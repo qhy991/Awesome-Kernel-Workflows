@@ -59,6 +59,9 @@ Awesome-Kernel-Workflows/
 │   └── README.md
 ├── KSearch/                     # World-model-guided tree search
 │   └── ksearch-kernel-optimization.js
+├── KernelBand/                  # MAB with hardware-aware pruning + clustering
+│   ├── kernelband-kernel-optimization.js
+│   └── README.md
 ├── _meta/                       # Meta-workflow: paper → workflow generation
 │   ├── README.md
 │   ├── tools/
@@ -98,6 +101,7 @@ Workflow files follow Claude Code conventions: export `meta` (name, description,
 | [CUDA Agent](CUDAAgent/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) ![RL-trained](https://img.shields.io/badge/RL--trained-red?style=flat) | Profile → Implement → Verify → Refine | [arXiv:2602.24286](https://arxiv.org/abs/2602.24286) (ByteDance/Tsinghua 2026) |
 | [cuPilot](cuPilot/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![NCU](https://img.shields.io/badge/NCU-555?style=flat) ![Evolutionary](https://img.shields.io/badge/evolutionary-darkblue?style=flat) ![Roofline](https://img.shields.io/badge/roofline-teal?style=flat) ![RAG](https://img.shields.io/badge/RAG-orange?style=flat) | Strategize → Translate → Revise → Evolve | [arXiv:2512.16465](https://arxiv.org/abs/2512.16465) (SEU/Tsinghua 2025) |
 | [TritorX](TritorX/) | ![ASIC](https://img.shields.io/badge/ASIC%2FNPU-333?style=flat) ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![FSM](https://img.shields.io/badge/FSM-blue?style=flat) ![Linter](https://img.shields.io/badge/linter-green?style=flat) ![Coverage](https://img.shields.io/badge/coverage--first-teal?style=flat) | Generate → Lint → Compile/Test → Debug (loop) | [arXiv:2512.10977](https://arxiv.org/abs/2512.10977) (Meta 2025) |
+| [KernelBand](KernelBand/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![NCU](https://img.shields.io/badge/NCU-555?style=flat) ![MAB](https://img.shields.io/badge/MAB--UCB-darkblue?style=flat) ![Clustering](https://img.shields.io/badge/clustering-orange?style=flat) ![HW-Pruning](https://img.shields.io/badge/HW--pruning-red?style=flat) | Profile → Cluster → Select(UCB) → Generate → Evaluate → Update | [arXiv:2511.18868](https://arxiv.org/abs/2511.18868) (PKU 2026) |
 | [Meta-Workflow](_meta/) | ![Tooling](https://img.shields.io/badge/tooling-gray?style=flat) | Research → Model → Assemble → Generate → Validate | — |
 
 ### Tag Legend
@@ -106,10 +110,10 @@ Workflow files follow Claude Code conventions: export `meta` (name, description,
 |----------|------|
 | **Backend** | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![ROCm](https://img.shields.io/badge/ROCm-ED1C24?style=flat&logo=amd&logoColor=white) ![SYCL](https://img.shields.io/badge/SYCL-0071C5?style=flat&logo=intel&logoColor=white) |
 | **Kernel Language** | ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![DSL](https://img.shields.io/badge/DSL-darkgreen?style=flat) ![CuTe](https://img.shields.io/badge/CuTe-darkgreen?style=flat) ![TileLang](https://img.shields.io/badge/TileLang-darkgreen?style=flat) |
-| **Search Strategy** | ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) ![Tree](https://img.shields.io/badge/tree--search-darkblue?style=flat) ![MCTS](https://img.shields.io/badge/MCTS-darkblue?style=flat) ![Evolutionary](https://img.shields.io/badge/MAP--Elites-darkblue?style=flat) ![Pipeline](https://img.shields.io/badge/pipeline-purple?style=flat) |
+| **Search Strategy** | ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) ![Tree](https://img.shields.io/badge/tree--search-darkblue?style=flat) ![MCTS](https://img.shields.io/badge/MCTS-darkblue?style=flat) ![Evolutionary](https://img.shields.io/badge/MAP--Elites-darkblue?style=flat) ![MAB](https://img.shields.io/badge/MAB--UCB-darkblue?style=flat) ![Pipeline](https://img.shields.io/badge/pipeline-purple?style=flat) |
 | **Profiler** | ![NCU](https://img.shields.io/badge/NCU-555?style=flat) |
-| **Learning Mechanism** | ![Experience](https://img.shields.io/badge/experience--memory-orange?style=flat) ![SkillMemory](https://img.shields.io/badge/skill--memory-orange?style=flat) ![WorldModel](https://img.shields.io/badge/world--model-orange?style=flat) ![MetaPrompt](https://img.shields.io/badge/meta--prompt-orange?style=flat) ![ICRL](https://img.shields.io/badge/ICRL-blue?style=flat) ![RL-trained](https://img.shields.io/badge/RL--trained-red?style=flat) |
-| **Special** | ![Invariants](https://img.shields.io/badge/invariants-red?style=flat) ![Evidence](https://img.shields.io/badge/evidence--driven-green?style=flat) ![Explanation](https://img.shields.io/badge/explanation-teal?style=flat) |
+| **Learning Mechanism** | ![Experience](https://img.shields.io/badge/experience--memory-orange?style=flat) ![SkillMemory](https://img.shields.io/badge/skill--memory-orange?style=flat) ![WorldModel](https://img.shields.io/badge/world--model-orange?style=flat) ![MetaPrompt](https://img.shields.io/badge/meta--prompt-orange?style=flat) ![Clustering](https://img.shields.io/badge/clustering-orange?style=flat) ![ICRL](https://img.shields.io/badge/ICRL-blue?style=flat) ![RL-trained](https://img.shields.io/badge/RL--trained-red?style=flat) |
+| **Special** | ![Invariants](https://img.shields.io/badge/invariants-red?style=flat) ![Evidence](https://img.shields.io/badge/evidence--driven-green?style=flat) ![Explanation](https://img.shields.io/badge/explanation-teal?style=flat) ![HW-Pruning](https://img.shields.io/badge/HW--pruning-red?style=flat) |
 
 > Industrial practices (e.g. tiled attention as in FlashInfer, CUTLASS tuning workflows) will be added when they are concrete enough to agentize. Open an issue or PR to nominate the next entry.
 

@@ -59,6 +59,9 @@ Awesome-Kernel-Workflows/
 │   └── README.md
 ├── KSearch/                     # 世界模型引导的树搜索
 │   └── ksearch-kernel-optimization.js
+├── KernelBand/                  # 多臂老虎机 + 硬件感知剪枝 + 聚类
+│   ├── kernelband-kernel-optimization.js
+│   └── README.md
 ├── _meta/                       # Meta-workflow：论文 → 工作流生成
 │   ├── README.md
 │   ├── tools/                   # 生成器 + 验证器
@@ -87,6 +90,7 @@ Workflow 文件遵循 Claude Code 约定：导出 `meta`（名称、描述、阶
 | [CUDA Agent](CUDAAgent/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) ![RL-trained](https://img.shields.io/badge/RL--trained-red?style=flat) | Profile → Implement → Verify → Refine | [arXiv:2602.24286](https://arxiv.org/abs/2602.24286)（字节跳动/清华 2026） |
 | [cuPilot](cuPilot/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![NCU](https://img.shields.io/badge/NCU-555?style=flat) ![Evolutionary](https://img.shields.io/badge/evolutionary-darkblue?style=flat) ![Roofline](https://img.shields.io/badge/roofline-teal?style=flat) ![RAG](https://img.shields.io/badge/RAG-orange?style=flat) | Strategize → Translate → Revise → Evolve | [arXiv:2512.16465](https://arxiv.org/abs/2512.16465)（东南大学/清华 2025） |
 | [TritorX](TritorX/) | ![ASIC](https://img.shields.io/badge/ASIC%2FNPU-333?style=flat) ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![FSM](https://img.shields.io/badge/FSM-blue?style=flat) ![Linter](https://img.shields.io/badge/linter-green?style=flat) ![Coverage](https://img.shields.io/badge/coverage--first-teal?style=flat) | Generate → Lint → Compile/Test → Debug（循环） | [arXiv:2512.10977](https://arxiv.org/abs/2512.10977)（Meta 2025） |
+| [KernelBand](KernelBand/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![NCU](https://img.shields.io/badge/NCU-555?style=flat) ![MAB](https://img.shields.io/badge/MAB--UCB-darkblue?style=flat) ![Clustering](https://img.shields.io/badge/clustering-orange?style=flat) ![HW-Pruning](https://img.shields.io/badge/HW--pruning-red?style=flat) | Profile → Cluster → Select(UCB) → Generate → Evaluate → Update | [arXiv:2511.18868](https://arxiv.org/abs/2511.18868)（北大 2026） |
 | [Meta-Workflow](_meta/) | ![Tooling](https://img.shields.io/badge/tooling-gray?style=flat) | Research → Model → Assemble → Generate → Validate | — |
 
 ### 标签说明
@@ -95,10 +99,10 @@ Workflow 文件遵循 Claude Code 约定：导出 `meta`（名称、描述、阶
 |------|------|
 | **后端** | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![ROCm](https://img.shields.io/badge/ROCm-ED1C24?style=flat&logo=amd&logoColor=white) ![SYCL](https://img.shields.io/badge/SYCL-0071C5?style=flat&logo=intel&logoColor=white) |
 | **内核语言** | ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![DSL](https://img.shields.io/badge/DSL-darkgreen?style=flat) ![CuTe](https://img.shields.io/badge/CuTe-darkgreen?style=flat) ![TileLang](https://img.shields.io/badge/TileLang-darkgreen?style=flat) |
-| **搜索策略** | ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) ![Tree](https://img.shields.io/badge/tree--search-darkblue?style=flat) ![MCTS](https://img.shields.io/badge/MCTS-darkblue?style=flat) ![Evolutionary](https://img.shields.io/badge/MAP--Elites-darkblue?style=flat) ![Pipeline](https://img.shields.io/badge/pipeline-purple?style=flat) |
+| **搜索策略** | ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) ![Tree](https://img.shields.io/badge/tree--search-darkblue?style=flat) ![MCTS](https://img.shields.io/badge/MCTS-darkblue?style=flat) ![Evolutionary](https://img.shields.io/badge/MAP--Elites-darkblue?style=flat) ![MAB](https://img.shields.io/badge/MAB--UCB-darkblue?style=flat) ![Pipeline](https://img.shields.io/badge/pipeline-purple?style=flat) |
 | **分析工具** | ![NCU](https://img.shields.io/badge/NCU-555?style=flat) |
-| **学习机制** | ![Experience](https://img.shields.io/badge/experience--memory-orange?style=flat) ![SkillMemory](https://img.shields.io/badge/skill--memory-orange?style=flat) ![WorldModel](https://img.shields.io/badge/world--model-orange?style=flat) ![MetaPrompt](https://img.shields.io/badge/meta--prompt-orange?style=flat) ![ICRL](https://img.shields.io/badge/ICRL-blue?style=flat) ![RL-trained](https://img.shields.io/badge/RL--trained-red?style=flat) |
-| **特殊** | ![Invariants](https://img.shields.io/badge/invariants-red?style=flat) ![Evidence](https://img.shields.io/badge/evidence--driven-green?style=flat) ![Explanation](https://img.shields.io/badge/explanation-teal?style=flat) |
+| **学习机制** | ![Experience](https://img.shields.io/badge/experience--memory-orange?style=flat) ![SkillMemory](https://img.shields.io/badge/skill--memory-orange?style=flat) ![WorldModel](https://img.shields.io/badge/world--model-orange?style=flat) ![MetaPrompt](https://img.shields.io/badge/meta--prompt-orange?style=flat) ![Clustering](https://img.shields.io/badge/clustering-orange?style=flat) ![ICRL](https://img.shields.io/badge/ICRL-blue?style=flat) ![RL-trained](https://img.shields.io/badge/RL--trained-red?style=flat) |
+| **特殊** | ![Invariants](https://img.shields.io/badge/invariants-red?style=flat) ![Evidence](https://img.shields.io/badge/evidence--driven-green?style=flat) ![Explanation](https://img.shields.io/badge/explanation-teal?style=flat) ![HW-Pruning](https://img.shields.io/badge/HW--pruning-red?style=flat) |
 
 > 工业界实践（如 FlashInfer 式分块 attention、CUTLASS 调参流程）会按「可 agent 化程度」陆续收录；欢迎提交 issue / PR 提名。
 
@@ -168,6 +172,7 @@ Workflow({
 | KDA | 验证命令 + 指标 | candidates.jsonl 记录 | 达标晋升 | 竞赛/基准测试场景 |
 | K-Search | 世界模型评分 | 树搜索 + 回溯 | 最优路径 | 优化路径不确定时 |
 | AdaExplore | 编译/运行错误 + speedup | 技能记忆 + MCTS | Triton 内核生成 | PyTorch 算子替换 |
+| KernelBand | NCU φ(k) + 延迟 | 动态聚类 + Masked UCB | 1.91× 几何均值 | 多策略大空间搜索 |
 
 ---
 
