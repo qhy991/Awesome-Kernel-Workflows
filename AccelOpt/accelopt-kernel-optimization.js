@@ -4,40 +4,46 @@ export const meta = {
   whenToUse: 'When you need to iteratively optimize a CUDA kernel through plan-execute-profile-learn cycles. Uses Nsight Compute (ncu) for evidence-based profiling rather than guessing bottlenecks.',
   phases: [
     { title: 'Setup', detail: 'Read target kernel, compile harness, NCU profile baseline' },
-    { title: 'Plan', detail: 'Generate optimization plans guided by NCU bottleneck data' },
+    { title: 'Plan', detail: 'Generate optimization plans guided by NCU data + candidate beam context' },
     { title: 'Execute', detail: 'Implement optimized kernels from each plan' },
-    { title: 'Evaluate', detail: 'NCU profile variants, measure real speedup' },
-    { title: 'Learn', detail: 'Extract reusable insights from slow-fast kernel pairs + NCU diffs' },
-    { title: 'Iterate', detail: 'Feed learnings back into next optimization round' },
+    { title: 'Evaluate', detail: 'NCU profile variants, per-branch dedup, update candidate beam' },
+    { title: 'Learn', detail: 'Threshold-filtered slow-fast pairs → reusable patterns (AccelOpt format)' },
+    { title: 'Iterate', detail: 'Feed sampled experience + beam state into next optimization round' },
   ],
 }
 
 // =============================================================================
-// AccelOpt Self-Improving Kernel Optimization Workflow (NCU-Enhanced)
+// AccelOpt Self-Improving Kernel Optimization Workflow (NCU-Enhanced, v2)
 // =============================================================================
 //
 // Implements the AccelOpt paper's core loop (MLSys 2026, arXiv:2511.15915):
 //   Plan → Execute → Profile → Summarize → Accumulate Experience → Repeat
 //
-// Enhanced with Nsight Compute (ncu) profiling at each stage:
-//   - Setup: NCU --set full on baseline → identifies REAL bottlenecks
-//   - Plan: Planner receives NCU metrics (stalls, memory patterns, occupancy)
-//   - Evaluate: NCU profiles each variant → real latency + metric comparison
-//   - Learn: Summarizer sees both code diff AND metric diff
+// v2 enhancements aligned with the original AccelOpt system:
+//   1. Candidate beam pool (topK kernels carried forward, not just single best)
+//   2. Experience pool random sampling with capacity control
+//   3. Parameterized selection heuristics (threshold filtering)
+//   4. Per-branch deduplication (best sample per plan)
+//   5. Experience format aligned with original system
 //
 // Usage:
 //   Workflow({name: 'accelopt-kernel-optimization', args: {
 //     kernel_path: '/path/to/kernel.cu',
 //     op_description: 'Quantized GEMM Q4_0 weight * FP32 activation',
-//     harness_path: '/path/to/harness.cu',         // standalone profiling harness
-//     harness_build_cmd: 'nvcc -O3 -lineinfo ...',  // build command
-//     harness_run_args: '',                          // runtime args for harness binary
-//     kernel_name_regex: 'forward_kernel',           // ncu -k regex
-//     ncu_binary: 'ncu',                             // path to ncu
-//     exp_dir: '/path/to/experiment/output',         // where to save profiles
+//     harness_path: '/path/to/harness.cu',
+//     harness_build_cmd: 'nvcc -O3 -lineinfo ...',
+//     harness_run_args: '',
+//     kernel_name_regex: 'forward_kernel',
+//     ncu_binary: 'ncu',
+//     exp_dir: '/path/to/experiment/output',
 //     iterations: 3,
 //     breadth: 3,
 //     samples_per_plan: 2,
+//     topk_candidates: 3,
+//     max_experience_in_prompt: 8,
+//     max_threshold: 1.05,
+//     min_threshold: 1.05,
+//     topk_learn: 5,
 //   }})
 //
 // =============================================================================
@@ -56,22 +62,72 @@ const KERNEL_NAME_REGEX = args.kernel_name_regex || ''
 const NCU_BINARY = args.ncu_binary || 'ncu'
 const EXP_DIR = args.exp_dir || '/tmp/accelopt_exp'
 
-// Fallback: non-NCU profiling commands (used if NCU is not available)
+// Fallback: non-NCU profiling commands
 const TEST_CMD = args.test_command || ''
 const BENCH_CMD = args.benchmark_command || ''
 
+// AccelOpt-aligned parameters (v2)
+const TOPK_CANDIDATES = args.topk_candidates || 3
+const MAX_EXPERIENCE_IN_PROMPT = args.max_experience_in_prompt || 8
+const MAX_THRESHOLD = args.max_threshold || 1.05
+const MIN_THRESHOLD = args.min_threshold || 1.05
+const TOPK_LEARN = args.topk_learn || 5
+
 // State
-let experienceMemory = []
+let experienceMemory = []       // Full pool of learned patterns (grows unbounded)
+let lastIterNewPatterns = []    // Patterns discovered in the most recent Learn phase
 let bestLatency = null
 let bestKernelCode = null
 let baselineLatency = null
-let baselineNcuProfile = ''  // NCU analysis text for the baseline
+let baselineNcuProfile = ''
+let candidateBeam = []          // [{code, latency, speedup, ncuSummary, planTitle}]
+
+// Helper: sample n items from array without replacement (Fisher-Yates partial)
+function sampleWithoutReplacement(arr, n) {
+  if (n >= arr.length) return [...arr]
+  const copy = [...arr]
+  const result = []
+  for (let i = 0; i < n; i++) {
+    const j = i + Math.floor((copy.length - i) * (i / (i + 1 + copy.length)))
+    // Deterministic pseudo-shuffle using index-based swap
+    const swapIdx = (i * 7 + 3) % (copy.length - i) + i
+    const temp = copy[i]
+    copy[i] = copy[swapIdx]
+    copy[swapIdx] = temp
+    result.push(copy[i])
+  }
+  return result
+}
+
+// Helper: construct experience section for planner prompt (AccelOpt sampling logic)
+function buildExperienceSection(experienceMemory, lastIterNewPatterns, maxInPrompt) {
+  if (experienceMemory.length === 0) return ''
+
+  let selected = []
+  // Priority: new patterns from last iteration (like original_rewrite_list in AccelOpt)
+  const newPatterns = [...lastIterNewPatterns]
+  if (newPatterns.length >= maxInPrompt) {
+    selected = newPatterns.slice(0, maxInPrompt)
+  } else {
+    selected = [...newPatterns]
+    const remaining = maxInPrompt - selected.length
+    // Fill remaining slots with random samples from the full pool (excluding already-selected)
+    const pool = experienceMemory.filter(e => !newPatterns.includes(e))
+    const sampled = sampleWithoutReplacement(pool, remaining)
+    selected = selected.concat(sampled)
+  }
+
+  return `\n\n# Learned Optimization Patterns (${selected.length}/${experienceMemory.length} sampled)\n${selected.map((e, i) => `${i + 1}. ${e}`).join('\n\n')}`
+}
+
+// Helper: format candidate beam info for planner prompt
+function buildBeamSection(candidateBeam) {
+  if (candidateBeam.length <= 1) return ''
+  return `\n\n# Candidate Beam (top-${candidateBeam.length} kernels from previous iterations)\n${candidateBeam.map((c, i) => `## Candidate ${i + 1}: "${c.planTitle}" — ${c.speedup.toFixed(2)}x, ${c.latency.toFixed(3)}ms\nNCU: ${c.ncuSummary || 'N/A'}\n\`\`\`cuda\n${c.code.substring(0, 1500)}\n\`\`\``).join('\n\n')}`
+}
 
 // =============================================================================
 // Phase 1: Setup — Read kernel, build harness, NCU profile baseline
-//
-// Key principle from ncu-report-skill:
-//   "Profile → Diagnose → Plan, in that order. Never guess."
 // =============================================================================
 phase('Setup')
 
@@ -109,13 +165,6 @@ const opType = setupResult.op_type
 log(`Baseline: ${opType}, kernels: ${setupResult.key_functions.join(', ')}`)
 
 // NCU Profile the baseline
-// Following the ncu-report-skill workflow:
-//   1. Create run directory
-//   2. Build harness (if needed)
-//   3. Run ncu --set full + PmSampling
-//   4. Run ncu --set source
-//   5. Parse with Python API
-//   6. Work through 6 analysis dimensions
 const ncuSetup = await agent(`You are a CUDA profiling expert using Nsight Compute (ncu). Set up and run NCU profiling for the baseline kernel.
 
 # Environment
@@ -219,7 +268,16 @@ baselineLatency = ncuSetup.latency_ms
 bestLatency = baselineLatency
 bestKernelCode = baselineKernel
 
-// Build the NCU profile string that will be injected into the Planner
+// Initialize candidate beam with baseline
+candidateBeam = [{
+  code: baselineKernel,
+  latency: baselineLatency,
+  speedup: 1.0,
+  ncuSummary: ncuSetup.profile_summary || ncuSetup.bottleneck_diagnosis,
+  planTitle: 'baseline',
+}]
+
+// Build the NCU profile string
 baselineNcuProfile = `
 ## NCU Profile Results (Baseline)
 - Latency: ${ncuSetup.latency_ms} ms
@@ -248,23 +306,20 @@ log(`Baseline: ${baselineLatency}ms | ${ncuSetup.bottleneck_diagnosis}`)
 // =============================================================================
 
 for (let iter = 0; iter < ITERATIONS; iter++) {
-  log(`\n=== Iteration ${iter + 1}/${ITERATIONS} | Best: ${bestLatency.toFixed(3)}ms (${(baselineLatency / bestLatency).toFixed(2)}x) | Experience: ${experienceMemory.length} patterns ===`)
+  log(`\n=== Iteration ${iter + 1}/${ITERATIONS} | Best: ${bestLatency.toFixed(3)}ms (${(baselineLatency / bestLatency).toFixed(2)}x) | Beam: ${candidateBeam.length} | Experience: ${experienceMemory.length} patterns ===`)
 
   // ===========================================================================
-  // Phase 2: Plan — Generate optimization plans GUIDED BY NCU DATA
-  //
-  // Key difference from vanilla AccelOpt: the planner receives REAL profiling
-  // data (stall reasons, memory patterns, occupancy) rather than guessing from
-  // code alone. This follows the ncu-report-skill principle:
-  //   "Profile → Diagnose → Plan, in that order. Never guess."
+  // Phase 2: Plan — Generate optimization plans GUIDED BY NCU DATA + BEAM
   // ===========================================================================
   phase('Plan')
 
-  const experienceSection = experienceMemory.length > 0
-    ? `\n\n# Learned Optimization Patterns (from previous iterations)\n${experienceMemory.map((e, i) => `${i + 1}. ${e}`).join('\n')}`
-    : ''
+  // Experience sampling (AccelOpt: construct_experience.py logic)
+  const experienceSection = buildExperienceSection(experienceMemory, lastIterNewPatterns, MAX_EXPERIENCE_IN_PROMPT)
 
-  // NCU-informed focus areas — derived from the diagnosis playbook
+  // Candidate beam context for planner
+  const beamSection = buildBeamSection(candidateBeam)
+
+  // NCU-informed focus areas
   const planAngles = [
     'memory latency hiding: address long_scoreboard stalls via ILP, prefetching, async copies, or software pipelining',
     'memory coalescing and vectorization: fix uncoalesced accesses (sectors/request > 4), use float4/int4 loads',
@@ -288,6 +343,7 @@ ${baselineNcuProfile}
 # Current Performance:
 - Latency: ${bestLatency}ms
 - Speedup vs original baseline: ${(baselineLatency / bestLatency).toFixed(2)}x
+${beamSection}
 ${experienceSection}
 
 # How to read NCU data for planning:
@@ -308,7 +364,8 @@ ${experienceSection}
 2. Name the exact code region and transformation
 3. Prefer STRUCTURAL changes over parameter tuning
 4. Don't suggest lowering precision below the baseline
-5. Estimate expected speedup based on the NCU data (e.g., "NCU reports sectors/request=8.2; fixing to 4.0 should cut load time ~2x on those lines")`
+5. Estimate expected speedup based on the NCU data (e.g., "NCU reports sectors/request=8.2; fixing to 4.0 should cut load time ~2x on those lines")
+6. If candidate beam shows multiple approaches, consider COMBINING strengths from different candidates`
 
   const plans = await parallel(
     Array.from({length: BREADTH}, (_, i) => () =>
@@ -388,6 +445,7 @@ Return the complete CUDA code.`, {
       if (impl && impl.code) {
         allVariants.push({
           plan: validPlans[planIdx],
+          planIdx: planIdx,
           code: impl.code,
           id: `plan_${planIdx}_sample_${sIdx}`,
         })
@@ -398,12 +456,7 @@ Return the complete CUDA code.`, {
   log(`Generated ${allVariants.length} kernel variants`)
 
   // ===========================================================================
-  // Phase 4: Evaluate — NCU profile each variant
-  //
-  // Uses real NCU profiling (not estimation) when available.
-  // Follows the ncu-report-skill collection recipes:
-  //   Recipe 5 (targeted metrics) for fast A/B comparison
-  //   Recipe 6 (A/B comparison) for the best variant
+  // Phase 4: Evaluate — NCU profile each variant + per-branch dedup + beam update
   // ===========================================================================
   phase('Evaluate')
 
@@ -438,11 +491,8 @@ ${variant.code.substring(0, 4000)}
 
 ## Step 3: Build and NCU profile (if environment allows)
 \`\`\`bash
-# Write kernel to file
 mkdir -p ${EXP_DIR}/iter_${iter}/${variant.id}
-# Write the kernel code to kernel.cu in that directory
 
-# Build harness with new kernel
 ${HARNESS_BUILD_CMD ? HARNESS_BUILD_CMD.replace('KERNEL_PATH', `${EXP_DIR}/iter_${iter}/${variant.id}/kernel.cu`) : '# (no build command configured)'}
 
 # Quick NCU metrics (Recipe 5 — targeted, fast)
@@ -489,6 +539,7 @@ Return evaluation results.`, {
     )
   )
 
+  // Build results with evaluation data
   const results = []
   for (let i = 0; i < allVariants.length; i++) {
     const evalResult = evaluations[i]
@@ -500,46 +551,83 @@ Return evaluation results.`, {
     })
   }
 
-  results.sort((a, b) => b.speedup - a.speedup)
+  // Per-branch deduplication: keep only the best sample per plan (AccelOpt: select_candidates.py)
+  const planBestMap = new Map()
+  for (const r of results) {
+    if (!r.evaluation.is_correct || !r.evaluation.is_compilable) continue
+    const planKey = r.variant.planIdx
+    const existing = planBestMap.get(planKey)
+    if (!existing || r.speedup > existing.speedup) {
+      planBestMap.set(planKey, r)
+    }
+  }
+  const dedupedResults = [...planBestMap.values()]
+  dedupedResults.sort((a, b) => b.speedup - a.speedup)
 
-  const improved = results.filter(r => r.speedup > 1.0 && r.evaluation.is_correct && r.evaluation.is_compilable)
-  const degraded = results.filter(r => r.speedup < 1.0 && r.evaluation.is_correct && r.evaluation.is_compilable)
+  // Update candidate beam (AccelOpt: select_candidates.py topK logic)
+  const newCandidates = dedupedResults
+    .filter(r => r.speedup > 1.0)
+    .map(r => ({
+      code: r.variant.code,
+      latency: r.evaluation.estimated_latency_ms || (baselineLatency / r.speedup),
+      speedup: r.speedup * (baselineLatency / bestLatency), // relative to original baseline
+      ncuSummary: r.evaluation.ncu_comparison || r.evaluation.performance_analysis || '',
+      planTitle: r.variant.plan.title,
+    }))
 
-  log(`Results: ${improved.length} improved, ${degraded.length} degraded, ${results.length - improved.length - degraded.length} failed`)
+  // Merge new candidates into beam, re-sort, keep topK
+  const mergedBeam = [...candidateBeam, ...newCandidates]
+  mergedBeam.sort((a, b) => a.latency - b.latency)
+  candidateBeam = mergedBeam.slice(0, TOPK_CANDIDATES)
 
-  // Update best kernel and re-profile if improved
-  if (improved.length > 0) {
-    const best = improved[0]
-    bestKernelCode = best.variant.code
-    bestLatency = best.evaluation.estimated_latency_ms || (baselineLatency / best.speedup)
+  // Update best from beam[0]
+  if (candidateBeam.length > 0 && candidateBeam[0].latency < bestLatency) {
+    bestKernelCode = candidateBeam[0].code
+    bestLatency = candidateBeam[0].latency
 
-    // Update NCU profile for next iteration's planner
-    if (best.evaluation.ncu_comparison) {
+    // Update NCU profile for next iteration
+    const bestResult = dedupedResults.find(r => r.variant.code === candidateBeam[0].code)
+    if (bestResult && bestResult.evaluation.ncu_comparison) {
       baselineNcuProfile = `
-## NCU Profile Results (After Iteration ${iter + 1} — Best Variant: "${best.variant.plan.title}")
-- Latency: ${bestLatency}ms (${best.speedup.toFixed(2)}x speedup)
-- Bottleneck addressed: ${best.evaluation.bottleneck_addressed ? 'YES' : 'NO'}
-- New bottleneck: ${best.evaluation.new_bottleneck || 'unknown'}
-- Comparison: ${best.evaluation.ncu_comparison}
+## NCU Profile Results (After Iteration ${iter + 1} — Best: "${candidateBeam[0].planTitle}")
+- Latency: ${bestLatency}ms (${(baselineLatency / bestLatency).toFixed(2)}x speedup vs original)
+- Bottleneck addressed: ${bestResult.evaluation.bottleneck_addressed ? 'YES' : 'NO'}
+- New bottleneck: ${bestResult.evaluation.new_bottleneck || 'unknown'}
+- Comparison: ${bestResult.evaluation.ncu_comparison}
 
 Previous profile data for reference:
 ${baselineNcuProfile}`
     }
 
-    log(`NEW BEST: "${best.variant.plan.title}" — ${best.speedup.toFixed(2)}x, ~${bestLatency.toFixed(3)}ms`)
+    log(`NEW BEST: "${candidateBeam[0].planTitle}" — ${(baselineLatency / bestLatency).toFixed(2)}x, ~${bestLatency.toFixed(3)}ms`)
   }
+
+  const improved = dedupedResults.filter(r => r.speedup > 1.0)
+  const degraded = dedupedResults.filter(r => r.speedup < 1.0)
+  log(`Results (deduped): ${improved.length} improved, ${degraded.length} degraded | Beam: [${candidateBeam.map(c => c.planTitle).join(', ')}]`)
 
   // ===========================================================================
   // Phase 5: Learn — Extract insights from slow-fast pairs + NCU metric diffs
   //
-  // Enhanced over vanilla AccelOpt: the summarizer sees BOTH the code diff AND
-  // the NCU metric diff, producing richer optimization patterns.
+  // AccelOpt alignment:
+  //   - Threshold filtering (max_threshold / min_threshold)
+  //   - topk_learn total budget
+  //   - Experience format: **title** + NCU trigger + code snippets
   // ===========================================================================
   phase('Learn')
 
+  // Threshold-filtered selection (AccelOpt: rewrites_selection.py)
+  const positiveFiltered = improved.filter(r => r.speedup > MAX_THRESHOLD)
+  const negativeFiltered = degraded.filter(r => r.speedup < (1.0 / MIN_THRESHOLD))
+
+  const maxPositive = Math.min(positiveFiltered.length, Math.ceil(TOPK_LEARN / 2))
+  const selectedPositive = positiveFiltered.slice(0, maxPositive)
+  const remainingSlots = Math.min(TOPK_LEARN - selectedPositive.length, negativeFiltered.length)
+  const selectedNegative = negativeFiltered.slice(0, remainingSlots)
+
   const pairsToSummarize = []
 
-  for (const r of improved.slice(0, 3)) {
+  for (const r of selectedPositive) {
     pairsToSummarize.push({
       slow: baselineKernel,
       fast: r.variant.code,
@@ -552,7 +640,7 @@ ${baselineNcuProfile}`
     })
   }
 
-  for (const r of degraded.slice(0, 2)) {
+  for (const r of selectedNegative) {
     pairsToSummarize.push({
       slow: r.variant.code,
       fast: bestKernelCode,
@@ -592,50 +680,56 @@ ${pair.ncu_comparison || 'N/A'}
 # Was the targeted bottleneck addressed? ${pair.bottleneck_addressed ? 'YES' : 'NO/UNKNOWN'}
 
 ## Your task:
-Extract a GENERAL optimization rule. Include:
-1. What NCU signal triggered this optimization (so future planners know when to apply it)
-2. The code transformation pattern
-3. WHY it helps (in terms of hardware — cache behavior, warp scheduling, etc.)
+Extract a GENERAL optimization rule following this EXACT format:
 
-Format:
 **{Short title}**
 NCU trigger: {what metric/stall pattern signals this opportunity}
 Rule: {one sentence — when you see X in NCU, do Y to the code}
-Before:
+Original code:
 \`\`\`cuda
 {2-5 lines of slow pattern}
 \`\`\`
-After:
+Optimized code:
 \`\`\`cuda
 {2-5 lines of fast pattern}
 \`\`\`
-Why: {hardware-level explanation}`, {
+Why: {hardware-level explanation}
+
+Make the rule GENERAL enough to apply to other kernels (not specific to this one kernel).`, {
           label: `learn-${pair.plan_title.substring(0, 20)}`,
           phase: 'Learn',
           schema: {
             type: 'object',
             properties: {
-              summary: { type: 'string' },
               title: { type: 'string' },
               ncu_trigger: { type: 'string' },
+              rule: { type: 'string' },
+              original_snippet: { type: 'string' },
+              optimized_snippet: { type: 'string' },
+              why: { type: 'string' },
               is_antipattern: { type: 'boolean' },
             },
-            required: ['summary', 'title'],
+            required: ['title', 'ncu_trigger', 'rule', 'original_snippet', 'optimized_snippet', 'why'],
           },
         })
       )
     )
 
+    // Format experience entries aligned with AccelOpt's summarizer output format
+    lastIterNewPatterns = []
     for (const s of summaries.filter(Boolean)) {
-      experienceMemory.push(s.summary)
+      const formatted = `**${s.title}**\nNCU trigger: ${s.ncu_trigger}\n${s.rule}\nOriginal code:\n\`\`\`cuda\n${s.original_snippet}\n\`\`\`\nOptimized code:\n\`\`\`cuda\n${s.optimized_snippet}\n\`\`\`\nWhy: ${s.why}`
+      experienceMemory.push(formatted)
+      lastIterNewPatterns.push(formatted)
     }
-    log(`Learned ${summaries.filter(Boolean).length} patterns (with NCU triggers). Bank: ${experienceMemory.length}`)
+    log(`Learned ${lastIterNewPatterns.length} patterns (threshold-filtered from ${pairsToSummarize.length} pairs). Pool: ${experienceMemory.length}`)
   } else {
-    log(`No pairs to learn from.`)
+    lastIterNewPatterns = []
+    log(`No pairs passed threshold filters (max>${MAX_THRESHOLD}, min<${(1/MIN_THRESHOLD).toFixed(3)}).`)
   }
 
   phase('Iterate')
-  log(`Iteration ${iter + 1} done. ${(baselineLatency / bestLatency).toFixed(2)}x vs baseline.`)
+  log(`Iteration ${iter + 1} done. ${(baselineLatency / bestLatency).toFixed(2)}x vs baseline. Beam size: ${candidateBeam.length}`)
 }
 
 // =============================================================================
@@ -649,10 +743,14 @@ const finalReport = await agent(`Write a concise technical optimization report.
 - Final Best Latency: ${bestLatency}ms
 - Overall Speedup: ${(baselineLatency / bestLatency).toFixed(2)}x
 - Iterations: ${ITERATIONS}
+- Candidate Beam (final): ${candidateBeam.length} kernels
 - Experience Patterns: ${experienceMemory.length}
 
 # Initial NCU Diagnosis:
 ${baselineNcuProfile.substring(0, 1000)}
+
+# Final Candidate Beam:
+${candidateBeam.map((c, i) => `${i + 1}. "${c.planTitle}" — ${c.speedup.toFixed(2)}x (${c.latency.toFixed(3)}ms)`).join('\n')}
 
 # Learned Optimization Knowledge Base:
 ${experienceMemory.map((e, i) => `${i + 1}. ${e}`).join('\n\n')}
@@ -666,8 +764,9 @@ Write:
 1. NCU-driven optimization journey (what metrics → what actions → what results)
 2. Which NCU patterns reliably predicted optimization opportunities
 3. Anti-patterns: what NCU data looked promising but the optimization failed
-4. Remaining bottlenecks (what NCU shows for the final kernel)
-5. Recommendations for further optimization with specific NCU metrics to target`, {
+4. Candidate beam evolution: how the population of solutions evolved
+5. Remaining bottlenecks (what NCU shows for the final kernel)
+6. Recommendations for further optimization with specific NCU metrics to target`, {
   label: 'final-report',
   phase: 'Iterate',
 })
@@ -677,6 +776,11 @@ return {
   best_latency_ms: bestLatency,
   overall_speedup: baselineLatency / bestLatency,
   iterations_completed: ITERATIONS,
+  candidate_beam: candidateBeam.map(c => ({
+    plan_title: c.planTitle,
+    latency_ms: c.latency,
+    speedup: c.speedup,
+  })),
   experience_patterns_count: experienceMemory.length,
   experience_patterns: experienceMemory,
   best_kernel_code: bestKernelCode,

@@ -1,0 +1,338 @@
+# =============================================================================
+# AccelOpt Manifest — Back-filled from accelopt-kernel-optimization.js
+# =============================================================================
+# This manifest serves as the ground-truth regression reference.
+# Running generate-workflow against this should produce a structurally
+# equivalent workflow to the hand-crafted AccelOpt/accelopt-kernel-optimization.js
+# =============================================================================
+
+source:
+  paper_title: "AccelOpt: Self-Improving Kernel Optimization with Agentic Compiler"
+  paper_url: "https://arxiv.org/abs/2511.15915"
+  paper_venue: "MLSys 2026"
+  repo_url: ""
+  commit_or_tag: ""
+  license: ""
+  notes: "Core methodology from Section 3: Plan-Execute-Profile-Learn iterative loop"
+
+workflow:
+  name: "accelopt-kernel-optimization"
+  description: "Self-improving CUDA kernel optimization loop with NCU profiling (AccelOpt methodology)"
+  when_to_use: "When you need to iteratively optimize a CUDA kernel through plan-execute-profile-learn cycles. Uses Nsight Compute (ncu) for evidence-based profiling rather than guessing bottlenecks."
+  output_filename: "accelopt-kernel-optimization.js"
+  directory: "AccelOpt/"
+
+method:
+  category: "iterative_self_improving"
+  core_insight: >
+    Instead of guessing bottlenecks from code, profile first with NCU to get real metrics
+    (stall reasons, memory patterns, occupancy), then let the planner cite specific evidence.
+    Accumulate optimization patterns from slow-fast kernel pairs across iterations to build
+    reusable experience that improves future planning.
+  feedback_signal:
+    type: "profiler_metric"
+    description: "NCU gpu__time_duration.sum (kernel latency), stall reasons, SM/DRAM throughput, occupancy, sectors/request"
+    tool: "ncu"
+    higher_is_better: false  # lower latency = better
+
+topology:
+  type: "iterative"
+  iterative:
+    max_iterations_arg: "iterations"
+    convergence_condition: ""  # AccelOpt uses fixed iteration count, no early stopping
+    state_variables:
+      - name: "experienceMemory"
+        type: "array"
+        initial_value: "[]"
+        description: "Accumulated optimization patterns (strings) from Learn phase"
+      - name: "bestLatency"
+        type: "number"
+        initial_value: "null"
+        description: "Best achieved kernel latency in ms"
+      - name: "bestKernelCode"
+        type: "string"
+        initial_value: "null"
+        description: "Source code of the current best kernel variant"
+      - name: "baselineLatency"
+        type: "number"
+        initial_value: "null"
+        description: "Original kernel latency (set once in Setup, never mutated)"
+      - name: "baselineNcuProfile"
+        type: "string"
+        initial_value: "''"
+        description: "NCU analysis text block, updated each iteration for next planner"
+
+phases:
+  # --- PREAMBLE ---
+  - name: "Setup"
+    detail: "Read target kernel, compile harness, NCU profile baseline"
+    position: "preamble"
+    agents:
+      - label: "read-baseline"
+        description: "Read and analyze the CUDA kernel file structure"
+        parallelism: "single"
+        input_variables: ["KERNEL_PATH"]
+        output_schema:
+          type: "object"
+          properties:
+            kernel_code: { type: "string" }
+            op_type: { type: "string" }
+            key_functions: { type: "array", items: { type: "string" } }
+            current_approach: { type: "string" }
+            launch_config: { type: "string" }
+            shared_memory_usage: { type: "string" }
+            memory_access_patterns: { type: "string" }
+          required: ["kernel_code", "op_type", "key_functions", "current_approach"]
+      - label: "ncu-baseline"
+        description: "Build harness, run NCU --set full + source profile, extract key metrics"
+        parallelism: "single"
+        input_variables: ["NCU_BINARY", "EXP_DIR", "KERNEL_PATH", "KERNEL_NAME_REGEX", "HARNESS_PATH", "HARNESS_BUILD_CMD", "HARNESS_RUN_ARGS", "baselineKernel"]
+        output_schema:
+          type: "object"
+          properties:
+            latency_ms: { type: "number" }
+            sm_throughput_pct: { type: "number" }
+            dram_throughput_pct: { type: "number" }
+            achieved_occupancy_pct: { type: "number" }
+            theoretical_occupancy_pct: { type: "number" }
+            waves_per_sm: { type: "number" }
+            registers_per_thread: { type: "number" }
+            top_stall_reason: { type: "string" }
+            top_stall_pct: { type: "number" }
+            sectors_per_request: { type: "number" }
+            l1_hit_rate_pct: { type: "number" }
+            l2_hit_rate_pct: { type: "number" }
+            ncu_rule_suggestions: { type: "array", items: { type: "string" } }
+            bottleneck_diagnosis: { type: "string" }
+            profile_summary: { type: "string" }
+            ncu_available: { type: "boolean" }
+          required: ["latency_ms", "bottleneck_diagnosis", "profile_summary"]
+
+  # --- LOOP BODY ---
+  - name: "Plan"
+    detail: "Generate optimization plans guided by NCU bottleneck data"
+    position: "loop_body"
+    agents:
+      - label: "plan-{iter}-{i}"
+        description: "Generate one NCU-evidence-based optimization plan focused on a specific angle"
+        parallelism: "parallel_fan_out"
+        parallel_axis: "planAngles"
+        count_arg: "breadth"
+        input_variables: ["OP_DESC", "opType", "bestKernelCode", "baselineNcuProfile", "bestLatency", "baselineLatency", "experienceMemory"]
+        output_schema:
+          type: "object"
+          properties:
+            title: { type: "string" }
+            focus_area: { type: "string" }
+            ncu_evidence: { type: "string" }
+            analysis: { type: "string" }
+            plan: { type: "string" }
+            expected_impact: { type: "string" }
+            risk: { type: "string" }
+          required: ["title", "ncu_evidence", "plan", "expected_impact"]
+
+  - name: "Execute"
+    detail: "Implement optimized kernels from each plan"
+    position: "loop_body"
+    agents:
+      - label: "impl-{iter}-{plan}-v{sample}"
+        description: "Implement a complete, compilable optimized kernel from a plan"
+        parallelism: "pipeline_then_parallel"
+        parallel_axis: "validPlans"
+        count_arg: "samples_per_plan"
+        input_variables: ["bestKernelCode", "plan.title", "plan.ncu_evidence", "plan.plan"]
+        output_schema:
+          type: "object"
+          properties:
+            code: { type: "string" }
+            implementation_notes: { type: "string" }
+          required: ["code"]
+
+  - name: "Evaluate"
+    detail: "NCU profile variants, measure real speedup"
+    position: "loop_body"
+    agents:
+      - label: "eval-{variant.id}"
+        description: "Static correctness check + NCU profile + speedup measurement"
+        parallelism: "parallel_fan_out"
+        parallel_axis: "allVariants"
+        input_variables: ["variant.code", "variant.plan", "bestLatency", "ncuSetup", "EXP_DIR", "HARNESS_BUILD_CMD", "NCU_BINARY", "KERNEL_NAME_REGEX", "HARNESS_RUN_ARGS"]
+        output_schema:
+          type: "object"
+          properties:
+            is_correct: { type: "boolean" }
+            is_compilable: { type: "boolean" }
+            estimated_latency_ms: { type: "number" }
+            estimated_speedup: { type: "number" }
+            correctness_issues: { type: "array", items: { type: "string" } }
+            ncu_comparison: { type: "string" }
+            bottleneck_addressed: { type: "boolean" }
+            new_bottleneck: { type: "string" }
+            performance_analysis: { type: "string" }
+          required: ["is_correct", "is_compilable", "estimated_speedup"]
+
+  - name: "Learn"
+    detail: "Extract reusable insights from slow-fast kernel pairs + NCU diffs"
+    position: "loop_body"
+    agents:
+      - label: "learn-{pair.plan_title}"
+        description: "Analyze slow-fast kernel pair with NCU metric diffs, extract general optimization rule"
+        parallelism: "parallel_fan_out"
+        parallel_axis: "pairsToSummarize"
+        input_variables: ["pair.slow", "pair.fast", "pair.speedup", "pair.type", "pair.ncu_evidence", "pair.ncu_comparison", "pair.bottleneck_addressed"]
+        output_schema:
+          type: "object"
+          properties:
+            summary: { type: "string" }
+            title: { type: "string" }
+            ncu_trigger: { type: "string" }
+            is_antipattern: { type: "boolean" }
+          required: ["summary", "title"]
+
+  - name: "Iterate"
+    detail: "Feed learnings back into next optimization round"
+    position: "loop_body"
+    agents: []  # log-only phase, no agent calls
+
+  # --- EPILOGUE ---
+  # The final report is emitted inside the last Iterate phase in the actual
+  # workflow, but logically it is post-loop.
+
+plan_angles:
+  - name: "memory_latency_hiding"
+    description: "Address long_scoreboard stalls via ILP, prefetching, async copies, or software pipelining"
+    trigger: "top_stall_reason == long_scoreboard AND top_stall_pct > 40%"
+  - name: "memory_coalescing"
+    description: "Fix uncoalesced accesses (sectors/request > 4), use float4/int4 vectorized loads"
+    trigger: "sectors_per_request > 5"
+  - name: "occupancy_and_parallelism"
+    description: "Address SM idle time, tail effects, or low achieved occupancy"
+    trigger: "achieved_occupancy_pct << theoretical_occupancy_pct OR waves_per_sm < 1"
+  - name: "compute_restructuring"
+    description: "Tensor core usage, warp-level reductions, reduced synchronization"
+    trigger: "top_stall_reason == barrier (>20%) OR compute-bound with suboptimal ALU usage"
+  - name: "data_layout_and_tiling"
+    description: "Shared memory staging, bank-conflict-free layouts, double-buffering"
+    trigger: "DRAM throughput > 80% OR high shared-mem bank conflicts"
+
+args:
+  required:
+    - name: "kernel_path"
+      type: "string"
+      description: "Path to the target CUDA kernel file (.cu)"
+      example: "/path/to/kernel.cu"
+  optional:
+    - name: "op_description"
+      type: "string"
+      default: "'CUDA kernel'"
+      description: "Human-readable description of the kernel's operation"
+      example: "Quantized GEMM Q4_0 weight × FP32 activation"
+    - name: "harness_path"
+      type: "string"
+      default: "''"
+      description: "Path to standalone profiling harness (if pre-built)"
+      example: "/path/to/harness.cu"
+    - name: "harness_build_cmd"
+      type: "string"
+      default: "''"
+      description: "Command to build the profiling harness"
+      example: "nvcc -O3 -lineinfo -arch=sm_90 -o bench harness.cu"
+    - name: "harness_run_args"
+      type: "string"
+      default: "''"
+      description: "Runtime arguments for the harness binary"
+      example: "--m 4096 --n 4096 --k 4096"
+    - name: "kernel_name_regex"
+      type: "string"
+      default: "''"
+      description: "Regex for ncu -k to select the target kernel"
+      example: "forward_kernel"
+    - name: "ncu_binary"
+      type: "string"
+      default: "'ncu'"
+      description: "Path to the Nsight Compute binary"
+      example: "ncu"
+    - name: "exp_dir"
+      type: "string"
+      default: "'/tmp/accelopt_exp'"
+      description: "Directory for saving NCU reports and experiment outputs"
+      example: "/path/to/experiment/output"
+    - name: "iterations"
+      type: "number"
+      default: "2"
+      description: "Number of optimization iterations"
+      example: "3"
+    - name: "breadth"
+      type: "number"
+      default: "3"
+      description: "Number of parallel optimization plans per iteration"
+      example: "3"
+    - name: "samples_per_plan"
+      type: "number"
+      default: "2"
+      description: "Number of implementation variants per plan"
+      example: "2"
+    - name: "test_command"
+      type: "string"
+      default: "''"
+      description: "Fallback test command when NCU is unavailable"
+      example: "python test_kernel.py"
+    - name: "benchmark_command"
+      type: "string"
+      default: "''"
+      description: "Fallback benchmark command when NCU is unavailable"
+      example: "python bench_kernel.py"
+
+correctness:
+  criteria:
+    - "Same numerical output as baseline within FP32 tolerance"
+    - "No race conditions (proper __syncthreads placement)"
+    - "No out-of-bounds memory access"
+    - "No missing synchronization between shared memory writes and reads"
+    - "Correct warp shuffle masks and final-warp reduction logic"
+  check_type: "static_analysis"
+  reference_output: "Run baseline kernel to obtain reference output"
+
+return_fields:
+  - name: "baseline_latency_ms"
+    type: "number"
+    description: "Original kernel latency from NCU profiling"
+    required: true
+  - name: "best_latency_ms"
+    type: "number"
+    description: "Best achieved latency after optimization"
+    required: true
+  - name: "overall_speedup"
+    type: "number"
+    description: "Speedup ratio: baseline / best"
+    required: true
+  - name: "iterations_completed"
+    type: "number"
+    description: "Number of iterations executed"
+    required: true
+  - name: "experience_patterns_count"
+    type: "number"
+    description: "Number of learned optimization patterns"
+    required: true
+  - name: "experience_patterns"
+    type: "array"
+    description: "Array of optimization pattern strings from Learn phases"
+    required: true
+  - name: "best_kernel_code"
+    type: "string"
+    description: "Source code of the final best kernel"
+    required: true
+  - name: "ncu_baseline_profile"
+    type: "string"
+    description: "Final NCU profile context (may include multiple iterations)"
+    required: true
+  - name: "report"
+    type: "string"
+    description: "Final technical optimization report from the report agent"
+    required: true
+
+template:
+  base: "iterative-loop"
+  customizations:
+    - "experience_memory"
+    - "ncu_profiling"

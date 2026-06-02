@@ -1,0 +1,225 @@
+// =============================================================================
+// TEMPLATE: Search-Based Kernel Optimization (Autotuning / Evolutionary)
+// =============================================================================
+//
+// This is a PARAMETERIZED TEMPLATE for search-based optimization methods.
+// Topology: search (Sample → Evaluate → Prune → Refine → Repeat)
+//
+// Suitable for: autotuning, evolutionary search, Bayesian optimization, grid search
+//
+// Token reference:
+//   {{META_NAME}}              — workflow.name from manifest
+//   {{META_DESCRIPTION}}       — workflow.description
+//   {{META_WHEN_TO_USE}}       — workflow.when_to_use
+//   {{PHASES_ARRAY}}           — JSON array of {title, detail}
+//   {{HEADER_COMMENT}}         — Auto-generated args documentation
+//   {{SOURCE_CITATION}}        — source.paper_title + source.paper_url
+//   {{REQUIRED_ARGS}}          — const declarations for required args
+//   {{OPTIONAL_ARGS}}          — const declarations with defaults
+//   {{STATE_VARIABLES}}        — let declarations for state
+//   {{BUDGET_VAR}}             — variable name for search budget
+//   {{POPULATION_SIZE_VAR}}    — variable name for population size
+//   {{SEARCH_SPACE_DESC}}      — description of the search space
+//   {{SAMPLER_TYPE}}           — random | bayesian | evolutionary | grid
+//   {{SETUP_AGENTS}}           — agent calls for Setup phase
+//   {{SAMPLE_PROMPT}}          — prompt for sampling agent
+//   {{SAMPLE_SCHEMA}}          — schema for sample output
+//   {{EVALUATE_PROMPT}}        — prompt for evaluation agent
+//   {{EVALUATE_SCHEMA}}        — schema for evaluation output
+//   {{PRUNE_PROMPT}}           — prompt for pruning/selection agent
+//   {{PRUNE_SCHEMA}}           — schema for prune output
+//   {{REFINE_PROMPT}}          — prompt for search space refinement agent
+//   {{REFINE_SCHEMA}}          — schema for refine output
+//   {{REPORT_PROMPT}}          — prompt for final report
+//   {{RETURN_OBJECT}}          — return statement fields
+//
+// Block reference:
+//   [BLOCK:bayesian_surrogate]  — Surrogate model fitting
+//   [BLOCK:evolutionary_ops]    — Crossover and mutation operators
+//   [BLOCK:early_stopping]      — Budget or convergence stopping
+//   [BLOCK:search_space_shrink] — Progressive space reduction
+//
+// =============================================================================
+
+export const meta = {
+  name: '{{META_NAME}}',
+  description: '{{META_DESCRIPTION}}',
+  whenToUse: '{{META_WHEN_TO_USE}}',
+  phases: {{PHASES_ARRAY}},
+}
+
+// =============================================================================
+// {{META_NAME}}
+// =============================================================================
+//
+// Source: {{SOURCE_CITATION}}
+//
+// {{HEADER_COMMENT}}
+//
+// =============================================================================
+
+// --- Required Args ---
+{{REQUIRED_ARGS}}
+
+// --- Optional Args ---
+{{OPTIONAL_ARGS}}
+
+// --- State ---
+{{STATE_VARIABLES}}
+let searchHistory = []
+let bestConfig = null
+let bestMetric = null
+
+// =============================================================================
+// Phase: Setup — Analyze target and define search space
+// =============================================================================
+phase('Setup')
+
+{{SETUP_AGENTS}}
+
+// =============================================================================
+// Phase: Define Search Space
+// =============================================================================
+phase('Define')
+
+const searchSpace = await agent(`{{SEARCH_SPACE_DESC}}`, {
+  label: 'define-search-space',
+  phase: 'Define',
+  schema: {
+    type: 'object',
+    properties: {
+      dimensions: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, type: { type: 'string' }, range: { type: 'string' } } } },
+      constraints: { type: 'array', items: { type: 'string' } },
+      total_space_size: { type: 'string' },
+    },
+    required: ['dimensions'],
+  },
+})
+
+log(`Search space: ${searchSpace.dimensions?.length || 0} dimensions`)
+
+// =============================================================================
+// Search Loop
+// =============================================================================
+
+for (let round = 0; round < {{BUDGET_VAR}}; round++) {
+  log(`\n=== Search Round ${round + 1}/${{{BUDGET_VAR}}} | Best: ${bestMetric || 'N/A'} ===`)
+
+  //[BLOCK:early_stopping]
+  // Early stopping: if no improvement in last N rounds
+  //[/BLOCK:early_stopping]
+
+  // ===========================================================================
+  // Phase: Sample — Generate candidate configurations
+  // ===========================================================================
+  phase('Sample')
+
+  const candidates = await agent(`{{SAMPLE_PROMPT}}
+
+# Search Space:
+${JSON.stringify(searchSpace.dimensions || [])}
+
+# Search History (last 10):
+${JSON.stringify(searchHistory.slice(-10))}
+
+# Current Best: ${JSON.stringify(bestConfig)}
+# Best Metric: ${bestMetric}
+# Round: ${round + 1}/${{{BUDGET_VAR}}}
+# Sampler: {{SAMPLER_TYPE}}
+
+Generate ${{{POPULATION_SIZE_VAR}}} candidate configurations.`, {
+    label: `sample-${round}`,
+    phase: 'Sample',
+    schema: {{SAMPLE_SCHEMA}},
+  })
+
+  const configs = candidates.configurations || []
+  log(`Sampled ${configs.length} candidates`)
+
+  // ===========================================================================
+  // Phase: Evaluate — Measure each candidate
+  // ===========================================================================
+  phase('Evaluate')
+
+  const evaluations = await parallel(
+    configs.map((config, idx) => () =>
+      agent(`{{EVALUATE_PROMPT}}
+
+# Configuration ${idx + 1}/${configs.length}:
+${JSON.stringify(config)}`, {
+        label: `eval-${round}-${idx}`,
+        phase: 'Evaluate',
+        schema: {{EVALUATE_SCHEMA}},
+      })
+    )
+  )
+
+  // Record results
+  for (let i = 0; i < configs.length; i++) {
+    const evalResult = evaluations[i]
+    if (!evalResult) continue
+    searchHistory.push({
+      config: configs[i],
+      metric: evalResult.metric_value,
+      round,
+      is_valid: evalResult.is_valid,
+    })
+
+    // Update best
+    const isBetter = evalResult.is_valid && (
+      bestMetric === null ||
+      ({{HIGHER_IS_BETTER}} ? evalResult.metric_value > bestMetric : evalResult.metric_value < bestMetric)
+    )
+    if (isBetter) {
+      bestConfig = configs[i]
+      bestMetric = evalResult.metric_value
+      log(`NEW BEST: metric=${bestMetric}`)
+    }
+  }
+
+  // ===========================================================================
+  // Phase: Prune — Select survivors and update search strategy
+  // ===========================================================================
+  phase('Prune')
+
+  //[BLOCK:search_space_shrink]
+  const refinement = await agent(`{{REFINE_PROMPT}}
+
+# Search History Summary:
+- Total evaluated: ${searchHistory.length}
+- Best metric: ${bestMetric}
+- Best config: ${JSON.stringify(bestConfig)}
+- Recent results: ${JSON.stringify(searchHistory.slice(-{{POPULATION_SIZE_VAR}}))}
+
+Analyze patterns in good vs bad configurations. Suggest how to narrow the search space.`, {
+    label: `refine-${round}`,
+    phase: 'Prune',
+    schema: {{REFINE_SCHEMA}},
+  })
+  //[/BLOCK:search_space_shrink]
+
+  log(`Round ${round + 1} done. History: ${searchHistory.length} configs evaluated.`)
+}
+
+// =============================================================================
+// Final Report
+// =============================================================================
+phase('Report')
+
+const finalReport = await agent(`{{REPORT_PROMPT}}
+
+# Search Results:
+- Rounds: ${{{BUDGET_VAR}}}
+- Total configs evaluated: ${searchHistory.length}
+- Best metric: ${bestMetric}
+- Best config: ${JSON.stringify(bestConfig)}
+
+# Top 5 configurations:
+${JSON.stringify(searchHistory.filter(h => h.is_valid).sort((a, b) => {{HIGHER_IS_BETTER}} ? b.metric - a.metric : a.metric - b.metric).slice(0, 5))}`, {
+  label: 'final-report',
+  phase: 'Report',
+})
+
+return {
+  {{RETURN_OBJECT}}
+}

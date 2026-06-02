@@ -1,0 +1,776 @@
+export const meta = {
+  name: 'ksearch-kernel-optimization',
+  description: 'World-model-guided tree search for GPU kernel optimization (K-Search methodology)',
+  whenToUse: 'When you need to explore a large kernel design space systematically rather than iterating on a single optimization path. Uses a co-evolving decision tree (world model) to track hypotheses, guide action selection, and backtrack from failed strategies. Best for complex kernels where multiple orthogonal design decisions interact (e.g., MLA attention, MoE routing, fused operators).',
+  phases: [
+    { title: 'Setup', detail: 'Read kernel spec, evaluate baseline performance' },
+    { title: 'Initialize', detail: 'Build initial world model decision tree with design hypotheses' },
+    { title: 'Select', detail: 'Choose highest-scoring open frontier action node' },
+    { title: 'Generate', detail: 'Generate and iteratively improve kernel code for selected action' },
+    { title: 'Evaluate', detail: 'Compile, run, and measure kernel against workloads' },
+    { title: 'Refine', detail: 'Update tree: attach solution (success) or downgrade + backtrack (failure)' },
+    { title: 'Report', detail: 'Final optimization report with search trajectory' },
+  ],
+}
+
+// =============================================================================
+// K-Search: Co-Evolving World Model Kernel Optimization Workflow
+// =============================================================================
+//
+// Source: "K-Search: LLM Kernel Generation via Co-Evolving Intrinsic World Model"
+//         arXiv:2602.19128 — Shiyi Cao, Ziming Mao, Joseph E. Gonzalez, Ion Stoica
+//
+// Core idea: maintain a JSON decision tree (world model) encoding kernel design
+// hypotheses. Each cycle selects the highest-scoring open action node, generates
+// code with multiple improve attempts, evaluates, then refines (success) or
+// backtracks (failure). The tree co-evolves with the solutions.
+//
+// Usage:
+//   Workflow({name: 'ksearch-kernel-optimization', args: {
+//     kernel_spec_path: '/path/to/spec.yaml',
+//     op_description: 'MLA decode attention kernel',
+//     language: 'triton',                 // triton | cuda | python
+//     target_gpu: 'H100',
+//     max_cycles: 10,                     // search cycles
+//     attempts_per_cycle: 5,              // generate/improve rounds per cycle
+//     stagnation_window: 3,              // non-improving attempts before cycle ends
+//     max_difficulty: 4,                  // max action difficulty (1-5)
+//     bench_command: 'python eval.py --kernel',
+//     baseline_code_path: '/path/to/baseline.py',
+//     rtol: 0.01,
+//     atol: 0.01,
+//     exp_dir: '/tmp/ksearch_exp',
+//   }})
+//
+// =============================================================================
+
+const KERNEL_SPEC_PATH = args.kernel_spec_path
+const OP_DESC = args.op_description || 'GPU kernel'
+const LANGUAGE = args.language || 'triton'
+const TARGET_GPU = args.target_gpu || 'H100'
+const MAX_CYCLES = args.max_cycles || 10
+const ATTEMPTS_PER_CYCLE = args.attempts_per_cycle || 5
+const STAGNATION_WINDOW = args.stagnation_window || 3
+const MAX_DIFFICULTY = args.max_difficulty || 4
+const BENCH_CMD = args.bench_command || ''
+const BASELINE_CODE_PATH = args.baseline_code_path || ''
+const RTOL = args.rtol || 0.01
+const ATOL = args.atol || 0.01
+const EXP_DIR = args.exp_dir || '/tmp/ksearch_exp'
+
+// State
+let decisionTree = null
+let solutionDb = []
+let bestSolution = null
+let bestMetric = null
+let baselineMetric = null
+let specText = ''
+let cycleCount = 0
+let globalRound = 0
+
+// =============================================================================
+// Phase 1: Setup — Read spec, evaluate baseline
+// =============================================================================
+phase('Setup')
+
+const setupResult = await agent(`You are a GPU kernel optimization expert. Read and analyze the kernel specification.
+
+# Task
+Read the kernel specification file at: ${KERNEL_SPEC_PATH}
+${BASELINE_CODE_PATH ? `Also read the baseline kernel at: ${BASELINE_CODE_PATH}` : ''}
+
+# Analyze and return:
+1. **spec_text**: The full specification text (problem definition, input/output formats, constraints)
+2. **op_type**: Classification of the operation (e.g., "mla_attention", "moe_routing", "gemm", "softmax")
+3. **input_shapes**: Description of input tensor shapes and data types
+4. **output_shape**: Expected output shape and type
+5. **constraints**: List of hard constraints (numerical precision, memory limits, etc.)
+6. **baseline_code**: The baseline kernel code (if available)
+7. **key_challenges**: What makes this kernel hard to optimize?
+8. **design_dimensions**: Orthogonal axes of the design space (e.g., tiling strategy, memory hierarchy usage, parallelism decomposition, algorithmic variant)
+
+Target language: ${LANGUAGE}
+Target GPU: ${TARGET_GPU}
+Operation: ${OP_DESC}
+
+Return structured analysis.`, {
+  label: 'read-spec',
+  phase: 'Setup',
+  schema: {
+    type: 'object',
+    properties: {
+      spec_text: { type: 'string' },
+      op_type: { type: 'string' },
+      input_shapes: { type: 'string' },
+      output_shape: { type: 'string' },
+      constraints: { type: 'array', items: { type: 'string' } },
+      baseline_code: { type: 'string' },
+      key_challenges: { type: 'array', items: { type: 'string' } },
+      design_dimensions: { type: 'array', items: { type: 'string' } },
+    },
+    required: ['spec_text', 'op_type'],
+  },
+})
+
+specText = setupResult.spec_text
+const opType = setupResult.op_type
+
+// Evaluate baseline
+const baselineEval = await agent(`You are a kernel evaluation expert. Evaluate the baseline kernel to establish reference performance.
+
+# Kernel Spec:
+${specText.substring(0, 2000)}
+
+# Baseline Code:
+\`\`\`${LANGUAGE}
+${(setupResult.baseline_code || '').substring(0, 3000)}
+\`\`\`
+
+# Evaluation Instructions:
+${BENCH_CMD ? `Run: ${BENCH_CMD}` : 'Perform static analysis to estimate baseline performance.'}
+
+Establish the baseline metric. If a benchmark command is available, compile and run it.
+If not, analyze the code and estimate performance characteristics.
+
+The metric is mean_vs_baseline_factor (this IS the baseline, so it should be 1.0).
+Also report absolute latency if measurable.
+
+Return evaluation results.`, {
+  label: 'eval-baseline',
+  phase: 'Setup',
+  schema: {
+    type: 'object',
+    properties: {
+      baseline_metric: { type: 'number' },
+      baseline_latency_ms: { type: 'number' },
+      eval_passed: { type: 'boolean' },
+      performance_profile: { type: 'string' },
+      bottleneck_analysis: { type: 'string' },
+    },
+    required: ['baseline_metric', 'eval_passed'],
+  },
+})
+
+baselineMetric = baselineEval.baseline_metric || 1.0
+bestMetric = baselineMetric
+log(`Baseline: metric=${baselineMetric}, latency=${baselineEval.baseline_latency_ms || 'N/A'}ms`)
+log(`Bottleneck: ${baselineEval.bottleneck_analysis || 'unknown'}`)
+
+// =============================================================================
+// Phase 2: Initialize — Build the world model decision tree
+// =============================================================================
+phase('Initialize')
+
+const initResult = await agent(`You are a kernel optimization architect. Build an initial world model decision tree for systematic design space exploration.
+
+# Kernel Specification:
+${specText.substring(0, 3000)}
+
+# Operation: ${OP_DESC} (${opType})
+# Language: ${LANGUAGE}
+# Target GPU: ${TARGET_GPU}
+# Baseline performance: metric=${baselineMetric}, latency=${baselineEval.baseline_latency_ms || 'N/A'}ms
+# Bottleneck: ${baselineEval.bottleneck_analysis || 'unknown'}
+
+# Design Dimensions Identified:
+${(setupResult.design_dimensions || []).map((d, i) => `${i + 1}. ${d}`).join('\n')}
+
+# Key Challenges:
+${(setupResult.key_challenges || []).map((c, i) => `${i + 1}. ${c}`).join('\n')}
+
+# World Model Structure
+
+Build a decision tree where:
+- Root node (id: "root") is a dummy anchor
+- Level 1+ nodes represent design DECISIONS (what aspect to optimize)
+- Each node has:
+  - node_id: unique string identifier
+  - parent_id: parent node id
+  - node_type: "decision" | "action"
+  - decision: what design dimension this addresses
+  - choice: the specific strategy chosen
+  - action: {title, description, difficulty_1_to_5, score_0_to_1, expected_vs_baseline_factor}
+  - status: "open" (no solution attached yet) | "solved" | "failed"
+  - children: array of child node ids
+
+# Requirements:
+1. Create at least 5 open action nodes across different design dimensions
+2. Each action should be concrete enough to implement (not vague like "optimize memory")
+3. Assign difficulty 1-5 (1=simple parameter tuning, 5=complete algorithmic redesign)
+4. Assign score 0-1 (expected value of pursuing this action, based on bottleneck analysis)
+5. Assign expected_vs_baseline_factor (realistic expected speedup if successful)
+6. Cover diverse strategies: don't put all nodes in the same design dimension
+7. Order by estimated impact: highest-value, lowest-difficulty actions should have higher scores
+
+Return the complete decision tree.`, {
+  label: 'init-tree',
+  phase: 'Initialize',
+  schema: {
+    type: 'object',
+    properties: {
+      decision_tree: { type: 'object' },
+      node_count: { type: 'number' },
+      open_actions: { type: 'number' },
+      design_dimensions: { type: 'array', items: { type: 'string' } },
+      initial_hypotheses: { type: 'array', items: { type: 'string' } },
+    },
+    required: ['decision_tree', 'node_count', 'open_actions'],
+  },
+})
+
+decisionTree = initResult.decision_tree
+log(`World model initialized: ${initResult.node_count} nodes, ${initResult.open_actions} open actions`)
+log(`Dimensions: ${(initResult.design_dimensions || []).join(', ')}`)
+
+// =============================================================================
+// Search Cycles — Select → Generate/Improve → Evaluate → Refine/Backtrack
+// =============================================================================
+
+for (let cycle = 0; cycle < MAX_CYCLES; cycle++) {
+  log(`\n=== Cycle ${cycle + 1}/${MAX_CYCLES} | Best: ${bestMetric?.toFixed(3) || 'N/A'}x | Solutions: ${solutionDb.length} ===`)
+
+  // ===========================================================================
+  // Cycle Start: Propose action nodes to ensure frontier has enough candidates
+  // (K-Search calls propose_action_nodes() at the start of every cycle)
+  // ===========================================================================
+  phase('Select')
+
+  const proposeResult = await agent(`You are a world model manager. Ensure the decision tree has enough high-quality open action nodes on the frontier.
+
+# Current Decision Tree:
+${JSON.stringify(decisionTree, null, 2).substring(0, 5000)}
+
+# Frontier Requirements:
+- There must be at least 3 open frontier action nodes (status="open", action.title non-empty)
+- At least one must have score_0_to_1 > 0.5
+- A frontier node is "executable" only if its parent has a solution attached OR it is a direct child of root
+- If requirements are already met, return the tree unchanged
+
+# If requirements NOT met:
+- Add 2-3 new open action nodes in under-explored design dimensions
+- Each new node needs: node_id, parent_id, action.title, action.description, difficulty_1_to_5, score_0_to_1, expected_vs_baseline_factor
+- Prefer attaching new actions as children of the best-performing solved nodes (builds on success)
+
+# Current best metric: ${bestMetric || baselineMetric}
+
+Return the (possibly updated) tree and a count of open frontier nodes.`, {
+    label: `propose-${cycle}`,
+    phase: 'Select',
+    schema: {
+      type: 'object',
+      properties: {
+        updated_tree: { type: 'object' },
+        open_frontier_count: { type: 'number' },
+        nodes_added: { type: 'number' },
+      },
+      required: ['updated_tree', 'open_frontier_count'],
+    },
+  })
+
+  if (proposeResult && proposeResult.updated_tree) {
+    decisionTree = proposeResult.updated_tree
+  }
+
+  // ===========================================================================
+  // Select — Choose best frontier action node
+  // K-Search selection: sort by (-score, +difficulty, -overall_rating, node_id)
+  // Hard constraint: only executable frontier nodes with difficulty <= MAX_DIFFICULTY
+  // ===========================================================================
+
+  const selection = await agent(`You are a search strategy expert implementing the K-Search action selection algorithm.
+
+# Decision Tree (current state):
+${JSON.stringify(decisionTree, null, 2).substring(0, 6000)}
+
+# Selection Algorithm (DETERMINISTIC — follow exactly):
+1. Identify all "open frontier" nodes: status="open" AND action.title is non-empty AND (parent has solution_id OR parent is root)
+2. Filter: only keep nodes with difficulty_1_to_5 <= ${MAX_DIFFICULTY}
+3. Sort remaining by: (-score_0_to_1, +difficulty_1_to_5, -overall_rating_0_to_10, +node_id alphabetically)
+4. Select the FIRST node after sorting (highest utility)
+
+If no nodes pass the filter, relax difficulty constraint and try again with all candidates.
+If still no candidates, return selected_node_id = null (search exhausted).
+
+# Current State:
+- Best metric: ${bestMetric || 'baseline only'}
+- Solutions: ${solutionDb.length}
+- Cycle: ${cycle + 1}/${MAX_CYCLES}
+
+# Also provide:
+- parent_solution_code: code from the parent node's attached solution (or baseline code if parent is root)
+- parent_metric: the score of the parent node's solution
+- context_for_generation: ancestor path decisions + sibling outcomes (compact)
+
+Return selection result.`, {
+    label: `select-${cycle}`,
+    phase: 'Select',
+    schema: {
+      type: 'object',
+      properties: {
+        selected_node_id: { type: 'string' },
+        action_title: { type: 'string' },
+        action_description: { type: 'string' },
+        action_score: { type: 'number' },
+        action_difficulty: { type: 'number' },
+        parent_solution_code: { type: 'string' },
+        parent_metric: { type: 'number' },
+        parent_is_root: { type: 'boolean' },
+        context_for_generation: { type: 'object' },
+        reasoning: { type: 'string' },
+      },
+      required: ['selected_node_id', 'action_title'],
+    },
+  })
+
+  if (!selection || !selection.selected_node_id) {
+    log('No viable action nodes remain — search exhausted.')
+    break
+  }
+
+  const activeNodeId = selection.selected_node_id
+  const parentCode = selection.parent_solution_code || setupResult.baseline_code || ''
+  const parentIsRoot = selection.parent_is_root || false
+  const baseScore = selection.parent_metric || baselineMetric
+
+  log(`Selected: "${selection.action_title}" (node=${activeNodeId}, score=${selection.action_score || '?'}, difficulty=${selection.action_difficulty || '?'})`)
+
+  // ===========================================================================
+  // Phase: Generate — Multi-attempt code generation with dual stagnation detection
+  //
+  // K-Search has TWO stagnation counters:
+  //   1. no_improve_streak: consecutive rounds not beating cycle_best_score
+  //   2. no_improve_over_base_streak: consecutive rounds where cycle_best <= parent score
+  // Either reaching STAGNATION_WINDOW terminates the cycle.
+  //
+  // Prompt selection (4 branches):
+  //   - Attempt 1: "generate from action" (with or without base code)
+  //   - Attempts 2+: "debug" (no passing solution yet) OR "improve" (have passing solution)
+  //     Each further splits on whether base code exists.
+  // ===========================================================================
+  phase('Generate')
+
+  let cycleBestCode = null
+  let cycleBestEval = null
+  let cycleBestScore = -1
+  let currentRawCode = null  // tracks the LAST generated code (for debug prompts)
+  let noImproveStreak = 0
+  let noImproveOverBaseStreak = 0
+  let hasPassedInCycle = false
+
+  for (let attempt = 0; attempt < ATTEMPTS_PER_CYCLE; attempt++) {
+    globalRound++
+    const isFirstAttempt = attempt === 0
+
+    // Compact WM section injected into every codegen prompt (K-Search does this)
+    const wmSection = `\n\n# World Model (persistent decision tree — use it to guide design):\n${JSON.stringify(decisionTree, null, 2).substring(0, 3000)}`
+
+    // Determine base_for_debug: whichever of parentCode and cycleBestCode has higher score
+    const baseForDebug = (cycleBestCode && cycleBestScore > baseScore) ? cycleBestCode : parentCode
+    const baseForDebugLabel = (cycleBestCode && cycleBestScore > baseScore) ? 'cycle_best' : 'parent'
+
+    let genResult
+
+    if (isFirstAttempt) {
+      // Attempt 1: generate from action (with or without base code)
+      genResult = await agent(`You are an expert ${LANGUAGE} kernel developer. Generate a high-performance kernel implementing a SPECIFIC optimization action.
+
+# Operation: ${OP_DESC} (${opType})
+# Target: ${TARGET_GPU}
+# Language: ${LANGUAGE}
+
+# Kernel Specification:
+${specText.substring(0, 2000)}
+
+# Action to implement: "${selection.action_title}"
+${selection.action_description || ''}
+
+${parentCode ? `# Base code (from parent node — start from this and apply the action):
+\`\`\`${LANGUAGE}
+${parentCode.substring(0, 4000)}
+\`\`\`` : '# No base code available — implement from specification directly.'}
+
+# Tree context (ancestor decisions):
+${JSON.stringify(selection.context_for_generation || {}).substring(0, 1500)}
+${wmSection}
+
+# Requirements:
+1. Output COMPLETE, COMPILABLE ${LANGUAGE} code
+2. Implement ONLY the specified action — keep everything else close to base
+3. Must be functionally correct (outputs within rtol=${RTOL}, atol=${ATOL})
+4. Target ${TARGET_GPU} architecture
+5. Include all necessary imports/headers
+
+Return the complete kernel code.`, {
+        label: `gen-${cycle}-${attempt}`,
+        phase: 'Generate',
+        schema: {
+          type: 'object',
+          properties: {
+            code: { type: 'string' },
+            implementation_notes: { type: 'string' },
+            design_choices: { type: 'array', items: { type: 'string' } },
+          },
+          required: ['code'],
+        },
+      })
+    } else if (!hasPassedInCycle) {
+      // Attempts 2+, NO passing solution yet: DEBUG prompt
+      // Uses currentRawCode (last attempt's code) as the buggy code to fix
+      genResult = await agent(`You are an expert ${LANGUAGE} kernel developer. The previous attempt has bugs or fails correctness. Debug and fix it.
+
+# Operation: ${OP_DESC} (${opType})
+# Target: ${TARGET_GPU}
+# Language: ${LANGUAGE}
+
+# Kernel Specification:
+${specText.substring(0, 1500)}
+
+# Action: "${selection.action_title}"
+${selection.action_description || ''}
+
+${parentCode ? `# Base code (known-good reference, from ${baseForDebugLabel}):
+\`\`\`${LANGUAGE}
+${baseForDebug.substring(0, 3000)}
+\`\`\`` : ''}
+
+# Buggy code (last attempt — FIX THIS):
+\`\`\`${LANGUAGE}
+${(currentRawCode || '').substring(0, 4000)}
+\`\`\`
+
+# Previous evaluation (shows what went wrong):
+${JSON.stringify(cycleBestEval || {}, null, 2).substring(0, 1500)}
+
+# Debug round: ${attempt + 1}/${ATTEMPTS_PER_CYCLE}
+# Priority: FIX CORRECTNESS FIRST, then optimize performance.
+${wmSection}
+
+Return the fixed kernel code.`, {
+        label: `debug-${cycle}-${attempt}`,
+        phase: 'Generate',
+        schema: {
+          type: 'object',
+          properties: {
+            code: { type: 'string' },
+            changes_made: { type: 'string' },
+            bugs_fixed: { type: 'array', items: { type: 'string' } },
+          },
+          required: ['code'],
+        },
+      })
+    } else {
+      // Attempts 2+, HAVE a passing solution: IMPROVE prompt
+      // Focus on performance, not correctness
+      genResult = await agent(`You are an expert ${LANGUAGE} kernel developer. You have a working solution — improve its performance.
+
+# Operation: ${OP_DESC} (${opType})
+# Target: ${TARGET_GPU}
+# Language: ${LANGUAGE}
+
+# Kernel Specification:
+${specText.substring(0, 1500)}
+
+${parentCode ? `# Base code (reference, from ${baseForDebugLabel}):
+\`\`\`${LANGUAGE}
+${baseForDebug.substring(0, 3000)}
+\`\`\`` : ''}
+
+# Current working code (improve this):
+\`\`\`${LANGUAGE}
+${(currentRawCode || cycleBestCode || '').substring(0, 4000)}
+\`\`\`
+
+# Current performance:
+- Last attempt metric: ${cycleBestEval?.metric_value || 'unknown'}
+- vs parent (${baseScore}): ${cycleBestScore > baseScore ? 'BEATING' : 'NOT YET BEATING'} parent
+- vs global best (${bestMetric}): ${cycleBestScore > bestMetric ? 'NEW BEST' : 'below best'}
+
+# Improvement round: ${attempt + 1}/${ATTEMPTS_PER_CYCLE}
+# Target: beat metric ${Math.max(bestMetric || 0, baseScore)}
+${wmSection}
+
+Focus on PERFORMANCE OPTIMIZATION. The code is already correct.
+Return improved kernel code.`, {
+        label: `improve-${cycle}-${attempt}`,
+        phase: 'Generate',
+        schema: {
+          type: 'object',
+          properties: {
+            code: { type: 'string' },
+            changes_made: { type: 'string' },
+            expected_improvement: { type: 'string' },
+          },
+          required: ['code'],
+        },
+      })
+    }
+
+    if (!genResult || !genResult.code) continue
+
+    // Track the LAST generated code (used in debug prompts for next attempt)
+    currentRawCode = genResult.code
+
+    // =========================================================================
+    // Phase: Evaluate
+    // =========================================================================
+    phase('Evaluate')
+
+    const evalResult = await agent(`You are a kernel evaluation expert. Evaluate this ${LANGUAGE} kernel for correctness and performance.
+
+# Kernel Code:
+\`\`\`${LANGUAGE}
+${genResult.code.substring(0, 4000)}
+\`\`\`
+
+# Kernel Specification (for correctness reference):
+${specText.substring(0, 1500)}
+
+# Evaluation Steps:
+
+## 1. Compilation Check
+- Is the code syntactically valid ${LANGUAGE}?
+- All imports/includes present?
+
+## 2. Correctness Check
+- Implements specification correctly?
+- No race conditions, out-of-bounds, precision issues?
+- Outputs match reference within rtol=${RTOL}, atol=${ATOL}?
+
+## 3. Performance Measurement
+${BENCH_CMD ? `Run benchmark: ${BENCH_CMD}` : 'Estimate performance via code analysis.'}
+- Latency (ms)
+- metric_value = mean_vs_baseline_factor (higher = better, baseline=${baselineMetric})
+
+## 4. Performance Analysis
+- Primary bottleneck?
+- Underutilized hardware resources?
+
+# Context:
+- Baseline: ${baselineMetric}, Parent: ${baseScore}, Global best: ${bestMetric || baselineMetric}
+- Action: "${selection.action_title}"
+
+Return evaluation.`, {
+      label: `eval-${cycle}-${attempt}`,
+      phase: 'Evaluate',
+      schema: {
+        type: 'object',
+        properties: {
+          is_valid: { type: 'boolean' },
+          metric_value: { type: 'number' },
+          latency_ms: { type: 'number' },
+          speedup_vs_baseline: { type: 'number' },
+          pass_rate: { type: 'string' },
+          error_log: { type: 'string' },
+          performance_analysis: { type: 'string' },
+          remaining_bottleneck: { type: 'string' },
+        },
+        required: ['is_valid', 'metric_value'],
+      },
+    })
+
+    if (!evalResult) continue
+
+    // Track solution
+    solutionDb.push({
+      id: `cycle_${cycle}_attempt_${attempt}`,
+      code: genResult.code,
+      eval: evalResult,
+      node_id: activeNodeId,
+    })
+
+    const roundScore = evalResult.is_valid ? evalResult.metric_value : -1
+    const allPassed = evalResult.is_valid
+
+    // Update cycle best (K-Search: only update if passed AND score > cycle_best_score)
+    if (allPassed && roundScore > cycleBestScore) {
+      cycleBestCode = genResult.code
+      cycleBestEval = evalResult
+      cycleBestScore = roundScore
+      hasPassedInCycle = true
+      noImproveStreak = 0
+    } else {
+      noImproveStreak++
+    }
+
+    // Second stagnation counter: cycle best vs parent/base score
+    if (cycleBestScore > 0 && baseScore > 0) {
+      if (cycleBestScore > baseScore) {
+        noImproveOverBaseStreak = 0
+      } else {
+        noImproveOverBaseStreak++
+      }
+    }
+
+    // Dual stagnation detection (K-Search terminates cycle on EITHER)
+    if (noImproveStreak >= STAGNATION_WINDOW || noImproveOverBaseStreak >= STAGNATION_WINDOW) {
+      log(`Stagnation after ${attempt + 1} attempts (streak=${noImproveStreak}, over_base=${noImproveOverBaseStreak}) — ending cycle`)
+      break
+    }
+  }
+
+  // ===========================================================================
+  // Phase: Refine or Backtrack
+  // K-Search: cycleSucceeded = at least one PASSED eval in this cycle
+  // ===========================================================================
+  phase('Refine')
+
+  const cycleSucceeded = hasPassedInCycle
+
+  if (cycleSucceeded) {
+    // Update global best
+    if (bestMetric === null || cycleBestScore > bestMetric) {
+      bestMetric = cycleBestScore
+      bestSolution = { code: cycleBestCode, eval: cycleBestEval, node_id: activeNodeId }
+      log(`NEW GLOBAL BEST: ${bestMetric.toFixed(3)}x vs baseline`)
+    }
+
+    // Refine the tree — attach solution, update scores, add continuation children
+    // K-Search hard requirement: the solved node MUST have at least one open child after refine
+    const refineResult = await agent(`You are a world model manager. The search cycle SUCCEEDED. Update the decision tree.
+
+# Outcome:
+- Node: ${activeNodeId}
+- Action: "${selection.action_title}"
+- Achieved metric: ${cycleBestScore} (vs baseline ${baselineMetric}, vs parent ${baseScore})
+- Speedup vs baseline: ${cycleBestEval.speedup_vs_baseline || 'N/A'}x
+- Performance analysis: ${cycleBestEval.performance_analysis || 'N/A'}
+- Remaining bottleneck: ${cycleBestEval.remaining_bottleneck || 'unknown'}
+- Global best: ${bestMetric}
+
+# Current Decision Tree:
+${JSON.stringify(decisionTree, null, 2).substring(0, 5000)}
+
+# Tasks (ALL REQUIRED):
+1. **Attach solution**: Mark node ${activeNodeId} as status="solved", record metric=${cycleBestScore}
+2. **Update ancestor scores**: Increase scores of ancestors if result exceeded expected_vs_baseline_factor; decrease slightly if below
+3. **MANDATORY — Add continuation children**: You MUST add at least 2 NEW open action nodes as children of ${activeNodeId}. This is a HARD REQUIREMENT — the solved node must have open children for the search to continue.
+   - Each child should address the remaining bottleneck (${cycleBestEval.remaining_bottleneck || 'unknown'}) or explore orthogonal improvements
+   - Assign realistic difficulty (1-5) and score (0-1)
+4. **Reflect**: Add a note with CURRENT observation, FOLLOW_THROUGH items, and UPDATE_BELIEF adjustments
+
+Return the updated tree. The solved node MUST have at least one open child action node.`, {
+      label: `refine-${cycle}`,
+      phase: 'Refine',
+      schema: {
+        type: 'object',
+        properties: {
+          updated_tree: { type: 'object' },
+          new_actions_added: { type: 'number' },
+          score_updates: { type: 'array', items: { type: 'string' } },
+          reflection: { type: 'string' },
+        },
+        required: ['updated_tree', 'new_actions_added'],
+      },
+    })
+
+    if (refineResult && refineResult.updated_tree) {
+      decisionTree = refineResult.updated_tree
+      // Hard fallback: if refine didn't add children, we note it (in real K-Search this inserts a deterministic node)
+      if ((refineResult.new_actions_added || 0) < 1) {
+        log(`WARNING: refine did not add continuation children — search may stall on this branch`)
+      }
+      log(`Refined: +${refineResult.new_actions_added || 0} new actions. ${refineResult.reflection || ''}`)
+    }
+  } else {
+    // Backtrack — downgrade node (note_action_too_hard)
+    const backtrackResult = await agent(`You are a world model manager. The search cycle FAILED — no passing solution was produced. Update the decision tree.
+
+# Outcome:
+- Node: ${activeNodeId}
+- Action attempted: "${selection.action_title}" (difficulty: ${selection.action_difficulty || '?'})
+- Result: NO PASSED SOLUTION in ${Math.min(ATTEMPTS_PER_CYCLE, noImproveStreak + 1)} attempts
+- Best attempt: ${cycleBestEval ? `is_valid=${cycleBestEval.is_valid}, metric=${cycleBestEval.metric_value}` : 'all failed'}
+- Error: ${cycleBestEval?.error_log || 'compilation/correctness failure'}
+
+# Current Decision Tree:
+${JSON.stringify(decisionTree, null, 2).substring(0, 5000)}
+
+# Tasks:
+1. **Downgrade node**: Mark ${activeNodeId} status="failed", reduce score_0_to_1 significantly, increase difficulty_1_to_5 by 1 (cap at 5)
+2. **Failure analysis**: Why did this action fail? (too complex, wrong prerequisite, incompatible with target arch, etc.)
+3. **Add recovery actions**: Add 1-2 NEW easier alternative nodes (lower difficulty, different approach to same dimension)
+4. **Update siblings**: If this failure implies sibling strategies are also risky, reduce their scores
+
+Return the updated tree.`, {
+      label: `backtrack-${cycle}`,
+      phase: 'Refine',
+      schema: {
+        type: 'object',
+        properties: {
+          updated_tree: { type: 'object' },
+          failure_analysis: { type: 'string' },
+          recovery_actions: { type: 'array', items: { type: 'string' } },
+          downgraded_node: { type: 'string' },
+        },
+        required: ['updated_tree'],
+      },
+    })
+
+    if (backtrackResult && backtrackResult.updated_tree) {
+      decisionTree = backtrackResult.updated_tree
+      log(`Backtracked: ${backtrackResult.failure_analysis || 'action too hard'}`)
+      log(`Recovery: ${(backtrackResult.recovery_actions || []).join(', ')}`)
+    }
+  }
+
+  cycleCount++
+}
+
+// =============================================================================
+// Final Report
+// =============================================================================
+phase('Report')
+
+const topSolutions = solutionDb
+  .filter(s => s.eval?.is_valid)
+  .sort((a, b) => (b.eval.metric_value || 0) - (a.eval.metric_value || 0))
+  .slice(0, 5)
+
+const finalReport = await agent(`Write a concise technical report on this K-Search kernel optimization campaign.
+
+# K-Search Optimization Results
+- Operation: ${OP_DESC} (${opType})
+- Language: ${LANGUAGE}, Target: ${TARGET_GPU}
+- Baseline metric: ${baselineMetric}
+- Best metric achieved: ${bestMetric}
+- Overall speedup: ${bestMetric ? (bestMetric / baselineMetric).toFixed(2) : 'N/A'}x
+- Cycles completed: ${cycleCount}/${MAX_CYCLES}
+- Total solutions evaluated: ${solutionDb.length}
+- Valid solutions: ${solutionDb.filter(s => s.eval?.is_valid).length}
+
+# Best Solution (node: ${bestSolution?.node_id || 'none'}):
+\`\`\`${LANGUAGE}
+${(bestSolution?.code || '').substring(0, 3000)}
+\`\`\`
+
+# Top 5 Solutions:
+${topSolutions.map((s, i) => `${i + 1}. ${s.id} (node=${s.node_id}, metric=${s.eval.metric_value})`).join('\n')}
+
+# Final Decision Tree State:
+${JSON.stringify(decisionTree, null, 2).substring(0, 3000)}
+
+# Write:
+1. Search trajectory: which actions were attempted in what order, success/failure pattern
+2. Key insights: what design decisions yielded the most improvement?
+3. World model evolution: how did the tree structure change over time?
+4. Failed strategies: what was tried and abandoned, and why?
+5. Remaining opportunities: what open actions in the tree look promising for future exploration?`, {
+  label: 'final-report',
+  phase: 'Report',
+})
+
+return {
+  best_metric: bestMetric,
+  best_solution_code: bestSolution?.code || '',
+  cycles_completed: cycleCount,
+  solutions_evaluated: solutionDb.length,
+  decision_tree: decisionTree,
+  solution_lineage: topSolutions.map(s => ({
+    id: s.id,
+    node_id: s.node_id,
+    metric: s.eval.metric_value,
+  })),
+  report: finalReport,
+  baseline_metric: baselineMetric,
+  speedup_over_baseline: bestMetric ? bestMetric / baselineMetric : 1.0,
+}

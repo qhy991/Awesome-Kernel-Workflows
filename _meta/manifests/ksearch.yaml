@@ -1,0 +1,387 @@
+# =============================================================================
+# K-Search Manifest — Co-Evolving World Model for Kernel Optimization
+# =============================================================================
+# Source: arXiv:2602.19128 "K-Search: LLM Kernel Generation via Co-Evolving
+#         Intrinsic World Model"
+# Authors: Shiyi Cao, Ziming Mao, Joseph E. Gonzalez, Ion Stoica
+# =============================================================================
+
+source:
+  paper_title: "K-Search: LLM Kernel Generation via Co-Evolving Intrinsic World Model"
+  paper_url: "https://arxiv.org/abs/2602.19128"
+  paper_venue: ""
+  repo_url: "https://github.com/mao-code/K-Search"
+  commit_or_tag: ""
+  license: ""
+  notes: >
+    Core methodology from Section 3: co-evolving world model as a decision/prefix
+    tree that guides evidence-driven search across the kernel design space. Each node
+    represents a design decision; the system selects the highest-scoring open frontier
+    node, generates code, evaluates, then refines or backtracks.
+
+workflow:
+  name: "ksearch-kernel-optimization"
+  description: "World-model-guided tree search for GPU kernel optimization (K-Search methodology)"
+  when_to_use: >
+    When you need to explore a large kernel design space systematically rather than
+    iterating on a single optimization path. Uses a co-evolving decision tree (world model)
+    to track hypotheses, guide action selection via utility scoring, and backtrack from
+    failed strategies. Best for complex kernels where multiple orthogonal design decisions
+    interact (e.g., MLA attention, MoE routing, fused operators).
+  output_filename: "ksearch-kernel-optimization.js"
+  directory: "KSearch/"
+
+method:
+  category: "tree_exploration"
+  core_insight: >
+    Instead of linear iteration, maintain a structured JSON decision tree encoding kernel
+    design hypotheses, alternatives, and their empirical outcomes. Each tree node carries
+    a utility score (combining expected speedup, difficulty, confidence). The system
+    deterministically selects the highest-scoring open frontier node, attempts code generation
+    with multiple debug/improve rounds, then either refines the tree (success: attach solution,
+    update ancestor scores, add continuation children) or backtracks (failure: downgrade node,
+    propose recovery actions). This avoids getting stuck in local optima and enables
+    systematic coverage of the design space.
+  feedback_signal:
+    type: "throughput_delta"
+    description: "mean_vs_baseline_factor — geometric mean speedup over baseline across feedback workloads"
+    tool: "custom_bench"
+    higher_is_better: true
+
+topology:
+  type: "tree"
+  tree:
+    branching_factor_arg: ""
+    max_depth_arg: ""
+    scoring_function: >
+      Deterministic utility: weighted combination of action score_0_to_1, difficulty (lower=better),
+      tree depth (prefer shallow), parent solution quality, overall_rating_0_to_10, and confidence_0_to_1.
+      Hard constraint: only attempt nodes with difficulty <= max_difficulty.
+    backtrack_condition: >
+      No PASSED solution after all attempts in a cycle, OR stagnation (no_improve_streak
+      reaches wm_stagnation_window). On backtrack: downgrade node score/difficulty, add
+      recovery action nodes, advance to next frontier node.
+  iterative:
+    max_iterations_arg: "max_cycles"
+    convergence_condition: "No open frontier nodes remain, or budget exhausted"
+    state_variables:
+      - name: "decisionTree"
+        type: "object"
+        initial_value: "null"
+        description: "JSON decision tree (world model) with nodes, scores, actions, solutions"
+      - name: "solutionDb"
+        type: "array"
+        initial_value: "[]"
+        description: "Array of {id, code, eval, node_id} — all evaluated solutions"
+      - name: "bestSolution"
+        type: "object"
+        initial_value: "null"
+        description: "Best solution found: {code, eval, node_id}"
+      - name: "bestMetric"
+        type: "number"
+        initial_value: "null"
+        description: "Best metric value (mean_vs_baseline_factor)"
+      - name: "cycleCount"
+        type: "number"
+        initial_value: "0"
+        description: "Number of completed search cycles"
+
+phases:
+  # --- PREAMBLE ---
+  - name: "Setup"
+    detail: "Read target kernel specification and establish baseline performance"
+    position: "preamble"
+    agents:
+      - label: "read-spec"
+        description: "Read and analyze the kernel specification / problem definition"
+        parallelism: "single"
+        input_variables: ["KERNEL_SPEC_PATH", "LANGUAGE", "TARGET_GPU"]
+        output_schema:
+          type: "object"
+          properties:
+            spec_text: { type: "string" }
+            op_type: { type: "string" }
+            input_shapes: { type: "string" }
+            output_shape: { type: "string" }
+            constraints: { type: "array", items: { type: "string" } }
+            baseline_code: { type: "string" }
+            baseline_metric: { type: "number" }
+          required: ["spec_text", "op_type"]
+      - label: "eval-baseline"
+        description: "Evaluate baseline kernel to establish reference metric"
+        parallelism: "single"
+        input_variables: ["KERNEL_SPEC_PATH", "BENCH_CMD", "BASELINE_CODE"]
+        output_schema:
+          type: "object"
+          properties:
+            baseline_latency_ms: { type: "number" }
+            baseline_throughput: { type: "number" }
+            baseline_metric: { type: "number" }
+            eval_passed: { type: "boolean" }
+          required: ["baseline_metric", "eval_passed"]
+
+  - name: "Initialize"
+    detail: "Build the initial world model decision tree with design hypotheses"
+    position: "preamble"
+    agents:
+      - label: "init-tree"
+        description: "Analyze kernel deeply and produce initial decision tree with open action nodes"
+        parallelism: "single"
+        input_variables: ["specText", "opType", "LANGUAGE", "TARGET_GPU", "baselineMetric"]
+        output_schema:
+          type: "object"
+          properties:
+            decision_tree: { type: "object" }
+            node_count: { type: "number" }
+            open_actions: { type: "number" }
+            design_dimensions: { type: "array", items: { type: "string" } }
+            initial_hypotheses: { type: "array", items: { type: "string" } }
+          required: ["decision_tree", "node_count", "open_actions"]
+
+  # --- LOOP BODY ---
+  - name: "Select"
+    detail: "Choose the highest-scoring open frontier action node from the tree"
+    position: "loop_body"
+    agents:
+      - label: "select-{cycle}"
+        description: "Rank open frontier nodes by utility and select the best action to attempt"
+        parallelism: "single"
+        input_variables: ["decisionTree", "bestMetric", "solutionDb", "MAX_DIFFICULTY"]
+        output_schema:
+          type: "object"
+          properties:
+            selected_node_id: { type: "string" }
+            action_title: { type: "string" }
+            action_description: { type: "string" }
+            action_score: { type: "number" }
+            action_difficulty: { type: "number" }
+            parent_solution_code: { type: "string" }
+            parent_metric: { type: "number" }
+            context_for_generation: { type: "object" }
+          required: ["selected_node_id", "action_title"]
+
+  - name: "Generate"
+    detail: "Generate and iteratively improve kernel code for the selected action"
+    position: "loop_body"
+    agents:
+      - label: "gen-{cycle}-{attempt}"
+        description: "Generate initial kernel implementation for the selected action"
+        parallelism: "single"
+        input_variables: ["selection", "parentCode", "specText", "decisionTree"]
+        output_schema:
+          type: "object"
+          properties:
+            code: { type: "string" }
+            implementation_notes: { type: "string" }
+            design_choices: { type: "array", items: { type: "string" } }
+          required: ["code"]
+      - label: "improve-{cycle}-{attempt}"
+        description: "Debug and improve code based on previous evaluation feedback"
+        parallelism: "single"
+        input_variables: ["selection", "cycleBestCode", "cycleBestEval", "bestMetric", "specText"]
+        output_schema:
+          type: "object"
+          properties:
+            code: { type: "string" }
+            changes_made: { type: "string" }
+            expected_improvement: { type: "string" }
+          required: ["code"]
+
+  - name: "Evaluate"
+    detail: "Compile, run, and measure the generated kernel against workloads"
+    position: "loop_body"
+    agents:
+      - label: "eval-{cycle}-{attempt}"
+        description: "Evaluate kernel correctness and performance against baseline"
+        parallelism: "single"
+        input_variables: ["genResult.code", "BENCH_CMD", "baselineMetric", "RTOL", "ATOL"]
+        output_schema:
+          type: "object"
+          properties:
+            is_valid: { type: "boolean" }
+            metric_value: { type: "number" }
+            latency_ms: { type: "number" }
+            speedup_vs_baseline: { type: "number" }
+            pass_rate: { type: "string" }
+            error_log: { type: "string" }
+            performance_analysis: { type: "string" }
+          required: ["is_valid", "metric_value"]
+
+  - name: "Refine"
+    detail: "Update decision tree: attach solution + add children (success) or downgrade + backtrack (failure)"
+    position: "loop_body"
+    agents:
+      - label: "refine-{cycle}"
+        description: "Attach successful solution to tree node, update ancestor scores, add continuation actions"
+        parallelism: "single"
+        input_variables: ["decisionTree", "activeNodeId", "cycleBestEval", "bestMetric"]
+        output_schema:
+          type: "object"
+          properties:
+            updated_tree: { type: "object" }
+            new_actions_added: { type: "number" }
+            score_updates: { type: "array", items: { type: "string" } }
+            reflection: { type: "string" }
+          required: ["updated_tree"]
+      - label: "backtrack-{cycle}"
+        description: "Downgrade failed node, add recovery actions, redirect search"
+        parallelism: "single"
+        input_variables: ["decisionTree", "activeNodeId", "selection", "cycleBestEval"]
+        output_schema:
+          type: "object"
+          properties:
+            updated_tree: { type: "object" }
+            downgraded_node: { type: "string" }
+            recovery_actions: { type: "array", items: { type: "string" } }
+            failure_analysis: { type: "string" }
+          required: ["updated_tree"]
+
+  # --- EPILOGUE ---
+  - name: "Report"
+    detail: "Produce final optimization report with search trajectory and best result"
+    position: "epilogue"
+    agents:
+      - label: "final-report"
+        description: "Summarize search trajectory, decision tree evolution, and best kernel"
+        parallelism: "single"
+        input_variables: ["cycleCount", "solutionDb", "bestMetric", "bestSolution", "decisionTree"]
+        output_schema:
+          type: "object"
+          properties:
+            report: { type: "string" }
+            search_trajectory: { type: "array", items: { type: "string" } }
+            key_insights: { type: "array", items: { type: "string" } }
+          required: ["report"]
+
+plan_angles:
+  - name: "memory_hierarchy"
+    description: "Optimize data movement across global/shared/register memory hierarchy — tiling, staging, async copies"
+    trigger: "Kernel is memory-bandwidth-bound or has high global memory traffic"
+  - name: "parallelism_decomposition"
+    description: "Restructure work decomposition across thread blocks, warps, threads — grid mapping, cooperative groups"
+    trigger: "Low occupancy, tail effects, or load imbalance across SMs"
+  - name: "compute_specialization"
+    description: "Leverage hardware-specific compute units — tensor cores, warp-level matrix ops, specialized instructions"
+    trigger: "Operation has matrix structure that maps to tensor cores or SIMT reduction patterns"
+  - name: "kernel_fusion"
+    description: "Fuse multiple operations into a single kernel to eliminate intermediate memory traffic"
+    trigger: "Multiple sequential kernel launches with producer-consumer data dependency"
+  - name: "algorithmic_transformation"
+    description: "Apply algorithmic changes — online softmax, flash attention pattern, log-sum-exp tricks, quantized computation"
+    trigger: "Standard algorithm has known numerically-stable or compute-reduced alternative"
+
+args:
+  required:
+    - name: "kernel_spec_path"
+      type: "string"
+      description: "Path to the kernel specification / problem definition file"
+      example: "/path/to/mla_decode_spec.yaml"
+  optional:
+    - name: "op_description"
+      type: "string"
+      default: "'GPU kernel'"
+      description: "Human-readable description of the target operation"
+      example: "Multi-head Latent Attention (MLA) decode kernel"
+    - name: "language"
+      type: "string"
+      default: "'triton'"
+      description: "Target language: triton, cuda, or python"
+      example: "triton"
+    - name: "target_gpu"
+      type: "string"
+      default: "'H100'"
+      description: "Target GPU architecture for optimization hints"
+      example: "H100"
+    - name: "max_cycles"
+      type: "number"
+      default: "10"
+      description: "Maximum number of search cycles (tree exploration rounds)"
+      example: "20"
+    - name: "attempts_per_cycle"
+      type: "number"
+      default: "5"
+      description: "Maximum generate/improve attempts within one cycle"
+      example: "5"
+    - name: "stagnation_window"
+      type: "number"
+      default: "3"
+      description: "Consecutive non-improving attempts before ending a cycle early"
+      example: "5"
+    - name: "max_difficulty"
+      type: "number"
+      default: "4"
+      description: "Maximum action difficulty (1-5) to attempt"
+      example: "4"
+    - name: "bench_command"
+      type: "string"
+      default: "''"
+      description: "Command to build and benchmark the kernel"
+      example: "python eval_kernel.py --kernel"
+    - name: "baseline_code_path"
+      type: "string"
+      default: "''"
+      description: "Path to baseline kernel code for comparison"
+      example: "/path/to/baseline_kernel.py"
+    - name: "rtol"
+      type: "number"
+      default: "0.01"
+      description: "Relative tolerance for correctness checking"
+      example: "0.01"
+    - name: "atol"
+      type: "number"
+      default: "0.01"
+      description: "Absolute tolerance for correctness checking"
+      example: "0.01"
+    - name: "exp_dir"
+      type: "string"
+      default: "'/tmp/ksearch_exp'"
+      description: "Directory for saving world model snapshots and solutions"
+      example: "/path/to/experiment/output"
+
+correctness:
+  criteria:
+    - "Output matches reference within rtol/atol tolerances across all workloads"
+    - "No compilation errors or runtime crashes"
+    - "Handles all input shapes in the workload trace set"
+    - "No race conditions or undefined behavior"
+  check_type: "runtime_comparison"
+  reference_output: "Run baseline kernel on the same workload inputs"
+
+return_fields:
+  - name: "best_metric"
+    type: "number"
+    description: "Best mean_vs_baseline_factor achieved"
+    required: true
+  - name: "best_solution_code"
+    type: "string"
+    description: "Source code of the best kernel"
+    required: true
+  - name: "cycles_completed"
+    type: "number"
+    description: "Number of search cycles executed"
+    required: true
+  - name: "solutions_evaluated"
+    type: "number"
+    description: "Total number of kernel variants evaluated"
+    required: true
+  - name: "decision_tree"
+    type: "object"
+    description: "Final state of the world model decision tree"
+    required: true
+  - name: "solution_lineage"
+    type: "array"
+    description: "Top solutions with their node IDs and metrics"
+    required: true
+  - name: "report"
+    type: "string"
+    description: "Final technical report from the report agent"
+    required: true
+
+template:
+  base: "tree-exploration"
+  customizations:
+    - "world_model"
+    - "solution_db"
+    - "stagnation_detect"
+    - "multi_attempt"
+    - "difficulty_filter"

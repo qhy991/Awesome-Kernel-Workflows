@@ -1,0 +1,200 @@
+# =============================================================================
+# Awesome-Kernel-Workflows — Manifest Schema v1.0
+# =============================================================================
+#
+# Every new kernel optimization method to be converted into a Claude Code
+# Workflow must first be described as a manifest YAML conforming to this schema.
+#
+# The manifest serves three purposes:
+#   1. Structured input for the generate-workflow meta-workflow
+#   2. Human-readable documentation of the method's loop structure
+#   3. Regression reference: regenerating from manifest should reproduce the workflow
+#
+# Field annotations:
+#   [R] = required, [O] = optional
+#   Type shown in parentheses after description
+#
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# SOURCE METADATA — Where does this method come from?
+# ---------------------------------------------------------------------------
+source:
+  paper_title: ""          # [R] Full paper title (string)
+  paper_url: ""            # [R] arXiv, ACM DL, or IEEE URL (string, URL format)
+  paper_venue: ""          # [O] Publication venue + year, e.g. "MLSys 2026" (string)
+  repo_url: ""             # [O] GitHub/GitLab repository URL (string, URL format)
+  commit_or_tag: ""        # [O] Pinned version for reproducibility (string)
+  license: ""              # [O] Upstream license: MIT, Apache-2.0, BSD-3, etc. (string)
+  notes: ""                # [O] Free-text context, e.g. "derived from Section 4.2" (string)
+
+# ---------------------------------------------------------------------------
+# WORKFLOW IDENTITY — Maps directly to `export const meta` in the .js file
+# ---------------------------------------------------------------------------
+workflow:
+  name: ""                 # [R] kebab-case identifier, becomes meta.name (string)
+  description: ""          # [R] One-line summary, becomes meta.description (string)
+  when_to_use: ""          # [R] Usage guidance, becomes meta.whenToUse (string)
+  output_filename: ""      # [R] Target .js filename, e.g. "method-optimization.js" (string)
+  directory: ""            # [R] Subdirectory name, e.g. "MethodName/" (string)
+
+# ---------------------------------------------------------------------------
+# METHOD CATEGORY — What kind of optimization approach is this?
+# ---------------------------------------------------------------------------
+method:
+  # [R] One of:
+  #   - iterative_self_improving : Plan→Execute→Profile→Learn→Repeat (e.g. AccelOpt)
+  #   - search_based            : Generate space→Sample→Evaluate→Prune (e.g. autotuning)
+  #   - tree_exploration        : Branch→Score→Expand→Backtrack (e.g. ToT-style)
+  #   - single_pass_pipeline    : Analyze→Transform→Verify (e.g. compiler passes)
+  #   - multi_stage_refinement  : Coarse→Fine→Polish (e.g. progressive optimization)
+  category: ""
+
+  # [R] 1-2 sentences on what makes this method unique (string)
+  core_insight: ""
+
+  # [R] What signal drives iteration/selection decisions
+  feedback_signal:
+    # [R] One of: profiler_metric, throughput_delta, correctness_score, loss_delta, custom
+    type: ""
+    # [R] Human description of what is measured (string)
+    description: ""
+    # [R] Tool used to obtain the signal: ncu, perf, torch.profiler, custom_bench, etc. (string)
+    tool: ""
+    # [R] true if higher signal value = better result (boolean)
+    higher_is_better: false
+
+# ---------------------------------------------------------------------------
+# LOOP TOPOLOGY — How does the optimization loop flow?
+# ---------------------------------------------------------------------------
+topology:
+  # [R] One of: iterative, search, tree, pipeline
+  type: ""
+
+  # --- Fields for type=iterative ---
+  iterative:
+    # [O] Arg name controlling max iterations (string, default: "iterations")
+    max_iterations_arg: "iterations"
+    # [O] When to stop early (string)
+    convergence_condition: ""
+    # [R for iterative] Mutable state carried across iterations
+    state_variables:
+      # Each entry:
+      - name: ""           # JS variable name (string)
+        type: ""           # JS type: number | string | array | object (string)
+        initial_value: ""  # JS expression for initialization (string)
+        description: ""    # What this variable tracks (string)
+
+  # --- Fields for type=search ---
+  search:
+    search_space_description: ""  # [R for search] How the space is defined (string)
+    sampler: ""                   # [R] random | bayesian | grid | evolutionary (string)
+    pruning_strategy: ""          # [R] e.g. "top-k by metric" (string)
+    budget_arg: ""                # [O] Arg name controlling total evaluations (string)
+
+  # --- Fields for type=tree ---
+  tree:
+    branching_factor_arg: ""      # [O] Arg controlling branching (string)
+    max_depth_arg: ""             # [O] Arg controlling max depth (string)
+    scoring_function: ""          # [R for tree] How nodes are scored (string)
+    backtrack_condition: ""       # [R for tree] When to backtrack (string)
+
+  # --- Fields for type=pipeline ---
+  pipeline:
+    # [R for pipeline] Ordered list of pass names
+    pass_order: []
+
+# ---------------------------------------------------------------------------
+# PHASES — Maps to meta.phases[] and phase() calls in the workflow
+# ---------------------------------------------------------------------------
+# Each entry becomes one entry in meta.phases and one phase() call.
+phases:
+  - name: ""               # [R] Phase title, must be unique (string)
+    detail: ""             # [R] Becomes meta.phases[i].detail (string)
+    # [R] Where this phase appears in the workflow structure:
+    #   preamble  = before the main loop (setup, baseline measurement)
+    #   loop_body = inside the iteration/search loop
+    #   epilogue  = after the loop (final report, cleanup)
+    position: ""
+
+    # [O] Agent calls within this phase. Omit for log-only phases.
+    agents:
+      - label: ""          # [R] Unique kebab-case agent label (string)
+        description: ""    # [R] What this agent does (string)
+        # [R] How this agent is invoked:
+        #   single               = one await agent() call
+        #   parallel_fan_out     = parallel(array.map(item => () => agent(...)))
+        #   pipeline_then_parallel = pipeline(items, item => parallel(...))
+        parallelism: ""
+        # [O] For parallel_fan_out: what array is fanned over (string)
+        parallel_axis: ""
+        # [O] For parallel_fan_out: arg name controlling fan count (string)
+        count_arg: ""
+        # [R] Variables from workflow scope injected into the agent prompt
+        input_variables: []
+        # [R] JSON Schema for agent's structured output
+        output_schema:
+          type: "object"
+          properties: {}
+          required: []
+
+# ---------------------------------------------------------------------------
+# PLAN ANGLES — Orthogonal optimization dimensions for the Planner
+# ---------------------------------------------------------------------------
+# For iterative/search methods: each angle gives the planner a distinct focus.
+# Agents in the Plan phase are assigned one angle each.
+plan_angles:
+  - name: ""               # [R] Short label (string)
+    description: ""        # [R] One sentence, injected into planner prompt (string)
+    trigger: ""            # [O] What metric/signal indicates this angle is relevant (string)
+
+# ---------------------------------------------------------------------------
+# ARGS — Workflow arguments (becomes the const declarations + header docs)
+# ---------------------------------------------------------------------------
+args:
+  required:
+    - name: ""             # [R] snake_case arg name (string)
+      type: ""             # [R] string | number | boolean (string)
+      description: ""      # [R] What this arg is (string)
+      example: ""          # [R] Concrete example value (string)
+  optional:
+    - name: ""             # [R] snake_case arg name (string)
+      type: ""             # [R] string | number | boolean (string)
+      default: ""          # [R] JS expression for default value (string)
+      description: ""      # [R] What this arg is (string)
+      example: ""          # [O] Concrete example value (string)
+
+# ---------------------------------------------------------------------------
+# CORRECTNESS — How does the Evaluate agent check functional correctness?
+# ---------------------------------------------------------------------------
+correctness:
+  # [R] List of correctness criteria the evaluator checks
+  criteria: []
+  # [R] One of: static_analysis, runtime_comparison, formal_verification
+  check_type: ""
+  # [O] How to obtain reference output (string)
+  reference_output: ""
+
+# ---------------------------------------------------------------------------
+# RETURN ENVELOPE — Fields in the final `return {}` statement
+# ---------------------------------------------------------------------------
+return_fields:
+  - name: ""               # [R] JS field name in the return object (string)
+    type: ""               # [R] string | number | boolean | array | object (string)
+    description: ""        # [R] What this field contains (string)
+    required: true         # [R] Whether this field is always present (boolean)
+
+# ---------------------------------------------------------------------------
+# TEMPLATE SELECTION — Which template to use and what optional blocks to enable
+# ---------------------------------------------------------------------------
+template:
+  # [R] One of: iterative-loop, search-based, single-pass, tree-exploration
+  base: ""
+  # [O] List of optional feature blocks to enable in the template:
+  #   - experience_memory   : Learn phase with experienceMemory accumulation
+  #   - ncu_profiling       : NCU-specific profiling setup and metric extraction
+  #   - custom_profiling    : Generic profiling tool integration
+  #   - backtracking        : Tree-style backtrack logic
+  #   - early_stopping      : Convergence-based early termination
+  #   - search_space_shrink : Progressive search space reduction
+  customizations: []
