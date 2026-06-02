@@ -1,0 +1,441 @@
+export const meta = {
+  name: 'tritorx-operator-generation',
+  description: 'FSM-based agentic generation of Triton ATen kernels for emerging accelerator platforms with linter-driven feedback (TritorX methodology)',
+  whenToUse: 'When generating functionally correct Triton kernel + wrapper pairs for an entire PyTorch ATen operator set on a new accelerator platform (ASIC/NPU). Prioritizes correctness and coverage over performance. Uses a finite state machine with custom linter, JIT compilation, and OpInfo test harness for iterative refinement.',
+  phases: [
+    { title: 'Setup', detail: 'Parse operator list, load docstrings, prepare test harness and hardware config' },
+    { title: 'Generate', detail: 'LLM generates initial Triton kernel + Python wrapper from operator docstring' },
+    { title: 'Lint', detail: 'Custom linter checks for illegal dispatches, invalid intrinsics, format issues' },
+    { title: 'Compile-Test', detail: 'JIT compile on target hardware, run OpInfo tests across dtypes/shapes' },
+    { title: 'Debug', detail: 'Analyze failures (compile/runtime/accuracy), build feedback prompt, retry' },
+    { title: 'Report', detail: 'Coverage statistics, operator-level pass/fail, production readiness summary' },
+  ],
+}
+
+// =============================================================================
+// TritorX: Agentic Operator Generation for ML ASICs
+// =============================================================================
+//
+// Source: "Agentic Operator Generation for ML ASICs"
+//         Hammond, Markosyan, Dontula, Mahns, Fisches, Pedchenko, Muzumdar,
+//         Supper, Saroufim, Isaacson, Wang, Hunt, Gondkar, Levenstein,
+//         Synnaeve, Li, Kahn, Mathews
+//         Meta (FAIR / Meta Superintelligence Labs), arXiv:2512.10977, 2025
+//
+// TritorX generates functionally correct Triton PyTorch ATen kernels at scale
+// for emerging accelerator platforms (e.g., Meta MTIA). Unlike performance-focused
+// kernel optimization, TritorX prioritizes COVERAGE — generating correct kernels
+// for the entire operator set (481 ops, 20,000+ tests).
+//
+// FSM Architecture (Figure 3):
+//   Init → Generate Kernel → Triton Linter → Compile/Execute/Test
+//     → Process Results → Debug → (feedback loop back to Generate)
+//     → Success (all OpInfo tests pass) or Failure (max retries)
+//
+// Key mechanisms:
+//   1. Custom Triton Linter: prevents "cheating" (dispatching to host PyTorch ops),
+//      enforces valid Triton dialect syntax, catches unauthorized intrinsics
+//   2. In-context distillation: learns hardware-specific Triton semantics iteratively
+//      from compiler/runtime error feedback (not from upfront documentation)
+//   3. OpInfo test harness: tests across all supported dtypes, shapes, and argument
+//      patterns — orders of magnitude more tests than KernelBench
+//   4. Feedback summarization: secondary LLM summarizes long compiler logs to fit
+//      in context window
+//   5. LLDB debugger integration: for runtime crashes, extracts backtrace + registers
+//
+// Usage:
+//   Workflow({name: 'tritorx-operator-generation', args: {
+//     operator_name: 'aten::softmax',
+//     operator_docstring: 'Applies softmax over dim ...',
+//     target_platform: 'MTIA',
+//     triton_dialect: 'triton-mtia',
+//     compile_command: 'python -c "import triton; ..."',
+//     test_command: 'python run_opinfo_tests.py --op softmax',
+//     lint_command: 'python triton_linter.py',
+//     max_attempts: 3,
+//     max_llm_calls_per_attempt: 15,
+//     few_shot_examples: [],
+//   }})
+//
+// =============================================================================
+
+// --- Required Args ---
+const OP_NAME = args.operator_name || ''
+const OP_DOCSTRING = args.operator_docstring || ''
+
+// --- Optional Args ---
+const TARGET_PLATFORM = args.target_platform || 'GPU'
+const TRITON_DIALECT = args.triton_dialect || 'triton'
+const COMPILE_CMD = args.compile_command || ''
+const TEST_CMD = args.test_command || ''
+const LINT_CMD = args.lint_command || ''
+const MAX_ATTEMPTS = args.max_attempts || 3
+const MAX_LLM_CALLS = args.max_llm_calls_per_attempt || 15
+const FEW_SHOT_EXAMPLES = args.few_shot_examples || []
+const EXP_DIR = args.exp_dir || '/tmp/tritorx_exp'
+const SUPPORTED_DTYPES = args.supported_dtypes || ['bfloat16', 'float16', 'float32', 'int32', 'int64']
+const ENABLE_SUMMARIZATION = args.enable_summarization !== false
+const OPERATOR_LIST = args.operator_list || []
+
+// --- State ---
+let currentKernel = ''
+let currentWrapper = ''
+let attempt = 0
+let llmCallsThisAttempt = 0
+let allResults = []
+let operatorsPassed = []
+let operatorsFailed = []
+
+// Operators to process (single or batch)
+const operators = OPERATOR_LIST.length > 0
+  ? OPERATOR_LIST
+  : [{ name: OP_NAME, docstring: OP_DOCSTRING }]
+
+// =============================================================================
+// Phase 1: Setup — Parse operators, prepare harness
+// =============================================================================
+phase('Setup')
+
+const setupResult = await agent(`You are setting up a TritorX kernel generation session.
+
+# Target Platform: ${TARGET_PLATFORM}
+# Triton Dialect: ${TRITON_DIALECT}
+# Operators to generate: ${operators.length === 1 ? operators[0].name : `${operators.length} operators`}
+
+# Tasks:
+1. Create experiment directory: mkdir -p ${EXP_DIR}/{kernels,wrappers,logs,tests}
+2. Verify the target platform toolchain is available:
+   ${COMPILE_CMD ? `Compile check: ${COMPILE_CMD}` : '(verify Triton JIT is accessible)'}
+3. Verify test harness:
+   ${TEST_CMD ? `Test harness: ${TEST_CMD}` : '(verify OpInfo or equivalent test framework)'}
+4. Parse operator docstrings and identify:
+   - Input/output signatures
+   - Supported dtypes: ${SUPPORTED_DTYPES.join(', ')}
+   - Nested operator dependencies (e.g., argmax references max)
+   - Expected output format
+
+${operators.length === 1 ? `# Operator: ${operators[0].name}\n# Docstring:\n${operators[0].docstring?.substring(0, 2000) || '(to be loaded)'}` : ''}
+
+Return setup status.`, {
+  label: 'setup',
+  phase: 'Setup',
+  schema: {
+    type: 'object',
+    properties: {
+      platform_ready: { type: 'boolean' },
+      test_harness_ready: { type: 'boolean' },
+      operator_signatures: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, signature: { type: 'string' } } } },
+      nested_dependencies: { type: 'array', items: { type: 'string' } },
+      platform_constraints: { type: 'string' },
+    },
+    required: ['platform_ready'],
+  },
+})
+
+log(`Setup: ${TARGET_PLATFORM} | ${operators.length} operator(s) | Dtypes: ${SUPPORTED_DTYPES.join(', ')}`)
+
+// =============================================================================
+// Per-Operator Generation Loop
+// =============================================================================
+
+for (const op of operators) {
+  const opName = op.name || OP_NAME
+  const opDoc = op.docstring || OP_DOCSTRING
+  let success = false
+
+  log(`\n=== Generating: ${opName} ===`)
+
+  for (attempt = 0; attempt < MAX_ATTEMPTS && !success; attempt++) {
+    llmCallsThisAttempt = 0
+    currentKernel = ''
+    currentWrapper = ''
+    let feedbackPrompt = ''
+
+    // =========================================================================
+    // Phase 2: Generate — LLM produces Triton kernel + wrapper
+    // =========================================================================
+    phase('Generate')
+
+    const generateResult = await agent(`You are a TritorX kernel generator. Generate a Triton ${TRITON_DIALECT} kernel and Python wrapper for this PyTorch ATen operator.
+
+# Operator: ${opName}
+# Docstring:
+${opDoc.substring(0, 3000) || `(Generate implementation for ${opName})`}
+
+# Target Platform: ${TARGET_PLATFORM}
+# Triton Dialect: ${TRITON_DIALECT}
+# Supported dtypes: ${SUPPORTED_DTYPES.join(', ')}
+
+${FEW_SHOT_EXAMPLES.length > 0 ? `# Few-shot Examples:\n${FEW_SHOT_EXAMPLES.slice(0, 3).map((ex, i) => `## Example ${i + 1}: ${ex.name}\nKernel:\n\`\`\`python\n${ex.kernel?.substring(0, 1000)}\n\`\`\`\nWrapper:\n\`\`\`python\n${ex.wrapper?.substring(0, 500)}\n\`\`\``).join('\n\n')}` : ''}
+
+${feedbackPrompt ? `# Feedback from previous attempt:\n${feedbackPrompt}` : ''}
+
+# Output Requirements:
+1. **Triton Kernel** (@triton.jit decorated function):
+   - Implement the core computation using Triton block-level operations
+   - Handle masking for non-aligned dimensions
+   - Support all required dtypes via proper casting
+   ${TARGET_PLATFORM === 'MTIA' ? '- Use 32-byte aligned memory access patterns\n   - Use MTIA-compatible Triton intrinsics only' : ''}
+
+2. **Python Wrapper** (matching ATen operator signature):
+   - Match the exact PyTorch operator signature from the docstring
+   - Compute grid dimensions and launch the kernel
+   - Handle dtype dispatch for multiple input types
+   - Do NOT call any other torch/aten operators (this is "cheating")
+   - Do NOT use torch.nn.functional or torch.ops fallbacks
+
+Return the kernel and wrapper code.
+
+Attempt ${attempt + 1}/${MAX_ATTEMPTS}, LLM call ${llmCallsThisAttempt + 1}/${MAX_LLM_CALLS}`, {
+      label: `generate-${opName}-a${attempt}`,
+      phase: 'Generate',
+      schema: {
+        type: 'object',
+        properties: {
+          kernel_code: { type: 'string' },
+          wrapper_code: { type: 'string' },
+          implementation_notes: { type: 'string' },
+        },
+        required: ['kernel_code', 'wrapper_code'],
+      },
+    })
+
+    currentKernel = generateResult?.kernel_code || ''
+    currentWrapper = generateResult?.wrapper_code || ''
+    llmCallsThisAttempt++
+
+    // Inner FSM loop: Lint → Compile/Test → Debug → retry
+    let fsmState = 'lint'
+
+    while (fsmState !== 'success' && fsmState !== 'failure' && llmCallsThisAttempt < MAX_LLM_CALLS) {
+
+      if (fsmState === 'lint') {
+        // =====================================================================
+        // Phase 3: Lint — Custom linter checks
+        // =====================================================================
+        phase('Lint')
+
+        const lintResult = await agent(`You are the TritorX Custom Linter (Section 3.2).
+Check this Triton kernel + wrapper for violations.
+
+# Kernel:
+\`\`\`python
+${currentKernel.substring(0, 4000)}
+\`\`\`
+
+# Wrapper:
+\`\`\`python
+${currentWrapper.substring(0, 2000)}
+\`\`\`
+
+# Lint Rules:
+1. Wrapper must NOT call other ATen operators (no torch.*, no F.*, no aten::*)
+   EXCEPT: tensor allocation (torch.empty, torch.zeros) is allowed
+2. Kernel must use valid ${TRITON_DIALECT} syntax and intrinsics only
+3. Kernel must have @triton.jit decorator
+4. Wrapper must match the operator signature for ${opName}
+5. No unauthorized use of host-side PyTorch functions in the kernel path
+${TARGET_PLATFORM === 'MTIA' ? '6. Memory access must be 32-byte aligned\n7. Only MTIA-supported Triton intrinsics' : ''}
+
+${LINT_CMD ? `Also run: ${LINT_CMD}` : ''}
+
+Return lint results.`, {
+          label: `lint-${opName}-a${attempt}-c${llmCallsThisAttempt}`,
+          phase: 'Lint',
+          schema: {
+            type: 'object',
+            properties: {
+              passed: { type: 'boolean' },
+              violations: { type: 'array', items: { type: 'string' } },
+              severity: { type: 'string' },
+            },
+            required: ['passed'],
+          },
+        })
+        llmCallsThisAttempt++
+
+        if (lintResult?.passed) {
+          fsmState = 'compile_test'
+        } else {
+          feedbackPrompt = `Lint violations:\n${(lintResult?.violations || []).join('\n')}\nFix these issues.`
+          fsmState = 'debug'
+        }
+
+      } else if (fsmState === 'compile_test') {
+        // =====================================================================
+        // Phase 4: Compile-Test — JIT compile + OpInfo tests
+        // =====================================================================
+        phase('Compile-Test')
+
+        const testResult = await agent(`You are the TritorX Compile/Test executor.
+Compile and test this kernel on ${TARGET_PLATFORM}.
+
+# Kernel:
+\`\`\`python
+${currentKernel.substring(0, 3000)}
+\`\`\`
+
+# Wrapper:
+\`\`\`python
+${currentWrapper.substring(0, 2000)}
+\`\`\`
+
+# Steps:
+1. JIT Compile: ${COMPILE_CMD || `Import and compile the Triton kernel via JIT`}
+2. Run tests: ${TEST_CMD || `Run OpInfo tests for ${opName} across dtypes: ${SUPPORTED_DTYPES.join(', ')}`}
+3. For each test:
+   - Compile kernel (may need recompilation for different dtypes)
+   - Execute on ${TARGET_PLATFORM}
+   - Compare output against PyTorch reference (CPU ATen)
+   - Check numerical tolerance (dtype-dependent)
+
+Report: compilation status, tests passed/failed, error details.`, {
+          label: `test-${opName}-a${attempt}-c${llmCallsThisAttempt}`,
+          phase: 'Compile-Test',
+          schema: {
+            type: 'object',
+            properties: {
+              compiled: { type: 'boolean' },
+              compile_error: { type: 'string' },
+              tests_total: { type: 'number' },
+              tests_passed: { type: 'number' },
+              tests_failed: { type: 'number' },
+              all_passed: { type: 'boolean' },
+              failure_type: { type: 'string' },
+              failure_details: { type: 'string' },
+              failing_dtypes: { type: 'array', items: { type: 'string' } },
+            },
+            required: ['compiled', 'all_passed'],
+          },
+        })
+        llmCallsThisAttempt++
+
+        if (testResult?.all_passed) {
+          fsmState = 'success'
+        } else {
+          // Build feedback for debug phase
+          if (!testResult?.compiled) {
+            feedbackPrompt = `Compilation failed:\n${testResult?.compile_error || 'unknown error'}`
+          } else if (testResult?.failure_type === 'runtime') {
+            feedbackPrompt = `Runtime error. Failing dtypes: ${(testResult?.failing_dtypes || []).join(', ')}\n${testResult?.failure_details || ''}`
+          } else {
+            feedbackPrompt = `Accuracy error: ${testResult?.tests_passed}/${testResult?.tests_total} tests passed.\nFailing dtypes: ${(testResult?.failing_dtypes || []).join(', ')}\n${testResult?.failure_details || ''}`
+          }
+          fsmState = 'debug'
+        }
+
+      } else if (fsmState === 'debug') {
+        // =====================================================================
+        // Phase 5: Debug — Analyze failure, regenerate
+        // =====================================================================
+        phase('Debug')
+
+        const debugResult = await agent(`You are the TritorX Debug agent. Fix this kernel based on the error feedback.
+
+# Current Kernel:
+\`\`\`python
+${currentKernel.substring(0, 3000)}
+\`\`\`
+
+# Current Wrapper:
+\`\`\`python
+${currentWrapper.substring(0, 1500)}
+\`\`\`
+
+# Error Feedback:
+${feedbackPrompt}
+
+# Operator: ${opName}
+# Platform: ${TARGET_PLATFORM}
+
+# Debug Guidelines (TritorX Section 3.2):
+- For compile errors: check Triton syntax, intrinsic compatibility, type mismatches
+- For runtime crashes: check memory access alignment, bounds, synchronization
+- For accuracy errors: check dtype handling, reduction semantics, broadcasting
+- Do NOT introduce calls to other ATen operators as a "fix"
+
+Return the fixed kernel and wrapper.
+LLM call ${llmCallsThisAttempt + 1}/${MAX_LLM_CALLS}`, {
+          label: `debug-${opName}-a${attempt}-c${llmCallsThisAttempt}`,
+          phase: 'Debug',
+          schema: {
+            type: 'object',
+            properties: {
+              kernel_code: { type: 'string' },
+              wrapper_code: { type: 'string' },
+              fix_description: { type: 'string' },
+            },
+            required: ['kernel_code', 'wrapper_code'],
+          },
+        })
+        llmCallsThisAttempt++
+
+        if (debugResult?.kernel_code) {
+          currentKernel = debugResult.kernel_code
+          currentWrapper = debugResult.wrapper_code || currentWrapper
+        }
+        fsmState = 'lint'
+      }
+    }
+
+    if (fsmState === 'success') {
+      success = true
+      operatorsPassed.push({ name: opName, attempt: attempt + 1, llm_calls: llmCallsThisAttempt })
+      log(`  ${opName}: PASS (attempt ${attempt + 1}, ${llmCallsThisAttempt} LLM calls)`)
+    } else if (fsmState === 'failure' || llmCallsThisAttempt >= MAX_LLM_CALLS) {
+      log(`  ${opName}: attempt ${attempt + 1} FAILED (${llmCallsThisAttempt} LLM calls)`)
+    }
+  }
+
+  if (!success) {
+    operatorsFailed.push({ name: opName, attempts: MAX_ATTEMPTS, last_error: feedbackPrompt?.substring(0, 100) || '' })
+    log(`  ${opName}: FAILED after ${MAX_ATTEMPTS} attempts`)
+  }
+
+  allResults.push({ name: opName, success, kernel: success ? currentKernel : '', wrapper: success ? currentWrapper : '' })
+}
+
+// =============================================================================
+// Phase 6: Report
+// =============================================================================
+phase('Report')
+
+const coverage = operators.length > 0 ? (operatorsPassed.length / operators.length * 100).toFixed(1) : '0'
+
+const finalReport = await agent(`Write a TritorX generation report.
+
+# TritorX Results
+- Target: ${TARGET_PLATFORM} (${TRITON_DIALECT})
+- Operators attempted: ${operators.length}
+- Operators passed: ${operatorsPassed.length} (${coverage}% coverage)
+- Operators failed: ${operatorsFailed.length}
+- Max attempts per operator: ${MAX_ATTEMPTS}
+- Max LLM calls per attempt: ${MAX_LLM_CALLS}
+
+# Passed Operators:
+${operatorsPassed.map(o => `- ${o.name}: attempt ${o.attempt}, ${o.llm_calls} LLM calls`).join('\n') || 'None'}
+
+# Failed Operators:
+${operatorsFailed.map(o => `- ${o.name}: ${o.last_error}`).join('\n') || 'None'}
+
+Write:
+1. Coverage analysis by operator category
+2. Common failure patterns and root causes
+3. In-context learning effectiveness (did later calls succeed faster?)
+4. Platform-specific challenges encountered
+5. Recommendations for improving coverage`, {
+  label: 'final-report',
+  phase: 'Report',
+})
+
+return {
+  target_platform: TARGET_PLATFORM,
+  operators_attempted: operators.length,
+  operators_passed: operatorsPassed.length,
+  operators_failed: operatorsFailed.length,
+  coverage_pct: parseFloat(coverage),
+  passed_details: operatorsPassed,
+  failed_details: operatorsFailed,
+  all_results: allResults,
+  report: finalReport,
+}
