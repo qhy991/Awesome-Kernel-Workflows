@@ -9,7 +9,7 @@ count=0
 for dir in "$ROOT"/*/; do
   name="$(basename "$dir")"
   case "$name" in
-    _*|experiments|Awesome-LLM-Kernel|output|outputs|kernel_cache|candidates|__pycache__)
+    _*|scripts|experiments|Awesome-LLM-Kernel|output|outputs|kernel_cache|candidates|__pycache__)
       continue
       ;;
   esac
