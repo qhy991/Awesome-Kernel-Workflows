@@ -28,6 +28,8 @@ export const meta = {
 //   Instead, it builds or loads a CUDA Reasoning Graph from optimization traces,
 //   traverses it with Monte Carlo Graph Search, prompts a coding agent with the
 //   selected method/example path, and trusts only evaluator evidence.
+// adaptation_scope: training_free_inference — this covers the graph-guided
+// inference/use phase, not full small-model transfer training.
 //
 // Usage:
 //   Workflow({name: 'regrapht-kernel-optimization', args: {
@@ -74,6 +76,7 @@ const EXPLORATION_WEIGHT = args.exploration_weight ?? 1.4
 const MAX_PATH_LENGTH = args.max_path_length || 4
 const TARGET_GPU = args.target_gpu || 'H100'
 const EXP_DIR = args.exp_dir || '/tmp/regrapht_exp'
+const ADAPTATION_SCOPE = 'training_free_inference'
 
 // --- State ---
 let sourceCode = ''
@@ -446,6 +449,9 @@ ${OP_DESC}
 # Boundary
 This workflow used ReGraphT as a training-free inference loop. It built or loaded a CUDA Reasoning Graph, selected paths with Monte Carlo Graph Search, generated candidates from graph-conditioned examples, and used evaluator evidence for reward.
 
+# Adaptation scope
+${ADAPTATION_SCOPE}
+
 # Final graph stats
 \`\`\`json
 ${JSON.stringify(finalGraphStats, null, 2)}
@@ -488,6 +494,7 @@ return {
   attempts: BUDGET,
   evaluated_candidates: evaluatedCandidates.length,
   correct_candidates: evaluatedCandidates.filter(item => item.eval?.correct).length,
+  adaptation_scope: ADAPTATION_SCOPE,
   selected_paths: selectedPaths,
   graph,
   graph_stats: finalGraphStats,

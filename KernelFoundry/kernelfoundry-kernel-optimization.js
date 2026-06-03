@@ -48,6 +48,8 @@ export const meta = {
 //     target_hardware: 'Intel Arc B580',          // or 'NVIDIA A6000', etc.
 //     test_command: 'python test.py',
 //     benchmark_command: 'python bench.py',
+//     descriptor_result_path: '/tmp/kernelfoundry_exp/descriptors/latest.json',
+//     archive_update_result_path: '/tmp/kernelfoundry_exp/archive/updates.jsonl',
 //     generations: 40,
 //     meta_prompt_interval: 10,
 //     speedup_target: 2.0,
@@ -65,12 +67,15 @@ const TARGET_LANG = args.target_language || 'cuda'
 const TARGET_HW = args.target_hardware || 'NVIDIA GPU'
 const TEST_CMD = args.test_command || ''
 const BENCH_CMD = args.benchmark_command || ''
+const DESCRIPTOR_RESULT_PATH = args.descriptor_result_path || `${args.exp_dir || '/tmp/kernelfoundry_exp'}/descriptors/latest.json`
+const ARCHIVE_UPDATE_RESULT_PATH = args.archive_update_result_path || `${args.exp_dir || '/tmp/kernelfoundry_exp'}/archive/updates.jsonl`
 const GENERATIONS = args.generations || 30
 const META_PROMPT_INTERVAL = args.meta_prompt_interval || 10
 const SPEEDUP_TARGET = args.speedup_target || 2.0
 const SELECTION_STRATEGY = args.selection_strategy || 'mixed'
 const EXP_DIR = args.exp_dir || '/tmp/kernelfoundry_exp'
 const KERNEL_PATH = args.kernel_path || ''
+const EVIDENCE_MODE = (TEST_CMD && BENCH_CMD) ? 'measured' : 'conservative_missing_evidence'
 
 // --- State: MAP-Elites Archive ---
 // 4x4x4 = 64 cells, indexed by (d_mem, d_algo, d_sync)
@@ -117,6 +122,11 @@ ${TASK_SPEC ? `\`\`\`python\n${TASK_SPEC.substring(0, 3000)}\n\`\`\`` : '(Determ
 # Operation: ${OP_DESC}
 # Target language: ${TARGET_LANG} (SYCL/CUDA/Triton)
 # Target hardware: ${TARGET_HW}
+# Evidence contract:
+- descriptor_result_path: ${DESCRIPTOR_RESULT_PATH}
+- archive_update_result_path: ${ARCHIVE_UPDATE_RESULT_PATH}
+- evidence_mode: ${EVIDENCE_MODE}
+- If evidence_mode is conservative_missing_evidence, behavioral descriptors and MAP-Elites insertion decisions are not strict paper evidence.
 
 # Setup Tasks:
 1. Parse the operator specification (inputs, outputs, shapes, dtypes)
@@ -458,6 +468,9 @@ const finalReport = await agent(`Write a concise technical report on KernelFound
 - Archive coverage: ${Object.keys(archive).length}/64 cells
 - Total improvements: ${transitions.filter(t => t.outcome === 'improvement').length}
 - Total discoveries: ${transitions.filter(t => t.outcome === 'discovery').length}
+- Evidence mode: ${EVIDENCE_MODE}
+- Descriptor artifact: ${DESCRIPTOR_RESULT_PATH}
+- Archive update artifact: ${ARCHIVE_UPDATE_RESULT_PATH}
 
 # Archive (top cells):
 ${Object.entries(archive).sort((a, b) => b[1].fitness - a[1].fitness).slice(0, 10).map(([k, v]) => `[${k}] ${v.speedup.toFixed(2)}x — ${v.strategy?.substring(0, 60)}`).join('\n')}
@@ -494,5 +507,8 @@ return {
   discoveries: transitions.filter(t => t.outcome === 'discovery').length,
   final_meta_prompt: metaPrompt,
   prompt_evolution_history: promptArchive.length,
+  descriptor_result_path: DESCRIPTOR_RESULT_PATH,
+  archive_update_result_path: ARCHIVE_UPDATE_RESULT_PATH,
+  evidence_mode: EVIDENCE_MODE,
   report: finalReport,
 }

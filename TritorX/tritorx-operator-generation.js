@@ -52,6 +52,7 @@ export const meta = {
 //     compile_command: 'python -c "import triton; ..."',
 //     test_command: 'python run_opinfo_tests.py --op softmax',
 //     lint_command: 'python triton_linter.py',
+//     strict_harness: true,
 //     max_attempts: 3,
 //     max_llm_calls_per_attempt: 15,
 //     few_shot_examples: [],
@@ -69,6 +70,7 @@ const TRITON_DIALECT = args.triton_dialect || 'triton'
 const COMPILE_CMD = args.compile_command || ''
 const TEST_CMD = args.test_command || ''
 const LINT_CMD = args.lint_command || ''
+const STRICT_HARNESS = args.strict_harness === true
 const MAX_ATTEMPTS = args.max_attempts || 3
 const MAX_LLM_CALLS = args.max_llm_calls_per_attempt || 15
 const FEW_SHOT_EXAMPLES = args.few_shot_examples || []
@@ -76,6 +78,9 @@ const EXP_DIR = args.exp_dir || '/tmp/tritorx_exp'
 const SUPPORTED_DTYPES = args.supported_dtypes || ['bfloat16', 'float16', 'float32', 'int32', 'int64']
 const ENABLE_SUMMARIZATION = args.enable_summarization !== false
 const OPERATOR_LIST = args.operator_list || []
+const HARNESS_EVIDENCE = (LINT_CMD && TEST_CMD && COMPILE_CMD)
+  ? 'strict_linter_opinfo'
+  : (STRICT_HARNESS ? 'missing_required_harness' : 'TritorX-style FSM')
 
 // --- State ---
 let currentKernel = ''
@@ -101,6 +106,10 @@ const setupResult = await agent(`You are setting up a TritorX kernel generation 
 # Target Platform: ${TARGET_PLATFORM}
 # Triton Dialect: ${TRITON_DIALECT}
 # Operators to generate: ${operators.length === 1 ? operators[0].name : `${operators.length} operators`}
+# Harness contract:
+- strict_harness: ${STRICT_HARNESS}
+- harness_evidence: ${HARNESS_EVIDENCE}
+- Strict TritorX fidelity requires lint_command, compile_command, and an OpInfo/equivalent test_command. Without them, run only as TritorX-style FSM.
 
 # Tasks:
 1. Create experiment directory: mkdir -p ${EXP_DIR}/{kernels,wrappers,logs,tests}
@@ -411,6 +420,7 @@ const finalReport = await agent(`Write a TritorX generation report.
 - Operators failed: ${operatorsFailed.length}
 - Max attempts per operator: ${MAX_ATTEMPTS}
 - Max LLM calls per attempt: ${MAX_LLM_CALLS}
+- Harness evidence: ${HARNESS_EVIDENCE}
 
 # Passed Operators:
 ${operatorsPassed.map(o => `- ${o.name}: attempt ${o.attempt}, ${o.llm_calls} LLM calls`).join('\n') || 'None'}
@@ -437,5 +447,7 @@ return {
   passed_details: operatorsPassed,
   failed_details: operatorsFailed,
   all_results: allResults,
+  strict_harness: STRICT_HARNESS,
+  harness_evidence: HARNESS_EVIDENCE,
   report: finalReport,
 }

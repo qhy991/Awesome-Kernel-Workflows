@@ -56,6 +56,8 @@ export const meta = {
 //     compile_command: 'nvcc -O3 -arch=sm_80 ...',
 //     test_command: 'python test_kernel.py',
 //     ncu_command: 'ncu --metrics ... ./bench',
+//     roofline_result_path: '/tmp/cupilot_exp/roofline.json',
+//     strategy_corpus_path: '/tmp/cupilot_exp/strategy_corpus.jsonl',
 //     epochs: 3,
 //     generations_per_epoch: 4,
 //     population_size: 50,
@@ -73,6 +75,8 @@ const GPU_TARGET = args.gpu_target || 'A100'
 const COMPILE_CMD = args.compile_command || ''
 const TEST_CMD = args.test_command || ''
 const NCU_CMD = args.ncu_command || ''
+const ROOFLINE_RESULT_PATH = args.roofline_result_path || `${args.exp_dir || '/tmp/cupilot_exp'}/roofline.json`
+const STRATEGY_CORPUS_PATH = args.strategy_corpus_path || args.strategy_pool_path || ''
 const EPOCHS = args.epochs || 2
 const GENERATIONS = args.generations_per_epoch || 4
 const POP_SIZE = args.population_size || 30
@@ -80,6 +84,9 @@ const STRATEGY_POOL_PATH = args.strategy_pool_path || ''
 const EXP_DIR = args.exp_dir || '/tmp/cupilot_exp'
 const KERNEL_PATH = args.kernel_path || ''
 const MAX_REVISE_LOOPS = args.max_revise_loops || 3
+const EVIDENCE_MODE = (COMPILE_CMD && TEST_CMD && NCU_CMD && STRATEGY_CORPUS_PATH)
+  ? 'measured'
+  : 'conservative_missing_evidence'
 
 // --- State ---
 let population = []      // [{kernel, strategy, fitness, hwUtil}]
@@ -102,6 +109,12 @@ const setupResults = await parallel([
 1. Read the kernel specification:
 ${KERNEL_PATH ? `Read from: ${KERNEL_PATH}` : ''}
 ${KERNEL_SPEC ? `\`\`\`python\n${KERNEL_SPEC.substring(0, 3000)}\n\`\`\`` : `Operation: ${OP_DESC}`}
+
+# Evidence contract:
+- roofline_result_path: ${ROOFLINE_RESULT_PATH}
+- strategy_corpus_path: ${STRATEGY_CORPUS_PATH || '(missing)'}
+- evidence_mode: ${EVIDENCE_MODE}
+- If evidence_mode is conservative_missing_evidence, roofline guidance, RAG initialization, and SCE decisions are workflow estimates, not strict cuPilot evidence.
 
 2. Generate a functionally correct initial CUDA kernel (vanilla, unoptimized)
    - Include proper __global__ function, thread mapping, memory access
@@ -464,6 +477,9 @@ const finalReport = await agent(`Write a concise technical report on cuPilot evo
 - Epochs: ${EPOCHS}, Generations/epoch: ${GENERATIONS}
 - Final population: ${population.length}
 - Strategy pool: ${strategyPool.length} strategies
+- Evidence mode: ${EVIDENCE_MODE}
+- Roofline artifact: ${ROOFLINE_RESULT_PATH}
+- Strategy corpus: ${STRATEGY_CORPUS_PATH || '(missing)'}
 
 # Best Kernel Strategy:
 ${bestKernel.strategy}
@@ -498,5 +514,8 @@ return {
   final_population_size: population.length,
   strategy_pool_size: strategyPool.length,
   top_strategies: population.slice(0, 5).map(p => ({ strategy: p.strategy, speedup: p.speedup })),
+  roofline_result_path: ROOFLINE_RESULT_PATH,
+  strategy_corpus_path: STRATEGY_CORPUS_PATH,
+  evidence_mode: EVIDENCE_MODE,
   report: finalReport,
 }

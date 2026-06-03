@@ -50,6 +50,8 @@ export const meta = {
 //     hardware_target: 'AMD MI300X' | 'NVIDIA H100',
 //     test_command: 'python test_kernel.py',
 //     benchmark_command: 'python bench_kernel.py',
+//     invariant_check_command: 'python check_invariants.py --kernel {kernel_path} --json {invariant_result_path}',
+//     invariant_result_path: '/tmp/argus_exp/invariants/result.json',
 //     knowledge_base_path: '',
 //     iterations: 10,
 //     inner_steps: 5,
@@ -66,11 +68,14 @@ const KERNEL_SPEC = args.kernel_spec || ''
 const HARDWARE_TARGET = args.hardware_target || 'NVIDIA H100'
 const TEST_CMD = args.test_command || ''
 const BENCH_CMD = args.benchmark_command || ''
+const INVARIANT_CHECK_CMD = args.invariant_check_command || ''
+const INVARIANT_RESULT_PATH = args.invariant_result_path || `${args.exp_dir || '/tmp/argus_exp'}/invariants/latest.json`
 const KNOWLEDGE_BASE_PATH = args.knowledge_base_path || ''
 const ITERATIONS = args.iterations || 5
 const INNER_STEPS = args.inner_steps || 3
 const EXP_DIR = args.exp_dir || '/tmp/argus_exp'
 const OPT_CATEGORIES = args.optimization_categories || ['global_intrusive', 'local_source', 'isa_specific']
+const invariantEvidenceMode = INVARIANT_CHECK_CMD ? 'executable_checker' : 'missing_invariant_evidence'
 
 // State (ICRL)
 let bestKernelCode = null
@@ -112,15 +117,21 @@ const setupResult = await agent(`You are a GPU kernel optimization expert. Read 
 # Kernel file: ${KERNEL_PATH}
 # Kernel specification: ${KERNEL_SPEC}
 # Hardware target: ${HARDWARE_TARGET}
+# Invariant evidence contract:
+- invariant_check_command: ${INVARIANT_CHECK_CMD || '(missing)'}
+- invariant_result_path: ${INVARIANT_RESULT_PATH}
+- invariant_evidence mode: ${invariantEvidenceMode}
+- missing_invariant_evidence means ARGUS dense feedback is unavailable; do not treat LLM-written invariants as checked violations.
 
 # Task:
 1. Read the kernel source code at ${KERNEL_PATH}
 2. Identify:
    - What computation it performs (GEMM, attention, MoE, etc.)
-   - Current optimization level (naive, partially optimized, etc.)
-   - Tiling strategy (tile sizes, how work maps to threads/blocks)
-   - Memory hierarchy usage (registers, shared memory, global)
-   - Any existing data-flow patterns (how data moves through the kernel)
+  - Current optimization level (naive, partially optimized, etc.)
+  - Tiling strategy (tile sizes, how work maps to threads/blocks)
+  - Memory hierarchy usage (registers, shared memory, global)
+  - Any existing data-flow patterns (how data moves through the kernel)
+  - Whether executable invariant checking is available
 3. Determine hardware constraints:
    - For ${HARDWARE_TARGET}: register file size, shared memory, compute units
    - Arithmetic intensity requirements (ops/byte for compute-bound)
@@ -577,6 +588,11 @@ ${invariantViolationLog.slice(0, 10).join('\n') || 'No violations recorded.'}
 # Final Planner Policy (learned):
 ${plannerPolicy}
 
+# Invariant Evidence Contract:
+- invariant_check_command: ${INVARIANT_CHECK_CMD || '(missing)'}
+- invariant_result_path: ${INVARIANT_RESULT_PATH}
+- invariant_evidence: ${invariantEvidenceMode}
+
 # Final Kernel:
 \`\`\`
 ${bestKernelCode.substring(0, 4000)}
@@ -605,5 +621,8 @@ return {
   planner_policy_final: plannerPolicy,
   candidate_beam: candidateBeam.map(c => ({ label: c.label, throughput: c.throughput })),
   best_kernel_code: bestKernelCode,
+  invariant_check_command: INVARIANT_CHECK_CMD,
+  invariant_result_path: INVARIANT_RESULT_PATH,
+  invariant_evidence: invariantEvidenceMode,
   report: finalReport,
 }

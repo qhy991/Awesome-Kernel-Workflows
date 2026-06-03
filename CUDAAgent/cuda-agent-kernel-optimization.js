@@ -23,6 +23,8 @@ export const meta = {
 //
 // The CUDA Agent paper introduces a training system (agentic RL with PPO), but its
 // inference-time agent loop (Section 3.2, Figure 2) defines a reusable workflow:
+// adaptation_scope: inference_time_adaptation — this workflow does not reproduce
+// dataset construction, PPO training, or model-weight updates from the full paper.
 //
 // SKILL.md (CUDA Coding Skill):
 //   1. Analyze native PyTorch performance using profile.py
@@ -72,6 +74,7 @@ const COMPILE_CMD = args.compile_command || ''
 const TARGET_SPEEDUP = args.target_speedup || 1.05
 const MAX_TURNS = args.max_turns || 15
 const EXP_DIR = args.exp_dir || '/tmp/cuda_agent_exp'
+const ADAPTATION_SCOPE = 'inference_time_adaptation'
 
 // --- State ---
 let modelCode = ''
@@ -372,6 +375,7 @@ phase('Report')
 const finalReport = await agent(`Write a concise optimization report.
 
 # CUDA Agent Optimization Results
+- Adaptation scope: ${ADAPTATION_SCOPE}
 - Operation: ${OP_DESC}
 - Baseline eager: ${eagerTime}ms
 - Baseline compile: ${compileTime}ms
@@ -407,6 +411,7 @@ return {
   turns_used: currentAttempt,
   max_turns: MAX_TURNS,
   reward_history: history.map(h => h.reward),
+  adaptation_scope: ADAPTATION_SCOPE,
   best_kernel_code: bestKernelCode,
   best_binding_code: bestBindingCode,
   best_model_new: bestModelNew,

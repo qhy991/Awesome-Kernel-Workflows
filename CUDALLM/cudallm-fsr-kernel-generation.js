@@ -26,6 +26,8 @@ export const meta = {
 //   Reinforcement loop. It does not train a model. It searches CUDA optimization
 //   features, generates kernels, evaluates them with real compile/correctness/
 //   latency evidence, and reinforces feature choices for later iterations.
+// adaptation_scope: workflow_adaptation — this is not the full CUDA-LLM training
+// or model-development pipeline.
 //
 // Usage:
 //   Workflow({name: 'cudallm-fsr-kernel-generation', args: {
@@ -69,6 +71,7 @@ const SAMPLES_PER_FEATURE_SET = args.samples_per_feature_set || 2
 const RTOL = args.rtol ?? 0.01
 const ATOL = args.atol ?? 0.01
 const EXP_DIR = args.exp_dir || '/tmp/cudallm_fsr_exp'
+const ADAPTATION_SCOPE = 'workflow_adaptation'
 
 // --- State ---
 let taskSpec = ''
@@ -448,6 +451,9 @@ const finalReport = await agent(`Write a concise CUDA-LLM FSR optimization repor
 # Task
 ${taskSpec.substring(0, 4000)}
 
+# Adaptation scope
+${ADAPTATION_SCOPE}
+
 # Best candidate summary
 \`\`\`json
 ${JSON.stringify(bestCandidate ? {
@@ -490,6 +496,7 @@ return {
   iterations: ITERATIONS,
   feature_budget: FEATURE_BUDGET,
   samples_per_feature_set: SAMPLES_PER_FEATURE_SET,
+  adaptation_scope: ADAPTATION_SCOPE,
   best_speedup: bestCandidate?.eval?.speedup || 0,
   best_latency_ms: bestCandidate?.eval?.latency_ms || null,
   best_kernel_code: bestCandidate?.code || '',

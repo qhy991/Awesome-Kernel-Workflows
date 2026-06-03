@@ -63,6 +63,8 @@ export const meta = {
 //     compile_command: 'python -c "import kernel; kernel.test()"',
 //     benchmark_command: 'python benchmark.py',
 //     ncu_command: 'ncu --metrics ...',
+//     feature_vector_result_path: '/tmp/kernelband_exp/features.json',
+//     hardware_signature_result_path: '/tmp/kernelband_exp/hardware_signature.json',
 //     gpu_target: 'A100',
 //     iterations: 20,
 //     num_clusters: 3,
@@ -82,6 +84,8 @@ const COMPILE_CMD = args.compile_command || ''
 const BENCHMARK_CMD = args.benchmark_command || ''
 const NCU_CMD = args.ncu_command || ''
 const NCU_BINARY = args.ncu_binary || 'ncu'
+const FEATURE_VECTOR_RESULT_PATH = args.feature_vector_result_path || `${args.exp_dir || '/tmp/kernelband_exp'}/features/latest.json`
+const HARDWARE_SIGNATURE_RESULT_PATH = args.hardware_signature_result_path || `${args.exp_dir || '/tmp/kernelband_exp'}/profiles/hardware_signature.json`
 const GPU_TARGET = args.gpu_target || 'A100'
 const ITERATIONS = args.iterations || 20
 const NUM_CLUSTERS = args.num_clusters || 3
@@ -89,6 +93,9 @@ const RECLUSTER_PERIOD = args.recluster_period || 10
 const UCB_C = args.ucb_exploration || 2.0
 const SATURATION_THRESHOLD = args.saturation_threshold || 0.75
 const EXP_DIR = args.exp_dir || '/tmp/kernelband_exp'
+const EVIDENCE_MODE = (COMPILE_CMD && BENCHMARK_CMD && (NCU_CMD || NCU_BINARY))
+  ? 'measured'
+  : 'conservative_missing_evidence'
 
 const STRATEGIES = args.strategies || [
   'tiling',
@@ -126,10 +133,15 @@ const setupResult = await agent(`You are setting up a KernelBand optimization se
 # Task
 1. Read the kernel file: ${KERNEL_PATH}
 2. Create experiment directory: mkdir -p ${EXP_DIR}/{candidates,profiles,logs}
-3. Establish baseline performance:
+3. Record profiling evidence artifacts:
+   - feature_vector_result_path: ${FEATURE_VECTOR_RESULT_PATH}
+   - hardware_signature_result_path: ${HARDWARE_SIGNATURE_RESULT_PATH}
+   - evidence_mode: ${EVIDENCE_MODE}
+   If evidence_mode is conservative_missing_evidence, do not claim strict KernelBand execution; mark phi, masks, and rewards as estimates.
+4. Establish baseline performance:
    ${COMPILE_CMD ? `Compile: ${COMPILE_CMD}` : '(compile the kernel)'}
    ${BENCHMARK_CMD ? `Benchmark: ${BENCHMARK_CMD}` : '(run the benchmark)'}
-4. Run initial NCU profiling to get hardware signature:
+5. Run initial NCU profiling to get hardware signature:
    ${NCU_CMD || `${NCU_BINARY} --set full --target-processes all <benchmark_binary>`}
    Extract: DRAM throughput %, L2 throughput %, SM throughput %
 5. Extract behavioral features φ(k₀):
@@ -614,6 +626,9 @@ const finalReport = await agent(`Write a KernelBand optimization report.
 - Operation: ${OP_DESCRIPTION}
 - Iterations: ${ITERATIONS}
 - Clusters: ${NUM_CLUSTERS} (re-cluster period: ${RECLUSTER_PERIOD})
+- Evidence mode: ${EVIDENCE_MODE}
+- Feature vector artifact: ${FEATURE_VECTOR_RESULT_PATH}
+- Hardware signature artifact: ${HARDWARE_SIGNATURE_RESULT_PATH}
 
 # Performance
 - Baseline: ${baselineLatency} μs
@@ -655,6 +670,9 @@ return {
   candidate_pool_size: candidatePool.length,
   strategy_stats: strategyStats,
   bandit_stats: banditStats,
+  feature_vector_result_path: FEATURE_VECTOR_RESULT_PATH,
+  hardware_signature_result_path: HARDWARE_SIGNATURE_RESULT_PATH,
+  evidence_mode: EVIDENCE_MODE,
   iteration_log: iterationLog,
   report: finalReport,
 }
