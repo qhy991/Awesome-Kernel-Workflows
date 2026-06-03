@@ -141,6 +141,31 @@ Workflow files follow Claude Code conventions: export `meta` (name, description,
 | **Learning Mechanism** | ![Experience](https://img.shields.io/badge/experience--memory-orange?style=flat) ![SkillMemory](https://img.shields.io/badge/skill--memory-orange?style=flat) ![WorldModel](https://img.shields.io/badge/world--model-orange?style=flat) ![MetaPrompt](https://img.shields.io/badge/meta--prompt-orange?style=flat) ![Clustering](https://img.shields.io/badge/clustering-orange?style=flat) ![ICRL](https://img.shields.io/badge/ICRL-blue?style=flat) ![RL-trained](https://img.shields.io/badge/RL--trained-red?style=flat) |
 | **Special** | ![Invariants](https://img.shields.io/badge/invariants-red?style=flat) ![Evidence](https://img.shields.io/badge/evidence--driven-green?style=flat) ![Explanation](https://img.shields.io/badge/explanation-teal?style=flat) ![HW-Pruning](https://img.shields.io/badge/HW--pruning-red?style=flat) |
 
+### Methodology Classification Matrix
+
+Use this matrix as the primary taxonomy when adding or reviewing workflows. Backend and language badges are useful, but the more important dimensions are **loop topology**, **authoritative feedback**, and **state carried across attempts**.
+
+| Workflow | Primary category | Search topology | Authoritative feedback | Carried state / memory | Fidelity boundary |
+|----------|------------------|-----------------|------------------------|------------------------|-------------------|
+| [AccelOpt](AccelOpt/) | `iterative_self_improving` | Beam-style Plan/Execute/Profile/Learn loop | NCU metrics, latency, slow/fast pairs | `experienceMemory`, candidate beam | Faithful CUDA/NCU adaptation of a broader accelerator method |
+| [KEET](KEET/) | `single_pass_pipeline` | Source/profile analysis pipeline | NCU profile plus source-grounded hypotheses | Hypothesis verdicts and explanation report | Explanation workflow, not an optimizer |
+| [ARGUS](ARGUS/) | `iterative_self_improving` | ICRL Plan/Select/Lower/Validate/Learn loop | Invariant violations, tests, throughput | Planner policy, invariant violation log, candidate beam | Strict use requires executable invariant checker artifacts |
+| [AKO4X](AKO4X/) | `iterative_self_improving` | Round-level loop with inner iterations | Smoke/full benchmark, optional NCU | Experience headers, `TRAPS.md`, archive | High-fidelity to AKO4X round/archive protocol |
+| [KDA](KDA/) | `iterative_self_improving` | One-candidate-at-a-time evidence loop | Validation command and target metric | Draft/plan docs, candidate records | High-fidelity to KDA agent-flow contract |
+| [K-Search](KSearch/) | `tree_exploration` | Co-evolving world-model tree with backtracking | Evaluator speedup and pass/fail result | Decision tree, solution DB, best solution | High-fidelity inference/search translation |
+| [AdaExplore](AdaExplore/) | `tree_exploration` | MCTS with large/small expansion steps | Compile/correctness/performance evaluator | MCTS statistics, diversity pool, skill memory | High-fidelity standalone method translation |
+| [KernelFoundry](KernelFoundry/) | `search_based` | MAP-Elites quality-diversity evolution | Compile, correctness, benchmark, descriptor evidence | Elite archive, descriptors, meta-prompts | Needs deterministic archive/descriptor artifacts for strictness |
+| [CUDA Agent](CUDAAgent/) | `iterative_self_improving` | Profile/Implement/Verify/Refine loop | Compile, correctness, speedup reward | Interaction history and skill-loop notes | Inference-time loop only; no RL/PPO training reproduction |
+| [cuPilot](cuPilot/) | `search_based` | Strategy-level evolutionary loop | NVCC/function check, NCU, roofline evidence | Strategy pool, population, RAG corpus | Strictness depends on concrete roofline/RAG/NCU artifacts |
+| [TritorX](TritorX/) | `multi_stage_refinement` | FSM over Generate/Lint/Compile/Test/Debug | Linter, compiler, OpInfo correctness tests | Failure summaries, operator coverage stats | Coverage-first FSM unless real target harness is present |
+| [KernelBand](KernelBand/) | `search_based` | Clustered multi-armed bandit with masked UCB | NCU feature vectors, latency reward | Cluster assignments, bandit statistics | Strictness requires real feature-vector and mask artifacts |
+| [KernelAgent](KernelAgent/) | `multi_stage_refinement` | Route, parallel seeds, verify, refine, compose | Sandboxed verification pass/fail | Candidate pool, refinement history | Faithful but simplified runtime/process model |
+| [STARK](STARK/) | `tree_exploration` | Epsilon-greedy tree with Plan/Code/Debug roles | Compile, correctness, runtime | Tree memory, leaderboard, dynamic contexts | Faithful but runtime role separation is prompt-mediated |
+| [ReGraphT](ReGraphT/) | `tree_exploration` | Monte Carlo Graph Search over reasoning graph | Evaluator JSON with speedup/correctness | CUDA reasoning graph, selected paths | Training-free inference/search phase only |
+| [Astra](Astra/) | `multi_stage_refinement` | Multi-agent production-kernel optimization loop | Tests, profiling, speedup | Run log, reintegration notes, best result | Idea-preserving unless source repo/runtime is available |
+| [CUDA-LLM](CUDALLM/) | `iterative_self_improving` | Feature Search and Reinforcement loop | Compile/correctness/latency reward | Feature catalog, feature scores, candidates | Workflow adaptation; no model training reproduction |
+| [Meta-Workflow](_meta/) | `tooling` | Research/Model/Assemble/Generate/Validate | Manifest schema and static/semantic checks | Templates, manifests, validation reports | Repository infrastructure, not a paper method |
+
 > Industrial practices (e.g. tiled attention as in FlashInfer, CUTLASS tuning workflows) will be added when they are concrete enough to agentize. Open an issue or PR to nominate the next entry.
 
 ---

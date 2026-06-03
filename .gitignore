@@ -16,6 +16,7 @@ output/
 outputs/
 kernel_cache/
 candidates/
+paper/
 candidate_kernel.py
 kernel_0.py
 fused_add_gelu_kernel.py

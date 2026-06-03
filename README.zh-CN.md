@@ -130,6 +130,31 @@ Workflow 文件遵循 Claude Code 约定：导出 `meta`（名称、描述、阶
 | **学习机制** | ![Experience](https://img.shields.io/badge/experience--memory-orange?style=flat) ![SkillMemory](https://img.shields.io/badge/skill--memory-orange?style=flat) ![WorldModel](https://img.shields.io/badge/world--model-orange?style=flat) ![MetaPrompt](https://img.shields.io/badge/meta--prompt-orange?style=flat) ![Clustering](https://img.shields.io/badge/clustering-orange?style=flat) ![ICRL](https://img.shields.io/badge/ICRL-blue?style=flat) ![RL-trained](https://img.shields.io/badge/RL--trained-red?style=flat) |
 | **特殊** | ![Invariants](https://img.shields.io/badge/invariants-red?style=flat) ![Evidence](https://img.shields.io/badge/evidence--driven-green?style=flat) ![Explanation](https://img.shields.io/badge/explanation-teal?style=flat) ![HW-Pruning](https://img.shields.io/badge/HW--pruning-red?style=flat) |
 
+### 方法学分类矩阵
+
+新增或审查 workflow 时，优先使用这张矩阵。CUDA / Triton / ROCm 等后端标签很有用，但真正决定方法差异的是 **循环拓扑**、**权威反馈信号** 和 **跨轮携带的状态/记忆**。
+
+| Workflow | 主要类别 | 搜索拓扑 | 权威反馈信号 | 状态 / 记忆 | Fidelity 边界 |
+|----------|----------|----------|--------------|-------------|---------------|
+| [AccelOpt](AccelOpt/) | `iterative_self_improving` | Beam 式 Plan/Execute/Profile/Learn 循环 | NCU 指标、延迟、慢/快对 | `experienceMemory`、candidate beam | 对更广义 accelerator 方法的 CUDA/NCU 适配 |
+| [KEET](KEET/) | `single_pass_pipeline` | 源码/Profile 分析流水线 | NCU profile + 源码假设 | 假设裁决、解释报告 | 解释 workflow，不是优化器 |
+| [ARGUS](ARGUS/) | `iterative_self_improving` | ICRL Plan/Select/Lower/Validate/Learn 循环 | 不变量违规、单测、吞吐量 | planner policy、不变量违规日志、候选 beam | 严格复现需要可执行 invariant checker 证据 |
+| [AKO4X](AKO4X/) | `iterative_self_improving` | 外层 round + 内层 iteration | smoke/full benchmark、可选 NCU | 经验 header、`TRAPS.md`、archive | 高保真对应 AKO4X round/archive 协议 |
+| [KDA](KDA/) | `iterative_self_improving` | 单候选证据驱动循环 | validation command、目标指标 | draft/plan 文档、候选记录 | 高保真对应 KDA agent-flow 契约 |
+| [K-Search](KSearch/) | `tree_exploration` | 共演化 world-model tree + 回溯 | evaluator speedup、pass/fail | decision tree、solution DB、best solution | 高保真 inference/search 翻译 |
+| [AdaExplore](AdaExplore/) | `tree_exploration` | MCTS + large/small expansion | 编译/正确性/性能 evaluator | MCTS 统计、多样性池、skill memory | 高保真 standalone 方法翻译 |
+| [KernelFoundry](KernelFoundry/) | `search_based` | MAP-Elites 质量-多样性进化 | 编译、正确性、benchmark、descriptor 证据 | elite archive、descriptor、meta-prompt | 严格性依赖确定性 archive/descriptor 证据 |
+| [CUDA Agent](CUDAAgent/) | `iterative_self_improving` | Profile/Implement/Verify/Refine 循环 | 编译、正确性、speedup reward | 交互历史、skill-loop notes | 只覆盖推理时循环，不复现 RL/PPO 训练 |
+| [cuPilot](cuPilot/) | `search_based` | strategy-level evolution | NVCC/function check、NCU、roofline 证据 | strategy pool、population、RAG corpus | 严格性依赖真实 roofline/RAG/NCU 产物 |
+| [TritorX](TritorX/) | `multi_stage_refinement` | Generate/Lint/Compile/Test/Debug FSM | linter、compiler、OpInfo 正确性测试 | failure summary、operator coverage stats | 无真实目标 harness 时只能称 TritorX-style FSM |
+| [KernelBand](KernelBand/) | `search_based` | 聚类多臂老虎机 + Masked UCB | NCU feature vector、latency reward | cluster assignment、bandit statistics | 严格性需要真实 feature-vector 和 mask 产物 |
+| [KernelAgent](KernelAgent/) | `multi_stage_refinement` | Route、并行 seed、verify、refine、compose | sandboxed verification pass/fail | candidate pool、refinement history | 方法形状保真，但 runtime/process 有简化 |
+| [STARK](STARK/) | `tree_exploration` | epsilon-greedy tree + Plan/Code/Debug 角色 | 编译、正确性、runtime | tree memory、leaderboard、dynamic contexts | 方法形状保真，角色分离主要由 prompt 表达 |
+| [ReGraphT](ReGraphT/) | `tree_exploration` | reasoning graph 上的 MCGS | evaluator JSON：speedup/correctness | CUDA reasoning graph、selected paths | 只覆盖 training-free inference/search 阶段 |
+| [Astra](Astra/) | `multi_stage_refinement` | 多 Agent 生产内核优化循环 | tests、profiling、speedup | run log、reintegration notes、best result | 无源 repo/runtime 时属于 idea-preserving |
+| [CUDA-LLM](CUDALLM/) | `iterative_self_improving` | Feature Search and Reinforcement 循环 | 编译/正确性/latency reward | feature catalog、feature scores、candidates | workflow adaptation，不复现模型训练 |
+| [Meta-Workflow](_meta/) | `tooling` | Research/Model/Assemble/Generate/Validate | manifest schema、静态/语义检查 | templates、manifests、validation reports | 仓库基础设施，不是论文方法 |
+
 > 工业界实践（如 FlashInfer 式分块 attention、CUTLASS 调参流程）会按「可 agent 化程度」陆续收录；欢迎提交 issue / PR 提名。
 
 ---
