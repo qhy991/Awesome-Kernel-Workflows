@@ -1,0 +1,373 @@
+# =============================================================================
+# KernelAgent Manifest — Multi-Agent Triton Kernel Synthesis
+# =============================================================================
+# Based on PyTorch Labs' KernelAgent (Apache-2.0)
+# Blog: https://pytorch.org/blog/kernelfalcon-autonomous-gpu-kernel-generation-via-deep-agents/
+# =============================================================================
+
+source:
+  paper_title: "KernelAgent: Multi-Agent GPU Kernel Synthesis with Deep Agents"
+  paper_url: "https://pytorch.org/blog/kernelfalcon-autonomous-gpu-kernel-generation-via-deep-agents/"
+  paper_venue: "PyTorch Blog 2025"
+  repo_url: "https://github.com/pytorch-labs/KernelAgent"
+  commit_or_tag: ""
+  license: "Apache-2.0"
+  notes: >
+    KernelAgent turns PyTorch programs into verified Triton kernels using parallel
+    seed generation, sandboxed verification, and iterative refinement. Includes
+    an auto-router that decides between direct synthesis and a multi-subgraph
+    Fuser pipeline (extract → dispatch → compose).
+
+workflow:
+  name: "kernelagent-triton-synthesis"
+  description: "Multi-agent Triton kernel synthesis with parallel seed generation, iterative refinement, and strict verification (KernelAgent methodology)"
+  when_to_use: "When you need to generate verified Triton kernels from a PyTorch problem description or code. Uses parallel workers for diverse seed generation, sandboxed test execution for verification, and iterative LLM-guided refinement. Supports both direct single-kernel and Fuser pipeline (multi-subgraph) paths."
+  output_filename: "kernelagent-triton-synthesis.js"
+  directory: "KernelAgent/"
+
+method:
+  category: "multi_stage_refinement"
+  core_insight: >
+    Combine parallel diversity (N seed kernels with varied temperatures/strategies)
+    with strict runtime verification (sandboxed subprocess, no PyTorch fallbacks)
+    and iterative error-driven refinement. Auto-routing via static complexity
+    analysis selects between direct synthesis and a multi-subgraph Fuser pipeline
+    (extract → parallel dispatch → compose) for complex multi-op problems.
+  feedback_signal:
+    type: "correctness_score"
+    description: "Binary pass/fail from sandboxed test execution (exit code 0 + PASS sentinel). Error messages drive refinement prompts."
+    tool: "subprocess_test_execution"
+    higher_is_better: false  # 0 errors = better
+
+topology:
+  type: "pipeline"
+  pipeline:
+    pass_order:
+      - "Setup"
+      - "Route"
+      - "Generate"
+      - "Verify"
+      - "Refine"
+      - "Compose"
+      - "Report"
+
+phases:
+  # --- PREAMBLE ---
+  - name: "Setup"
+    detail: "Parse problem, generate test harness, initialize workspace"
+    position: "preamble"
+    agents:
+      - label: "setup-problem"
+        description: "Parse problem from file or description, extract tensor specs and operations"
+        parallelism: "single"
+        input_variables: ["PROBLEM_PATH", "PROBLEM_DESC"]
+        output_schema:
+          type: "object"
+          properties:
+            problem_description: { type: "string" }
+            input_tensors: { type: "array" }
+            operations: { type: "array", items: { type: "string" } }
+            output_spec: { type: "object" }
+            complexity_signals: { type: "array", items: { type: "string" } }
+          required: ["problem_description", "operations"]
+      - label: "setup-test"
+        description: "Generate Python test harness that verifies kernel output against PyTorch reference"
+        parallelism: "single"
+        input_variables: ["problemDescription", "setupResult"]
+        output_schema:
+          type: "object"
+          properties:
+            test_code: { type: "string" }
+          required: ["test_code"]
+
+  - name: "Route"
+    detail: "Static analysis to choose direct path vs Fuser pipeline"
+    position: "preamble"
+    agents:
+      - label: "route-analysis"
+        description: "Analyze problem complexity to decide direct vs pipeline synthesis path"
+        parallelism: "single"
+        input_variables: ["problemDescription", "setupResult"]
+        output_schema:
+          type: "object"
+          properties:
+            path: { type: "string", enum: ["direct", "pipeline"] }
+            reason: { type: "string" }
+            subgraph_count: { type: "number" }
+            estimated_difficulty: { type: "string" }
+          required: ["path", "reason"]
+      - label: "route-subgraphs"
+        description: "(Pipeline path only) Extract subgraphs for parallel synthesis"
+        parallelism: "single"
+        input_variables: ["problemDescription", "setupResult"]
+        output_schema:
+          type: "object"
+          properties:
+            subgraphs: { type: "array" }
+          required: ["subgraphs"]
+
+  # --- LOOP BODY ---
+  - name: "Generate"
+    detail: "Parallel seed generation: N agents each produce a candidate Triton kernel"
+    position: "loop_body"
+    agents:
+      - label: "gen-{target}-seed{idx}"
+        description: "Generate a single Triton kernel seed with specified temperature/strategy"
+        parallelism: "parallel_fan_out"
+        parallel_axis: "synthesisTargets × MAX_SEEDS"
+        count_arg: "max_seeds"
+        input_variables: ["target.description", "testCode", "seedIdx", "temperature"]
+        output_schema:
+          type: "object"
+          properties:
+            kernel_code: { type: "string" }
+            approach: { type: "string" }
+            potential_issues: { type: "string" }
+          required: ["kernel_code", "approach"]
+
+  - name: "Verify"
+    detail: "Sandboxed test execution for each candidate in parallel"
+    position: "loop_body"
+    agents:
+      - label: "verify-{candidate.id}"
+        description: "Execute test harness against kernel in sandboxed subprocess"
+        parallelism: "parallel_fan_out"
+        parallel_axis: "validCandidates"
+        input_variables: ["candidate.code", "testCode"]
+        output_schema:
+          type: "object"
+          properties:
+            passed: { type: "boolean" }
+            exit_code: { type: "number" }
+            stdout: { type: "string" }
+            stderr: { type: "string" }
+            error_summary: { type: "string" }
+            verification_result: { type: "string", enum: ["pass", "fail", "timeout", "error"] }
+          required: ["passed", "verification_result"]
+
+  - name: "Refine"
+    detail: "Iterative refinement: failed candidates get LLM-guided fixes"
+    position: "loop_body"
+    agents:
+      - label: "refine-{candidate.id}-r{round}"
+        description: "Analyze error and fix failing kernel code"
+        parallelism: "parallel_fan_out"
+        parallel_axis: "failedCandidates"
+        input_variables: ["candidate.code", "candidate.error", "candidate.verification", "refinementHistory"]
+        output_schema:
+          type: "object"
+          properties:
+            kernel_code: { type: "string" }
+            changes_made: { type: "array", items: { type: "string" } }
+            confidence: { type: "string", enum: ["high", "medium", "low"] }
+            fix_explanation: { type: "string" }
+          required: ["kernel_code", "fix_explanation"]
+      - label: "reverify-{candidate.id}-r{round}"
+        description: "Re-verify refined kernel"
+        parallelism: "parallel_fan_out"
+        parallel_axis: "toReVerify"
+        input_variables: ["candidate.code", "testCode"]
+        output_schema:
+          type: "object"
+          properties:
+            passed: { type: "boolean" }
+            verification_result: { type: "string", enum: ["pass", "fail", "timeout", "error"] }
+          required: ["passed", "verification_result"]
+
+  - name: "Compose"
+    detail: "Stitch verified subgraph kernels into final Triton program (pipeline path only)"
+    position: "loop_body"
+    agents:
+      - label: "compose-stitch"
+        description: "Combine subgraph kernels into a single Triton program with kernel_function wrapper"
+        parallelism: "single"
+        input_variables: ["problemDescription", "verifiedKernels", "subgraphs"]
+        output_schema:
+          type: "object"
+          properties:
+            composed_code: { type: "string" }
+            composition_notes: { type: "string" }
+            intermediate_tensors: { type: "array", items: { type: "string" } }
+          required: ["composed_code", "composition_notes"]
+      - label: "compose-verify"
+        description: "Verify the composed kernel against original test"
+        parallelism: "single"
+        input_variables: ["composedKernel", "testCode"]
+        output_schema:
+          type: "object"
+          properties:
+            passed: { type: "boolean" }
+            verification_result: { type: "string", enum: ["pass", "fail", "timeout", "error"] }
+          required: ["passed", "verification_result"]
+
+  # --- EPILOGUE ---
+  - name: "Report"
+    detail: "Final summary with best kernel, verification status, artifacts"
+    position: "epilogue"
+    agents:
+      - label: "report-summary"
+        description: "Generate comprehensive synthesis report"
+        parallelism: "single"
+        input_variables: ["problemDescription", "routingDecision", "candidates", "verifiedKernels", "refinementHistory", "composedKernel"]
+        output_schema:
+          type: "object"
+          properties:
+            outcome: { type: "string", enum: ["success", "partial", "failed"] }
+            summary: { type: "string" }
+            best_kernel_approach: { type: "string" }
+            verification_status: { type: "string" }
+            recommendations: { type: "array", items: { type: "string" } }
+            artifacts_path: { type: "string" }
+          required: ["outcome", "summary"]
+
+plan_angles: []  # Not applicable — KernelAgent uses parallel diverse seeds, not plan angles
+
+args:
+  required:
+    - name: "problem_path"
+      type: "string"
+      description: "Path to a Python file containing the PyTorch problem/module to synthesize"
+      example: "/path/to/KernelBench/level1/19_ReLU.py"
+  optional:
+    - name: "problem_description"
+      type: "string"
+      default: "''"
+      description: "Alternative to problem_path: direct text description of the kernel to generate"
+      example: "Implement ReLU over a contiguous 1D tensor of length 1024"
+    - name: "num_workers"
+      type: "number"
+      default: "4"
+      description: "Number of parallel verification workers"
+      example: "4"
+    - name: "max_rounds"
+      type: "number"
+      default: "10"
+      description: "Maximum refinement rounds per failed candidate"
+      example: "10"
+    - name: "max_seeds"
+      type: "number"
+      default: "4"
+      description: "Number of diverse kernel seeds to generate per target"
+      example: "4"
+    - name: "model_name"
+      type: "string"
+      default: "'claude-sonnet-4-20250514'"
+      description: "LLM model for kernel generation and refinement"
+      example: "gpt-5"
+    - name: "verify"
+      type: "boolean"
+      default: "true"
+      description: "Run verification tests on generated kernels"
+      example: "true"
+    - name: "compose"
+      type: "boolean"
+      default: "true"
+      description: "For pipeline path, compose subgraph kernels into final program"
+      example: "true"
+    - name: "exp_dir"
+      type: "string"
+      default: "'/tmp/kernelagent_exp'"
+      description: "Directory for experiment artifacts and session logs"
+      example: "/path/to/experiment/output"
+    - name: "temperature_base"
+      type: "number"
+      default: "0.8"
+      description: "Base temperature for seed generation (increases per seed for diversity)"
+      example: "0.8"
+    - name: "fuser_extract_model"
+      type: "string"
+      default: "''"
+      description: "Model for subgraph extraction in pipeline path (defaults to model_name)"
+      example: "gpt-5"
+    - name: "fuser_dispatch_model"
+      type: "string"
+      default: "''"
+      description: "Model for kernel dispatch in pipeline path (defaults to model_name)"
+      example: "o4-mini"
+    - name: "fuser_compose_model"
+      type: "string"
+      default: "''"
+      description: "Model for kernel composition in pipeline path (defaults to model_name)"
+      example: "o4-mini"
+
+correctness:
+  criteria:
+    - "Kernel must use @triton.jit decorator (no torch.nn fallbacks)"
+    - "Test harness must print PASS and exit with code 0"
+    - "No disallowed PyTorch patterns (torch.nn, torch.nn.functional, activation helpers)"
+    - "Output must match PyTorch reference within tolerance (rtol=1e-3, atol=1e-3)"
+    - "Test must complete within 30 seconds (no infinite loops)"
+    - "Composed kernel must pass original problem's test (pipeline path)"
+  check_type: "runtime_comparison"
+  reference_output: "PyTorch reference implementation from the problem description"
+
+return_fields:
+  - name: "outcome"
+    type: "string"
+    description: "Synthesis outcome: 'success', 'partial', or 'failed'"
+    required: true
+  - name: "summary"
+    type: "string"
+    description: "Executive summary of the synthesis run"
+    required: true
+  - name: "routing_path"
+    type: "string"
+    description: "Chosen synthesis path: 'direct' or 'pipeline'"
+    required: true
+  - name: "routing_reason"
+    type: "string"
+    description: "Explanation of the routing decision"
+    required: true
+  - name: "total_candidates"
+    type: "number"
+    description: "Total number of kernel candidates generated"
+    required: true
+  - name: "verified_count"
+    type: "number"
+    description: "Number of candidates that passed verification"
+    required: true
+  - name: "refinement_rounds"
+    type: "number"
+    description: "Number of refinement rounds executed"
+    required: true
+  - name: "best_kernel_code"
+    type: "string"
+    description: "Source code of the best verified kernel (or composed kernel)"
+    required: true
+  - name: "best_kernel_approach"
+    type: "string"
+    description: "Description of the winning kernel's implementation strategy"
+    required: true
+  - name: "composed_kernel"
+    type: "string"
+    description: "Composed multi-subgraph kernel (empty string for direct path)"
+    required: false
+  - name: "verification_status"
+    type: "string"
+    description: "Verification status from the report"
+    required: true
+  - name: "recommendations"
+    type: "array"
+    description: "Suggestions for further optimization"
+    required: false
+  - name: "session_directory"
+    type: "string"
+    description: "Path to session artifacts"
+    required: true
+  - name: "test_code"
+    type: "string"
+    description: "Generated test harness code"
+    required: true
+  - name: "subgraph_count"
+    type: "number"
+    description: "Number of subgraphs (1 for direct path)"
+    required: true
+  - name: "candidates_summary"
+    type: "array"
+    description: "Summary of all candidates with id, status, approach"
+    required: true
+
+template:
+  base: "single-pass"  # Pipeline topology with iterative refinement sub-loop
+  customizations:
+    - "iterative_refinement"

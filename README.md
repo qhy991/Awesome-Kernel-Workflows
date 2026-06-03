@@ -62,6 +62,26 @@ Awesome-Kernel-Workflows/
 ├── KernelBand/                  # MAB with hardware-aware pruning + clustering
 │   ├── kernelband-kernel-optimization.js
 │   └── README.md
+├── KernelAgent/                 # Multi-agent Triton synthesis with parallel verification
+│   ├── kernelagent-triton-synthesis.js
+│   ├── manifest.yaml
+│   └── README.md
+├── STARK/                       # Multi-agent collaboration + tree search + grounded instruction
+│   ├── stark-kernel-optimization.js
+│   ├── manifest.yaml
+│   └── README.md
+├── ReGraphT/                    # CUDA reasoning graph + Monte Carlo Graph Search
+│   ├── regrapht-kernel-optimization.js
+│   ├── manifest.yaml
+│   └── README.md
+├── Astra/                       # Multi-agent optimization for existing CUDA kernels
+│   ├── astra-kernel-optimization.js
+│   ├── manifest.yaml
+│   └── README.md
+├── CUDALLM/                     # Feature Search and Reinforcement for CUDA generation
+│   ├── cudallm-fsr-kernel-generation.js
+│   ├── manifest.yaml
+│   └── README.md
 ├── _meta/                       # Meta-workflow: paper → workflow generation
 │   ├── README.md
 │   ├── tools/
@@ -102,6 +122,11 @@ Workflow files follow Claude Code conventions: export `meta` (name, description,
 | [cuPilot](cuPilot/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![NCU](https://img.shields.io/badge/NCU-555?style=flat) ![Evolutionary](https://img.shields.io/badge/evolutionary-darkblue?style=flat) ![Roofline](https://img.shields.io/badge/roofline-teal?style=flat) ![RAG](https://img.shields.io/badge/RAG-orange?style=flat) | Strategize → Translate → Revise → Evolve | [arXiv:2512.16465](https://arxiv.org/abs/2512.16465) (SEU/Tsinghua 2025) |
 | [TritorX](TritorX/) | ![ASIC](https://img.shields.io/badge/ASIC%2FNPU-333?style=flat) ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![FSM](https://img.shields.io/badge/FSM-blue?style=flat) ![Linter](https://img.shields.io/badge/linter-green?style=flat) ![Coverage](https://img.shields.io/badge/coverage--first-teal?style=flat) | Generate → Lint → Compile/Test → Debug (loop) | [arXiv:2512.10977](https://arxiv.org/abs/2512.10977) (Meta 2025) |
 | [KernelBand](KernelBand/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![NCU](https://img.shields.io/badge/NCU-555?style=flat) ![MAB](https://img.shields.io/badge/MAB--UCB-darkblue?style=flat) ![Clustering](https://img.shields.io/badge/clustering-orange?style=flat) ![HW-Pruning](https://img.shields.io/badge/HW--pruning-red?style=flat) | Profile → Cluster → Select(UCB) → Generate → Evaluate → Update | [arXiv:2511.18868](https://arxiv.org/abs/2511.18868) (PKU 2026) |
+| [KernelAgent](KernelAgent/) | ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?style=flat&logo=pytorch&logoColor=white) ![Pipeline](https://img.shields.io/badge/pipeline-purple?style=flat) ![MultiAgent](https://img.shields.io/badge/multi--agent-teal?style=flat) ![Verification](https://img.shields.io/badge/verification-green?style=flat) | Route → Generate(parallel) → Verify → Refine → Compose | [PyTorch Blog](https://pytorch.org/blog/kernelfalcon-autonomous-gpu-kernel-generation-via-deep-agents/) (PyTorch Labs 2025) |
+| [STARK](STARK/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Tree](https://img.shields.io/badge/tree--search-darkblue?style=flat) ![MultiAgent](https://img.shields.io/badge/multi--agent-teal?style=flat) ![Grounded](https://img.shields.io/badge/grounded--instruction-green?style=flat) ![DynamicContext](https://img.shields.io/badge/dynamic--context-orange?style=flat) | Setup → Select(ε-greedy) → Plan/Code/Debug → Evaluate → Update | [arXiv:2510.16996](https://arxiv.org/abs/2510.16996) (Meta/Duke 2025) |
+| [ReGraphT](ReGraphT/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Tree](https://img.shields.io/badge/tree--search-darkblue?style=flat) ![RAG](https://img.shields.io/badge/RAG-orange?style=flat) ![ReasoningGraph](https://img.shields.io/badge/reasoning--graph-teal?style=flat) ![MCGS](https://img.shields.io/badge/MCGS-darkblue?style=flat) | BuildGraph → Select(MCGS) → Generate → Evaluate → UpdateGraph | [arXiv:2510.19873](https://arxiv.org/abs/2510.19873) (CAS/SCUT 2025) |
+| [Astra](Astra/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![MultiAgent](https://img.shields.io/badge/multi--agent-teal?style=flat) ![Profiling](https://img.shields.io/badge/profiling-green?style=flat) ![SGLang](https://img.shields.io/badge/SGLang-orange?style=flat) | Setup → Test/Profile → Plan → Code → Evaluate → Record | [arXiv:2509.07506](https://arxiv.org/abs/2509.07506) (Stanford/SJTU/NJU 2025) |
+| [CUDA-LLM](CUDALLM/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) ![FeatureSearch](https://img.shields.io/badge/feature--search-teal?style=flat) ![Reinforcement](https://img.shields.io/badge/reinforcement-red?style=flat) | Catalog → SelectFeatures → Generate → Evaluate → Reinforce | [arXiv:2506.09092](https://arxiv.org/abs/2506.09092) (2025) |
 | [Meta-Workflow](_meta/) | ![Tooling](https://img.shields.io/badge/tooling-gray?style=flat) | Research → Model → Assemble → Generate → Validate | — |
 
 ### Tag Legend

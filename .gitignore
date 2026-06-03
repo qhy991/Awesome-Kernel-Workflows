@@ -12,3 +12,12 @@ __pycache__/
 *.pyzzzz
 *.pywzzzz
 experiments/
+output/
+outputs/
+kernel_cache/
+candidates/
+candidate_kernel.py
+kernel_0.py
+fused_add_gelu_kernel.py
+Awesome-LLM-Kernel/
+ARGUS/*_kernel.py

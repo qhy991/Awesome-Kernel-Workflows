@@ -1,0 +1,505 @@
+export const meta = {
+  name: 'cudallm-fsr-kernel-generation',
+  description: 'CUDA-LLM Feature Search and Reinforcement workflow for evaluator-guided CUDA kernel generation',
+  whenToUse: 'When generating or optimizing CUDA kernels from a task specification and you want explicit CUDA feature search rather than generic iterative prompting. Maintains feature-level scores for tiling, shared memory, vectorization, warp primitives, occupancy, and fast math, then reinforces feature choices using compile, correctness, and latency evidence.',
+  phases: [
+    { title: 'Setup', detail: 'Read task specification, reference implementation, target GPU, and evaluator contract' },
+    { title: 'FeatureCatalog', detail: 'Build a CUDA optimization feature space tailored to the task' },
+    { title: 'GenerateTests', detail: 'Create diverse correctness and boundary tests for the task' },
+    { title: 'SelectFeatures', detail: 'Choose a feature combination from scored feature history' },
+    { title: 'GenerateKernel', detail: 'Generate candidate CUDA code conditioned on selected features' },
+    { title: 'Evaluate', detail: 'Compile, correctness-test, and benchmark the candidate' },
+    { title: 'Reinforce', detail: 'Update feature scores from measured compile/correctness/speedup reward' },
+    { title: 'Report', detail: 'Return best kernel, feature reward table, failures, and next feature sets' },
+  ],
+}
+
+// =============================================================================
+// CUDA-LLM — Feature Search and Reinforcement (FSR) Workflow
+// =============================================================================
+//
+// Source: "CUDA-LLM: LLMs Can Write Efficient CUDA Kernels"
+//         arXiv:2506.09092 — Wentao Chen, Jiace Zhu, Qi Fan, Yehan Ma, An Zou
+//
+// Boundary:
+//   This workflow implements an agent-executable Feature Search and
+//   Reinforcement loop. It does not train a model. It searches CUDA optimization
+//   features, generates kernels, evaluates them with real compile/correctness/
+//   latency evidence, and reinforces feature choices for later iterations.
+//
+// Usage:
+//   Workflow({name: 'cudallm-fsr-kernel-generation', args: {
+//     task_spec_path: '/path/to/task.md',
+//     reference_code_path: '/path/to/reference.py',
+//     eval_command: 'python eval.py --kernel {kernel_path} --json {result_path}',
+//     target_gpu: 'H100',
+//     iterations: 8,
+//     feature_budget: 4,
+//     samples_per_feature_set: 2,
+//     rtol: 0.01,
+//     atol: 0.01,
+//     exp_dir: '/tmp/cudallm_fsr_exp',
+//   }})
+//
+// Evaluator JSON contract:
+//   eval_command should write JSON at {result_path}:
+//   {
+//     "compiled": true,
+//     "correct": true,
+//     "speedup": 1.23,
+//     "latency_ms": 0.12,
+//     "baseline_latency_ms": 0.15,
+//     "error_message": "",
+//     "passed_tests": 128,
+//     "total_tests": 128
+//   }
+//
+// =============================================================================
+
+// --- Required Args ---
+const TASK_SPEC_PATH = args.task_spec_path || ''
+const REFERENCE_CODE_PATH = args.reference_code_path || ''
+const EVAL_CMD = args.eval_command || ''
+
+// --- Optional Args ---
+const TARGET_GPU = args.target_gpu || 'H100'
+const ITERATIONS = args.iterations || 8
+const FEATURE_BUDGET = args.feature_budget || 4
+const SAMPLES_PER_FEATURE_SET = args.samples_per_feature_set || 2
+const RTOL = args.rtol ?? 0.01
+const ATOL = args.atol ?? 0.01
+const EXP_DIR = args.exp_dir || '/tmp/cudallm_fsr_exp'
+
+// --- State ---
+let taskSpec = ''
+let referenceCode = ''
+let tests = []
+let featureCatalog = []
+let featureScores = {}
+let candidates = []
+let bestCandidate = null
+
+function initFeatureScore(feature) {
+  if (!featureScores[feature.id]) {
+    featureScores[feature.id] = {
+      id: feature.id,
+      name: feature.name,
+      attempts: 0,
+      compiled: 0,
+      correct: 0,
+      reward: 0,
+      best_speedup: 0,
+      failures: [],
+    }
+  }
+}
+
+function candidateScore(candidate) {
+  if (!candidate?.eval?.compiled) return [0, 0, 0]
+  if (!candidate.eval.correct) return [1, 0, 0]
+  return [1, 1, candidate.eval.speedup || 0]
+}
+
+function isBetterCandidate(candidate, incumbent) {
+  if (!incumbent) return !!candidate?.eval?.correct
+  const a = candidateScore(candidate)
+  const b = candidateScore(incumbent)
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return a[i] > b[i]
+  }
+  return false
+}
+
+// =============================================================================
+// Phase 1: Setup
+// =============================================================================
+phase('Setup')
+
+const setup = await agent(`You are a CUDA kernel generation expert. Read and structure this CUDA-LLM task.
+
+# Inputs
+- task_spec_path: ${TASK_SPEC_PATH}
+- reference_code_path: ${REFERENCE_CODE_PATH}
+- target_gpu: ${TARGET_GPU}
+- eval_command: ${EVAL_CMD || '(missing; evaluator evidence required before accepting speedup)'}
+- tolerances: rtol=${RTOL}, atol=${ATOL}
+
+# Tasks
+1. Read the task specification and reference implementation.
+2. Identify operation type, tensor shapes/dtypes, layout assumptions, and expected output.
+3. Identify hard constraints: pure CUDA/C++ only, no PyTorch fallback in generated kernel, preserve numerical tolerance.
+4. State the evaluator JSON contract and how {kernel_path}/{result_path} are substituted.
+5. List baseline performance if available.
+
+Return structured task information.`, {
+  label: 'setup-task',
+  phase: 'Setup',
+  schema: {
+    type: 'object',
+    properties: {
+      task_spec: { type: 'string' },
+      reference_code: { type: 'string' },
+      operation_type: { type: 'string' },
+      input_contract: { type: 'string' },
+      output_contract: { type: 'string' },
+      constraints: { type: 'array', items: { type: 'string' } },
+      baseline_latency_ms: { type: 'number' },
+    },
+    required: ['task_spec', 'operation_type', 'constraints'],
+  },
+})
+
+taskSpec = setup.task_spec || ''
+referenceCode = setup.reference_code || ''
+
+// =============================================================================
+// Phase 2: FeatureCatalog
+// =============================================================================
+phase('FeatureCatalog')
+
+const catalog = await agent(`Build a CUDA optimization feature catalog for Feature Search and Reinforcement.
+
+# Task
+${taskSpec.substring(0, 5000)}
+
+# Reference
+\`\`\`
+${referenceCode.substring(0, 5000)}
+\`\`\`
+
+# Target GPU
+${TARGET_GPU}
+
+# Required feature families
+- tiling and block/grid decomposition
+- shared memory staging
+- vectorized/global memory access
+- warp-level primitives
+- loop unrolling and instruction scheduling
+- occupancy/register pressure tuning
+- fast math or CUDA intrinsics, only when tolerance allows
+- boundary handling / tail masking
+
+# Tasks
+1. Produce feature entries with id, name, family, description, prerequisites, incompatibilities, and risk.
+2. Mark features that are unsafe under the given tolerance.
+3. Include a conservative baseline feature set.
+4. Initialize all feature scores with neutral priors.
+
+Return feature catalog.`, {
+  label: 'feature-catalog',
+  phase: 'FeatureCatalog',
+  schema: {
+    type: 'object',
+    properties: {
+      features: { type: 'array', items: { type: 'object' } },
+      baseline_feature_ids: { type: 'array', items: { type: 'string' } },
+      unsafe_feature_ids: { type: 'array', items: { type: 'string' } },
+      notes: { type: 'array', items: { type: 'string' } },
+    },
+    required: ['features', 'baseline_feature_ids'],
+  },
+})
+
+featureCatalog = catalog.features || []
+for (const feature of featureCatalog) initFeatureScore(feature)
+
+// =============================================================================
+// Phase 3: GenerateTests
+// =============================================================================
+phase('GenerateTests')
+
+const testPlan = await agent(`Generate diverse correctness tests for this CUDA-LLM task.
+
+# Operation
+${setup.operation_type}
+
+# Input contract
+${setup.input_contract || ''}
+
+# Output contract
+${setup.output_contract || ''}
+
+# Tolerances
+rtol=${RTOL}, atol=${ATOL}
+
+# Requirements
+1. Cover small, medium, and large shapes.
+2. Cover boundary/tail cases that stress masking and vectorized loads.
+3. Cover dtype/layout variations if the task allows them.
+4. Include random and adversarial value distributions.
+5. These tests are a plan for eval_command or a workflow-created harness; model self-judgment is not enough.
+
+Return test cases.`, {
+  label: 'generate-tests',
+  phase: 'GenerateTests',
+  schema: {
+    type: 'object',
+    properties: {
+      test_cases: { type: 'array', items: { type: 'object' } },
+      tolerance_policy: { type: 'string' },
+      harness_notes: { type: 'string' },
+    },
+    required: ['test_cases', 'tolerance_policy'],
+  },
+})
+
+tests = testPlan.test_cases || []
+
+// =============================================================================
+// Main FSR Loop
+// =============================================================================
+for (let iteration = 0; iteration < ITERATIONS; iteration++) {
+  for (let sample = 0; sample < SAMPLES_PER_FEATURE_SET; sample++) {
+    log(`\n=== CUDA-LLM FSR iteration ${iteration + 1}/${ITERATIONS}, sample ${sample + 1}/${SAMPLES_PER_FEATURE_SET} ===`)
+
+    phase('SelectFeatures')
+
+    const selection = await agent(`Select a CUDA feature combination for the next candidate.
+
+# Feature catalog
+\`\`\`json
+${JSON.stringify(featureCatalog, null, 2).substring(0, 10000)}
+\`\`\`
+
+# Feature scores
+\`\`\`json
+${JSON.stringify(featureScores, null, 2).substring(0, 10000)}
+\`\`\`
+
+# Recent candidates
+\`\`\`json
+${JSON.stringify(candidates.slice(-8), null, 2).substring(0, 10000)}
+\`\`\`
+
+# Selection rules
+1. Select at most ${FEATURE_BUDGET} features.
+2. Combine compatible features only.
+3. Use exploration early: try under-tested but plausible features.
+4. Use exploitation when feature evidence shows compile/correctness/speedup reward.
+5. Avoid unsafe features unless explicitly justified by tolerance and tests.
+
+Return selected feature ids and rationale.`, {
+      label: `select-features-${iteration}-${sample}`,
+      phase: 'SelectFeatures',
+      schema: {
+        type: 'object',
+        properties: {
+          selected_feature_ids: { type: 'array', items: { type: 'string' } },
+          rationale: { type: 'string' },
+          expected_risks: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['selected_feature_ids', 'rationale'],
+      },
+    })
+
+    phase('GenerateKernel')
+
+    const generation = await agent(`Generate a CUDA kernel using the selected CUDA-LLM FSR features.
+
+# Task specification
+${taskSpec.substring(0, 8000)}
+
+# Reference implementation
+\`\`\`
+${referenceCode.substring(0, 8000)}
+\`\`\`
+
+# Selected features
+\`\`\`json
+${JSON.stringify(selection, null, 2)}
+\`\`\`
+
+# Hard constraints
+1. Return complete CUDA/C++ source, not a patch.
+2. Do not call PyTorch or reference implementation from generated kernel.
+3. Preserve input/output contract and tolerances.
+4. Implement selected features concretely; if a feature is skipped, explain why.
+5. Keep code benchmarkable by eval_command.
+
+Return candidate code and implemented features.`, {
+      label: `generate-kernel-${iteration}-${sample}`,
+      phase: 'GenerateKernel',
+      schema: {
+        type: 'object',
+        properties: {
+          candidate_code: { type: 'string' },
+          implemented_feature_ids: { type: 'array', items: { type: 'string' } },
+          skipped_feature_ids: { type: 'array', items: { type: 'string' } },
+          implementation_notes: { type: 'string' },
+        },
+        required: ['candidate_code', 'implemented_feature_ids'],
+      },
+    })
+
+    phase('Evaluate')
+
+    const evaluation = await agent(`Evaluate this CUDA candidate with compile, correctness, and latency evidence.
+
+# Candidate code
+\`\`\`cuda
+${(generation.candidate_code || '').substring(0, 16000)}
+\`\`\`
+
+# Eval command
+${EVAL_CMD || '(no eval_command provided)'}
+
+# Paths
+- kernel_path: ${EXP_DIR}/cudallm_iter_${iteration}_sample_${sample}.cu
+- result_path: ${EXP_DIR}/cudallm_iter_${iteration}_sample_${sample}.json
+
+# Tests
+\`\`\`json
+${JSON.stringify(tests, null, 2).substring(0, 8000)}
+\`\`\`
+
+# Required behavior
+1. If eval_command is available, materialize the kernel and run it with {kernel_path}/{result_path}.
+2. Parse evaluator JSON.
+3. If eval_command is unavailable, set compiled=false, correct=false, speedup=0 and explain missing evidence.
+4. Reward must be based on compile success, functional correctness over diverse tests, and measured latency.
+5. Report suspected reward-hacking signs: hardcoded shapes, skipped computation, PyTorch fallback, or ignored inputs.
+
+Return evaluator result.`, {
+      label: `evaluate-${iteration}-${sample}`,
+      phase: 'Evaluate',
+      schema: {
+        type: 'object',
+        properties: {
+          compiled: { type: 'boolean' },
+          correct: { type: 'boolean' },
+          speedup: { type: 'number' },
+          latency_ms: { type: 'number' },
+          baseline_latency_ms: { type: 'number' },
+          passed_tests: { type: 'number' },
+          total_tests: { type: 'number' },
+          error_message: { type: 'string' },
+          reward_hacking_flags: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['compiled', 'correct', 'speedup'],
+      },
+    })
+
+    const candidate = {
+      id: `iter_${iteration}_sample_${sample}`,
+      selected_feature_ids: selection.selected_feature_ids || [],
+      implemented_feature_ids: generation.implemented_feature_ids || [],
+      code: generation.candidate_code || '',
+      eval: evaluation,
+    }
+    candidates.push(candidate)
+
+    if (isBetterCandidate(candidate, bestCandidate)) {
+      bestCandidate = candidate
+    }
+
+    phase('Reinforce')
+
+    const reinforce = await agent(`Update CUDA feature scores from this measured candidate.
+
+# Candidate
+\`\`\`json
+${JSON.stringify({
+  id: candidate.id,
+  selected_feature_ids: candidate.selected_feature_ids,
+  implemented_feature_ids: candidate.implemented_feature_ids,
+  eval: candidate.eval,
+}, null, 2)}
+\`\`\`
+
+# Current feature scores
+\`\`\`json
+${JSON.stringify(featureScores, null, 2).substring(0, 10000)}
+\`\`\`
+
+# Reward rules
+1. compiled=false gives strong penalty to implemented features.
+2. compiled=true but correct=false gives weak compile credit and correctness penalty.
+3. correct=true gives correctness credit plus speedup reward.
+4. reward_hacking_flags suppress reward even if speedup appears high.
+5. Features not implemented should not receive credit.
+
+Return updated score records for affected features.`, {
+      label: `reinforce-${iteration}-${sample}`,
+      phase: 'Reinforce',
+      schema: {
+        type: 'object',
+        properties: {
+          updated_scores: { type: 'array', items: { type: 'object' } },
+          reinforcement_notes: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['updated_scores'],
+      },
+    })
+
+    for (const score of reinforce.updated_scores || []) {
+      if (score?.id) featureScores[score.id] = score
+    }
+  }
+}
+
+// =============================================================================
+// Phase 8: Report
+// =============================================================================
+phase('Report')
+
+const finalReport = await agent(`Write a concise CUDA-LLM FSR optimization report.
+
+# Task
+${taskSpec.substring(0, 4000)}
+
+# Best candidate summary
+\`\`\`json
+${JSON.stringify(bestCandidate ? {
+  id: bestCandidate.id,
+  selected_feature_ids: bestCandidate.selected_feature_ids,
+  implemented_feature_ids: bestCandidate.implemented_feature_ids,
+  eval: bestCandidate.eval,
+} : null, null, 2)}
+\`\`\`
+
+# Feature scores
+\`\`\`json
+${JSON.stringify(featureScores, null, 2).substring(0, 12000)}
+\`\`\`
+
+# Candidate history
+\`\`\`json
+${JSON.stringify(candidates.map(c => ({
+  id: c.id,
+  selected_feature_ids: c.selected_feature_ids,
+  implemented_feature_ids: c.implemented_feature_ids,
+  eval: c.eval,
+})), null, 2).substring(0, 14000)}
+\`\`\`
+
+Cover:
+1. Which CUDA features were reinforced by measured evidence.
+2. Which feature combinations failed and why.
+3. Whether the best kernel is trustworthy under diverse tests.
+4. Which feature sets should be tried next.
+5. Any reward-hacking risks that remain.`, {
+  label: 'final-report',
+  phase: 'Report',
+})
+
+return {
+  task_spec_path: TASK_SPEC_PATH,
+  reference_code_path: REFERENCE_CODE_PATH,
+  target_gpu: TARGET_GPU,
+  iterations: ITERATIONS,
+  feature_budget: FEATURE_BUDGET,
+  samples_per_feature_set: SAMPLES_PER_FEATURE_SET,
+  best_speedup: bestCandidate?.eval?.speedup || 0,
+  best_latency_ms: bestCandidate?.eval?.latency_ms || null,
+  best_kernel_code: bestCandidate?.code || '',
+  best_candidate_id: bestCandidate?.id || '',
+  feature_scores: featureScores,
+  candidates: candidates.map(c => ({
+    id: c.id,
+    selected_feature_ids: c.selected_feature_ids,
+    implemented_feature_ids: c.implemented_feature_ids,
+    eval: c.eval,
+  })),
+  report: finalReport,
+}

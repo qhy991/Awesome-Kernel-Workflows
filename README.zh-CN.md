@@ -62,6 +62,26 @@ Awesome-Kernel-Workflows/
 ├── KernelBand/                  # 多臂老虎机 + 硬件感知剪枝 + 聚类
 │   ├── kernelband-kernel-optimization.js
 │   └── README.md
+├── KernelAgent/                 # 多 Agent Triton 合成 + 并行验证
+│   ├── kernelagent-triton-synthesis.js
+│   ├── manifest.yaml
+│   └── README.md
+├── STARK/                       # 多 Agent 协作 + 树搜索 + Grounded Instruction
+│   ├── stark-kernel-optimization.js
+│   ├── manifest.yaml
+│   └── README.md
+├── ReGraphT/                    # CUDA Reasoning Graph + Monte Carlo Graph Search
+│   ├── regrapht-kernel-optimization.js
+│   ├── manifest.yaml
+│   └── README.md
+├── Astra/                       # 多 Agent 优化已有 CUDA kernel
+│   ├── astra-kernel-optimization.js
+│   ├── manifest.yaml
+│   └── README.md
+├── CUDALLM/                     # CUDA 生成的 Feature Search and Reinforcement
+│   ├── cudallm-fsr-kernel-generation.js
+│   ├── manifest.yaml
+│   └── README.md
 ├── _meta/                       # Meta-workflow：论文 → 工作流生成
 │   ├── README.md
 │   ├── tools/                   # 生成器 + 验证器
@@ -91,6 +111,11 @@ Workflow 文件遵循 Claude Code 约定：导出 `meta`（名称、描述、阶
 | [cuPilot](cuPilot/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![NCU](https://img.shields.io/badge/NCU-555?style=flat) ![Evolutionary](https://img.shields.io/badge/evolutionary-darkblue?style=flat) ![Roofline](https://img.shields.io/badge/roofline-teal?style=flat) ![RAG](https://img.shields.io/badge/RAG-orange?style=flat) | Strategize → Translate → Revise → Evolve | [arXiv:2512.16465](https://arxiv.org/abs/2512.16465)（东南大学/清华 2025） |
 | [TritorX](TritorX/) | ![ASIC](https://img.shields.io/badge/ASIC%2FNPU-333?style=flat) ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![FSM](https://img.shields.io/badge/FSM-blue?style=flat) ![Linter](https://img.shields.io/badge/linter-green?style=flat) ![Coverage](https://img.shields.io/badge/coverage--first-teal?style=flat) | Generate → Lint → Compile/Test → Debug（循环） | [arXiv:2512.10977](https://arxiv.org/abs/2512.10977)（Meta 2025） |
 | [KernelBand](KernelBand/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![NCU](https://img.shields.io/badge/NCU-555?style=flat) ![MAB](https://img.shields.io/badge/MAB--UCB-darkblue?style=flat) ![Clustering](https://img.shields.io/badge/clustering-orange?style=flat) ![HW-Pruning](https://img.shields.io/badge/HW--pruning-red?style=flat) | Profile → Cluster → Select(UCB) → Generate → Evaluate → Update | [arXiv:2511.18868](https://arxiv.org/abs/2511.18868)（北大 2026） |
+| [KernelAgent](KernelAgent/) | ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?style=flat&logo=pytorch&logoColor=white) ![Pipeline](https://img.shields.io/badge/pipeline-purple?style=flat) ![MultiAgent](https://img.shields.io/badge/multi--agent-teal?style=flat) ![Verification](https://img.shields.io/badge/verification-green?style=flat) | 路由 → 并行生成 → 验证 → 修复 → 组合 | [PyTorch Blog](https://pytorch.org/blog/kernelfalcon-autonomous-gpu-kernel-generation-via-deep-agents/)（PyTorch Labs 2025） |
+| [STARK](STARK/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Tree](https://img.shields.io/badge/tree--search-darkblue?style=flat) ![MultiAgent](https://img.shields.io/badge/multi--agent-teal?style=flat) ![Grounded](https://img.shields.io/badge/grounded--instruction-green?style=flat) ![DynamicContext](https://img.shields.io/badge/dynamic--context-orange?style=flat) | Setup → Select(ε-greedy) → Plan/Code/Debug → Evaluate → Update | [arXiv:2510.16996](https://arxiv.org/abs/2510.16996)（Meta/Duke 2025） |
+| [ReGraphT](ReGraphT/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Tree](https://img.shields.io/badge/tree--search-darkblue?style=flat) ![RAG](https://img.shields.io/badge/RAG-orange?style=flat) ![ReasoningGraph](https://img.shields.io/badge/reasoning--graph-teal?style=flat) ![MCGS](https://img.shields.io/badge/MCGS-darkblue?style=flat) | BuildGraph → Select(MCGS) → Generate → Evaluate → UpdateGraph | [arXiv:2510.19873](https://arxiv.org/abs/2510.19873)（中科院/华南理工 2025） |
+| [Astra](Astra/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![MultiAgent](https://img.shields.io/badge/multi--agent-teal?style=flat) ![Profiling](https://img.shields.io/badge/profiling-green?style=flat) ![SGLang](https://img.shields.io/badge/SGLang-orange?style=flat) | Setup → Test/Profile → Plan → Code → Evaluate → Record | [arXiv:2509.07506](https://arxiv.org/abs/2509.07506)（Stanford/SJTU/NJU 2025） |
+| [CUDA-LLM](CUDALLM/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) ![FeatureSearch](https://img.shields.io/badge/feature--search-teal?style=flat) ![Reinforcement](https://img.shields.io/badge/reinforcement-red?style=flat) | Catalog → SelectFeatures → Generate → Evaluate → Reinforce | [arXiv:2506.09092](https://arxiv.org/abs/2506.09092)（2025） |
 | [Meta-Workflow](_meta/) | ![Tooling](https://img.shields.io/badge/tooling-gray?style=flat) | Research → Model → Assemble → Generate → Validate | — |
 
 ### 标签说明
@@ -171,6 +196,9 @@ Workflow({
 | AKO4X | Benchmark + NCU | 5-段 header 经验 + TRAPS.md | 多轮渐进 | 多 DSL（Triton/CUDA/CuTe） |
 | KDA | 验证命令 + 指标 | candidates.jsonl 记录 | 达标晋升 | 竞赛/基准测试场景 |
 | K-Search | 世界模型评分 | 树搜索 + 回溯 | 最优路径 | 优化路径不确定时 |
+| ReGraphT | evaluator 加速比 + 图奖励 | CUDA Reasoning Graph + MCGS | 小/本地模型图引导 | 有优化轨迹可复用时 |
+| Astra | 正确性测试 + profiling + speedup | Testing/Profiling/Planning/Coding 多 Agent | 生产 CUDA kernel 迭代优化 | 已有 SGLang/CUDA kernel 时 |
+| CUDA-LLM | 编译/正确性/latency reward | Feature Search + Reinforcement | 显式 CUDA feature 选择 | 从 task/spec 生成 CUDA kernel |
 | AdaExplore | 编译/运行错误 + speedup | 技能记忆 + MCTS | Triton 内核生成 | PyTorch 算子替换 |
 | KernelBand | NCU φ(k) + 延迟 | 动态聚类 + Masked UCB | 1.91× 几何均值 | 多策略大空间搜索 |
 

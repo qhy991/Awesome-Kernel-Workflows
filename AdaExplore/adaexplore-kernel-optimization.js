@@ -354,7 +354,9 @@ for (let searchStep = 0; searchStep < STEPS; searchStep++) {
     .filter(n => n && n.stepType === 'small')
     .length
   const forceLarge = selectedNode.id === 'root' || numSmallChildren >= SMALL_STEP_LIMIT
-  const randomLarge = Math.random() < P_LARGE
+  // Use a deterministic pseudo-random based on step index (Math.random() is unavailable in workflow scripts)
+  const pseudoRandom = ((searchStep * 2654435761) >>> 0) / 4294967296  // Knuth multiplicative hash
+  const randomLarge = pseudoRandom < P_LARGE
   const isLargeStep = forceLarge || randomLarge
 
   log(`Step ${searchStep + 1}/${STEPS} | selected=${selectedNode.id} | expand=${isLargeStep ? 'large' : 'small'} | nodes=${mctsNodes.length}`)

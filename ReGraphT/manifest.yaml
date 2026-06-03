@@ -1,0 +1,283 @@
+# =============================================================================
+# ReGraphT Manifest — CUDA Reasoning Graph + Monte Carlo Graph Search
+# =============================================================================
+# Source: arXiv:2510.19873 "From Large to Small: Transferring CUDA
+#         Optimization Expertise via Reasoning Graph"
+# =============================================================================
+
+source:
+  paper_title: "From Large to Small: Transferring CUDA Optimization Expertise via Reasoning Graph"
+  paper_url: "https://arxiv.org/abs/2510.19873"
+  paper_venue: "arXiv 2025"
+  repo_url: "https://anonymous.4open.science/r/ReGraphT-1A47"
+  commit_or_tag: ""
+  license: ""
+  notes: >
+    ReGraphT is a training-free framework that transfers CUDA optimization
+    trajectories into a directed CUDA Reasoning Graph and uses Monte Carlo Graph
+    Search to guide small/local models during CUDA code generation. This workflow
+    implements the inference/search contract, not model training.
+
+workflow:
+  name: "regrapht-kernel-optimization"
+  description: "Reasoning-graph-guided CUDA optimization with Monte Carlo Graph Search (ReGraphT methodology)"
+  when_to_use: >
+    Use when you have reusable CUDA optimization trajectories, or want to build
+    a graph of optimization methods, and need graph-guided generation with real
+    compile/correctness/benchmark feedback.
+  output_filename: "regrapht-kernel-optimization.js"
+  directory: "ReGraphT/"
+
+method:
+  category: "tree_exploration"
+  core_insight: >
+    CUDA optimization expertise can be represented as a directed graph where
+    nodes are normalized optimization methods and edges are method transitions.
+    Monte Carlo Graph Search selects suitable paths through that graph so a
+    smaller or local model receives structured multi-step CUDA reasoning without
+    fine-tuning.
+  feedback_signal:
+    type: "throughput_delta"
+    description: "Evaluator JSON with compile, correctness, latency, and speedup evidence"
+    tool: "custom_bench"
+    higher_is_better: true
+
+topology:
+  type: "tree"
+  tree:
+    branching_factor_arg: ""
+    max_depth_arg: "max_path_length"
+    scoring_function: >
+      UCT-style Monte Carlo Graph Search over graph paths: average measured
+      reward plus exploration bonus plus edge prior. Correct speedup is the main
+      reward; compile-only progress receives weak reward; incorrect candidates
+      suppress the path.
+    backtrack_condition: >
+      A selected path fails compilation/correctness or yields no speedup. The
+      graph update phase records failure evidence, lowers reward, and expands
+      alternative follow-up edges.
+  iterative:
+    max_iterations_arg: "budget"
+    convergence_condition: "Budget exhausted or no promising graph path remains"
+    state_variables:
+      - name: "graph"
+        type: "object"
+        initial_value: "{ nodes: [{ id: 'v_init', method: 'initial sequential/source code', visits: 0, reward: 0, examples: [] }], edges: [] }"
+        description: "CUDA Reasoning Graph with method nodes and transition edges"
+      - name: "evaluatedCandidates"
+        type: "array"
+        initial_value: "[]"
+        description: "All candidates with selected path, applied methods, code, and evaluator result"
+      - name: "bestCandidate"
+        type: "object"
+        initial_value: "null"
+        description: "Best correct candidate by measured speedup"
+      - name: "selectedPaths"
+        type: "array"
+        initial_value: "[]"
+        description: "MCGS-selected graph paths attempted during the run"
+
+phases:
+  - name: "Setup"
+    detail: "Read source kernel/spec, evaluator contract, optional trace corpus, and optional existing reasoning graph"
+    position: "preamble"
+    agents:
+      - label: "setup-task"
+        description: "Read source code, operation contract, baseline, and evaluator contract"
+        parallelism: "single"
+        input_variables: ["SOURCE_CODE_PATH", "OP_DESC", "EVAL_CMD", "BASELINE_CMD", "TARGET_GPU"]
+        output_schema:
+          type: "object"
+          properties:
+            source_code: { type: "string" }
+            operation_type: { type: "string" }
+            evaluator_contract: { type: "string" }
+            optimization_dimensions: { type: "array", items: { type: "string" } }
+          required: ["source_code", "operation_type", "evaluator_contract"]
+
+  - name: "BuildGraph"
+    detail: "Construct or refresh the CUDA Reasoning Graph from optimization trajectories and method labels"
+    position: "preamble"
+    agents:
+      - label: "build-regraph"
+        description: "Load existing graph or build a seed graph from trace corpus and CUDA dimensions"
+        parallelism: "single"
+        input_variables: ["GRAPH_PATH", "TRACE_CORPUS_PATH", "sourceCode", "setupResult"]
+        output_schema:
+          type: "object"
+          properties:
+            graph: { type: "object" }
+            method_labels: { type: "array", items: { type: "string" } }
+            trace_count: { type: "number" }
+          required: ["graph", "method_labels"]
+
+  - name: "Select"
+    detail: "Use Monte Carlo Graph Search to choose a promising optimization path"
+    position: "loop_body"
+    agents:
+      - label: "select-{attempt}"
+        description: "Select method path and graph examples with UCT-style MCGS"
+        parallelism: "single"
+        input_variables: ["graph", "evaluatedCandidates", "ROLLOUTS_PER_SELECT", "MAX_PATH_LENGTH"]
+        output_schema:
+          type: "object"
+          properties:
+            path_node_ids: { type: "array", items: { type: "string" } }
+            method_sequence: { type: "array", items: { type: "string" } }
+            selected_examples: { type: "array", items: { type: "object" } }
+            selection_rationale: { type: "string" }
+          required: ["path_node_ids", "method_sequence", "selection_rationale"]
+
+  - name: "Generate"
+    detail: "Generate a CUDA candidate conditioned on selected graph examples and method sequence"
+    position: "loop_body"
+    agents:
+      - label: "generate-{attempt}"
+        description: "Generate complete candidate code from source and selected reasoning path"
+        parallelism: "single"
+        input_variables: ["sourceCode", "selection", "setupResult"]
+        output_schema:
+          type: "object"
+          properties:
+            candidate_code: { type: "string" }
+            applied_methods: { type: "array", items: { type: "string" } }
+            skipped_methods: { type: "array", items: { type: "string" } }
+          required: ["candidate_code", "applied_methods"]
+
+  - name: "Evaluate"
+    detail: "Compile, correctness-test, and benchmark the generated candidate"
+    position: "loop_body"
+    agents:
+      - label: "evaluate-{attempt}"
+        description: "Run evaluator command and parse authoritative JSON evidence"
+        parallelism: "single"
+        input_variables: ["generation.candidate_code", "EVAL_CMD", "EXP_DIR"]
+        output_schema:
+          type: "object"
+          properties:
+            compiled: { type: "boolean" }
+            correct: { type: "boolean" }
+            speedup: { type: "number" }
+            kernel_time_ms: { type: "number" }
+            error_message: { type: "string" }
+          required: ["compiled", "correct", "speedup"]
+
+  - name: "UpdateGraph"
+    detail: "Backpropagate measured reward, record evidence, and expand/relabel graph nodes if needed"
+    position: "loop_body"
+    agents:
+      - label: "update-graph-{attempt}"
+        description: "Update visits, rewards, examples, labels, and follow-up edges"
+        parallelism: "single"
+        input_variables: ["graph", "selection", "generation", "evaluation", "GRAPH_PATH"]
+        output_schema:
+          type: "object"
+          properties:
+            updated_graph: { type: "object" }
+            reward: { type: "number" }
+            added_nodes: { type: "array", items: { type: "string" } }
+            added_edges: { type: "array", items: { type: "string" } }
+          required: ["updated_graph", "reward"]
+
+  - name: "Report"
+    detail: "Return best kernel, selected reasoning paths, final graph statistics, and next opportunities"
+    position: "epilogue"
+    agents:
+      - label: "final-report"
+        description: "Summarize evidence-backed results and future graph paths"
+        parallelism: "single"
+        input_variables: ["bestCandidate", "graph", "selectedPaths", "evaluatedCandidates"]
+        output_schema:
+          type: "object"
+          properties: {}
+          required: []
+
+plan_angles:
+  - name: "method_fit"
+    description: "Prefer graph methods whose examples match the operation, shape, and memory access pattern."
+    trigger: "Selected example is structurally similar to the source kernel"
+  - name: "transition_quality"
+    description: "Prefer method transitions that historically compound well."
+    trigger: "Graph edge has high reward and repeated successful examples"
+  - name: "failure_avoidance"
+    description: "Avoid methods contradicted by compile/correctness failures."
+    trigger: "Prior evaluator logs identify the same method as a failure cause"
+
+args:
+  required:
+    - name: "source_code_path"
+      type: "string"
+      description: "Path to source CUDA/C++ code or task specification"
+      example: "/path/to/source.cu"
+    - name: "eval_command"
+      type: "string"
+      description: "Command that evaluates candidate code with {kernel_path} and {result_path} substitutions"
+      example: "python eval.py --kernel {kernel_path} --json {result_path}"
+  optional:
+    - name: "op_description"
+      type: "string"
+      default: "'CUDA kernel optimization task'"
+      description: "Human-readable operation description"
+      example: "Sequential stencil kernel to CUDA"
+    - name: "trace_corpus_path"
+      type: "string"
+      default: "''"
+      description: "Optional JSONL corpus of LLM optimization trajectories"
+      example: "/data/regrapht_traces.jsonl"
+    - name: "graph_path"
+      type: "string"
+      default: "''"
+      description: "Optional persisted CUDA Reasoning Graph path"
+      example: "/data/regraph.json"
+    - name: "budget"
+      type: "number"
+      default: "20"
+      description: "Number of candidate attempts"
+      example: "20"
+    - name: "rollouts_per_select"
+      type: "number"
+      default: "12"
+      description: "Conceptual MCGS rollouts per selection"
+      example: "16"
+    - name: "max_path_length"
+      type: "number"
+      default: "4"
+      description: "Maximum method path length through the graph"
+      example: "4"
+
+correctness:
+  criteria:
+    - "Candidate compiles"
+    - "Candidate passes reference-output comparison"
+    - "Speedup is parsed from evaluator JSON, not inferred by the LLM"
+  check_type: "runtime_comparison"
+  reference_output: "Provided by eval_command or baseline_command"
+
+return_fields:
+  - name: "best_speedup"
+    type: "number"
+    description: "Best measured speedup among correct candidates"
+    required: true
+  - name: "best_kernel_code"
+    type: "string"
+    description: "Code for best measured candidate"
+    required: true
+  - name: "graph"
+    type: "object"
+    description: "Final CUDA Reasoning Graph"
+    required: true
+  - name: "selected_paths"
+    type: "array"
+    description: "MCGS-selected paths attempted"
+    required: true
+  - name: "report"
+    type: "object"
+    description: "Technical report"
+    required: true
+
+template:
+  base: "tree-exploration"
+  customizations:
+    - "backtracking"
+    - "custom_profiling"
+    - "early_stopping"

@@ -1,0 +1,370 @@
+# =============================================================================
+# STARK Manifest — Strategic Team of Agents for Refining Kernels
+# =============================================================================
+# Based on: arXiv:2510.16996 (Meta Ranking AI Research / Duke University, 2025)
+# =============================================================================
+
+source:
+  paper_title: "STARK: Strategic Team of Agents for Refining Kernels"
+  paper_url: "https://arxiv.org/abs/2510.16996"
+  paper_venue: "arXiv 2025 (Meta / Duke University)"
+  repo_url: ""
+  commit_or_tag: ""
+  license: ""
+  notes: >
+    Core methodology from Sections 4.1–4.5: Multi-agent collaboration (Plan/Code/Debug),
+    grounded instruction with span anchors, dynamic context windows per agent role,
+    and strategic tree search with domain-adapted ε-greedy policy.
+
+workflow:
+  name: "stark-kernel-optimization"
+  description: "Strategic Team of Agents for Refining Kernels: multi-agent collaboration with tree-search, grounded instruction, and dynamic context windows (STARK methodology)"
+  when_to_use: "When you need to optimize GPU kernels through a structured multi-agent pipeline that separates planning, coding, and debugging, with strategic tree search and grounded instruction anchoring. Effective for KernelBench-style tasks where monolithic agents get trapped in local optima."
+  output_filename: "stark-kernel-optimization.js"
+  directory: "STARK/"
+
+method:
+  category: "multi_stage_refinement"
+  core_insight: >
+    Replace monolithic LLM agents with three specialized roles (Plan/Code/Debug)
+    operating at different temperatures. Bridge the plan-implementation gap via
+    grounded instruction anchors (<<<IMPROVE BEGINS/ENDS>>>) that precisely locate
+    code edits. Use dynamic, role-specific context windows (local children + global
+    leaderboard for planner; sibling patches for coder; sibling fixes for debugger).
+    Drive search with domain-adapted ε-greedy over a persistent tree memory, featuring
+    root throttling, dead-branch pruning, and leaf-biased exploration.
+  feedback_signal:
+    type: "profiler_metric"
+    description: "Kernel runtime in ms (lower is better), compile success, and correctness test pass/fail"
+    tool: "nvcc_compile + benchmark_harness"
+    higher_is_better: false
+
+topology:
+  type: "tree"
+  tree:
+    branching_factor_arg: ""
+    max_depth_arg: ""
+    scoring_function: "node runtime (lower is better); failed nodes score +inf"
+    backtrack_condition: "dead-branch pruning: if node has > n_child_max children and all fail, mark ineligible"
+
+phases:
+  - name: "Setup"
+    detail: "Read reference kernel, evaluate baseline, initialize search tree and leaderboard"
+    position: "preamble"
+    agents:
+      - label: "setup-read-reference"
+        description: "Read and analyze the reference CUDA kernel file"
+        parallelism: "single"
+        input_variables: ["REF_KERNEL_PATH"]
+        output_schema:
+          type: "object"
+          properties:
+            kernel_code: { type: "string" }
+            op_type: { type: "string" }
+            algorithm_description: { type: "string" }
+            launch_config: { type: "string" }
+            optimization_assessment: { type: "string" }
+            potential_directions: { type: "array", items: { type: "string" } }
+          required: ["kernel_code", "op_type", "algorithm_description"]
+      - label: "setup-eval-root"
+        description: "Compile and benchmark the reference kernel to establish baseline"
+        parallelism: "single"
+        input_variables: ["referenceKernelCode", "COMPILE_CMD", "BENCHMARK_CMD"]
+        output_schema:
+          type: "object"
+          properties:
+            compile_ok: { type: "boolean" }
+            correct: { type: "boolean" }
+            runtime_ms: { type: "number" }
+            logs: { type: "string" }
+          required: ["compile_ok", "correct", "runtime_ms", "logs"]
+
+  - name: "Select"
+    detail: "ε-greedy node selection from tree memory with root throttling and dead-branch pruning"
+    position: "loop_body"
+    agents: []  # Deterministic selection logic, no agent call
+
+  - name: "Plan"
+    detail: "Plan agent proposes optimization with grounded instruction anchors"
+    position: "loop_body"
+    agents:
+      - label: "plan-{selectedId}-a{attemptCount}"
+        description: "High-temperature plan agent proposes optimization strategy with span anchors"
+        parallelism: "single"
+        input_variables: ["selectedNode", "buildPlanContext"]
+        output_schema:
+          type: "object"
+          properties:
+            plan: { type: "string" }
+            anchored_scaffold: { type: "string" }
+            anchors:
+              type: "array"
+              items:
+                type: "object"
+                properties:
+                  name: { type: "string" }
+                  begin_line: { type: "number" }
+                  end_line: { type: "number" }
+                  description: { type: "string" }
+                required: ["name", "begin_line", "end_line"]
+            rationale: { type: "string" }
+          required: ["plan", "anchored_scaffold", "anchors", "rationale"]
+
+  - name: "Code"
+    detail: "Code agent realizes grounded instructions into executable kernel"
+    position: "loop_body"
+    agents:
+      - label: "code-{selectedId}-a{attemptCount}"
+        description: "Low-temperature code agent translates anchored scaffold into anchor-free CUDA"
+        parallelism: "single"
+        input_variables: ["planResult", "buildCodeContext"]
+        output_schema:
+          type: "object"
+          properties:
+            kernel_code: { type: "string" }
+            implementation_notes: { type: "string" }
+            anchor_resolutions: { type: "array", items: { type: "object" } }
+          required: ["kernel_code", "implementation_notes"]
+
+  - name: "Debug"
+    detail: "Debug agent repairs failing kernels using sibling context"
+    position: "loop_body"
+    agents:
+      - label: "debug-{selectedId}-a{attemptCount}"
+        description: "Debug agent fixes compilation/correctness errors with minimal changes"
+        parallelism: "single"
+        input_variables: ["selectedNode", "buildDebugContext"]
+        output_schema:
+          type: "object"
+          properties:
+            kernel_code: { type: "string" }
+            fix_summary: { type: "string" }
+            confidence: { type: "string", enum: ["high", "medium", "low"] }
+          required: ["kernel_code", "fix_summary"]
+
+  - name: "Evaluate"
+    detail: "Compile, correctness test, and runtime profiling"
+    position: "loop_body"
+    agents:
+      - label: "eval-a{attemptCount}"
+        description: "Compile kernel and run benchmark harness"
+        parallelism: "single"
+        input_variables: ["newKernelCode", "COMPILE_CMD", "BENCHMARK_CMD", "bestRuntime"]
+        output_schema:
+          type: "object"
+          properties:
+            compile_ok: { type: "boolean" }
+            correct: { type: "boolean" }
+            runtime_ms: { type: "number" }
+            speedup_vs_baseline: { type: "number" }
+            logs: { type: "string" }
+            error_category: { type: "string", enum: ["compile_error", "runtime_error", "correctness_fail", "timeout", "none"] }
+          required: ["compile_ok", "correct", "runtime_ms", "logs", "error_category"]
+
+  - name: "Update"
+    detail: "Append child to tree, update leaderboard"
+    position: "loop_body"
+    agents: []  # Deterministic update logic
+
+  - name: "Report"
+    detail: "Return best kernel from leaderboard with full trajectory"
+    position: "epilogue"
+    agents:
+      - label: "report-final"
+        description: "Generate comprehensive optimization report"
+        parallelism: "single"
+        input_variables: ["tree", "leaderboard", "rootNode", "bestNode", "attemptCount"]
+        output_schema:
+          type: "object"
+          properties:
+            outcome: { type: "string", enum: ["success", "partial", "failed"] }
+            summary: { type: "string" }
+            best_runtime_ms: { type: "number" }
+            baseline_runtime_ms: { type: "number" }
+            speedup: { type: "number" }
+            total_attempts: { type: "number" }
+            correct_kernels: { type: "number" }
+            failed_kernels: { type: "number" }
+            best_kernel_code: { type: "string" }
+            best_kernel_plan: { type: "string" }
+            best_kernel_id: { type: "string" }
+            optimization_trajectory: { type: "array", items: { type: "object" } }
+          required: ["outcome", "summary", "total_attempts", "correct_kernels", "failed_kernels"]
+
+plan_angles:
+  - name: "shared_memory_tiling"
+    description: "Stage data in shared memory with bank-conflict-free layouts; double-buffering for latency hiding"
+    trigger: "high global memory bandwidth utilization or irregular access patterns"
+  - name: "vectorized_load_store"
+    description: "Use float4/int4 vectorized LD/ST to reduce instruction count and improve throughput"
+    trigger: "memory-bound kernel with sequential access patterns"
+  - name: "loop_unrolling"
+    description: "Unroll inner loops to expose ILP and reduce branch overhead"
+    trigger: "small-trip-count loops with independent iterations"
+  - name: "warp_level_primitives"
+    description: "Replace shared-memory reductions with warp shuffle (__shfl_sync) for lower latency"
+    trigger: "reduction or scan patterns within a warp"
+  - name: "register_blocking"
+    description: "Load blocks into registers to reduce shared-memory pressure and increase compute intensity"
+    trigger: "compute-bound kernel with low register pressure"
+  - name: "launch_configuration"
+    description: "Adjust grid/block dimensions, occupancy, and wave scheduling for target SM architecture"
+    trigger: "low achieved occupancy or tail effects"
+  - name: "fusion"
+    description: "Fuse multiple element-wise ops into a single kernel to eliminate intermediate writes"
+    trigger: "sequence of element-wise operations with producer-consumer locality"
+
+args:
+  required:
+    - name: "reference_kernel_path"
+      type: "string"
+      description: "Path to the reference CUDA kernel file (.cu) to optimize"
+      example: "/path/to/reference.cu"
+    - name: "test_harness_path"
+      type: "string"
+      description: "Path to the test harness that validates kernel correctness and measures runtime"
+      example: "/path/to/test.py"
+  optional:
+    - name: "budget"
+      type: "number"
+      default: "30"
+      description: "Maximum optimization attempts (tree nodes generated)"
+      example: "30"
+    - name: "epsilon"
+      type: "number"
+      default: "0.35"
+      description: "Exploration rate for ε-greedy selection (higher = more exploration)"
+      example: "0.35"
+    - name: "n_root"
+      type: "number"
+      default: "5"
+      description: "Max direct children of root (root throttling)"
+      example: "5"
+    - name: "n_child_max"
+      type: "number"
+      default: "3"
+      description: "Threshold for dead-branch pruning (if all children fail)"
+      example: "3"
+    - name: "leaderboard_size"
+      type: "number"
+      default: "5"
+      description: "Number of top-performing kernels in global leaderboard"
+      example: "5"
+    - name: "plan_model"
+      type: "string"
+      default: "'claude-sonnet-4-20250514'"
+      description: "LLM model for plan agent (high temperature, creative)"
+      example: "claude-sonnet-4-20250514"
+    - name: "code_model"
+      type: "string"
+      default: "'claude-sonnet-4-20250514'"
+      description: "LLM model for code agent (low temperature, precise)"
+      example: "claude-sonnet-4-20250514"
+    - name: "debug_model"
+      type: "string"
+      default: "'claude-sonnet-4-20250514'"
+      description: "LLM model for debug agent (low temperature, precise)"
+      example: "claude-sonnet-4-20250514"
+    - name: "plan_temperature"
+      type: "number"
+      default: "0.8"
+      description: "Temperature for plan agent (higher = more diverse strategies)"
+      example: "0.8"
+    - name: "code_temperature"
+      type: "number"
+      default: "0.1"
+      description: "Temperature for code agent (lower = more deterministic)"
+      example: "0.1"
+    - name: "debug_temperature"
+      type: "number"
+      default: "0.1"
+      description: "Temperature for debug agent (lower = more deterministic)"
+      example: "0.1"
+    - name: "compile_command"
+      type: "string"
+      default: "''"
+      description: "Command to compile the CUDA kernel"
+      example: "nvcc -O3 -arch=sm_80 -o kernel reference.cu"
+    - name: "benchmark_command"
+      type: "string"
+      default: "''"
+      description: "Command to run the benchmark/test harness"
+      example: "python test.py"
+    - name: "exp_dir"
+      type: "string"
+      default: "'/tmp/stark_exp'"
+      description: "Directory for experiment artifacts and logs"
+      example: "/tmp/stark_exp"
+
+correctness:
+  criteria:
+    - "Kernel compiles without errors (nvcc exit code 0)"
+    - "Output matches PyTorch reference within tolerance"
+    - "Grounded instruction anchors fully resolved (no <<<IMPROVE>>> markers in final code)"
+    - "No hallucinated API calls or undefined functions"
+  check_type: "runtime_comparison"
+  reference_output: "PyTorch reference implementation from the problem specification"
+
+return_fields:
+  - name: "outcome"
+    type: "string"
+    description: "Synthesis outcome: 'success', 'partial', or 'failed'"
+    required: true
+  - name: "summary"
+    type: "string"
+    description: "Executive summary of the optimization run"
+    required: true
+  - name: "best_runtime_ms"
+    type: "number"
+    description: "Best achieved kernel runtime in milliseconds"
+    required: true
+  - name: "baseline_runtime_ms"
+    type: "number"
+    description: "Reference kernel baseline runtime"
+    required: true
+  - name: "speedup"
+    type: "number"
+    description: "Speedup ratio: baseline / best"
+    required: true
+  - name: "total_attempts"
+    type: "number"
+    description: "Number of optimization attempts made"
+    required: true
+  - name: "correct_kernels"
+    type: "number"
+    description: "Number of kernels that passed correctness tests"
+    required: true
+  - name: "failed_kernels"
+    type: "number"
+    description: "Number of kernels that failed compilation or correctness"
+    required: true
+  - name: "best_kernel_id"
+    type: "string"
+    description: "ID of the best-performing kernel node"
+    required: true
+  - name: "best_kernel_code"
+    type: "string"
+    description: "Source code of the best kernel"
+    required: true
+  - name: "best_kernel_plan"
+    type: "string"
+    description: "Optimization plan applied to the best kernel"
+    required: true
+  - name: "tree_summary"
+    type: "array"
+    description: "Summary of all tree nodes"
+    required: true
+  - name: "leaderboard"
+    type: "array"
+    description: "Top-performing kernels"
+    required: true
+  - name: "optimization_trajectory"
+    type: "array"
+    description: "Attempt-by-attempt optimization history"
+    required: false
+
+template:
+  base: "tree-exploration"
+  customizations:
+    - "backtracking"
+    - "early_stopping"
