@@ -11,6 +11,14 @@ export const meta = {
     { title: 'AdaptMemory', detail: 'Optionally distill failed evaluated logs into scored "You cannot..." constraints' },
     { title: 'Report', detail: 'Return best measured kernel, search tree stats, and memory changes' },
   ],
+  requiredSkills: [],
+  optionalSkills: [],
+  skillMemoryContract: {
+    type: 'method_memory_file',
+    path_arg: 'skill_memory_path',
+    update_arg: 'memory_update',
+    rule_format: 'You cannot ... || score',
+  },
 }
 
 // =============================================================================

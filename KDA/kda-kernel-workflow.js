@@ -10,6 +10,16 @@ export const meta = {
     { title: 'Decide', detail: 'Record evidence, promote/revise/reject candidate' },
     { title: 'Report', detail: 'Write final optimization report and candidates.jsonl' },
   ],
+  requiredSkills: [],
+  optionalSkills: [
+    'KernelWiki',
+    'cuda-kernel-development',
+    'humanize:gen-plan',
+    'ncu-report-skill',
+    'ako4x-cuda',
+    'ako4x-cute-dsl',
+  ],
+  skill_binding_mode: 'recommended_external_skills',
 }
 
 // =============================================================================

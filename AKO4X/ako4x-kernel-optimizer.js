@@ -10,6 +10,16 @@ export const meta = {
     { title: 'Retrospect', detail: 'Phase-2 harness retrospective (Mode 3 only), extract lessons' },
     { title: 'Report', detail: 'Final report with best variant, lessons, dead-ends, open directions' },
   ],
+  requiredSkills: [],
+  optionalSkills: [
+    'ako4x-triton',
+    'ako4x-cuda',
+    'ako4x-cute-dsl',
+    'ako4x-tilelang',
+    'ako4x-cpp',
+    'ako4x-bench',
+  ],
+  skill_binding_mode: 'prompt_reference_only',
 }
 
 // =============================================================================

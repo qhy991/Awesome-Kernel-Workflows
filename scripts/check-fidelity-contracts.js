@@ -15,9 +15,15 @@ const checks = [
   ['ReGraphT/regrapht-kernel-optimization.js', ['adaptation_scope', 'training_free_inference']],
 ]
 
+const skillChecks = [
+  ['AKO4X/ako4x-kernel-optimizer.js', ['optionalSkills', 'skill_binding_mode', 'prompt_reference_only']],
+  ['KDA/kda-kernel-workflow.js', ['optionalSkills', 'skill_binding_mode', 'recommended_external_skills']],
+  ['AdaExplore/adaexplore-kernel-optimization.js', ['skillMemoryContract', 'skill_memory_path', 'method_memory_file']],
+]
+
 let failures = []
 
-for (const [file, tokens] of checks) {
+for (const [file, tokens] of [...checks, ...skillChecks]) {
   const filePath = path.join(root, file)
   let text = ''
   try {
@@ -39,4 +45,4 @@ if (failures.length > 0) {
   process.exit(1)
 }
 
-console.log(`fidelity contracts ok (${checks.length} workflows)`)
+console.log(`fidelity contracts ok (${checks.length} workflows, ${skillChecks.length} skill contracts)`)
