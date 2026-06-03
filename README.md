@@ -83,6 +83,33 @@ Awesome-Kernel-Workflows/
 │   ├── cudallm-fsr-kernel-generation.js
 │   ├── manifest.yaml
 │   └── README.md
+├── CutlassGEMM/                 # CUTLASS GEMM multi-config dispatch tuning
+│   ├── cutlass-gemm-optimization.js
+│   └── README.md
+├── ArchAgent/                   # Evolutionary cache replacement policy optimization
+│   ├── archagent-cache-policy-optimization.js
+│   └── README.md
+├── FACT/                        # Compositional CUTLASS pattern synthesis
+│   ├── fact-kernel-optimization.js
+│   └── README.md
+├── GPUForecasters/              # PUCT search with learned speedup forecasting
+│   ├── gpuforecasters-kernel-optimization.js
+│   └── README.md
+├── KernelBlaster/               # Memory-augmented in-context RL for CUDA kernels
+│   ├── kernelblaster-kernel-optimization.js
+│   └── README.md
+├── KernelFoundryDx/             # Diagnosis-driven multi-island Triton evolution
+│   ├── kernelfoundrydx-kernel-optimization.js
+│   └── README.md
+├── KernelSkill/                 # Dual-memory multi-agent CUDA optimization
+│   ├── kernelskill-kernel-optimization.js
+│   └── README.md
+├── StitchCUDA/                  # Planner/Coder/Verifier CUDA synthesis
+│   ├── stitchcuda-kernel-optimization.js
+│   └── README.md
+├── Xe-Forge/                    # Multi-stage CoVeR optimization for Intel XPU
+│   ├── xe-forge-kernel-optimization.js
+│   └── README.md
 ├── _meta/                       # Meta-workflow: paper → workflow generation
 │   ├── README.md
 │   ├── tools/
@@ -128,15 +155,24 @@ Workflow files follow Claude Code conventions: export `meta` (name, description,
 | [ReGraphT](ReGraphT/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Tree](https://img.shields.io/badge/tree--search-darkblue?style=flat) ![RAG](https://img.shields.io/badge/RAG-orange?style=flat) ![ReasoningGraph](https://img.shields.io/badge/reasoning--graph-teal?style=flat) ![MCGS](https://img.shields.io/badge/MCGS-darkblue?style=flat) | BuildGraph → Select(MCGS) → Generate → Evaluate → UpdateGraph | [arXiv:2510.19873](https://arxiv.org/abs/2510.19873) (CAS/SCUT 2025) |
 | [Astra](Astra/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![MultiAgent](https://img.shields.io/badge/multi--agent-teal?style=flat) ![Profiling](https://img.shields.io/badge/profiling-green?style=flat) ![SGLang](https://img.shields.io/badge/SGLang-orange?style=flat) | Setup → Test/Profile → Plan → Code → Evaluate → Record | [arXiv:2509.07506](https://arxiv.org/abs/2509.07506) (Stanford/SJTU/NJU 2025) |
 | [CUDA-LLM](CUDALLM/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) ![FeatureSearch](https://img.shields.io/badge/feature--search-teal?style=flat) ![Reinforcement](https://img.shields.io/badge/reinforcement-red?style=flat) | Catalog → SelectFeatures → Generate → Evaluate → Reinforce | [arXiv:2506.09092](https://arxiv.org/abs/2506.09092) (2025) |
+| [CutlassGEMM](CutlassGEMM/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![C++](https://img.shields.io/badge/C%2B%2B-00599C?style=flat&logo=c%2B%2B&logoColor=white) ![CUTLASS](https://img.shields.io/badge/CUTLASS-76B900?style=flat) ![NCU](https://img.shields.io/badge/NCU-555?style=flat) ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) ![Dispatch](https://img.shields.io/badge/multi--config--dispatch-teal?style=flat) | Analyze → GenerateConfigs → Profile(NCU) → TuneDispatch → Validate | [CUTLASS](https://github.com/NVIDIA/cutlass) / [SOL-ExecBench](https://github.com/NVIDIA/SOL-ExecBench) |
+| [ArchAgent](ArchAgent/) | ![C++](https://img.shields.io/badge/C%2B%2B-00599C?style=flat&logo=c%2B%2B&logoColor=white) ![Cache](https://img.shields.io/badge/cache--policy-333?style=flat) ![Evolutionary](https://img.shields.io/badge/evolutionary-darkblue?style=flat) ![Cascade](https://img.shields.io/badge/short--long-green?style=flat) | Seed → ShortEval → Select → LongEval → Evolve | [arXiv:2602.22425](https://arxiv.org/abs/2602.22425) |
+| [FACT](FACT/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![C++](https://img.shields.io/badge/C%2B%2B-00599C?style=flat&logo=c%2B%2B&logoColor=white) ![CUTLASS](https://img.shields.io/badge/CUTLASS-76B900?style=flat) ![Pipeline](https://img.shields.io/badge/pipeline-purple?style=flat) ![Ablation](https://img.shields.io/badge/ablation-green?style=flat) | Discover → Realize → Compose → Ablate | [FACT Project](https://github.com/Project-FACT/FACT) |
+| [GPU Forecasters](GPUForecasters/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Tree](https://img.shields.io/badge/tree--search-darkblue?style=flat) ![PUCT](https://img.shields.io/badge/PUCT-darkblue?style=flat) ![Forecasting](https://img.shields.io/badge/speedup--forecaster-teal?style=flat) ![Abstain](https://img.shields.io/badge/abstain-orange?style=flat) | TrainForecaster → Select(PUCT) → Forecast/Execute → Update | [arXiv:2605.31464](https://arxiv.org/abs/2605.31464) |
+| [KernelBlaster](KernelBlaster/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![NCU](https://img.shields.io/badge/NCU-555?style=flat) ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) ![Experience](https://img.shields.io/badge/experience--memory-orange?style=flat) ![ICRL](https://img.shields.io/badge/in--context--RL-red?style=flat) | Profile/Classify → Retrieve → Apply → Evaluate → Reward/Update | [arXiv:2602.14293](https://arxiv.org/abs/2602.14293) |
+| [KernelFoundryDx](KernelFoundryDx/) | ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![Evolutionary](https://img.shields.io/badge/evolutionary-darkblue?style=flat) ![MultiAgent](https://img.shields.io/badge/multi--agent-teal?style=flat) ![RAG](https://img.shields.io/badge/RAG-orange?style=flat) ![Diagnosis](https://img.shields.io/badge/diagnosis-teal?style=flat) | RAG-Seed → Evolve(Islands) → Evaluate → Diagnose → Migrate | [arXiv:2605.30359](https://arxiv.org/abs/2605.30359) (CUHK/Huawei 2026) |
+| [KernelSkill](KernelSkill/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![NCU](https://img.shields.io/badge/NCU-555?style=flat) ![MultiAgent](https://img.shields.io/badge/multi--agent-teal?style=flat) ![SkillMemory](https://img.shields.io/badge/skill--memory-orange?style=flat) ![Verification](https://img.shields.io/badge/verification-green?style=flat) | Seed → Review → Repair/Optimize → Profile → UpdateMemory | [arXiv:2603.10085](https://arxiv.org/abs/2603.10085) |
+| [StitchCUDA](StitchCUDA/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![MultiAgent](https://img.shields.io/badge/multi--agent-teal?style=flat) ![Pipeline](https://img.shields.io/badge/pipeline-purple?style=flat) ![Verification](https://img.shields.io/badge/verification-green?style=flat) ![Replanning](https://img.shields.io/badge/adaptive--replanning-orange?style=flat) | Plan → Code → Verify → Replan → Iterate | [arXiv:2603.02637](https://arxiv.org/abs/2603.02637) |
+| [Xe-Forge](Xe-Forge/) | ![XPU](https://img.shields.io/badge/Intel--XPU-0071C5?style=flat&logo=intel&logoColor=white) ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![Pipeline](https://img.shields.io/badge/pipeline-purple?style=flat) ![CoVeR](https://img.shields.io/badge/CoVeR-purple?style=flat) ![VTune](https://img.shields.io/badge/VTune-555?style=flat) | Stage → Generate → Verify → Refine → Promote | [Xe-Forge Project](https://github.com/intel/Xe-Forge) |
 | [Meta-Workflow](_meta/) | ![Tooling](https://img.shields.io/badge/tooling-gray?style=flat) | Research → Model → Assemble → Generate → Validate | — |
 
 ### Tag Legend
 
 | Category | Tags |
 |----------|------|
-| **Backend** | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![ROCm](https://img.shields.io/badge/ROCm-ED1C24?style=flat&logo=amd&logoColor=white) ![SYCL](https://img.shields.io/badge/SYCL-0071C5?style=flat&logo=intel&logoColor=white) |
-| **Kernel Language** | ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![DSL](https://img.shields.io/badge/DSL-darkgreen?style=flat) ![CuTe](https://img.shields.io/badge/CuTe-darkgreen?style=flat) ![TileLang](https://img.shields.io/badge/TileLang-darkgreen?style=flat) |
-| **Search Strategy** | ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) ![Tree](https://img.shields.io/badge/tree--search-darkblue?style=flat) ![MCTS](https://img.shields.io/badge/MCTS-darkblue?style=flat) ![Evolutionary](https://img.shields.io/badge/MAP--Elites-darkblue?style=flat) ![MAB](https://img.shields.io/badge/MAB--UCB-darkblue?style=flat) ![Pipeline](https://img.shields.io/badge/pipeline-purple?style=flat) |
+| **Backend** | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![ROCm](https://img.shields.io/badge/ROCm-ED1C24?style=flat&logo=amd&logoColor=white) ![SYCL](https://img.shields.io/badge/SYCL-0071C5?style=flat&logo=intel&logoColor=white) ![XPU](https://img.shields.io/badge/Intel--XPU-0071C5?style=flat&logo=intel&logoColor=white) |
+| **Kernel Language** | ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![DSL](https://img.shields.io/badge/DSL-darkgreen?style=flat) ![CuTe](https://img.shields.io/badge/CuTe-darkgreen?style=flat) ![TileLang](https://img.shields.io/badge/TileLang-darkgreen?style=flat) ![CUTLASS](https://img.shields.io/badge/CUTLASS-76B900?style=flat) ![C++](https://img.shields.io/badge/C%2B%2B-00599C?style=flat&logo=c%2B%2B&logoColor=white) |
+| **Search Strategy** | ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) ![Tree](https://img.shields.io/badge/tree--search-darkblue?style=flat) ![MCTS](https://img.shields.io/badge/MCTS-darkblue?style=flat) ![PUCT](https://img.shields.io/badge/PUCT-darkblue?style=flat) ![Evolutionary](https://img.shields.io/badge/MAP--Elites-darkblue?style=flat) ![MAB](https://img.shields.io/badge/MAB--UCB-darkblue?style=flat) ![Pipeline](https://img.shields.io/badge/pipeline-purple?style=flat) ![CoVeR](https://img.shields.io/badge/CoVeR-purple?style=flat) |
 | **Profiler** | ![NCU](https://img.shields.io/badge/NCU-555?style=flat) |
 | **Learning Mechanism** | ![Experience](https://img.shields.io/badge/experience--memory-orange?style=flat) ![SkillMemory](https://img.shields.io/badge/skill--memory-orange?style=flat) ![WorldModel](https://img.shields.io/badge/world--model-orange?style=flat) ![MetaPrompt](https://img.shields.io/badge/meta--prompt-orange?style=flat) ![Clustering](https://img.shields.io/badge/clustering-orange?style=flat) ![ICRL](https://img.shields.io/badge/ICRL-blue?style=flat) ![RL-trained](https://img.shields.io/badge/RL--trained-red?style=flat) |
 | **Special** | ![Invariants](https://img.shields.io/badge/invariants-red?style=flat) ![Evidence](https://img.shields.io/badge/evidence--driven-green?style=flat) ![Explanation](https://img.shields.io/badge/explanation-teal?style=flat) ![HW-Pruning](https://img.shields.io/badge/HW--pruning-red?style=flat) |
@@ -164,6 +200,15 @@ Use this matrix as the primary taxonomy when adding or reviewing workflows. Back
 | [ReGraphT](ReGraphT/) | `tree_exploration` | Monte Carlo Graph Search over reasoning graph | Evaluator JSON with speedup/correctness | CUDA reasoning graph, selected paths | Training-free inference/search phase only |
 | [Astra](Astra/) | `multi_stage_refinement` | Multi-agent production-kernel optimization loop | Tests, profiling, speedup | Run log, reintegration notes, best result | Idea-preserving unless source repo/runtime is available |
 | [CUDA-LLM](CUDALLM/) | `iterative_self_improving` | Feature Search and Reinforcement loop | Compile/correctness/latency reward | Feature catalog, feature scores, candidates | Workflow adaptation; no model training reproduction |
+| [CutlassGEMM](CutlassGEMM/) | `iterative_self_improving` | NCU-guided multi-config CUTLASS dispatch tuning loop | SOL-ExecBench correctness/speedup, NCU metrics, MFU | Tile configs, dispatch thresholds, per-M performance regimes | Engineering workflow adaptation for CUTLASS GEMM tuning |
+| [ArchAgent](ArchAgent/) | `search_based` | Population evolution with short-to-long evaluation cascade | ChampSim IPC/MPKI and speedup vs baseline | Policy population, fitness history, diversity records | Workflow adaptation for CPU-cache policy search, outside CUDA-kernel execution |
+| [FACT](FACT/) | `multi_stage_refinement` | Pattern discovery, realization, composition, and ablation | CUTLASS compile/correctness/performance and ablation speedup | Pattern registry, dependency graph, composed candidates | Faithful but simplified compositional synthesis workflow |
+| [GPU Forecasters](GPUForecasters/) | `tree_exploration` | PUCT tree search guided by learned forecaster with abstain | GPU speedup evaluator plus forecast/abstain calibration | Forecaster model, search tree, GPU budget ledger | Workflow adaptation; surrogate training/calibration must be concrete for strictness |
+| [KernelBlaster](KernelBlaster/) | `iterative_self_improving` | MAIC-RL rollouts keyed by hardware performance state | NCU Elapsed Cycles, correctness, reward | Optimization database, trajectories, replay buffer | Faithful in-context RL adaptation with persistent memory |
+| [KernelFoundryDx](KernelFoundryDx/) | `search_based` | Multi-island evolutionary Triton search with diagnosis hints | Compile/correctness/speedup plus anti-cheating checks | Island populations, elite archives, hint library | Faithful paper adaptation; no public runtime/source repo available |
+| [KernelSkill](KernelSkill/) | `iterative_self_improving` | Seed/review plus repair-or-optimize refinement loop | Compiler/verifier/profiler, speedup, NCU/nsys evidence | Long-term skill library, optimize history, repair chain | Faithful decision-process adaptation; gate is prompt/workflow mediated |
+| [StitchCUDA](StitchCUDA/) | `multi_stage_refinement` | Planner/Coder/Verifier with adaptive replanning | Compile, correctness, benchmark speedup | Plan history, failure counters, best candidate | Faithful but simplified three-agent orchestration |
+| [Xe-Forge](Xe-Forge/) | `multi_stage_refinement` | Hard-ordered 11-stage CoVeR loops | Intel Triton compile, correctness, speedup, optional VTune | Best-in-stage kernels, promotion history | Workflow adaptation for Intel XPU project pipeline |
 | [Meta-Workflow](_meta/) | `tooling` | Research/Model/Assemble/Generate/Validate | Manifest schema and static/semantic checks | Templates, manifests, validation reports | Repository infrastructure, not a paper method |
 
 > Industrial practices (e.g. tiled attention as in FlashInfer, CUTLASS tuning workflows) will be added when they are concrete enough to agentize. Open an issue or PR to nominate the next entry.
@@ -189,9 +234,21 @@ Run inside a container or dedicated virtual environment when possible; agents ma
 git clone https://github.com/qhy991/Awesome-Kernel-Workflows.git
 ```
 
-### 2. Install into your kernel project
+### 2. Install as global Claude Code workflows (recommended)
 
-Copy the workflow into your project’s Claude Code workflows directory:
+Install once; available in **every project** via `~/.claude/workflows/`:
+
+```bash
+git clone https://github.com/qhy991/Awesome-Kernel-Workflows.git
+cd Awesome-Kernel-Workflows
+./scripts/install-global-workflows.sh
+```
+
+Restart Claude Code, browse with `/workflows`, or invoke by `meta.name` (e.g. `/ako4x-kernel-optimizer`).
+
+### 3. Or install into a single kernel project only
+
+Copy into the project’s `.claude/workflows/` directory:
 
 ```bash
 mkdir -p /path/to/your-kernel-project/.claude/workflows
@@ -199,7 +256,7 @@ cp Awesome-Kernel-Workflows/AccelOpt/accelopt-kernel-optimization.js \
    /path/to/your-kernel-project/.claude/workflows/
 ```
 
-### 3. Invoke from Claude Code
+### 4. Invoke from Claude Code
 
 From your kernel project root, start Claude Code and call the workflow (parameters are documented in each `.js` file). AccelOpt example:
 

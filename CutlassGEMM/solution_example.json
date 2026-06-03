@@ -1,0 +1,33 @@
+{
+  "name": "011_gemm_n28672_k4096_cutlass_sm80",
+  "definition": "011_gemm_n28672_k4096",
+  "author": "CutlassGEMM-workflow",
+  "spec": {
+    "languages": ["cutlass"],
+    "target_hardware": ["LOCAL"],
+    "entry_point": "main.cpp::run",
+    "dependencies": ["cutlass"],
+    "destination_passing_style": false,
+    "binding": "torch",
+    "compile_options": {
+      "cflags": ["-std=c++17", "-O3"],
+      "cuda_cflags": ["-std=c++17", "-O3", "--use_fast_math"],
+      "ld_flags": []
+    }
+  },
+  "sources": [
+    {
+      "path": "kernel.h",
+      "content": "#pragma once\n#include <torch/extension.h>\n#include <cuda_runtime.h>\n\nvoid gemm_cutlass(\n    torch::Tensor& C,\n    const torch::Tensor& A,\n    const torch::Tensor& B,\n    cudaStream_t stream);\n"
+    },
+    {
+      "path": "kernel.cu",
+      "content": "#include \"kernel.h\"\n\n#include <cutlass/cutlass.h>\n#include <cutlass/gemm/device/gemm_universal.h>\n#include <cutlass/epilogue/thread/linear_combination.h>\n#include <cutlass/gemm/threadblock/threadblock_swizzle.h>\n#include <cutlass/gemm/threadblock/threadblock_swizzle_streamk.h>\n#include <cutlass/half.h>\n\nusing ElementA = cutlass::half_t;\nusing LayoutA = cutlass::layout::RowMajor;\nusing ElementB = cutlass::half_t;\nusing LayoutB = cutlass::layout::ColumnMajor;\nusing ElementC = cutlass::half_t;\nusing LayoutC = cutlass::layout::RowMajor;\nusing ElementAccumulator = float;\n\nusing OperatorClass = cutlass::arch::OpClassTensorOp;\nusing ArchTag = cutlass::arch::Sm80;\nusing InstructionShape = cutlass::gemm::GemmShape<16, 8, 16>;\n\nconstexpr int AlignmentA = 8;\nconstexpr int AlignmentB = 8;\n\nusing EpilogueOp = cutlass::epilogue::thread::LinearCombination<\n    ElementC,\n    128 / cutlass::sizeof_bits<ElementC>::value,\n    ElementAccumulator,\n    ElementAccumulator>;\n\nusing Gemm_Large = cutlass::gemm::device::GemmUniversal<\n    ElementA, LayoutA,\n    ElementB, LayoutB,\n    ElementC, LayoutC,\n    ElementAccumulator,\n    OperatorClass,\n    ArchTag,\n    cutlass::gemm::GemmShape<256, 128, 32>,\n    cutlass::gemm::GemmShape<64, 64, 32>,\n    InstructionShape,\n    EpilogueOp,\n    cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<8>,\n    3,\n    AlignmentA,\n    AlignmentB>;\n\nusing Gemm_Med = cutlass::gemm::device::GemmUniversal<\n    ElementA, LayoutA,\n    ElementB, LayoutB,\n    ElementC, LayoutC,\n    ElementAccumulator,\n    OperatorClass,\n    ArchTag,\n    cutlass::gemm::GemmShape<256, 128, 32>,\n    cutlass::gemm::GemmShape<64, 64, 32>,\n    InstructionShape,\n    EpilogueOp,\n    cutlass::gemm::threadblock::ThreadblockSwizzleStreamK,\n    3,\n    AlignmentA,\n    AlignmentB>;\n\nusing Gemm_Small = cutlass::gemm::device::GemmUniversal<\n    ElementA, LayoutA,\n    ElementB, LayoutB,\n    ElementC, LayoutC,\n    ElementAccumulator,\n    OperatorClass,\n    ArchTag,\n    cutlass::gemm::GemmShape<128, 128, 32>,\n    cutlass::gemm::GemmShape<64, 64, 32>,\n    InstructionShape,\n    EpilogueOp,\n    cutlass::gemm::threadblock::ThreadblockSwizzleStreamK,\n    4,\n    AlignmentA,\n    AlignmentB>;\n\nstatic void* g_workspace = nullptr;\nstatic size_t g_workspace_size = 0;\n\nstatic void ensure_workspace(size_t needed) {\n    if (needed <= g_workspace_size) return;\n    if (g_workspace) cudaFree(g_workspace);\n    cudaMalloc(&g_workspace, needed);\n    g_workspace_size = needed;\n}\n\ntemplate <typename GemmOp>\nstatic void run_gemm(\n    int M, int N, int K,\n    const cutlass::half_t* A_ptr,\n    const cutlass::half_t* B_ptr,\n    cutlass::half_t* C_ptr,\n    cudaStream_t stream) {\n\n    GemmOp gemm_op;\n\n    typename GemmOp::Arguments args(\n        cutlass::gemm::GemmUniversalMode::kGemm,\n        {M, N, K},\n        1,\n        {1.0f, 0.0f},\n        A_ptr,\n        B_ptr,\n        C_ptr,\n        C_ptr,\n        (int64_t)M * K,\n        (int64_t)N * K,\n        (int64_t)M * N,\n        (int64_t)M * N,\n        (int64_t)K,\n        (int64_t)K,\n        (int64_t)N,\n        (int64_t)N);\n\n    size_t ws = GemmOp::get_workspace_size(args);\n    if (ws > 0) ensure_workspace(ws);\n\n    gemm_op.initialize(args, g_workspace, stream);\n    gemm_op.run(stream);\n}\n\nvoid gemm_cutlass(\n    torch::Tensor& C,\n    const torch::Tensor& A,\n    const torch::Tensor& B,\n    cudaStream_t stream) {\n\n    int M = A.size(0);\n    int K = A.size(1);\n    int N = B.size(0);\n\n    auto A_ptr = reinterpret_cast<const cutlass::half_t*>(A.data_ptr<at::Half>());\n    auto B_ptr = reinterpret_cast<const cutlass::half_t*>(B.data_ptr<at::Half>());\n    auto C_ptr = reinterpret_cast<cutlass::half_t*>(C.data_ptr<at::Half>());\n\n    if (M >= 512) {\n        run_gemm<Gemm_Large>(M, N, K, A_ptr, B_ptr, C_ptr, stream);\n    } else if (M >= 128) {\n        run_gemm<Gemm_Med>(M, N, K, A_ptr, B_ptr, C_ptr, stream);\n    } else {\n        run_gemm<Gemm_Small>(M, N, K, A_ptr, B_ptr, C_ptr, stream);\n    }\n}\n"
+    },
+    {
+      "path": "main.cpp",
+      "content": "#include <torch/extension.h>\n#include <ATen/cuda/CUDAContext.h>\n#include \"kernel.h\"\n\ntorch::Tensor run(const torch::Tensor& A, const torch::Tensor& B) {\n    TORCH_CHECK(A.dim() == 2 && B.dim() == 2, \"inputs must be 2D\");\n    TORCH_CHECK(A.is_cuda() && B.is_cuda(), \"inputs must be CUDA tensors\");\n    TORCH_CHECK(A.scalar_type() == torch::kFloat16, \"A must be float16\");\n    TORCH_CHECK(B.scalar_type() == torch::kFloat16, \"B must be float16\");\n    TORCH_CHECK(A.is_contiguous() && B.is_contiguous(), \"inputs must be contiguous\");\n\n    int M = A.size(0);\n    int N = B.size(0);\n\n    auto C = torch::empty({M, N}, A.options());\n    cudaStream_t stream = at::cuda::getCurrentCUDAStream();\n    gemm_cutlass(C, A, B, stream);\n    return C;\n}\n\nPYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {\n    m.def(\"run\", &run, \"CUTLASS GEMM C = A @ B.T\");\n}\n"
+    }
+  ],
+  "description": "CUTLASS fp16 GEMM: 3-way dispatch — data-parallel for M>=512, StreamK 256x128 for M=128-511, StreamK 128x128 for M<128. fp32 accum. C = A @ B.T (N=28672, K=4096, sm80)"
+}

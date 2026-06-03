@@ -83,6 +83,33 @@ Awesome-Kernel-Workflows/
 │   ├── cudallm-fsr-kernel-generation.js
 │   ├── manifest.yaml
 │   └── README.md
+├── CutlassGEMM/                 # CUTLASS GEMM 多配置调度调优
+│   ├── cutlass-gemm-optimization.js
+│   └── README.md
+├── ArchAgent/                   # 进化式缓存替换策略优化
+│   ├── archagent-cache-policy-optimization.js
+│   └── README.md
+├── FACT/                        # CUTLASS 模式组合式合成
+│   ├── fact-kernel-optimization.js
+│   └── README.md
+├── GPUForecasters/              # 带加速预测器的 PUCT 搜索
+│   ├── gpuforecasters-kernel-optimization.js
+│   └── README.md
+├── KernelBlaster/               # CUDA 内核的记忆增强上下文内 RL
+│   ├── kernelblaster-kernel-optimization.js
+│   └── README.md
+├── KernelFoundryDx/             # 诊断驱动的多岛 Triton 进化
+│   ├── kernelfoundrydx-kernel-optimization.js
+│   └── README.md
+├── KernelSkill/                 # 双层记忆的多 Agent CUDA 优化
+│   ├── kernelskill-kernel-optimization.js
+│   └── README.md
+├── StitchCUDA/                  # Planner/Coder/Verifier CUDA 合成
+│   ├── stitchcuda-kernel-optimization.js
+│   └── README.md
+├── Xe-Forge/                    # Intel XPU 多阶段 CoVeR 优化
+│   ├── xe-forge-kernel-optimization.js
+│   └── README.md
 ├── _meta/                       # Meta-workflow：论文 → 工作流生成
 │   ├── README.md
 │   ├── tools/                   # 生成器 + 验证器
@@ -117,15 +144,24 @@ Workflow 文件遵循 Claude Code 约定：导出 `meta`（名称、描述、阶
 | [ReGraphT](ReGraphT/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Tree](https://img.shields.io/badge/tree--search-darkblue?style=flat) ![RAG](https://img.shields.io/badge/RAG-orange?style=flat) ![ReasoningGraph](https://img.shields.io/badge/reasoning--graph-teal?style=flat) ![MCGS](https://img.shields.io/badge/MCGS-darkblue?style=flat) | BuildGraph → Select(MCGS) → Generate → Evaluate → UpdateGraph | [arXiv:2510.19873](https://arxiv.org/abs/2510.19873)（中科院/华南理工 2025） |
 | [Astra](Astra/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![MultiAgent](https://img.shields.io/badge/multi--agent-teal?style=flat) ![Profiling](https://img.shields.io/badge/profiling-green?style=flat) ![SGLang](https://img.shields.io/badge/SGLang-orange?style=flat) | Setup → Test/Profile → Plan → Code → Evaluate → Record | [arXiv:2509.07506](https://arxiv.org/abs/2509.07506)（Stanford/SJTU/NJU 2025） |
 | [CUDA-LLM](CUDALLM/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) ![FeatureSearch](https://img.shields.io/badge/feature--search-teal?style=flat) ![Reinforcement](https://img.shields.io/badge/reinforcement-red?style=flat) | Catalog → SelectFeatures → Generate → Evaluate → Reinforce | [arXiv:2506.09092](https://arxiv.org/abs/2506.09092)（2025） |
+| [CutlassGEMM](CutlassGEMM/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![C++](https://img.shields.io/badge/C%2B%2B-00599C?style=flat&logo=c%2B%2B&logoColor=white) ![CUTLASS](https://img.shields.io/badge/CUTLASS-76B900?style=flat) ![NCU](https://img.shields.io/badge/NCU-555?style=flat) ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) ![Dispatch](https://img.shields.io/badge/multi--config--dispatch-teal?style=flat) | 分析 → 生成配置 → Profile(NCU) → 调优调度 → 验证 | [CUTLASS](https://github.com/NVIDIA/cutlass) / [SOL-ExecBench](https://github.com/NVIDIA/SOL-ExecBench) |
+| [ArchAgent](ArchAgent/) | ![C++](https://img.shields.io/badge/C%2B%2B-00599C?style=flat&logo=c%2B%2B&logoColor=white) ![Cache](https://img.shields.io/badge/cache--policy-333?style=flat) ![Evolutionary](https://img.shields.io/badge/evolutionary-darkblue?style=flat) ![Cascade](https://img.shields.io/badge/short--long-green?style=flat) | 种子 → 短评估 → 选择 → 长评估 → 进化 | [arXiv:2602.22425](https://arxiv.org/abs/2602.22425) |
+| [FACT](FACT/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![C++](https://img.shields.io/badge/C%2B%2B-00599C?style=flat&logo=c%2B%2B&logoColor=white) ![CUTLASS](https://img.shields.io/badge/CUTLASS-76B900?style=flat) ![Pipeline](https://img.shields.io/badge/pipeline-purple?style=flat) ![Ablation](https://img.shields.io/badge/ablation-green?style=flat) | 发现 → 实现 → 组合 → 消融 | [FACT 项目](https://github.com/Project-FACT/FACT) |
+| [GPU Forecasters](GPUForecasters/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Tree](https://img.shields.io/badge/tree--search-darkblue?style=flat) ![PUCT](https://img.shields.io/badge/PUCT-darkblue?style=flat) ![Forecasting](https://img.shields.io/badge/speedup--forecaster-teal?style=flat) ![Abstain](https://img.shields.io/badge/abstain-orange?style=flat) | 训练预测器 → Select(PUCT) → 预测/执行 → 更新 | [arXiv:2605.31464](https://arxiv.org/abs/2605.31464) |
+| [KernelBlaster](KernelBlaster/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![NCU](https://img.shields.io/badge/NCU-555?style=flat) ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) ![Experience](https://img.shields.io/badge/experience--memory-orange?style=flat) ![ICRL](https://img.shields.io/badge/in--context--RL-red?style=flat) | Profile/分类 → 检索 → 应用 → 评估 → 奖励/更新 | [arXiv:2602.14293](https://arxiv.org/abs/2602.14293) |
+| [KernelFoundryDx](KernelFoundryDx/) | ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![Evolutionary](https://img.shields.io/badge/evolutionary-darkblue?style=flat) ![MultiAgent](https://img.shields.io/badge/multi--agent-teal?style=flat) ![RAG](https://img.shields.io/badge/RAG-orange?style=flat) ![Diagnosis](https://img.shields.io/badge/diagnosis-teal?style=flat) | RAG 种子 → 岛屿进化 → 评估 → 诊断 → 迁移 | [arXiv:2605.30359](https://arxiv.org/abs/2605.30359)（CUHK/Huawei 2026） |
+| [KernelSkill](KernelSkill/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![NCU](https://img.shields.io/badge/NCU-555?style=flat) ![MultiAgent](https://img.shields.io/badge/multi--agent-teal?style=flat) ![SkillMemory](https://img.shields.io/badge/skill--memory-orange?style=flat) ![Verification](https://img.shields.io/badge/verification-green?style=flat) | Seed → Review → 修复/优化 → Profile → 更新记忆 | [arXiv:2603.10085](https://arxiv.org/abs/2603.10085) |
+| [StitchCUDA](StitchCUDA/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![MultiAgent](https://img.shields.io/badge/multi--agent-teal?style=flat) ![Pipeline](https://img.shields.io/badge/pipeline-purple?style=flat) ![Verification](https://img.shields.io/badge/verification-green?style=flat) ![Replanning](https://img.shields.io/badge/adaptive--replanning-orange?style=flat) | 规划 → 编码 → 验证 → 重规划 → 迭代 | [arXiv:2603.02637](https://arxiv.org/abs/2603.02637) |
+| [Xe-Forge](Xe-Forge/) | ![XPU](https://img.shields.io/badge/Intel--XPU-0071C5?style=flat&logo=intel&logoColor=white) ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![Pipeline](https://img.shields.io/badge/pipeline-purple?style=flat) ![CoVeR](https://img.shields.io/badge/CoVeR-purple?style=flat) ![VTune](https://img.shields.io/badge/VTune-555?style=flat) | 阶段 → 生成 → 验证 → 优化 → 提升 | [Xe-Forge 项目](https://github.com/intel/Xe-Forge) |
 | [Meta-Workflow](_meta/) | ![Tooling](https://img.shields.io/badge/tooling-gray?style=flat) | Research → Model → Assemble → Generate → Validate | — |
 
 ### 标签说明
 
 | 分类 | 标签 |
 |------|------|
-| **后端** | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![ROCm](https://img.shields.io/badge/ROCm-ED1C24?style=flat&logo=amd&logoColor=white) ![SYCL](https://img.shields.io/badge/SYCL-0071C5?style=flat&logo=intel&logoColor=white) |
-| **内核语言** | ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![DSL](https://img.shields.io/badge/DSL-darkgreen?style=flat) ![CuTe](https://img.shields.io/badge/CuTe-darkgreen?style=flat) ![TileLang](https://img.shields.io/badge/TileLang-darkgreen?style=flat) |
-| **搜索策略** | ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) ![Tree](https://img.shields.io/badge/tree--search-darkblue?style=flat) ![MCTS](https://img.shields.io/badge/MCTS-darkblue?style=flat) ![Evolutionary](https://img.shields.io/badge/MAP--Elites-darkblue?style=flat) ![MAB](https://img.shields.io/badge/MAB--UCB-darkblue?style=flat) ![Pipeline](https://img.shields.io/badge/pipeline-purple?style=flat) |
+| **后端** | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![ROCm](https://img.shields.io/badge/ROCm-ED1C24?style=flat&logo=amd&logoColor=white) ![SYCL](https://img.shields.io/badge/SYCL-0071C5?style=flat&logo=intel&logoColor=white) ![XPU](https://img.shields.io/badge/Intel--XPU-0071C5?style=flat&logo=intel&logoColor=white) |
+| **内核语言** | ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![DSL](https://img.shields.io/badge/DSL-darkgreen?style=flat) ![CuTe](https://img.shields.io/badge/CuTe-darkgreen?style=flat) ![TileLang](https://img.shields.io/badge/TileLang-darkgreen?style=flat) ![CUTLASS](https://img.shields.io/badge/CUTLASS-76B900?style=flat) ![C++](https://img.shields.io/badge/C%2B%2B-00599C?style=flat&logo=c%2B%2B&logoColor=white) |
+| **搜索策略** | ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) ![Tree](https://img.shields.io/badge/tree--search-darkblue?style=flat) ![MCTS](https://img.shields.io/badge/MCTS-darkblue?style=flat) ![PUCT](https://img.shields.io/badge/PUCT-darkblue?style=flat) ![Evolutionary](https://img.shields.io/badge/MAP--Elites-darkblue?style=flat) ![MAB](https://img.shields.io/badge/MAB--UCB-darkblue?style=flat) ![Pipeline](https://img.shields.io/badge/pipeline-purple?style=flat) ![CoVeR](https://img.shields.io/badge/CoVeR-purple?style=flat) |
 | **分析工具** | ![NCU](https://img.shields.io/badge/NCU-555?style=flat) |
 | **学习机制** | ![Experience](https://img.shields.io/badge/experience--memory-orange?style=flat) ![SkillMemory](https://img.shields.io/badge/skill--memory-orange?style=flat) ![WorldModel](https://img.shields.io/badge/world--model-orange?style=flat) ![MetaPrompt](https://img.shields.io/badge/meta--prompt-orange?style=flat) ![Clustering](https://img.shields.io/badge/clustering-orange?style=flat) ![ICRL](https://img.shields.io/badge/ICRL-blue?style=flat) ![RL-trained](https://img.shields.io/badge/RL--trained-red?style=flat) |
 | **特殊** | ![Invariants](https://img.shields.io/badge/invariants-red?style=flat) ![Evidence](https://img.shields.io/badge/evidence--driven-green?style=flat) ![Explanation](https://img.shields.io/badge/explanation-teal?style=flat) ![HW-Pruning](https://img.shields.io/badge/HW--pruning-red?style=flat) |
@@ -153,6 +189,15 @@ Workflow 文件遵循 Claude Code 约定：导出 `meta`（名称、描述、阶
 | [ReGraphT](ReGraphT/) | `tree_exploration` | reasoning graph 上的 MCGS | evaluator JSON：speedup/correctness | CUDA reasoning graph、selected paths | 只覆盖 training-free inference/search 阶段 |
 | [Astra](Astra/) | `multi_stage_refinement` | 多 Agent 生产内核优化循环 | tests、profiling、speedup | run log、reintegration notes、best result | 无源 repo/runtime 时属于 idea-preserving |
 | [CUDA-LLM](CUDALLM/) | `iterative_self_improving` | Feature Search and Reinforcement 循环 | 编译/正确性/latency reward | feature catalog、feature scores、candidates | workflow adaptation，不复现模型训练 |
+| [CutlassGEMM](CutlassGEMM/) | `iterative_self_improving` | NCU 引导的 CUTLASS 多配置 dispatch 调优循环 | SOL-ExecBench 正确性/speedup、NCU 指标、MFU | tile configs、dispatch thresholds、per-M performance regimes | 面向 CUTLASS GEMM 调优的工程 workflow adaptation |
+| [ArchAgent](ArchAgent/) | `search_based` | 短-长评估级联的种群进化 | ChampSim IPC/MPKI、相对基线 speedup | policy population、fitness history、diversity records | 面向 CPU cache policy search 的 workflow adaptation，不是 CUDA kernel 执行 |
+| [FACT](FACT/) | `multi_stage_refinement` | 模式发现、实现、组合与消融 | CUTLASS 编译/正确性/性能和消融 speedup | pattern registry、dependency graph、composed candidates | 组合式合成 workflow，方法形状保真但有简化 |
+| [GPU Forecasters](GPUForecasters/) | `tree_exploration` | learned forecaster + abstain 引导的 PUCT tree search | GPU speedup evaluator、forecast/abstain 校准 | forecaster model、search tree、GPU budget ledger | workflow adaptation；严格性依赖真实 surrogate 训练/校准 |
+| [KernelBlaster](KernelBlaster/) | `iterative_self_improving` | 按硬件性能状态索引的 MAIC-RL rollout | NCU Elapsed Cycles、正确性、reward | optimization database、trajectory、replay buffer | 带持久记忆的 in-context RL adaptation |
+| [KernelFoundryDx](KernelFoundryDx/) | `search_based` | 诊断提示驱动的多岛 Triton 进化 | 编译/正确性/speedup + 反作弊检查 | island populations、elite archives、hint library | 依据论文的 faithful adaptation；无公开 runtime/source repo |
+| [KernelSkill](KernelSkill/) | `iterative_self_improving` | seed/review 后的 repair-or-optimize 精炼循环 | compiler/verifier/profiler、speedup、NCU/nsys 证据 | 长期 skill library、optimize history、repair chain | 决策流程保真；gate 由 prompt/workflow 表达 |
+| [StitchCUDA](StitchCUDA/) | `multi_stage_refinement` | Planner/Coder/Verifier + 自适应重规划 | 编译、正确性、benchmark speedup | plan history、failure counters、best candidate | 三智能体编排形状保真但有简化 |
+| [Xe-Forge](Xe-Forge/) | `multi_stage_refinement` | 硬序 11 阶段 CoVeR 循环 | Intel Triton 编译、正确性、speedup、可选 VTune | best-in-stage kernels、promotion history | 面向 Intel XPU 项目流程的 workflow adaptation |
 | [Meta-Workflow](_meta/) | `tooling` | Research/Model/Assemble/Generate/Validate | manifest schema、静态/语义检查 | templates、manifests、validation reports | 仓库基础设施，不是论文方法 |
 
 > 工业界实践（如 FlashInfer 式分块 attention、CUTLASS 调参流程）会按「可 agent 化程度」陆续收录；欢迎提交 issue / PR 提名。
@@ -178,9 +223,21 @@ Workflow 文件遵循 Claude Code 约定：导出 `meta`（名称、描述、阶
 git clone https://github.com/qhy991/Awesome-Kernel-Workflows.git
 ```
 
-### 2. 将 workflow 接入你的 kernel 项目
+### 2. 安装为 Claude Code 全局 workflow（推荐）
 
-在**待优化的 CUDA 工程**根目录下，把对应 workflow 复制到 Claude Code 工作流目录：
+一次安装，**所有项目**均可调用（`~/.claude/workflows/`）：
+
+```bash
+git clone https://github.com/qhy991/Awesome-Kernel-Workflows.git
+cd Awesome-Kernel-Workflows
+./scripts/install-global-workflows.sh
+```
+
+重启 Claude Code 后，用 `/workflows` 浏览，或按 `meta.name` 调用，例如 `/ako4x-kernel-optimizer`。
+
+### 3. 或仅安装到单个 kernel 项目
+
+在**待优化的 CUDA 工程**根目录下复制到项目级 `.claude/workflows/`：
 
 ```bash
 mkdir -p /path/to/your-kernel-project/.claude/workflows
@@ -188,7 +245,7 @@ cp Awesome-Kernel-Workflows/AccelOpt/accelopt-kernel-optimization.js \
    /path/to/your-kernel-project/.claude/workflows/
 ```
 
-### 3. 在 Claude Code 中启动
+### 4. 在 Claude Code 中启动
 
 进入 kernel 项目目录，启动 Claude Code，按 workflow 名称调用（参数以 workflow 文件内注释为准）。以 AccelOpt 为例：
 
