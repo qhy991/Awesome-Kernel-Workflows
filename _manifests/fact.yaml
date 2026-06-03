@@ -1,0 +1,204 @@
+name: fact-kernel-optimization
+version: 1.0.0
+description: Compositional kernel synthesis with pattern discovery and realization
+author: Claude Code Workflows
+license: MIT
+tags:
+  - kernel-optimization
+  - cutlass
+  - compositional-synthesis
+  - pattern-discovery
+  - ablation
+
+paper:
+  title: "FACT: Compositional kernel synthesis framework"
+  authors: ["Project-FACT Team"]
+  year: 2024
+  url: "https://github.com/Project-FACT/FACT"
+  venue: "GitHub Project"
+
+methodology:
+  approach: "Three-stage compositional synthesis: Pattern Discovery → Pattern Realization → Pattern Composition"
+  topology: "Sequential pipeline with ablation validation"
+
+  key_features:
+    - "Pattern registry: T(rule, dtype, architecture) → code transformation"
+    - "Discovery from exemplar kernels (high-performance references)"
+    - "CUTLASS 3.x API targeting (Tile/Kernel/Grid layers)"
+    - "Dependency-aware pattern composition"
+    - "Ablation studies to validate pattern contributions"
+    - "Supervisor checkpoints for human-in-the-loop (optional)"
+
+  stages:
+    - name: "Pattern Discovery"
+      description: "Discover optimization patterns from exemplar kernels"
+      substeps:
+        - "Analyze exemplar implementations"
+        - "Extract optimization idioms (tiling, memory, compute, fusion, layout)"
+        - "Abstract patterns to rules with applicability constraints"
+        - "Index in registry: T(rule_type, dtype, architecture)"
+
+      strategies:
+        - "REUSE: existing pattern applies directly"
+        - "ADAPT: existing pattern needs modification"
+        - "NEW: create new pattern from scratch"
+
+    - name: "Pattern Realization"
+      description: "Realize patterns as concrete CUTLASS code transformations"
+      substeps:
+        - "Generate CUTLASS code templates"
+        - "Define transformation parameters (tile sizes, thread counts, etc.)"
+        - "Specify applicability constraints"
+        - "Create dependency graph (which patterns can compose)"
+        - "Validate: syntactic correctness, type safety, resource constraints"
+
+      cutlass_layers:
+        - "Tile: block-level tiling strategy"
+        - "Kernel: warp-level computation pattern"
+        - "Grid: thread block configuration"
+
+    - name: "Pattern Composition"
+      description: "Compose patterns into optimized kernels"
+      substeps:
+        - "Select composition strategy (greedy, dependency-aware, search-based)"
+        - "Generate pattern combinations"
+        - "Filter by constraints (resources, compatibility)"
+        - "Tune pattern parameters"
+        - "Compile and evaluate composed kernels"
+
+      composition_strategies:
+        - "Greedy: iteratively add high-impact patterns"
+        - "Dependency-aware: respect pattern dependencies"
+        - "Search-based: explore pattern space systematically"
+
+    - name: "Ablation"
+      description: "Ablation studies to validate pattern contributions"
+      substeps:
+        - "Select top-performing kernels"
+        - "Create ablation variants (leave-one-out, leave-group-out)"
+        - "Measure performance impact of each pattern"
+        - "Identify critical vs marginal patterns"
+
+      ablation_configurations: "2^N + 1 (N patterns + baseline)"
+
+  phases:
+    - name: "Setup"
+      description: "Initialize CUTLASS environment, pattern registry, exemplar kernels"
+      agents: 1
+
+    - name: "Pattern Discovery"
+      description: "Discover optimization patterns from exemplars"
+      agents: 1
+      output: "List of discovered patterns with metadata"
+
+    - name: "Pattern Realization"
+      description: "Realize patterns as CUTLASS code transformations"
+      agents: 1
+      output: "Realized patterns with code templates, parameters, dependencies"
+
+    - name: "Pattern Composition"
+      description: "Compose patterns into optimized kernels"
+      agents: 1
+      output: "Composed kernel candidates"
+
+    - name: "Ablation"
+      description: "Ablation studies on top kernels"
+      agents: 1
+      output: "Pattern contribution analysis"
+
+    - name: "Evaluation"
+      description: "Evaluate all composed kernels on target hardware"
+      agents: 1
+      output: "Performance ranking, best kernel"
+
+    - name: "Report"
+      description: "Generate synthesis report"
+      agents: 1
+
+  tools:
+    compiler: "CUTLASS compiler (NVCC + CUDA)"
+    runtime: "CUTLASS runtime on NVIDIA GPUs"
+    profiler: "CUDA profiler (nsys, ncu)"
+    correctness: "Numerical correctness validation"
+
+  feedback_signals:
+    - metric: "speedup"
+      direction: "higher_better"
+      unit: "relative_speedup"
+      description: "Speedup vs PyTorch baseline"
+
+    - metric: "gflops"
+      direction: "higher_better"
+      unit: "GFLOPS"
+      description: "Sustained throughput"
+
+    - metric: "correctness"
+      direction: "gate"
+      description: "Numerical correctness"
+
+    - metric: "hardware_utilization"
+      direction: "higher_better"
+      unit: "percent"
+      description: "Tensor core utilization, memory bandwidth utilization"
+
+hardware:
+  target: "NVIDIA A100, H100"
+  architectures:
+    - "sm_80 (NVIDIA A100)"
+    - "sm_89 (NVIDIA L40S)"
+    - "sm_90 (NVIDIA H100)"
+
+  features:
+    - "Tensor Cores"
+    - "HBM2e / HBM3"
+    - "CUDA Compute Capability 8.0+"
+
+metrics:
+  primary: "speedup_vs_pytorch"
+  secondary:
+    - "gflops"
+    - "execution_time_ms"
+    - "tensor_core_utilization"
+    - "memory_bandwidth_utilization"
+
+convergence:
+  criteria:
+    - "All patterns discovered and realized"
+    - "Composition budget exhausted"
+    - "Ablation studies complete"
+
+  typical_patterns_discovered: 10-20
+  typical_kernels_composed: 20-50
+
+workflow_structure:
+  entry_point: "fact-kernel-optimization.js"
+  phases: 7
+  estimated_runtime: "60-120 minutes (depends on pattern count)"
+
+results:
+  output:
+    - "Optimized CUTLASS kernel"
+    - "Pattern registry with discovered patterns"
+    - "Ablation study results"
+    - "Pattern contribution analysis"
+    - "Synthesis report"
+
+  typical_speedup: "2x - 10x vs PyTorch baseline"
+
+usage:
+  example: |
+    Workflow will:
+    1. Analyze exemplar kernels
+    2. Discover optimization patterns (tiling, memory, compute, fusion, layout)
+    3. Realize patterns as CUTLASS code transformations
+    4. Compose patterns into kernel candidates
+    5. Run ablation studies to validate contributions
+    6. Return best kernel with pattern breakdown
+
+notes:
+  - "Pattern registry is key: T(rule, dtype, architecture) indexes transformations"
+  - "Exemplar-driven: learns from high-performance references"
+  - "Compositional: builds complex optimizations from simpler patterns"
+  - "Ablation validation: ensures patterns contribute meaningfully"
+  - "CUTLASS-specific: leverages CUTLASS 3.x API (Tile/Kernel/Grid)"
+  - "Supervisor checkpoints: optional human-in-the-loop approval gates"
