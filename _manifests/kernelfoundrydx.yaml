@@ -1,0 +1,352 @@
+# =============================================================================
+# Kernel Foundry (Diagnosis-driven, Multi-Experts) Manifest
+# =============================================================================
+# Source: arXiv:2605.30359 "Kernel Foundry: A Diagnosis-driven Evolutionary
+#         Kernel Optimizer with Multi-Experts"
+# Authors: Zixuan Huang, Da Chen, Kecheng Huang, Lihao Yin, Xing Li,
+#          Huiling Zhen, Mingxuan Yuan, Zili Shao (CUHK + Huawei Noah's Ark Lab)
+#
+# NOTE: This is a DISTINCT paper from the Intel "KernelFoundry" (arXiv:2603.12440,
+#       SYCL, MAP-Elites) already in this repo. This one targets Triton, uses an
+#       island-model evolutionary search with expert-guided RAG initialization and
+#       a diagnosis-driven hint library. Directory: KernelFoundryDx/ (Dx =
+#       Diagnosis-driven) to avoid colliding with the existing KernelFoundry/.
+#
+# No public code repository was found as of the preprint; this workflow is a
+# faithful adaptation of the method as described in the paper (incl. appendices).
+# =============================================================================
+
+source:
+  paper_title: "Kernel Foundry: A Diagnosis-driven Evolutionary Kernel Optimizer with Multi-Experts"
+  paper_url: "https://arxiv.org/abs/2605.30359"
+  paper_venue: "Preprint 2026"
+  repo_url: ""
+  commit_or_tag: ""
+  license: ""
+  notes: >
+    Method from arXiv:2605.30359 (2026-05-08). Island-model evolutionary search:
+    expert-guided RAG initialization (GraphCode embedding + Milvus retrieval over a
+    distilled verified PyTorch->Triton corpus) produces correct Triton seeds, then
+    role-specialized islands evolve variants. A Result Analyzer diagnoses each
+    candidate (failure mode for incorrect kernels; memory/latency/instruction-bound
+    limiter for correct kernels) and emits natural-language optimization hints stored
+    in a centralized experience library whose entries are reinforced/down-weighted by
+    correlating hint usage with observed speedups. Probabilistic elite migration
+    between islands on stagnation. Two-level anti-cheating (prompt constraints + LLM
+    validator). No ncu/nsys — lightweight compile+run signals only.
+
+workflow:
+  name: "kernelfoundrydx-kernel-optimization"
+  description: "Diagnosis-driven island-model evolutionary Triton kernel optimizer with expert-guided RAG init, role-specialized islands, and a self-refining hint library (Kernel Foundry / Multi-Experts methodology)"
+  when_to_use: >
+    When generating and optimizing Triton kernels from a PyTorch reference and you want
+    population-based evolutionary search rather than a single refinement path. Multiple
+    role-specialized islands (operator fusion / memory access / parameter tuning) evolve
+    in parallel, each candidate is diagnosed into a coarse bottleneck or failure class,
+    and reusable natural-language hints accumulate in a shared experience library that is
+    reinforced by measured speedups. Includes anti-cheating validation so speedups reflect
+    genuine kernel-level work. Best for KernelBench-style tasks where diverse optimization
+    perspectives and accumulated hints help escape local optima.
+  output_filename: "kernelfoundrydx-kernel-optimization.js"
+  directory: "KernelFoundryDx/"
+
+method:
+  category: "search_based"
+  core_insight: >
+    Frame GPU-kernel synthesis as iterative optimization rather than one-shot generation.
+    Combine expert-guided retrieval-augmented initialization (a small domain-specialized
+    model produces correct seeds from retrieved verified pairs) with multi-island
+    evolutionary search where every candidate is diagnosed (correctness failure mode OR
+    coarse performance limiter) and refined using reusable hints from a centralized
+    experience library. Explicit two-level anti-cheating ensures speedups come from real
+    kernel-level work, not from bypassing computation.
+  feedback_signal:
+    type: "throughput_delta"
+    description: "Measured speedup vs PyTorch eager (higher is better) plus correctness, from compile+run on real GPU. Bottleneck class is inferred from runtime stats + launch config, NOT from a profiler."
+    tool: "custom_bench"
+    higher_is_better: true
+
+topology:
+  type: "search"
+  search:
+    search_space_description: >
+      Space of Triton kernel implementations for the target operator. Explored by an
+      island-model genetic algorithm: each island holds an independent persistent
+      population and elite archive, mutating via LLM conditioned on the current candidate,
+      island role, retrieved hints, and evolution history.
+    sampler: "evolutionary"
+    pruning_strategy: "Per-island elitism: high performers preserved as mutation parents; best valid kernel across the union of all island populations is the output."
+    budget_arg: "iterations"
+  iterative:
+    max_iterations_arg: "iterations"
+    convergence_condition: "Max iterations reached, or metrics-coverage condition satisfied"
+    state_variables:
+      - name: "islands"
+        type: "array"
+        initial_value: "[]"
+        description: "Per-island state: {role, population[], eliteArchive[], stagnation}"
+      - name: "experienceLibrary"
+        type: "array"
+        initial_value: "[]"
+        description: "Centralized hint entries {trigger, context, suggestion, uses, avg_speedup, confidence} keyed by failure mode / bottleneck class"
+      - name: "bestKernel"
+        type: "object"
+        initial_value: "null"
+        description: "Best valid kernel across all islands: {code, speedup, island, iteration}"
+      - name: "bestSpeedup"
+        type: "number"
+        initial_value: "null"
+        description: "Best measured speedup vs eager"
+      - name: "baselineLatency"
+        type: "number"
+        initial_value: "null"
+        description: "PyTorch eager reference latency (set once)"
+
+phases:
+  - name: "Setup"
+    detail: "Read the PyTorch reference task, establish the eager baseline, seed the experience library"
+    position: "preamble"
+    agents:
+      - label: "read-ref"
+        description: "Analyze the PyTorch reference module and benchmark the eager baseline"
+        parallelism: "single"
+        input_variables: ["REF_PATH", "TARGET_GPU", "BENCH_CMD"]
+        output_schema:
+          type: "object"
+          properties:
+            op_summary: { type: "string" }
+            op_type: { type: "string" }
+            input_shapes: { type: "string" }
+            fusion_opportunities: { type: "array", items: { type: "string" } }
+            baseline_latency_ms: { type: "number" }
+          required: ["op_summary", "op_type"]
+
+  - name: "Init"
+    detail: "Expert-guided RAG initialization: retrieve similar verified PyTorch->Triton pairs, generate correct seeds, anti-cheating validation"
+    position: "preamble"
+    agents:
+      - label: "expert-seed-{i}"
+        description: "Expert model generates a correct Triton seed using retrieved few-shot pairs; anti-cheating validated"
+        parallelism: "parallel_fan_out"
+        parallel_axis: "islands"
+        count_arg: "num_islands"
+        input_variables: ["refSummary", "opType", "retrievedPairs", "TARGET_GPU"]
+        output_schema:
+          type: "object"
+          properties:
+            code: { type: "string" }
+            design_notes: { type: "string" }
+            cheating_likelihood: { type: "number" }
+            is_valid_seed: { type: "boolean" }
+          required: ["code", "cheating_likelihood"]
+
+  - name: "Evolve"
+    detail: "Per island, per iteration: LLM mutation conditioned on island role + retrieved hints + history"
+    position: "loop_body"
+    agents:
+      - label: "mutate-{iter}-{island}"
+        description: "Generate a new variant for one island, conditioned on the island role, retrieved hints, and the island's evolution history"
+        parallelism: "parallel_fan_out"
+        parallel_axis: "islands"
+        count_arg: "num_islands"
+        input_variables: ["island.role", "island.parent", "retrievedHints", "island.history", "bestSpeedup"]
+        output_schema:
+          type: "object"
+          properties:
+            code: { type: "string" }
+            applied_hints: { type: "array", items: { type: "string" } }
+            mutation_rationale: { type: "string" }
+          required: ["code"]
+
+  - name: "Evaluate"
+    detail: "Compile + run each variant on real hardware, measure correctness and speedup (lightweight signals only)"
+    position: "loop_body"
+    agents:
+      - label: "eval-{iter}-{island}"
+        description: "Compile and benchmark the variant; anti-cheating validate; report correctness + speedup + lightweight signals"
+        parallelism: "parallel_fan_out"
+        parallel_axis: "islands"
+        input_variables: ["variant.code", "BENCH_CMD", "baselineLatency", "RTOL", "ATOL"]
+        output_schema:
+          type: "object"
+          properties:
+            is_correct: { type: "boolean" }
+            is_compilable: { type: "boolean" }
+            cheating_likelihood: { type: "number" }
+            speedup: { type: "number" }
+            latency_ms: { type: "number" }
+            launch_config: { type: "string" }
+            failure_mode: { type: "string" }
+          required: ["is_correct", "is_compilable", "speedup"]
+
+  - name: "Diagnose"
+    detail: "Result Analyzer: classify failure mode (incorrect) or performance limiter (correct), generate hints, anti-cheating check"
+    position: "loop_body"
+    agents:
+      - label: "diagnose-{iter}-{island}"
+        description: "Three-stage Result Analyzer: signal extraction -> diagnosis (failure mode OR memory/latency/instruction-bound) -> hint generation"
+        parallelism: "parallel_fan_out"
+        parallel_axis: "evaluatedVariants"
+        input_variables: ["variant.code", "variant.eval", "variant.launch_config"]
+        output_schema:
+          type: "object"
+          properties:
+            diagnosis_class: { type: "string" }
+            is_correct: { type: "boolean" }
+            bottleneck: { type: "string" }
+            hints: { type: "array", items: { type: "object", properties: { trigger: { type: "string" }, suggestion: { type: "string" } } } }
+          required: ["diagnosis_class", "hints"]
+
+  - name: "Evolve-Pop"
+    detail: "Update island populations + elite archives; probabilistic elite migration on stagnation; reinforce/down-weight hints"
+    position: "loop_body"
+    agents: []  # deterministic bookkeeping, no agent calls
+
+  - name: "Report"
+    detail: "Best valid kernel across all islands, hint library evolution, island trajectories"
+    position: "epilogue"
+    agents:
+      - label: "final-report"
+        description: "Summarize best kernel, hint-library evolution, island trajectories, and remaining headroom"
+        parallelism: "single"
+        input_variables: ["bestKernel", "bestSpeedup", "experienceLibrary", "islands"]
+        output_schema:
+          type: "object"
+          properties:
+            report: { type: "string" }
+          required: ["report"]
+
+plan_angles:
+  - name: "operator_fusion"
+    description: "Island role: fuse multiple operations into a single Triton kernel to eliminate intermediate memory traffic"
+    trigger: "Reference has multiple sequential ops with producer-consumer data dependency"
+  - name: "memory_access_optimization"
+    description: "Island role: improve global/shared memory access patterns, coalescing, vectorized loads, tiling"
+    trigger: "Diagnosed memory-bound"
+  - name: "kernel_parameter_tuning"
+    description: "Island role: tune block sizes, num_warps, num_stages, grid mapping"
+    trigger: "Diagnosed latency-bound / low occupancy"
+  - name: "instruction_optimization"
+    description: "Island role: reduce instruction count, strength-reduce, restructure compute"
+    trigger: "Diagnosed instruction-bound"
+
+args:
+  required:
+    - name: "ref_path"
+      type: "string"
+      description: "Path to the PyTorch reference module (.py) defining the operator/model to port to Triton"
+      example: "/path/to/KernelBench/level2/95_Matmul_Add_Swish.py"
+  optional:
+    - name: "op_description"
+      type: "string"
+      default: "'PyTorch operator'"
+      description: "Human-readable description of the target operation"
+      example: "Matmul + Add + Swish + Tanh + GELU + Hardtanh fusion"
+    - name: "target_gpu"
+      type: "string"
+      default: "'RTX5090'"
+      description: "Target GPU (paper used RTX 5090 primary, A800-80G for memory-heavy cases)"
+      example: "RTX5090"
+    - name: "num_islands"
+      type: "number"
+      default: "4"
+      description: "Number of role-specialized evolutionary islands"
+      example: "4"
+    - name: "iterations"
+      type: "number"
+      default: "5"
+      description: "Number of evolution iterations (paper used 30)"
+      example: "30"
+    - name: "population_size"
+      type: "number"
+      default: "3"
+      description: "Population size per island"
+      example: "4"
+    - name: "migration_stagnation"
+      type: "number"
+      default: "2"
+      description: "Consecutive non-improving iterations on an island before elite migration is triggered"
+      example: "3"
+    - name: "bench_command"
+      type: "string"
+      default: "''"
+      description: "Command to compile and benchmark a Triton kernel against the reference"
+      example: "python eval_triton.py --kernel"
+    - name: "rtol"
+      type: "number"
+      default: "0.01"
+      description: "Relative tolerance for correctness checking"
+      example: "0.01"
+    - name: "atol"
+      type: "number"
+      default: "0.01"
+      description: "Absolute tolerance for correctness checking"
+      example: "0.01"
+    - name: "retrieval_corpus_path"
+      type: "string"
+      default: "''"
+      description: "Path to a corpus of verified PyTorch->Triton pairs for RAG initialization (KernelBook-style). If empty, the expert seeds from general knowledge."
+      example: "/path/to/verified_triton_pairs.jsonl"
+    - name: "hint_library_path"
+      type: "string"
+      default: "''"
+      description: "Path to a persisted experience/hint library JSON. Loaded at start and updated each run for cross-task reuse."
+      example: "/path/to/kernelfoundrydx_hints.json"
+    - name: "exp_dir"
+      type: "string"
+      default: "'/tmp/kernelfoundrydx_exp'"
+      description: "Directory for saving island populations, hint snapshots, and outputs"
+      example: "/path/to/experiment/output"
+    - name: "cheating_threshold"
+      type: "number"
+      default: "0.5"
+      description: "Discard a candidate if its cheating likelihood exceeds this threshold"
+      example: "0.5"
+
+correctness:
+  criteria:
+    - "Numerical equivalence to the PyTorch reference output within rtol/atol"
+    - "Compiles as a valid @triton.jit kernel with all compute in Triton"
+    - "Anti-cheating: genuine tl.load/tl.store/grid indexing, no external lib calls bypassing the computation, no missing computation"
+  check_type: "runtime_comparison"
+  reference_output: "Run the PyTorch reference module on the same inputs"
+
+return_fields:
+  - name: "best_speedup"
+    type: "number"
+    description: "Best measured speedup vs PyTorch eager"
+    required: true
+  - name: "best_kernel_code"
+    type: "string"
+    description: "Source of the best valid Triton kernel"
+    required: true
+  - name: "iterations_completed"
+    type: "number"
+    description: "Number of evolution iterations executed"
+    required: true
+  - name: "islands_summary"
+    type: "array"
+    description: "Per-island best speedup, role, and population size"
+    required: true
+  - name: "hint_library"
+    type: "array"
+    description: "Final experience/hint library with confidence stats"
+    required: true
+  - name: "kernels_evaluated"
+    type: "number"
+    description: "Total number of kernel variants evaluated"
+    required: true
+  - name: "report"
+    type: "string"
+    description: "Final technical report"
+    required: true
+
+template:
+  base: "search-based"
+  customizations:
+    - "evolutionary_ops"
+    - "island_model"
+    - "expert_rag_init"
+    - "diagnosis_hints"
+    - "experience_library"
+    - "anti_cheating"

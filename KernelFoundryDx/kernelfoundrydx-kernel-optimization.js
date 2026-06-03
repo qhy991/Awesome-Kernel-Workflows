@@ -1,0 +1,737 @@
+export const meta = {
+  name: 'kernelfoundrydx-kernel-optimization',
+  description: 'Diagnosis-driven multi-island evolutionary Triton kernel optimizer with expert-guided RAG initialization, a centralized hint/experience library, and anti-cheating validation (Kernel Foundry / Multi-Experts methodology, arXiv:2605.30359)',
+  whenToUse: 'When you want to evolve a Triton kernel from a PyTorch reference using a population-based search rather than a single optimization path. Kernel Foundry seeds correct initial kernels with an "expert" model guided by RAG few-shots, then runs several role-specialized evolutionary islands (e.g. fusion / memory-access / parameter-tuning). Every candidate is compiled+run on real hardware (no heavy profiling), DIAGNOSED (failure mode for incorrect kernels; memory/latency/instruction-bound class for correct ones), and refined with natural-language hints drawn from a shared experience library whose entries are reinforced or down-weighted by their measured speedup. Anti-cheating validation ensures speedups come from genuine kernel work. Use for KernelBench-style operator/fusion tasks on NVIDIA GPUs.',
+  phases: [
+    { title: 'Setup', detail: 'Read the PyTorch reference task, establish the eager baseline, seed the experience library' },
+    { title: 'Init', detail: 'Expert-guided RAG initialization: retrieve similar verified PyTorch->Triton pairs, generate correct seeds, anti-cheating validation' },
+    { title: 'Evolve', detail: 'Per island, per iteration: LLM mutation conditioned on island role + retrieved hints + history' },
+    { title: 'Evaluate', detail: 'Compile + run each variant on real hardware, measure correctness and speedup (lightweight signals only)' },
+    { title: 'Diagnose', detail: 'Result Analyzer: classify failure mode (incorrect) or performance limiter (correct), generate hints, anti-cheating check' },
+    { title: 'Evolve-Pop', detail: 'Update island populations + elite archives; probabilistic elite migration on stagnation; reinforce/down-weight hints' },
+    { title: 'Report', detail: 'Best valid kernel across all islands, hint library evolution, island trajectories' },
+  ],
+}
+
+// =============================================================================
+// Kernel Foundry: A Diagnosis-driven Evolutionary Kernel Optimizer with
+//                 Multi-Experts  (arXiv:2605.30359)
+// =============================================================================
+//
+// Source: Huang, Chen, Huang, Yin, Li, Zhen, Yuan, Shao
+//         "Kernel Foundry: A Diagnosis-driven Evolutionary Kernel Optimizer
+//          with Multi-Experts", arXiv:2605.30359 (CUHK + Huawei Noah's Ark Lab).
+//         No public code repo at preprint time — this workflow is a faithful
+//         adaptation of the method as described in the paper (incl. App. A/B/C).
+//
+// NOTE: This is DISTINCT from the existing KernelFoundry/ in this repo
+//       (arXiv:2603.12440, Intel, SYCL, MAP-Elites + meta-prompt co-evolution).
+//       That one is hardware-aware QD search on SYCL; THIS one is a
+//       diagnosis-driven multi-island evolutionary optimizer on Triton.
+//       Directory suffix "Dx" = Diagnosis-driven.
+//
+// Method summary (faithful to the paper):
+//
+//   1. EXPERT INIT   PyTorch input -> retrieve top-k similar verified
+//                    PyTorch->Triton pairs from a distilled corpus (RAG) ->
+//                    "expert" model generates candidate Triton seeds with the
+//                    retrieved few-shots -> anti-cheating validation (discard if
+//                    cheating likelihood > 50%). Correct seeds populate islands.
+//   2. EVOLUTION     Multiple role-specialized ISLANDS run in parallel. Each
+//                    island keeps an independent population + local elite archive.
+//                    Per iteration, per island:
+//                      a. MUTATE   the optimizer model generates a new variant
+//                                  conditioned on a parent candidate + the island's
+//                                  role-specialized system prompt + retrieved hints
+//                                  + the island's evolution history.
+//                      b. EVALUATE compile + run on real hardware; collect
+//                                  lightweight signals only (compile status,
+//                                  runtime/speedup, launch config) — NO ncu/nsys.
+//                      c. DIAGNOSE Result Analyzer:
+//                                   - incorrect -> classify failure mode
+//                                     (compile error / runtime fail / mismatch)
+//                                     -> targeted correctness hint.
+//                                   - correct   -> classify dominant limiter
+//                                     (memory_bound / latency_bound / instruction_bound)
+//                                     from runtime stats + config -> perf hint.
+//                                  Anti-cheating validation re-applied.
+//                      d. UPDATE   insert into island population/archive; reinforce
+//                                  hints correlated with speedup, down-weight others.
+//                    On STAGNATION, elites from other islands are probabilistically
+//                    migrated in as parents/seeds.
+//   3. SELECT        Output = best valid kernel across the UNION of all islands.
+//
+// MULTI-EXPERTS (note: NOT a gated mixture-of-experts):
+//   * Expert model (small, domain-specialized) drives INITIALIZATION via RAG.
+//   * A separate optimizer model (large) drives EVOLUTION.
+//   * Role-specialized ISLANDS: each island gets a different system prompt + a
+//     different hint subset, focusing on a distinct optimization perspective.
+//
+// EXPERIENCE / HINT LIBRARY (the diagnosis-driven core):
+//   Centralized, shared across islands. Expert-initialized from NVIDIA best
+//   practices, then refined online. Entries grouped by diagnosed error type /
+//   bottleneck class. Each entry = {trigger (error types / bottleneck class),
+//   context descriptors, optimization suggestion, confidence stats (success
+//   frequency, avg speedup)}. Can be OVERRIDDEN / PERSISTED via hint_library_path.
+//
+// Feedback signal: measured SPEEDUP vs PyTorch (higher = better) + correctness,
+//   from compile + execute on real GPU. Explicitly NOT profiler-based; the
+//   bottleneck class is INFERRED from runtime stats + config (coarse by design).
+//
+// Usage:
+//   Workflow({name: 'kernelfoundrydx-kernel-optimization', args: {
+//     task_path: '/path/to/KernelBench/level2/95_Matmul_Add_Swish.py',
+//     op_description: 'Matmul + Add + Swish + Tanh + GELU + Hardtanh fusion',
+//     target_gpu: 'RTX 5090',
+//     islands: 3,
+//     iterations: 6,
+//     population_size: 4,
+//     bench_command: 'python eval.py --kernel',
+//     hint_library_path: '/path/to/hint_library.json',  // optional, persists across runs
+//     rag_corpus_path: '/path/to/kernelbook_pairs/',     // optional retrieval corpus
+//     exp_dir: '/tmp/kernelfoundrydx_exp',
+//     run_timestamp_iso: '2026-06-02T17:00:00+08:00',
+//   }})
+//
+// =============================================================================
+
+// --- Required Args ---
+const TASK_PATH = args.task_path
+
+// --- Optional Args ---
+const OP_DESC = args.op_description || 'PyTorch operator (to Triton kernel)'
+const TARGET_GPU = args.target_gpu || 'RTX 5090'
+const ISLANDS = args.islands || 3
+const ITERATIONS = args.iterations || 6
+const POPULATION_SIZE = args.population_size || 4
+const SEED_COUNT = args.seed_count || 3
+const RAG_TOPK = args.rag_topk || 5
+const STAGNATION_WINDOW = args.stagnation_window || 2
+const CHEAT_THRESHOLD = args.cheat_threshold || 0.5  // discard if cheating likelihood > this
+const BENCH_CMD = args.bench_command || ''
+const TEST_CMD = args.test_command || ''
+const HINT_LIBRARY_PATH = args.hint_library_path || ''
+const RAG_CORPUS_PATH = args.rag_corpus_path || ''
+const EXP_DIR = args.exp_dir || '/tmp/kernelfoundrydx_exp'
+const RUN_TS = args.run_timestamp_iso || 'unknown'
+
+// --- Island roles (role-specialized system prompts; the "multi-experts" axis) ---
+// Each island focuses on a distinct optimization perspective. Cycled if ISLANDS > roles.
+const ISLAND_ROLES = [
+  {
+    name: 'operator_fusion',
+    focus: 'Fuse adjacent elementwise / reduction operations into a single Triton kernel to eliminate intermediate global-memory traffic and kernel-launch overhead. Prefer fusing producer-consumer chains and epilogues into the main compute kernel.',
+  },
+  {
+    name: 'memory_access',
+    focus: 'Optimize memory access: coalesced/vectorized tl.load/tl.store, block/tile sizing for L2 reuse, avoiding redundant global reads, masking only at boundaries, contiguous layouts.',
+  },
+  {
+    name: 'kernel_parameter_tuning',
+    focus: 'Tune launch and tiling parameters: BLOCK_SIZE, num_warps, num_stages, grid mapping, autotune configs. Restructure the program around the most parallel decomposition.',
+  },
+  {
+    name: 'compute_restructuring',
+    focus: 'Restructure compute: reduce instruction count, use fast-math/approximate intrinsics where tolerance allows, hoist invariants, exploit tl.dot / accumulation patterns, minimize divergence.',
+  },
+]
+
+// --- State ---
+let hintLibrary = []          // [{id, trigger, bottleneck_class, context, suggestion, success_count, use_count, avg_speedup}]
+let islands = []              // [{role, population:[{code, speedup, correct, diagnosis}], archive:[], bestSpeedup, stagnation}]
+let baselineLatency = null
+let bestKernel = null         // {code, speedup, correct, island, iteration}
+let bestSpeedup = null
+let evolutionTrajectory = []  // log of {iteration, island, speedup, correct, limiter, hint_ids}
+let totalEvaluated = 0
+
+// Helper: pick role for island index
+function roleFor(idx) {
+  return ISLAND_ROLES[idx % ISLAND_ROLES.length]
+}
+
+// Helper: format hint library subset relevant to a role / bottleneck for a prompt
+function buildHintSection(role, bottleneckClass) {
+  if (hintLibrary.length === 0) return '(experience library is empty — generate from first principles and NVIDIA best practices)'
+  // Prefer hints matching this role's bottleneck affinity or a given class, then high-confidence ones
+  const scored = hintLibrary.map(h => {
+    let s = (h.avg_speedup || 1.0) * (h.use_count > 0 ? (h.success_count / h.use_count) : 0.5)
+    if (bottleneckClass && h.bottleneck_class === bottleneckClass) s += 1.0
+    return { h, s }
+  })
+  scored.sort((a, b) => b.s - a.s)
+  const top = scored.slice(0, 6).map(({ h }, i) =>
+    `${i + 1}. [${h.bottleneck_class || h.trigger || 'general'}] ${h.suggestion}  (used ${h.use_count || 0}x, avg ${Number(h.avg_speedup || 1).toFixed(2)}x)`
+  )
+  return top.join('\n')
+}
+
+// Helper: reinforce or down-weight a hint after observing a candidate's speedup
+function updateHint(hintId, speedup, correct) {
+  const h = hintLibrary.find(x => x.id === hintId)
+  if (!h) return
+  h.use_count = (h.use_count || 0) + 1
+  const success = correct && speedup > 1.0
+  if (success) h.success_count = (h.success_count || 0) + 1
+  // Running average of speedup observed when this hint was applied to a correct kernel
+  if (correct) {
+    const prevAvg = h.avg_speedup || 1.0
+    const n = h.success_count || 1
+    h.avg_speedup = prevAvg + (speedup - prevAvg) / Math.max(1, n)
+  }
+}
+
+// =============================================================================
+// Phase: Setup — Read the reference task, baseline, seed the experience library
+// =============================================================================
+phase('Setup')
+
+const setup = await agent(`Read the PyTorch reference task file at: ${TASK_PATH}
+
+This file defines a reference computation (a "Model" with a forward()) that we must reproduce as a high-performance Triton kernel.
+
+Analyze it and return JSON:
+- task_text: the relevant PyTorch source (Model.forward + get_inputs / init_inputs if present)
+- op_type: short operation type label (e.g. "matmul_fusion", "elementwise", "reduction", "conv", "norm")
+- op_chain: ordered list of the operations performed in forward()
+- input_shapes: the input tensor shapes (from get_inputs / init_inputs if available)
+- fusion_opportunities: list of producer-consumer chains that could be fused into one kernel
+- numerical_notes: anything affecting numerical tolerance (softmax, exp, large reductions, etc.)
+
+Return ONLY the JSON object.`, {
+  label: 'read-task',
+  phase: 'Setup',
+  schema: {
+    type: 'object',
+    properties: {
+      task_text: { type: 'string' },
+      op_type: { type: 'string' },
+      op_chain: { type: 'array', items: { type: 'string' } },
+      input_shapes: { type: 'string' },
+      fusion_opportunities: { type: 'array', items: { type: 'string' } },
+      numerical_notes: { type: 'string' },
+    },
+    required: ['task_text', 'op_type', 'op_chain'],
+  },
+})
+
+const taskText = setup.task_text
+const opType = setup.op_type
+log(`Task: ${opType} | chain: ${(setup.op_chain || []).join(' -> ')}`)
+
+// Establish eager baseline + seed the experience/hint library (from NVIDIA best practices)
+const baseline = await agent(`You are setting up a Triton kernel optimization run for a PyTorch reference task.
+
+# Operation: ${OP_DESC} (${opType})
+# Op chain: ${(setup.op_chain || []).join(' -> ')}
+# Target GPU: ${TARGET_GPU}
+
+# Step 1: Establish the PyTorch-eager baseline latency.
+${BENCH_CMD ? `Run the reference under eager mode using: ${BENCH_CMD}` : '(no bench command provided — estimate a representative baseline latency in ms from the op chain and input shapes)'}
+${TEST_CMD ? `Correctness reference command: ${TEST_CMD}` : ''}
+Experiment dir: ${EXP_DIR}
+
+# Step 2: Seed the experience/hint library.
+${HINT_LIBRARY_PATH
+    ? `If a hint library exists at ${HINT_LIBRARY_PATH}, load it (JSON array of hint entries) and return its entries as initial_hints. Otherwise seed from NVIDIA best practices below.`
+    : 'No persistent hint library path was given — seed from NVIDIA best practices.'}
+
+Seed 6-10 GENERAL Triton optimization hints, each grouped by the bottleneck class it addresses. Bottleneck classes are exactly: "correctness", "memory_bound", "latency_bound", "instruction_bound".
+Each hint entry must have: trigger (when it applies), bottleneck_class (one of the four), context (short descriptor), suggestion (the actionable optimization in one sentence).
+
+Return JSON.`, {
+  label: 'baseline-and-seed',
+  phase: 'Setup',
+  schema: {
+    type: 'object',
+    properties: {
+      baseline_latency_ms: { type: 'number' },
+      baseline_available: { type: 'boolean' },
+      initial_hints: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            trigger: { type: 'string' },
+            bottleneck_class: { type: 'string' },
+            context: { type: 'string' },
+            suggestion: { type: 'string' },
+          },
+          required: ['bottleneck_class', 'suggestion'],
+        },
+      },
+      notes: { type: 'string' },
+    },
+    required: ['baseline_latency_ms', 'initial_hints'],
+  },
+})
+
+baselineLatency = baseline.baseline_latency_ms
+hintLibrary = (baseline.initial_hints || []).map((h, i) => ({
+  id: `hint_seed_${i}`,
+  trigger: h.trigger || '',
+  bottleneck_class: h.bottleneck_class || 'general',
+  context: h.context || '',
+  suggestion: h.suggestion,
+  success_count: 0,
+  use_count: 0,
+  avg_speedup: 1.0,
+}))
+log(`Baseline: ${baselineLatency}ms | seeded ${hintLibrary.length} hints`)
+
+// =============================================================================
+// Phase: Init — Expert-guided RAG initialization + anti-cheating validation
+// =============================================================================
+phase('Init')
+
+const seeds = await parallel(
+  Array.from({ length: SEED_COUNT }, (_, i) => () =>
+    agent(`You are an EXPERT GPU-programming model specializing in PyTorch -> Triton translation. Produce a CORRECT initial Triton kernel for this task. Correctness is the ONLY goal here — not speed.
+
+# Operation: ${OP_DESC} (${opType})
+# Op chain: ${(setup.op_chain || []).join(' -> ')}
+# Input shapes: ${setup.input_shapes || 'see task'}
+# Target GPU: ${TARGET_GPU}
+
+# PyTorch reference:
+\`\`\`python
+${taskText.substring(0, 4000)}
+\`\`\`
+
+# RAG few-shots (retrieval-augmented initialization):
+${RAG_CORPUS_PATH
+        ? `Retrieve the top-${RAG_TOPK} most similar VERIFIED PyTorch->Triton pairs from the corpus at ${RAG_CORPUS_PATH} (e.g. via embedding similarity on the op structure). Use them as worked examples of correct, idiomatic Triton for similar ops.`
+        : `No retrieval corpus path given. Recall idiomatic, VERIFIED Triton patterns for "${opType}" from first principles (correct masking, contiguous indexing, proper grid, @triton.jit, tl.load/tl.store).`}
+
+# Requirements:
+1. Output a COMPLETE runnable module: imports, the @triton.jit kernel(s), the Python wrapper that launches them, and a ModelNew class matching the reference forward() signature.
+2. All compute must be in Triton (tl.* ops); do NOT call torch ops to do the actual math (that would be cheating).
+3. Must be numerically equivalent to the reference within tolerance.
+4. This is seed variant ${i + 1}/${SEED_COUNT}; vary the decomposition slightly from a naive baseline.
+
+Return JSON with the code and a short note on the approach.`, {
+      label: `seed-${i}`,
+      phase: 'Init',
+      schema: {
+        type: 'object',
+        properties: {
+          code: { type: 'string' },
+          approach: { type: 'string' },
+          retrieved_examples: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['code'],
+      },
+    })
+  )
+)
+
+const seedCandidates = seeds.filter(Boolean).filter(s => s.code)
+log(`Generated ${seedCandidates.length} expert seeds`)
+
+// Anti-cheating validation of seeds (prompt-level + LLM validator)
+const validatedSeeds = await parallel(
+  seedCandidates.map((s, i) => () =>
+    agent(`You are an anti-cheating validator for Triton kernels. Determine whether this generated kernel does GENUINE kernel-level work or CHEATS (e.g. calls torch ops to do the math, returns precomputed/reference values, or omits the real computation).
+
+# Reference op chain: ${(setup.op_chain || []).join(' -> ')}
+
+# Candidate kernel:
+\`\`\`python
+${s.code.substring(0, 4000)}
+\`\`\`
+
+# Checks:
+1. Is there at least one real @triton.jit kernel with tl.load / tl.store and grid indexing?
+2. Is the actual math performed inside Triton (not delegated to torch.matmul / torch.nn.functional / etc.)?
+3. Are all operations in the reference chain actually computed (none silently skipped)?
+4. Does it avoid returning constants / reference outputs directly?
+
+Estimate cheating_likelihood in [0,1] (1 = definitely cheating). Also do a quick static read for obvious correctness/compile risks.
+
+Return JSON.`, {
+      label: `validate-seed-${i}`,
+      phase: 'Init',
+      schema: {
+        type: 'object',
+        properties: {
+          cheating_likelihood: { type: 'number' },
+          is_genuine_triton: { type: 'boolean' },
+          missing_ops: { type: 'array', items: { type: 'string' } },
+          static_risk_notes: { type: 'string' },
+        },
+        required: ['cheating_likelihood', 'is_genuine_triton'],
+      },
+    })
+  )
+)
+
+const cleanSeeds = []
+for (let i = 0; i < seedCandidates.length; i++) {
+  const v = validatedSeeds[i]
+  if (!v) continue
+  if ((v.cheating_likelihood || 0) > CHEAT_THRESHOLD) {
+    log(`Seed ${i} discarded (cheating likelihood ${v.cheating_likelihood})`)
+    continue
+  }
+  cleanSeeds.push({ code: seedCandidates[i].code, approach: seedCandidates[i].approach })
+}
+log(`${cleanSeeds.length}/${seedCandidates.length} seeds passed anti-cheating`)
+
+// Populate islands from clean seeds (round-robin), each with its role
+const seedPool = cleanSeeds.length > 0 ? cleanSeeds : seedCandidates.map(s => ({ code: s.code, approach: s.approach }))
+for (let isl = 0; isl < ISLANDS; isl++) {
+  const role = roleFor(isl)
+  const seed = seedPool[isl % seedPool.length]
+  islands.push({
+    role,
+    population: seed ? [{ code: seed.code, speedup: null, correct: null, diagnosis: null }] : [],
+    archive: [],
+    bestSpeedup: null,
+    stagnation: 0,
+  })
+}
+log(`Initialized ${islands.length} islands: ${islands.map(i => i.role.name).join(', ')}`)
+
+// =============================================================================
+// Multi-Island Diagnosis-Driven Evolution Loop
+// =============================================================================
+
+for (let iter = 0; iter < ITERATIONS; iter++) {
+  log(`\n=== Iteration ${iter + 1}/${ITERATIONS} | Best: ${bestSpeedup ? bestSpeedup.toFixed(2) + 'x' : 'N/A'} | Evaluated: ${totalEvaluated} ===`)
+
+  // ===========================================================================
+  // Phase: Evolve — each island mutates a parent (parallel across islands)
+  // ===========================================================================
+  phase('Evolve')
+
+  const mutations = await parallel(
+    islands.map((island, islIdx) => () => {
+      // Choose a parent: best in population, else first seed
+      const parent = island.population.length > 0
+        ? [...island.population].sort((a, b) => (b.speedup || 0) - (a.speedup || 0))[0]
+        : null
+      const parentCode = parent ? parent.code : (seedPool[0] ? seedPool[0].code : '')
+      const parentDiag = parent && parent.diagnosis ? parent.diagnosis : null
+      const bottleneckClass = parentDiag ? parentDiag.limiter : null
+      const hintSection = buildHintSection(island.role, bottleneckClass)
+      // History context for this island
+      const histLines = island.archive.slice(-3).map((a, k) =>
+        `  - gen ${k}: ${a.correct ? 'correct' : 'INCORRECT'}, ${a.speedup ? a.speedup.toFixed(2) + 'x' : 'n/a'}${a.diagnosis ? ', ' + (a.diagnosis.limiter || a.diagnosis.failure_mode || '') : ''}`
+      ).join('\n') || '  (no history yet)'
+
+      return agent(`You are the OPTIMIZER model evolving a Triton kernel. You belong to a role-specialized evolutionary island.
+
+# ISLAND ROLE: ${island.role.name}
+${island.role.focus}
+
+# Operation: ${OP_DESC} (${opType})
+# Target GPU: ${TARGET_GPU}
+# Iteration: ${iter + 1}/${ITERATIONS}
+
+# Parent kernel (your starting point — produce a MUTATION/improvement of this):
+\`\`\`python
+${parentCode.substring(0, 4000)}
+\`\`\`
+
+${parentDiag ? `# Diagnosis of the parent:\n- ${parent.correct === false ? 'INCORRECT: ' + (parentDiag.failure_mode || 'unknown failure') : 'limiter: ' + (parentDiag.limiter || 'unknown')}\n- ${parentDiag.rationale || ''}` : '# Parent has not been diagnosed yet.'}
+
+# Island evolution history (recent):
+${histLines}
+
+# Relevant hints from the shared experience library (apply those that fit your role + the diagnosis):
+${hintSection}
+
+# Your task:
+Generate ONE new Triton kernel variant that improves on the parent FROM YOUR ISLAND'S PERSPECTIVE (${island.role.name}). Stay correct. All math must remain in Triton (no torch-op cheating).
+Cite which hint(s) you applied (by their text) so we can track hint usefulness.
+
+Return JSON with the complete code, the applied hint(s), and a one-line summary of the change.`, {
+        label: `mutate-${iter}-isl${islIdx}`,
+        phase: 'Evolve',
+        schema: {
+          type: 'object',
+          properties: {
+            code: { type: 'string' },
+            applied_hints: { type: 'array', items: { type: 'string' } },
+            change_summary: { type: 'string' },
+          },
+          required: ['code'],
+        },
+      })
+    })
+  )
+
+  // ===========================================================================
+  // Phase: Evaluate — compile + run on real hardware (lightweight signals)
+  // ===========================================================================
+  phase('Evaluate')
+
+  const variants = []
+  for (let islIdx = 0; islIdx < islands.length; islIdx++) {
+    const m = mutations[islIdx]
+    if (m && m.code) variants.push({ islIdx, code: m.code, applied_hints: m.applied_hints || [], change_summary: m.change_summary || '' })
+  }
+
+  const evals = await parallel(
+    variants.map((v) => () =>
+      agent(`You are a Triton kernel evaluator. Compile and run this candidate on real hardware and report LIGHTWEIGHT signals only (no ncu/nsys profiling).
+
+# Target GPU: ${TARGET_GPU}
+# Reference op chain: ${(setup.op_chain || []).join(' -> ')}
+# PyTorch-eager baseline latency: ${baselineLatency}ms
+
+# Candidate (island role: ${islands[v.islIdx].role.name}):
+\`\`\`python
+${v.code.substring(0, 4000)}
+\`\`\`
+
+# Steps:
+1. Compile-check the Triton kernel (syntax, @triton.jit signature, grid).
+2. ${BENCH_CMD ? `Run with: ${BENCH_CMD}` : 'If you cannot execute, statically estimate runtime from tiling/launch config and op count.'}
+3. ${TEST_CMD ? `Check correctness with: ${TEST_CMD}` : 'Check numerical equivalence vs the reference within tolerance (static reasoning if not runnable).'}
+4. Report: compiles?, runs?, correct?, measured/estimated latency_ms, and speedup = baseline / latency.
+5. Capture lightweight execution metadata: launch config (BLOCK_SIZE, num_warps, num_stages, grid) if visible, and a one-line runtime characterization.
+
+Return JSON.`, {
+        label: `eval-${iter}-isl${v.islIdx}`,
+        phase: 'Evaluate',
+        schema: {
+          type: 'object',
+          properties: {
+            compiles: { type: 'boolean' },
+            runs: { type: 'boolean' },
+            is_correct: { type: 'boolean' },
+            latency_ms: { type: 'number' },
+            speedup: { type: 'number' },
+            launch_config: { type: 'string' },
+            runtime_characterization: { type: 'string' },
+            error_summary: { type: 'string' },
+          },
+          required: ['compiles', 'is_correct', 'speedup'],
+        },
+      })
+    )
+  )
+
+  // ===========================================================================
+  // Phase: Diagnose — Result Analyzer (failure mode OR perf limiter) + hints
+  // ===========================================================================
+  phase('Diagnose')
+
+  const diagnoses = await parallel(
+    variants.map((v, k) => () => {
+      const e = evals[k]
+      if (!e) return Promise.resolve(null)
+      const correct = !!e.is_correct && !!e.compiles
+      return agent(`You are the RESULT ANALYZER for a diagnosis-driven kernel optimizer. Diagnose this evaluated candidate and produce a reusable optimization hint. Use LIGHTWEIGHT signals only (no profiler).
+
+# Candidate island role: ${islands[v.islIdx].role.name}
+# Evaluation signals:
+- compiles: ${e.compiles}, runs: ${e.runs}, correct: ${correct}
+- latency: ${e.latency_ms}ms, speedup vs eager: ${e.speedup}
+- launch config: ${e.launch_config || 'n/a'}
+- runtime characterization: ${e.runtime_characterization || 'n/a'}
+- error (if any): ${e.error_summary || 'none'}
+
+# Candidate code (head):
+\`\`\`python
+${v.code.substring(0, 2500)}
+\`\`\`
+
+# Diagnosis rules:
+- If the kernel is INCORRECT (compile error / runtime fail / output mismatch): set diagnosis_type="failure", classify failure_mode as one of "compile_error" | "runtime_failure" | "output_mismatch", and produce a targeted CORRECTNESS hint (bottleneck_class="correctness").
+- If the kernel is CORRECT: set diagnosis_type="performance", classify the dominant limiter as one of "memory_bound" | "latency_bound" | "instruction_bound" from the runtime stats + launch config (this is coarse/approximate by design), and produce a PERFORMANCE hint with that bottleneck_class.
+
+The hint must be GENERAL and reusable (a one-sentence actionable suggestion with a trigger condition), not specific to this exact kernel.
+
+Return JSON.`, {
+        label: `diagnose-${iter}-isl${v.islIdx}`,
+        phase: 'Diagnose',
+        schema: {
+          type: 'object',
+          properties: {
+            diagnosis_type: { type: 'string' },     // failure | performance
+            failure_mode: { type: 'string' },        // when failure
+            limiter: { type: 'string' },             // when performance
+            rationale: { type: 'string' },
+            hint: {
+              type: 'object',
+              properties: {
+                trigger: { type: 'string' },
+                bottleneck_class: { type: 'string' },
+                suggestion: { type: 'string' },
+              },
+              required: ['bottleneck_class', 'suggestion'],
+            },
+            cheating_likelihood: { type: 'number' },
+          },
+          required: ['diagnosis_type', 'hint'],
+        },
+      })
+    })
+  )
+
+  // ===========================================================================
+  // Phase: Evolve-Pop — update populations, migrate elites, reinforce hints
+  // ===========================================================================
+  phase('Evolve-Pop')
+
+  for (let k = 0; k < variants.length; k++) {
+    const v = variants[k]
+    const e = evals[k]
+    const d = diagnoses[k]
+    if (!e) continue
+    totalEvaluated++
+
+    const correct = !!e.is_correct && !!e.compiles
+    const speedup = e.speedup || 0
+    const island = islands[v.islIdx]
+
+    // Anti-cheating gate at evolution time
+    if (d && (d.cheating_likelihood || 0) > CHEAT_THRESHOLD) {
+      log(`Island ${island.role.name}: variant discarded (cheating likelihood ${d.cheating_likelihood})`)
+      island.stagnation++
+      continue
+    }
+
+    const diagnosis = d ? {
+      type: d.diagnosis_type,
+      failure_mode: d.failure_mode,
+      limiter: d.limiter,
+      rationale: d.rationale,
+    } : null
+
+    const member = { code: v.code, speedup: correct ? speedup : null, correct, diagnosis }
+
+    // Insert into population; keep top POPULATION_SIZE by speedup (correct first)
+    island.population.push(member)
+    island.population.sort((a, b) => {
+      if ((a.correct ? 1 : 0) !== (b.correct ? 1 : 0)) return (b.correct ? 1 : 0) - (a.correct ? 1 : 0)
+      return (b.speedup || 0) - (a.speedup || 0)
+    })
+    island.population = island.population.slice(0, POPULATION_SIZE)
+
+    // Archive + trajectory
+    island.archive.push(member)
+    evolutionTrajectory.push({
+      iteration: iter + 1,
+      island: island.role.name,
+      correct,
+      speedup: correct ? speedup : null,
+      limiter: diagnosis ? (diagnosis.limiter || diagnosis.failure_mode) : null,
+      change: v.change_summary,
+    })
+
+    // Reinforce / down-weight hints that were applied to this variant
+    for (const appliedText of v.applied_hints) {
+      const matched = hintLibrary.find(h => appliedText && (appliedText.includes(h.suggestion.substring(0, 24)) || h.suggestion.includes(appliedText.substring(0, 24))))
+      if (matched) updateHint(matched.id, speedup, correct)
+    }
+
+    // Add the freshly generated hint to the shared experience library
+    if (d && d.hint && d.hint.suggestion) {
+      const exists = hintLibrary.find(h => h.suggestion === d.hint.suggestion)
+      if (!exists) {
+        hintLibrary.push({
+          id: `hint_${iter}_${v.islIdx}`,
+          trigger: d.hint.trigger || '',
+          bottleneck_class: d.hint.bottleneck_class || 'general',
+          context: island.role.name,
+          suggestion: d.hint.suggestion,
+          success_count: correct && speedup > 1.0 ? 1 : 0,
+          use_count: 1,
+          avg_speedup: correct ? speedup : 1.0,
+        })
+      } else {
+        updateHint(exists.id, speedup, correct)
+      }
+    }
+
+    // Update island + global best
+    if (correct && (island.bestSpeedup === null || speedup > island.bestSpeedup)) {
+      island.bestSpeedup = speedup
+      island.stagnation = 0
+    } else {
+      island.stagnation++
+    }
+    if (correct && (bestSpeedup === null || speedup > bestSpeedup)) {
+      bestSpeedup = speedup
+      bestKernel = { code: v.code, speedup, correct: true, island: island.role.name, iteration: iter + 1 }
+      log(`NEW GLOBAL BEST: ${speedup.toFixed(2)}x from island ${island.role.name}`)
+    }
+  }
+
+  // Probabilistic elite migration on stagnation
+  for (let isl = 0; isl < islands.length; isl++) {
+    const island = islands[isl]
+    if (island.stagnation >= STAGNATION_WINDOW) {
+      // Find a correct elite from another island
+      let bestOther = null
+      for (let other = 0; other < islands.length; other++) {
+        if (other === isl) continue
+        const cand = islands[other].population.find(m => m.correct)
+        if (cand && (!bestOther || (cand.speedup || 0) > (bestOther.speedup || 0))) bestOther = cand
+      }
+      // Deterministic "probabilistic" migration: migrate when an elite exists
+      if (bestOther) {
+        island.population.push({ code: bestOther.code, speedup: bestOther.speedup, correct: true, diagnosis: bestOther.diagnosis })
+        island.stagnation = 0
+        log(`Elite migration -> island ${island.role.name} (seeded ${bestOther.speedup ? bestOther.speedup.toFixed(2) + 'x' : 'elite'})`)
+      }
+    }
+  }
+
+  log(`Iteration ${iter + 1} done. Islands best: [${islands.map(i => `${i.role.name}:${i.bestSpeedup ? i.bestSpeedup.toFixed(2) + 'x' : '-'}`).join(', ')}] | hints: ${hintLibrary.length}`)
+}
+
+// =============================================================================
+// Phase: Report
+// =============================================================================
+phase('Report')
+
+const finalReport = await agent(`Write a concise technical report for this Kernel Foundry (diagnosis-driven, multi-island) optimization run.
+
+# Operation: ${OP_DESC} (${opType})
+# Target GPU: ${TARGET_GPU}
+# Run timestamp: ${RUN_TS}
+# Baseline (PyTorch eager): ${baselineLatency}ms
+# Best speedup found: ${bestSpeedup ? bestSpeedup.toFixed(2) + 'x' : 'none (no correct kernel beat baseline)'}
+# Islands: ${islands.map(i => `${i.role.name} (best ${i.bestSpeedup ? i.bestSpeedup.toFixed(2) + 'x' : 'n/a'})`).join(', ')}
+# Total candidates evaluated: ${totalEvaluated}
+
+# Evolution trajectory:
+${evolutionTrajectory.map(t => `- iter ${t.iteration} [${t.island}] ${t.correct ? 'correct' : 'INCORRECT'} ${t.speedup ? t.speedup.toFixed(2) + 'x' : ''} ${t.limiter ? '(' + t.limiter + ')' : ''} ${t.change || ''}`).join('\n')}
+
+# Experience/hint library (final, sorted by avg speedup):
+${[...hintLibrary].sort((a, b) => (b.avg_speedup || 0) - (a.avg_speedup || 0)).map((h, i) => `${i + 1}. [${h.bottleneck_class}] ${h.suggestion} (used ${h.use_count}x, avg ${Number(h.avg_speedup || 1).toFixed(2)}x)`).join('\n')}
+
+# Best kernel:
+\`\`\`python
+${bestKernel ? bestKernel.code.substring(0, 3000) : '(none)'}
+\`\`\`
+
+Write:
+1. How the diagnosis-driven loop steered evolution (which limiters were hit, which hints reinforced).
+2. Which island role contributed the best kernel and why.
+3. How the experience library evolved (which hints proved useful vs were down-weighted).
+4. Any anti-cheating discards and what they reveal.
+5. Remaining bottleneck of the best kernel and what to try next.`, {
+  label: 'final-report',
+  phase: 'Report',
+})
+
+return {
+  baseline_latency_ms: baselineLatency,
+  best_speedup: bestSpeedup,
+  best_kernel_code: bestKernel ? bestKernel.code : null,
+  best_kernel_island: bestKernel ? bestKernel.island : null,
+  iterations_completed: ITERATIONS,
+  islands_count: islands.length,
+  island_roles: islands.map(i => i.role.name),
+  island_best_speedups: islands.map(i => ({ role: i.role.name, best_speedup: i.bestSpeedup })),
+  candidates_evaluated: totalEvaluated,
+  hint_library: hintLibrary,
+  hint_library_size: hintLibrary.length,
+  evolution_trajectory: evolutionTrajectory,
+  report: finalReport,
+}
