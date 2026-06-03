@@ -12,14 +12,18 @@ export const meta = {
   ],
   requiredSkills: [],
   optionalSkills: [
-    'KernelWiki',
     'cuda-kernel-development',
     'humanize:gen-plan',
     'ncu-report-skill',
-    'ako4x-cuda',
-    'ako4x-cute-dsl',
   ],
-  skill_binding_mode: 'recommended_external_skills',
+  externalResources: [
+    {
+      name: 'KernelWiki',
+      url: 'https://github.com/mit-han-lab/KernelWiki/fork',
+      use: 'Fork or download externally when the KDA workflow needs KernelWiki architecture knowledge; do not vendor it under KDA/skills.',
+    },
+  ],
+  skill_binding_mode: 'local_skills_plus_external_resources',
 }
 
 // =============================================================================
@@ -108,8 +112,10 @@ const inspection = await agent(`You are in a task implementation workspace. Insp
 
 # Target kernel: ${KERNEL_PATH}
 
+# External Resources
+- KernelWiki is an external repository, not a bundled KDA skill. If it is available, use it for kernel optimization patterns, GPU architecture details, and performance techniques relevant to this task. Download or fork it from https://github.com/mit-han-lab/KernelWiki/fork.
+
 # Available Skills
-- Use \`KernelWiki\` skill for domain knowledge about kernel optimization patterns, GPU architecture details, and performance techniques relevant to this task.
 - Use \`cuda-kernel-development\` skill for hardware-aware CUDA development guidance.
 
 # Instructions
@@ -175,8 +181,10 @@ const draftResult = await agent(`Write a plan draft to docs/draft.md for this ke
 ${baselineCode.substring(0, 3000)}
 \`\`\`
 
+# External Resources
+- KernelWiki is an external repository, not a bundled KDA skill. If it is available, use it for architecture-specific optimization knowledge and research references. Download or fork it from https://github.com/mit-han-lab/KernelWiki/fork.
+
 # Available Skills
-- Use \`KernelWiki\` skill for architecture-specific optimization knowledge and research references.
 - Use \`humanize:gen-plan\` skill pattern for structured plan generation.
 - Use \`ncu-report-skill\` if NCU profiling data exists in the workspace (check profile/ directory).
 
@@ -300,10 +308,11 @@ ${currentBestCode.substring(0, 4000)}
 - Changes: ${candidate.changes}
 - Expected effect: ${candidate.expected_effect || 'improvement over baseline'}
 
+# External Resources
+- KernelWiki is an external repository, not a bundled KDA skill. If it is available, use it for architecture-specific optimization techniques such as Hopper/Blackwell features and tensor core usage. Download or fork it from https://github.com/mit-han-lab/KernelWiki/fork.
+
 # Available Skills
 - Use \`cuda-kernel-development\` skill for hardware-aware CUDA patterns (shared memory tiling, warp primitives, occupancy tuning).
-- Use \`KernelWiki\` skill for architecture-specific optimization techniques (e.g., Hopper/Blackwell features, tensor core usage).
-- Use \`ako4x-cuda\` or \`ako4x-cute-dsl\` skills if the implementation involves CuTe abstractions or advanced CUDA patterns.
 
 # Requirements
 1. Output a COMPLETE file — all includes, definitions, functions.

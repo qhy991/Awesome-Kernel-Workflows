@@ -17,7 +17,7 @@ const checks = [
 
 const skillChecks = [
   ['AKO4X/ako4x-kernel-optimizer.js', ['optionalSkills', 'skill_binding_mode', 'prompt_reference_only']],
-  ['KDA/kda-kernel-workflow.js', ['optionalSkills', 'skill_binding_mode', 'recommended_external_skills']],
+  ['KDA/kda-kernel-workflow.js', ['optionalSkills', 'externalResources', 'local_skills_plus_external_resources']],
   ['AdaExplore/adaexplore-kernel-optimization.js', ['skillMemoryContract', 'skill_memory_path', 'method_memory_file']],
 ]
 
@@ -28,13 +28,14 @@ const skillFolders = [
   'AKO4X/skills/ako4x-tilelang/SKILL.md',
   'AKO4X/skills/ako4x-cpp/SKILL.md',
   'AKO4X/skills/ako4x-bench/SKILL.md',
-  'KDA/skills/KernelWiki/SKILL.md',
   'KDA/skills/cuda-kernel-development/SKILL.md',
   'KDA/skills/humanize-gen-plan/SKILL.md',
   'KDA/skills/ncu-report-skill/SKILL.md',
-  'KDA/skills/ako4x-cuda/SKILL.md',
-  'KDA/skills/ako4x-cute-dsl/SKILL.md',
   'AdaExplore/skills/adaexplore-skill-memory/SKILL.md',
+]
+
+const externalResourceChecks = [
+  ['KDA/external-resources.md', ['KernelWiki', 'https://github.com/mit-han-lab/KernelWiki/fork', 'not a vendored KDA skill']],
 ]
 
 let failures = []
@@ -68,9 +69,26 @@ for (const file of skillFolders) {
   }
 }
 
+for (const [file, tokens] of externalResourceChecks) {
+  const filePath = path.join(root, file)
+  let text = ''
+  try {
+    text = fs.readFileSync(filePath, 'utf8')
+  } catch (error) {
+    failures.push(`${file}: cannot read (${error.message})`)
+    continue
+  }
+
+  for (const token of tokens) {
+    if (!text.includes(token)) {
+      failures.push(`${file}: missing external resource token ${token}`)
+    }
+  }
+}
+
 if (failures.length > 0) {
   console.error(failures.join('\n'))
   process.exit(1)
 }
 
-console.log(`fidelity contracts ok (${checks.length} workflows, ${skillChecks.length} skill contracts, ${skillFolders.length} local skill folders)`)
+console.log(`fidelity contracts ok (${checks.length} workflows, ${skillChecks.length} skill contracts, ${skillFolders.length} local skill folders, ${externalResourceChecks.length} external resource links)`)
