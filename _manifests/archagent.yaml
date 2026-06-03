@@ -1,0 +1,171 @@
+name: archagent-cache-policy-optimization
+version: 1.0.0
+description: Evolutionary cache replacement policy optimization with AlphaEvolve
+author: Claude Code Workflows
+license: MIT
+tags:
+  - cache-optimization
+  - evolutionary-search
+  - llc-replacement
+  - champsim
+  - alphaevolve
+
+paper:
+  title: "ArchAgent: Evolutionary cache replacement policy optimization"
+  authors: ["ArchAgent Team"]
+  year: 2024
+  arxiv: "2602.22425"
+  url: "https://arxiv.org/abs/2602.22425"
+  venue: "arXiv preprint"
+
+methodology:
+  approach: "AlphaEvolve: evolutionary search with short-to-long evaluation cascade"
+  topology: "Population-based evolutionary search with adaptive evaluation"
+
+  key_features:
+    - "ChampSim simulator integration for LLC replacement policy"
+    - "Short evaluation → Long evaluation cascade (10M → 100M instructions)"
+    - "AlphaEvolve: population-based search with fitness-based selection"
+    - "C++ policy code generation for ChampSim"
+    - "Mutation strategies: algorithmic changes, parameter tuning, pattern injection"
+    - "Diversity maintenance: prevent premature convergence"
+
+  phases:
+    - name: "Setup"
+      description: "Initialize ChampSim environment, baseline policies, evaluation framework"
+      agents: 1
+
+    - name: "Seed Population"
+      description: "Create initial population of LLC replacement policies"
+      agents: 1
+      strategies:
+        - "Sample from known policies (LRU, RRIP, SHiP, Hawkeye)"
+        - "LLM-generated novel policies"
+        - "Hybrid: combine elements from multiple policies"
+
+    - name: "Short Evaluation"
+      description: "Fast evaluation on short traces (10M instructions)"
+      agents: 1
+      purpose: "Quick fitness screening to filter population"
+
+    - name: "Selection"
+      description: "Select top candidates based on short evaluation"
+      agents: 1
+      selection_strategy: "Top-K or tournament selection"
+
+    - name: "Long Evaluation"
+      description: "Thorough evaluation on long traces (100M instructions)"
+      agents: 1
+      purpose: "Accurate fitness for final ranking"
+
+    - name: "Evolution"
+      description: "Generate next generation via mutation and crossover"
+      agents: 1
+      substeps:
+        - "Select parents (fitness-proportional or tournament)"
+        - "Mutate: algorithmic changes, parameter tuning, pattern injection"
+        - "Crossover: combine elements from two parents"
+        - "Diversity check: reject duplicates or near-duplicates"
+
+    - name: "Iterate"
+      description: "Repeat Short Eval → Selection → Long Eval → Evolution"
+      agents: 0
+      iterations: "Until convergence or max generations"
+
+    - name: "Report"
+      description: "Generate optimization report with best policy and evolution trajectory"
+      agents: 1
+
+  tools:
+    simulator: "ChampSim (cycle-accurate cache simulator)"
+    compiler: "g++ (compile C++ replacement policies)"
+    traces: "SPEC CPU 2017, memory-intensive workloads"
+    evaluation: "IPC (Instructions Per Cycle), MPKI (Misses Per Kilo Instructions)"
+
+  feedback_signals:
+    - metric: "ipc"
+      direction: "higher_better"
+      unit: "IPC"
+      description: "Instructions Per Cycle (primary fitness)"
+
+    - metric: "mpki"
+      direction: "lower_better"
+      unit: "MPKI"
+      description: "Misses Per Kilo Instructions (secondary)"
+
+    - metric: "speedup"
+      direction: "higher_better"
+      unit: "relative_speedup"
+      description: "Speedup vs baseline (LRU or RRIP)"
+
+  evolutionary_operators:
+    - name: "Mutation"
+      types:
+        - "Algorithmic: change prediction logic, update mechanism"
+        - "Parameter: adjust thresholds, counters, table sizes"
+        - "Pattern: inject known good patterns (e.g., bypass heuristics)"
+
+    - name: "Crossover"
+      strategy: "Combine prediction logic from parent A with update logic from parent B"
+
+    - name: "Diversity"
+      strategy: "Reject duplicates, maintain population diversity via distance metrics"
+
+hardware:
+  target: "CPU cache hierarchy (LLC focus)"
+  architectures:
+    - "x86-64 (Intel, AMD)"
+    - "ARM (optional)"
+
+  cache_levels:
+    - "LLC (Last-Level Cache): primary target"
+    - "L1/L2: future extensions"
+
+metrics:
+  primary: "ipc_improvement_vs_baseline"
+  secondary:
+    - "mpki_reduction"
+    - "speedup_geomean_across_traces"
+
+convergence:
+  criteria:
+    - "No IPC improvement for N generations"
+    - "Max generations reached"
+    - "Population diversity < threshold"
+
+  typical_generations: 10-30
+  population_size: 20-50
+
+workflow_structure:
+  entry_point: "archagent-cache-policy-optimization.js"
+  phases: 8
+  estimated_runtime: "2-8 hours (depends on trace length, population size)"
+
+results:
+  output:
+    - "Optimized LLC replacement policy (C++ code for ChampSim)"
+    - "Evolution trajectory (IPC per generation)"
+    - "Best policy breakdown (algorithm description, parameters)"
+    - "Comparison vs baselines (LRU, RRIP, SHiP, Hawkeye)"
+
+  typical_speedup: "1.05x - 1.20x IPC improvement vs LRU baseline"
+
+usage:
+  example: |
+    Workflow will:
+    1. Initialize ChampSim environment
+    2. Create seed population (LLM + known policies)
+    3. For each generation:
+       a. Short evaluation (10M instructions) → filter population
+       b. Long evaluation (100M instructions) → accurate fitness
+       c. Selection → top performers
+       d. Evolution → mutation + crossover → next generation
+    4. Return best policy with analysis
+
+notes:
+  - "Short → Long cascade: saves compute by filtering bad candidates early"
+  - "AlphaEvolve: population-based, not single-trajectory"
+  - "ChampSim integration: cycle-accurate simulation for cache behavior"
+  - "Diversity maintenance: prevents premature convergence to local optima"
+  - "C++ code generation: policies are executable ChampSim modules"
+  - "Evaluation cost: long traces can take minutes per policy"
