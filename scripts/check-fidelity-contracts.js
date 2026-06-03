@@ -21,6 +21,22 @@ const skillChecks = [
   ['AdaExplore/adaexplore-kernel-optimization.js', ['skillMemoryContract', 'skill_memory_path', 'method_memory_file']],
 ]
 
+const skillFolders = [
+  'AKO4X/skills/ako4x-triton/SKILL.md',
+  'AKO4X/skills/ako4x-cuda/SKILL.md',
+  'AKO4X/skills/ako4x-cute-dsl/SKILL.md',
+  'AKO4X/skills/ako4x-tilelang/SKILL.md',
+  'AKO4X/skills/ako4x-cpp/SKILL.md',
+  'AKO4X/skills/ako4x-bench/SKILL.md',
+  'KDA/skills/KernelWiki/SKILL.md',
+  'KDA/skills/cuda-kernel-development/SKILL.md',
+  'KDA/skills/humanize-gen-plan/SKILL.md',
+  'KDA/skills/ncu-report-skill/SKILL.md',
+  'KDA/skills/ako4x-cuda/SKILL.md',
+  'KDA/skills/ako4x-cute-dsl/SKILL.md',
+  'AdaExplore/skills/adaexplore-skill-memory/SKILL.md',
+]
+
 let failures = []
 
 for (const [file, tokens] of [...checks, ...skillChecks]) {
@@ -40,9 +56,21 @@ for (const [file, tokens] of [...checks, ...skillChecks]) {
   }
 }
 
+for (const file of skillFolders) {
+  const filePath = path.join(root, file)
+  if (!fs.existsSync(filePath)) {
+    failures.push(`${file}: missing local workflow skill folder entry`)
+    continue
+  }
+  const text = fs.readFileSync(filePath, 'utf8')
+  if (!text.startsWith('---') || !text.includes('\nname:') || !text.includes('\ndescription:')) {
+    failures.push(`${file}: missing skill frontmatter name/description`)
+  }
+}
+
 if (failures.length > 0) {
   console.error(failures.join('\n'))
   process.exit(1)
 }
 
-console.log(`fidelity contracts ok (${checks.length} workflows, ${skillChecks.length} skill contracts)`)
+console.log(`fidelity contracts ok (${checks.length} workflows, ${skillChecks.length} skill contracts, ${skillFolders.length} local skill folders)`)
