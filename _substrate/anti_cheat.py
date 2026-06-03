@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""Layer B — anti-cheat / validity gate + robust reward (KerSor Solver SDK).
+
+Borrowed from CUDAAgent (robust reward), CUDALLM/TritorX (cheat detection),
+AKO4X (pre-commit expectation). Deterministic. Static heuristics on the kernel
+source + a dynamic robust reward from measured baselines. An invalid attempt
+records speedup 0 and must never enter memory.
+
+Usage:
+  anti_cheat.py --source kernel.cu --metrics metrics.json
+  anti_cheat.py --source-text "<code>" --metrics metrics.json
+  # metrics.json: {compiled, correct, candidate_latency_ms, eager_latency_ms,
+  #                compile_latency_ms, claimed_speedup}
+Prints: {valid, reward, recorded_speedup, flags, reward_reason}
+"""
+import sys, json, argparse, re
+
+# (regex, label) — library delegation where a custom kernel is expected
+FALLBACK_PATTERNS = [
+    (r"\btorch\.matmul\b", "torch.matmul fallback"),
+    (r"\bF\.linear\b", "F.linear fallback"),
+    (r"torch\.nn\.functional", "torch.nn.functional fallback"),
+    (r"\bcublas\w*", "cuBLAS delegation"),
+    (r"\bcudnn\w*", "cuDNN delegation"),
+    (r"\bat::matmul\b", "at::matmul fallback"),
+]
+# (regex, label) — compute silently skipped / placeholder
+SKIP_PATTERNS = [
+    (r"return\s+input\b", "returns input unchanged"),
+    (r"#\s*TODO", "TODO placeholder"),
+    (r"raise\s+NotImplementedError", "NotImplementedError"),
+    (r"^\s*pass\s*$", "empty pass body"),
+]
+HARDCODE_HINT = re.compile(r"\b(M|N|K|seq_len|hidden|batch|dim)\s*=\s*\d{2,}")
+
+BLOCKING = {"library_fallback", "skipped_compute"}  # hardcoded_shape is a warning only
+
+
+def static_flags(src):
+    flags = []
+    for pat, msg in FALLBACK_PATTERNS:
+        if re.search(pat, src):
+            flags.append({"type": "library_fallback", "detail": msg})
+    for pat, msg in SKIP_PATTERNS:
+        if re.search(pat, src, re.M):
+            flags.append({"type": "skipped_compute", "detail": msg})
+    if len(HARDCODE_HINT.findall(src)) >= 2:
+        flags.append({"type": "hardcoded_shape", "detail": "multiple hardcoded dimensions"})
+    return flags
+
+
+def robust_reward(m):
+    if not m.get("compiled", False):
+        return -1, "not compiled"
+    if not m.get("correct", False):
+        return -1, "incorrect"
+    cand = m.get("candidate_latency_ms")
+    eager = m.get("eager_latency_ms")
+    comp = m.get("compile_latency_ms")
+    if cand is None or eager is None:
+        return 0, "missing latencies (cannot confirm speedup)"
+    beats_eager = cand < eager
+    beats_compile = (comp is not None) and (cand < comp)
+    if beats_eager and beats_compile:
+        return 3, "beats eager and torch.compile"
+    if beats_eager:
+        return 2, "beats eager only"
+    return 0, "no speedup over baselines"
+
+
+def evaluate(src, m):
+    flags = static_flags(src or "")
+    reward, reason = robust_reward(m)
+    blocking = [f for f in flags if f["type"] in BLOCKING]
+    valid = (reward >= 0) and (not blocking)
+    recorded = float(m.get("claimed_speedup") or 0.0) if (valid and reward >= 2) else 0.0
+    return {
+        "valid": valid,
+        "reward": reward,
+        "recorded_speedup": recorded,
+        "reward_reason": reason,
+        "flags": flags,
+        "blocking_flags": [f["type"] for f in blocking],
+    }
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--source"); ap.add_argument("--source-text")
+    ap.add_argument("--metrics", required=True)
+    a = ap.parse_args()
+    src = a.source_text if a.source_text is not None else (open(a.source).read() if a.source else "")
+    m = json.loads(sys.stdin.read() if a.metrics == "-" else open(a.metrics).read())
+    res = evaluate(src, m)
+    print(json.dumps(res, indent=2, ensure_ascii=False))
+    return 0 if res["valid"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
