@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/qhy991/Awesome-Kernel-Workflows"><img src="https://img.shields.io/badge/GitHub-Awesome--Kernel--Workflows-blue?logo=github" alt="GitHub"></a>
+  <a href="#catalog"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/qhy991/Awesome-Kernel-Workflows/main/badges/workflows.json" alt="workflow count"></a>
   <img src="https://img.shields.io/badge/Claude%20Code-Workflows-7C3AED" alt="Claude Code Workflows">
   <img src="https://img.shields.io/badge/GPU-CUDA%20%7C%20Triton%20%7C%20DSL-green" alt="GPU Kernels">
 </p>
@@ -106,7 +107,7 @@ Workflow files follow Claude Code conventions: export `meta` (name, description,
 
 ---
 
-## Catalog
+## Catalog {#catalog}
 
 | Method | Tags | Core loop | Paper / project |
 |--------|------|-----------|-----------------|
@@ -232,6 +233,7 @@ Checklist for contributors:
 1. Add `<MethodName>/` with the `*.js` workflow
 2. Document **source paper/repo** and **required args** in the file header
 3. Update the catalog table in **both** `README.md` and `README.zh-CN.md`
+4. Run `scripts/count-workflows.sh` to refresh the header **workflows** badge (`badges/workflows.json`)
 
 ---
 

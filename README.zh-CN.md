@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/qhy991/Awesome-Kernel-Workflows"><img src="https://img.shields.io/badge/GitHub-Awesome--Kernel--Workflows-blue?logo=github" alt="GitHub"></a>
+  <a href="#catalog"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/qhy991/Awesome-Kernel-Workflows/main/badges/workflows.json" alt="workflow 数量"></a>
   <img src="https://img.shields.io/badge/Claude%20Code-Workflows-7C3AED" alt="Claude Code Workflows">
   <img src="https://img.shields.io/badge/GPU-CUDA%20%7C%20Triton%20%7C%20DSL-green" alt="GPU Kernels">
 </p>
@@ -95,7 +96,7 @@ Workflow 文件遵循 Claude Code 约定：导出 `meta`（名称、描述、阶
 
 ---
 
-## 已收录 Workflows
+## 已收录 Workflows {#catalog}
 
 | 方法 | 标签 | 核心循环 | 论文 / 项目 |
 |------|------|----------|-------------|
@@ -231,7 +232,8 @@ Workflow({
 
 1. 新建 `<MethodName>/` 目录，放入 `*.js` workflow + `README.md`；
 2. 在 workflow 顶部用注释写明**来源论文/仓库**与**必需参数**；
-3. 更新 **`README.md` 与 `README.zh-CN.md`** 中的收录表格。
+3. 更新 **`README.md` 与 `README.zh-CN.md`** 中的收录表格；
+4. 运行 `scripts/count-workflows.sh`，刷新页眉 **workflows** 数量徽章（`badges/workflows.json`）。
 
 ---
 
