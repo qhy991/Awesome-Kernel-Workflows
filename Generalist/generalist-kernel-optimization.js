@@ -102,7 +102,10 @@ log(`Generalist solver | beam | breadth=${BREADTH} topk=${TOPK} iters=${ITERATIO
 let candidateBeam = [{ id: 'baseline', parent_id: null, code_path: KERNEL_PATH, speedup: 1.0, metrics: {}, planTitle: 'baseline' }]
 let bestSpeedup = 1.0
 let stagnantRounds = 0
+let dryRounds = 0                 // P1.5 — consecutive rounds with no new 'measured' insight
+const DRY_LIMIT = 2               // P1.5 — loop-until-dry stop threshold
 const allAttempts = []
+const verifiedInsights = []       // P1.4 — verified typed insights for the Layer A envelope
 
 for (let iter = 1; iter <= ITERATIONS; iter++) {
   const best = candidateBeam[0]
@@ -202,6 +205,27 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
     ` and return {updated:true}.`,
     { label: `learn-${iter}-${e.plan.method}`, phase: 'Learn', schema: JSON_PASSTHROUGH, model: MODEL.mechanical })))
 
+  // ---- P1.4: adversarial insight verification (LLM refuter judgment + deterministic downgrade) ----
+  const roundInsightRaw = {
+    kind: 'bottleneck', directive: 'explore',
+    claim: `bottleneck_class=${bclass} dominates ${OP} at this shape`,
+    evidence: NCU_CMD ? 'ncu' : 'benchmark', confidence: 'measured', source_round: iter,
+  }
+  const refute = await agent(
+    `Adversarially REFUTE this attribution against the MEASURED profile ` +
+    `${JSON.stringify(metrics.metrics || {})}: "${roundInsightRaw.claim}". ` +
+    `Default to refuted=true if the data does not clearly support it. Return {refuted, reason}.`,
+    { label: `refute-${iter}`, phase: 'Learn', model: MODEL.judgment,
+      schema: { type: 'object', properties: { refuted: { type: 'boolean' }, reason: { type: 'string' } }, required: ['refuted'] } })
+  const verified = await agent(
+    `Write this insight to ${EXP_DIR}/run-${iter}/insight.json:\n${JSON.stringify(roundInsightRaw)}\n` +
+    `Then run exactly: \`python3 ${SUBSTRATE}/verify_insight.py --insight ${EXP_DIR}/run-${iter}/insight.json --refuted ${refute.refuted ? 1 : 0}\` ` +
+    `and return its stdout JSON verbatim.`,
+    { label: `verify-insight-${iter}`, phase: 'Learn', schema: JSON_PASSTHROUGH, model: MODEL.mechanical })
+  verifiedInsights.push(verified)
+  const producedMeasured = (verified && verified.confidence) === 'measured'
+  log(`round insight confidence: ${(verified && verified.confidence) || 'n/a'}${refute.refuted ? ' (refuted -> downgraded)' : ''}`)
+
   // ---- Beam update (deterministic JS): merge, keep top-K by recorded speedup ----
   const newCandidates = evaluated
     .filter((e) => e.anticheat.valid && e.recorded_speedup > 0)
@@ -216,15 +240,17 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
   const newBest = candidateBeam[0].speedup
   const improvement = (newBest - bestSpeedup) / Math.max(bestSpeedup, 1e-9)
   stagnantRounds = improvement < STAGNATION_EPS ? stagnantRounds + 1 : 0
+  dryRounds = producedMeasured ? 0 : dryRounds + 1   // P1.5 loop-until-dry
   bestSpeedup = newBest
-  log(`iter ${iter}: best now ${bestSpeedup.toFixed(3)}x (Δ ${(improvement * 100).toFixed(1)}%) | stagnant ${stagnantRounds}`)
+  log(`iter ${iter}: best now ${bestSpeedup.toFixed(3)}x (Δ ${(improvement * 100).toFixed(1)}%) | stagnant ${stagnantRounds} | dry ${dryRounds}`)
   if (bestSpeedup >= TARGET) { log(`target ${TARGET}x reached — stop (COMPLETE)`); break }
   if (stagnantRounds >= STAGNATION_LIMIT) { log(`stagnation limit reached — stop (STALLED)`); break }
+  if (dryRounds >= DRY_LIMIT) { log(`loop-until-dry: ${DRY_LIMIT} rounds with no new measured insight — stop (STALLED)`); break }
 }
 
 // ---- Report + Layer A evidence envelope ----
 phase('Report')
-const status = bestSpeedup >= TARGET ? 'converged' : (stagnantRounds >= STAGNATION_LIMIT ? 'stalled' : 'budget_exhausted')
+const status = bestSpeedup >= TARGET ? 'converged' : ((stagnantRounds >= STAGNATION_LIMIT || dryRounds >= DRY_LIMIT) ? 'stalled' : 'budget_exhausted')
 await agent(
   `Write a final optimization report for ${OP}.\n` +
   `Best speedup: ${bestSpeedup.toFixed(3)}x | status: ${status}\n` +
@@ -242,5 +268,6 @@ return {
   convergence_status: status,
   beam: candidateBeam,
   attempts: allAttempts,
+  insights: verifiedInsights,
   memory_db: MEMORY_DB,
 }
