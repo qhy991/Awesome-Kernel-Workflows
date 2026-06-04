@@ -70,7 +70,7 @@ Loop:
 | `iterations` | `5` | Evolution iterations (paper used 30) |
 | `population_size` | `3` | Population per island |
 | `migration_stagnation` | `2` | Non-improving iterations before elite migration |
-| `bench_command` | `''` | Compile + benchmark command |
+| `benchmark_command` | `''` | Compile + benchmark command |
 | `rtol` / `atol` | `0.01` | Correctness tolerance |
 | `retrieval_corpus_path` | `''` | Verified PyTorch→Triton pairs for RAG init |
 | `hint_library_path` | `''` | Persisted hint library JSON (cross-task reuse) |
@@ -91,7 +91,7 @@ Workflow({
     num_islands: 4,
     iterations: 30,
     population_size: 4,
-    bench_command: 'python eval_triton.py --kernel',
+    benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
     retrieval_corpus_path: '/path/to/verified_triton_pairs.jsonl',
     hint_library_path: '/path/to/kernelfoundrydx_hints.json',
     exp_dir: '/tmp/kernelfoundrydx_exp',

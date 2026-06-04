@@ -44,8 +44,8 @@ method:
 topology:
   type: "iterative"
   iterative:
-    max_iterations_arg: "max_iterations"
-    convergence_condition: "Iteration budget exhausted or no measured improvement remains"
+    iterations_arg: "iterations"
+    convergence_condition: "Iteration iterations exhausted or no measured improvement remains"
     state_variables:
       - name: "currentBestCode"
         type: "string"
@@ -66,7 +66,7 @@ topology:
       - name: "lessons"
         type: "array"
         initial_value: "[]"
-        description: "Evidence-backed lessons passed to later Planning steps"
+        description: "Evidence-backed lessons passed to later Planning iterations"
 
 phases:
   - name: "Setup"
@@ -227,7 +227,7 @@ plan_angles:
 
 args:
   required:
-    - name: "initial_kernel_path"
+    - name: "kernel_path"
       type: "string"
       description: "Path to initial CUDA kernel file to optimize"
       example: "/path/to/rms_v1.cu"
@@ -256,13 +256,13 @@ args:
       type: "string"
       default: "''"
       description: "Correctness command with {kernel_path} and {result_path} placeholders"
-      example: "python test_kernel.py --kernel {kernel_path} --json {result_path}"
+      example: "<user-provided correctness command with {kernel_path}/{result_path}>"
     - name: "benchmark_command"
       type: "string"
       default: "''"
       description: "Benchmark command with {kernel_path} and {result_path} placeholders"
-      example: "python bench_kernel.py --kernel {kernel_path} --json {result_path}"
-    - name: "max_iterations"
+      example: "<user-provided benchmark command with {kernel_path}/{result_path}>"
+    - name: "iterations"
       type: "number"
       default: "5"
       description: "Maximum optimization iterations"

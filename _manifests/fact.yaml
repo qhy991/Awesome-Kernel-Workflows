@@ -164,7 +164,7 @@ metrics:
 convergence:
   criteria:
     - "All patterns discovered and realized"
-    - "Composition budget exhausted"
+    - "Composition iterations exhausted"
     - "Ablation studies complete"
 
   typical_patterns_discovered: 10-20

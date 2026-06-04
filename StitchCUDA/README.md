@@ -18,7 +18,7 @@ Sequential three-agent pipeline with adaptive replanning:
 
 PLANNER:
   Generate optimization plan
-  (strategy, steps, threading config)
+  (strategy, iterations, threading config)
   → Plan (JSON)
 
 CODER:
@@ -51,13 +51,13 @@ Track best kernel across all attempts
 
 **Responsibilities**:
 - High-level optimization approach (memory-bound, compute-bound, balanced)
-- Decompose into implementation steps
+- Decompose into implementation iterations
 - Specify threading/block configuration
 - Identify key optimizations
 
 **Output**: JSON plan with:
 - `strategy`: "memory-bound" | "compute-bound" | "balanced"
-- `steps`: Array of implementation steps
+- `iterations`: Array of implementation iterations
 - `threading_config`: `{block_size, grid_size, threads_per_block}`
 - `key_optimizations`: Array of optimization names (e.g., "coalescing", "shared_memory", "register_blocking")
 
@@ -67,7 +67,7 @@ Track best kernel across all attempts
 
 **Responsibilities**:
 - Generate complete CUDA kernel following plan
-- Implement all steps from plan
+- Implement all iterations from plan
 - Apply key optimizations (coalescing, shared memory, register blocking, loop unrolling, etc.)
 - PyTorch `load_inline` compatible format
 

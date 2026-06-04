@@ -37,16 +37,16 @@
 
 该 workflow 的主要参数：
 
-- `kernel_spec_path`：问题定义文件路径（必填）
+- `problem_path`：问题定义文件路径（必填）
 - `op_description`：算子描述
 - `language`：`triton | cuda | python`
 - `target_gpu`：目标 GPU（如 `H100`）
-- `max_cycles`：最大搜索轮数（默认 `10`）
+- `iterations`：最大搜索轮数（默认 `10`）
 - `attempts_per_cycle`：每轮生成/改进次数（默认 `5`）
 - `stagnation_window`：连续无改进提前结束窗口（默认 `3`）
 - `max_difficulty`：优先探索的最大 action 难度（默认 `4`）
-- `bench_command`：性能评测命令
-- `baseline_code_path`：可选，基线 kernel 路径
+- `benchmark_command`：性能评测命令
+- `kernel_path`：可选，基线 kernel 路径
 - `rtol` / `atol`：正确性容差
 - `exp_dir`：实验输出目录
 
@@ -60,16 +60,16 @@
 Workflow({
   name: 'ksearch-kernel-optimization',
   args: {
-    kernel_spec_path: '/path/to/spec.yaml',
+    problem_path: '/path/to/spec.yaml',
     op_description: 'MLA decode attention kernel',
     language: 'triton',
     target_gpu: 'H100',
-    max_cycles: 10,
+    iterations: 10,
     attempts_per_cycle: 5,
     stagnation_window: 3,
     max_difficulty: 4,
-    bench_command: 'python eval.py --kernel',
-    baseline_code_path: '/path/to/baseline.py',
+    benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+    kernel_path: '/path/to/baseline.py',
     rtol: 0.01,
     atol: 0.01,
     exp_dir: '/tmp/ksearch_exp',

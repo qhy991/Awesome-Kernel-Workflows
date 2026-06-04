@@ -32,9 +32,9 @@
 
 主要参数：
 
-- `task_spec_path`：CUDA 生成任务说明路径
+- `problem_path`：CUDA 生成任务说明路径
 - `reference_code_path`：可选 reference implementation
-- `eval_command`：评测命令，使用 `{kernel_path}` 和 `{result_path}`
+- `benchmark_command`：评测命令，使用 `{kernel_path}` 和 `{result_path}`
 - `target_gpu`：目标 GPU，默认 `H100`
 - `iterations`：feature search 迭代轮数，默认 `8`
 - `feature_budget`：每个 candidate 最多选择的 feature 数，默认 `4`
@@ -65,9 +65,9 @@ Evaluator JSON 建议格式：
 Workflow({
   name: 'cudallm-fsr-kernel-generation',
   args: {
-    task_spec_path: '/path/to/task.md',
+    problem_path: '/path/to/task.md',
     reference_code_path: '/path/to/reference.py',
-    eval_command: 'python eval.py --kernel {kernel_path} --json {result_path}',
+    benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
     target_gpu: 'H100',
     iterations: 8,
     feature_budget: 4,

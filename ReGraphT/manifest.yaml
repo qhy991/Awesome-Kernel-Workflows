@@ -57,7 +57,7 @@ topology:
       graph update phase records failure evidence, lowers reward, and expands
       alternative follow-up edges.
   iterative:
-    max_iterations_arg: "budget"
+    iterations_arg: "iterations"
     convergence_condition: "Budget exhausted or no promising graph path remains"
     state_variables:
       - name: "graph"
@@ -205,14 +205,14 @@ plan_angles:
 
 args:
   required:
-    - name: "source_code_path"
+    - name: "kernel_path"
       type: "string"
       description: "Path to source CUDA/C++ code or task specification"
       example: "/path/to/source.cu"
-    - name: "eval_command"
+    - name: "benchmark_command"
       type: "string"
       description: "Command that evaluates candidate code with {kernel_path} and {result_path} substitutions"
-      example: "python eval.py --kernel {kernel_path} --json {result_path}"
+      example: "<user-provided benchmark command with {kernel_path}/{result_path}>"
   optional:
     - name: "op_description"
       type: "string"
@@ -229,7 +229,7 @@ args:
       default: "''"
       description: "Optional persisted CUDA Reasoning Graph path"
       example: "/data/regraph.json"
-    - name: "budget"
+    - name: "iterations"
       type: "number"
       default: "20"
       description: "Number of candidate attempts"
@@ -251,7 +251,7 @@ correctness:
     - "Candidate passes reference-output comparison"
     - "Speedup is parsed from evaluator JSON, not inferred by the LLM"
   check_type: "runtime_comparison"
-  reference_output: "Provided by eval_command or baseline_command"
+  reference_output: "Provided by benchmark_command or baseline_command"
 
 return_fields:
   - name: "best_speedup"

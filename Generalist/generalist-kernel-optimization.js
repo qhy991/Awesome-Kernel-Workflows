@@ -34,11 +34,12 @@ export const meta = {
 //   Workflow({ name: 'generalist-kernel-optimization', args: {
 //     kernel_path: '/path/to/kernel.cu',
 //     op_description: 'Quantized GEMM Q4_0 weight x FP32 activation',
-//     eval_command: 'python eval.py --kernel KERNEL_PATH --out RESULT_JSON',
-//       // eval_command MUST write JSON: {compiled, correct, candidate_latency_ms,
+//     benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+//       // benchmark_command MUST write JSON: {compiled, correct, candidate_latency_ms,
 //       //   eager_latency_ms, compile_latency_ms, speedup, metrics:{dram_pct,sm_pct,occupancy,latency_ms}}
-//     ncu_command: 'ncu --set full ...',           // optional; else metrics come from eval_command
+//     ncu_command: '<user-provided profiler command>', // optional; else metrics come from benchmark_command
 //     substrate_dir: '/path/to/Awesome-Kernel-Workflows/_substrate',
+//     substrate_command_prefix: '<user-provided runner for substrate scripts>',
 //     exp_dir: '/path/to/experiment/output',
 //     memory_db: '/path/to/experiment/memory.json', // persistent; defaults to exp_dir/memory.json
 //     iterations: 3, breadth: 3, topk: 3, target_speedup: 1.5,
@@ -47,19 +48,30 @@ export const meta = {
 // =============================================================================
 
 // ---- Args / contract ----
-const KERNEL_PATH = args.kernel_path
+let KERNEL_PATH = args.kernel_path || ''
+const PROBLEM_DEFINITION = args.problem_definition || ''
+const PROBLEM_PATH = args.problem_path || ''
+const INPUT_MODE = KERNEL_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const OP = args.op_description || 'kernel optimization'
-const EVAL_CMD = args.eval_command
+const EVAL_CMD = args.benchmark_command
 const NCU_CMD = args.ncu_command || ''
 const SUBSTRATE = args.substrate_dir || '_substrate'
+const SUBSTRATE_COMMAND_PREFIX = args.substrate_command_prefix || ''
 const EXP_DIR = args.exp_dir || '.'
 const MEMORY_DB = args.memory_db || `${EXP_DIR}/memory.json`
 const ITERATIONS = args.iterations || 3
 const BREADTH = args.breadth || 3
 const TOPK = args.topk || 3
 const TARGET = args.target_speedup || 1.5
+const LANGUAGE = args.language || 'cuda'
+const TARGET_GPU = args.target_gpu || 'unknown GPU'
+const SEED_CANDIDATES = args.seed_candidates || 3
 const STAGNATION_EPS = 0.02   // < 2% improvement counts as no progress (Xe-Forge/KSearch)
 const STAGNATION_LIMIT = 2    // consecutive stagnant rounds -> stop
+
+if (!KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
+  throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
+}
 
 // P0 — model/intelligence routing: mechanical steps don't need Opus (token savings).
 const MODEL = {
@@ -67,9 +79,20 @@ const MODEL = {
   profile: args.model_profile || 'sonnet',       // run eval/ncu, normalize metrics
   judgment: args.model_judgment || 'opus',       // plan / implement / report (override per kernel complexity)
 }
+
+function substrateInstruction(script, cliArgs) {
+  const scriptPath = `${SUBSTRATE}/${script}`
+  if (!SUBSTRATE_COMMAND_PREFIX) {
+    return `No substrate_command_prefix provided for ${scriptPath} ${cliArgs}; do not invent an interpreter.`
+  }
+  return `Run exactly: \`${SUBSTRATE_COMMAND_PREFIX} ${scriptPath} ${cliArgs}\`.`
+}
 // P0 — token-budget wiring: rough per-unit output-token estimates for scaling + stopping.
 const EST_PER_CANDIDATE = args.est_tokens_per_candidate || 20000
 const EST_PER_ROUND = EST_PER_CANDIDATE * BREADTH + 15000
+let generatedKernelPath = ''
+let initialCandidates = []
+let initialGenerationResult = null
 
 // Schemas for structured agent returns
 const METRICS_SCHEMA = {
@@ -98,6 +121,44 @@ const ANTICHEAT_SCHEMA = {
 phase('Setup')
 log(`Generalist solver | beam | breadth=${BREADTH} topk=${TOPK} iters=${ITERATIONS} target=${TARGET}x | models ${MODEL.mechanical}/${MODEL.profile}/${MODEL.judgment} | budget ${(typeof budget !== 'undefined' && budget.total) ? Math.round(budget.total / 1000) + 'k' : 'unbounded'}`)
 
+if (INPUT_MODE === 'generate_then_optimize') {
+  const generated = await agent(`No kernel_path was provided. Generate and verify an initial kernel before seeding the Generalist candidate beam.
+
+# Problem Input
+- problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
+- problem_path: ${PROBLEM_PATH || '(not provided)'}
+- op_description: ${OP}
+- language: ${LANGUAGE}
+- target_gpu: ${TARGET_GPU}
+- seed_candidates: ${SEED_CANDIDATES}
+
+# Evidence Commands
+- benchmark_command: ${EVAL_CMD || '(not provided)'}
+- ncu_command: ${NCU_CMD || '(not provided)'}
+
+# Contract
+Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run benchmark_command if available using {kernel_path}/{result_path}. Return the best verified generated kernel path.`, {
+    label: 'generate-initial-kernel',
+    phase: 'Setup',
+    model: MODEL.judgment,
+    schema: {
+      type: 'object',
+      properties: {
+        generated_kernel_path: { type: 'string' },
+        initial_candidates: { type: 'array', items: { type: 'object' } },
+        initial_generation_result: { type: 'object' },
+      },
+      required: ['generated_kernel_path', 'initial_candidates', 'initial_generation_result'],
+    },
+  })
+  initialCandidates = generated.initial_candidates || []
+  initialGenerationResult = generated.initial_generation_result || { verified: false }
+  generatedKernelPath = generated.generated_kernel_path || ''
+  if (!generatedKernelPath) throw new Error('Generation mode did not produce generated_kernel_path')
+  if (EVAL_CMD && initialGenerationResult.verified === false) throw new Error('No generated seed passed benchmark evidence')
+  KERNEL_PATH = generatedKernelPath
+}
+
 // Baseline candidate seeds the beam.
 let candidateBeam = [{ id: 'baseline', parent_id: null, code_path: KERNEL_PATH, speedup: 1.0, metrics: {}, planTitle: 'baseline' }]
 let bestSpeedup = 1.0
@@ -125,8 +186,9 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
   const metrics = await agent(
     `Profile the current best kernel and produce normalized metrics.\n` +
     `Kernel: ${best.code_path}\nOp: ${OP}\n` +
-    (NCU_CMD ? `Run NCU: \`${NCU_CMD}\` and the eval command \`${EVAL_CMD}\`.\n`
-             : `Run the eval command \`${EVAL_CMD}\` (writes a JSON result file).\n`) +
+    (NCU_CMD && EVAL_CMD ? `Run the user-provided ncu_command: \`${NCU_CMD}\` and the benchmark command \`${EVAL_CMD}\`.\n`
+      : EVAL_CMD ? `Run the benchmark command \`${EVAL_CMD}\` (writes a JSON result file).\n`
+        : `No benchmark_command provided; do not invent an evaluator. Return missing/null measured metrics.\n`) +
     `Return the JSON exactly per the schema: compiled, correct, candidate_latency_ms, ` +
     `eager_latency_ms, compile_latency_ms, speedup, and metrics{dram_pct, sm_pct, occupancy, latency_ms}. ` +
     `Use null for unknown numbers. Do not fabricate; missing => null.`,
@@ -136,8 +198,8 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
   phase('Diagnose')
   const diag = await agent(
     `Write these metrics to ${EXP_DIR}/run-${iter}/metrics.json:\n${JSON.stringify(metrics.metrics || {})}\n` +
-    `Then run exactly: \`python3 ${SUBSTRATE}/diagnose.py --metrics ${EXP_DIR}/run-${iter}/metrics.json\` ` +
-    `and return its stdout JSON verbatim ({bottleneck_class, evidence}).`,
+    `${substrateInstruction('diagnose.py', `--metrics ${EXP_DIR}/run-${iter}/metrics.json`)} ` +
+    `Return its stdout JSON verbatim ({bottleneck_class, evidence}). If the substrate command is unavailable, return {bottleneck_class:"unknown", evidence:"missing_substrate_command_prefix"}.`,
     { label: `diagnose-${iter}`, phase: 'Diagnose', schema: JSON_PASSTHROUGH, model: MODEL.mechanical })
   const bclass = diag.bottleneck_class || 'unknown'
   log(`bottleneck_class = ${bclass}`)
@@ -146,12 +208,12 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
   phase('Retrieve')
   const [mem, gate] = await parallel([
     () => agent(
-      `Run exactly: \`python3 ${SUBSTRATE}/memory_store.py --db ${MEMORY_DB} retrieve --class ${bclass}\` ` +
-      `and return its stdout JSON verbatim ({bottleneck_class, techniques, dead_ends}).`,
+      `${substrateInstruction('memory_store.py', `--db ${MEMORY_DB} retrieve --class ${bclass}`)} ` +
+      `Return its stdout JSON verbatim ({bottleneck_class, techniques, dead_ends}). If unavailable, return empty techniques/dead_ends with missing evidence.`,
       { label: `retrieve-${iter}`, phase: 'Retrieve', schema: JSON_PASSTHROUGH, model: MODEL.mechanical }),
     () => agent(
-      `Run exactly: \`python3 ${SUBSTRATE}/method_gate.py --class ${bclass} --metrics ${EXP_DIR}/run-${iter}/metrics.json\` ` +
-      `and return its stdout JSON verbatim ({bottleneck_class, allowed_methods, rationale}).`,
+      `${substrateInstruction('method_gate.py', `--class ${bclass} --metrics ${EXP_DIR}/run-${iter}/metrics.json`)} ` +
+      `Return its stdout JSON verbatim ({bottleneck_class, allowed_methods, rationale}). If unavailable, return allowed_methods:[] with missing evidence.`,
       { label: `gate-${iter}`, phase: 'Retrieve', schema: JSON_PASSTHROUGH, model: MODEL.mechanical }),
   ])
   const allowed = (gate && gate.allowed_methods) || []
@@ -182,13 +244,15 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
     const m = await agent(
       `Implement this plan on a COPY of ${best.code_path} into ${runDir}/kernel, respecting the ` +
       `<<<IMPROVE BEGINS/ENDS>>> anchors. Method: ${p.method}. Plan: ${JSON.stringify(p.plan)}.\n` +
-      `Then run \`${EVAL_CMD}\` and return the JSON metrics per schema.`,
+      (EVAL_CMD
+        ? `Then run the benchmark command \`${EVAL_CMD}\` and return the JSON metrics per schema.`
+        : `No benchmark_command provided; do not invent an evaluator. Return compiled=false, correct=false, speedup=0, and missing evidence fields.`),
       { label: `impl-${iter}-${i + 1}`, phase: 'Evaluate', schema: METRICS_SCHEMA, model: MODEL.judgment, isolation: 'worktree' })
     const ac = await agent(
       `Write these metrics to ${runDir}/metrics.json:\n${JSON.stringify({ ...m, claimed_speedup: m.speedup })}\n` +
-      `Then run exactly: \`python3 ${SUBSTRATE}/anti_cheat.py --source ${runDir}/kernel --metrics ${runDir}/metrics.json\` ` +
-      `and return its stdout JSON verbatim. Then run ` +
-      `\`python3 ${SUBSTRATE}/evidence_schema.py validate ${runDir}/metrics.json\` to confirm it is well-formed.`,
+      `${substrateInstruction('anti_cheat.py', `--source ${runDir}/kernel --metrics ${runDir}/metrics.json`)} ` +
+      `Return its stdout JSON verbatim. Then ${substrateInstruction('evidence_schema.py', `validate ${runDir}/metrics.json`)} ` +
+      `If substrate commands are unavailable, mark valid=false with blocking_flags:["missing_substrate_command_prefix"].`,
       { label: `anticheat-${iter}-${i + 1}`, phase: 'Evaluate', schema: ANTICHEAT_SCHEMA, model: MODEL.mechanical })
     return { plan: p, metrics: m, anticheat: ac, code_path: `${runDir}/kernel`,
              recorded_speedup: ac.valid ? ac.recorded_speedup : 0 }
@@ -196,14 +260,15 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
 
   // ---- Learn: update persistent memory (Layer D) per measured outcome ----
   phase('Learn')
-  await parallel(evaluated.map((e) => () => agent(
-    `Run exactly: \`python3 ${SUBSTRATE}/memory_store.py --db ${MEMORY_DB} update --class ${bclass} ` +
-    `--technique ${e.plan.method} --speedup ${e.metrics.speedup || 0} --correct ${e.metrics.correct ? 1 : 0}\`` +
-    (e.anticheat.valid ? '' :
-      ` ; then run \`python3 ${SUBSTRATE}/memory_store.py --db ${MEMORY_DB} add-deadend ` +
-      `--claim ${JSON.stringify(e.plan.method)} --why ${JSON.stringify(e.anticheat.reward_reason || (e.anticheat.blocking_flags || []).join(','))} --revalidate-if "metrics change"\``) +
-    ` and return {updated:true}.`,
-    { label: `learn-${iter}-${e.plan.method}`, phase: 'Learn', schema: JSON_PASSTHROUGH, model: MODEL.mechanical })))
+  await parallel(evaluated.map((e) => () => {
+    const updateArgs = `--db ${MEMORY_DB} update --class ${bclass} --technique ${e.plan.method} --speedup ${e.metrics.speedup || 0} --correct ${e.metrics.correct ? 1 : 0}`
+    const deadendArgs = `--db ${MEMORY_DB} add-deadend --claim ${JSON.stringify(e.plan.method)} --why ${JSON.stringify(e.anticheat.reward_reason || (e.anticheat.blocking_flags || []).join(','))} --revalidate-if "metrics change"`
+    return agent(
+      `${substrateInstruction('memory_store.py', updateArgs)} ` +
+      (e.anticheat.valid ? '' : `${substrateInstruction('memory_store.py', deadendArgs)} `) +
+      `Return {updated:true} if the command ran. If unavailable, return {updated:false, reason:"missing_substrate_command_prefix"}.`,
+      { label: `learn-${iter}-${e.plan.method}`, phase: 'Learn', schema: JSON_PASSTHROUGH, model: MODEL.mechanical })
+  }))
 
   // ---- P1.4: adversarial insight verification (LLM refuter judgment + deterministic downgrade) ----
   const roundInsightRaw = {
@@ -219,8 +284,8 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
       schema: { type: 'object', properties: { refuted: { type: 'boolean' }, reason: { type: 'string' } }, required: ['refuted'] } })
   const verified = await agent(
     `Write this insight to ${EXP_DIR}/run-${iter}/insight.json:\n${JSON.stringify(roundInsightRaw)}\n` +
-    `Then run exactly: \`python3 ${SUBSTRATE}/verify_insight.py --insight ${EXP_DIR}/run-${iter}/insight.json --refuted ${refute.refuted ? 1 : 0}\` ` +
-    `and return its stdout JSON verbatim.`,
+    `${substrateInstruction('verify_insight.py', `--insight ${EXP_DIR}/run-${iter}/insight.json --refuted ${refute.refuted ? 1 : 0}`)} ` +
+    `Return its stdout JSON verbatim. If unavailable, return {verified:false, reason:"missing_substrate_command_prefix"}.`,
     { label: `verify-insight-${iter}`, phase: 'Learn', schema: JSON_PASSTHROUGH, model: MODEL.mechanical })
   verifiedInsights.push(verified)
   const producedMeasured = (verified && verified.confidence) === 'measured'
@@ -261,6 +326,12 @@ await agent(
   { label: 'final-report', phase: 'Report', model: MODEL.judgment })
 
 return {
+  input_mode: INPUT_MODE,
+  problem_definition: PROBLEM_DEFINITION,
+  problem_path: PROBLEM_PATH,
+  generated_kernel_path: generatedKernelPath,
+  initial_candidates: initialCandidates,
+  initial_generation_result: initialGenerationResult,
   solver: 'generalist-kernel-optimization',
   topology: 'beam',
   overall_speedup: bestSpeedup,

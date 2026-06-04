@@ -105,9 +105,9 @@ On AMD MI300X, ARGUS-generated kernels achieve:
 Workflow({name: 'argus-kernel-optimization', args: {
   kernel_path: '/path/to/kernel.py',
   kernel_spec: 'Flash attention GQA, bf16, d=128, Br=256, Bc=64, 512 threads',
-  hardware_target: 'AMD MI300X',
-  test_command: 'python test_kernel.py',
-  benchmark_command: 'python bench_kernel.py --warmup 100 --iters 1000',
+  target_gpu: 'AMD MI300X',
+  test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
+  benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
   iterations: 10,
   inner_steps: 5,
   optimization_categories: ['global_intrusive', 'local_source', 'isa_specific'],
@@ -120,11 +120,11 @@ Workflow({name: 'argus-kernel-optimization', args: {
 |-----------|---------|-------------|
 | `kernel_path` | (required) | Path to kernel source file |
 | `kernel_spec` | `''` | Natural language specification of the kernel |
-| `hardware_target` | `'NVIDIA H100'` | Target GPU architecture |
+| `target_gpu` | `'NVIDIA H100'` | Target GPU architecture |
 | `test_command` | `''` | Correctness test command |
 | `benchmark_command` | `''` | Performance benchmark command |
 | `iterations` | `5` | ICRL outer loop iterations |
-| `inner_steps` | `3` | Max optimization steps per iteration |
+| `inner_steps` | `3` | Max optimization iterations per iteration |
 | `exp_dir` | `'/tmp/argus_exp'` | Experiment artifacts directory |
 | `optimization_categories` | `['global_intrusive', 'local_source', 'isa_specific']` | Which knowledge base categories to explore |
 | `knowledge_base_path` | `''` | Custom knowledge base file |
@@ -134,7 +134,7 @@ Workflow({name: 'argus-kernel-optimization', args: {
 ```javascript
 {
   computation_type: string,
-  hardware_target: string,
+  target_gpu: string,
   baseline_throughput_tflops: number,
   best_throughput_tflops: number,
   overall_speedup: number,
@@ -219,9 +219,9 @@ Tag 函数 → 符号标注 → Tag 断言 → 违规反例
 Workflow({name: 'argus-kernel-optimization', args: {
   kernel_path: '/path/to/kernel.py',
   kernel_spec: 'Flash attention GQA, bf16, d=128, Br=256, Bc=64',
-  hardware_target: 'AMD MI300X',
-  test_command: 'python test_kernel.py',
-  benchmark_command: 'python bench_kernel.py',
+  target_gpu: 'AMD MI300X',
+  test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
+  benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
   iterations: 10,
   inner_steps: 5,
 }})
@@ -233,7 +233,7 @@ Workflow({name: 'argus-kernel-optimization', args: {
 |------|--------|------|
 | `kernel_path` | (必需) | 内核源文件路径 |
 | `kernel_spec` | `''` | 内核的自然语言规格描述 |
-| `hardware_target` | `'NVIDIA H100'` | 目标 GPU 架构 |
+| `target_gpu` | `'NVIDIA H100'` | 目标 GPU 架构 |
 | `test_command` | `''` | 正确性测试命令 |
 | `benchmark_command` | `''` | 性能基准命令 |
 | `iterations` | `5` | ICRL 外层循环次数 |

@@ -78,7 +78,7 @@ topology:
     pruning_strategy: "Per-island elitism: high performers preserved as mutation parents; best valid kernel across the union of all island populations is the output."
     budget_arg: "iterations"
   iterative:
-    max_iterations_arg: "iterations"
+    iterations_arg: "iterations"
     convergence_condition: "Max iterations reached, or metrics-coverage condition satisfied"
     state_variables:
       - name: "islands"
@@ -267,11 +267,11 @@ args:
       default: "2"
       description: "Consecutive non-improving iterations on an island before elite migration is triggered"
       example: "3"
-    - name: "bench_command"
+    - name: "benchmark_command"
       type: "string"
       default: "''"
       description: "Command to compile and benchmark a Triton kernel against the reference"
-      example: "python eval_triton.py --kernel"
+      example: "<user-provided benchmark command with {kernel_path}/{result_path}>"
     - name: "rtol"
       type: "number"
       default: "0.01"

@@ -27,15 +27,15 @@ export const meta = {
 //   1. Auto-routing: static complexity analysis chooses direct vs pipeline path
 //   2. Parallel seed generation: N diverse initializations via temperature variation
 //   3. Strict verification: sandboxed subprocess execution, no PyTorch fallbacks
-//   4. Iterative refinement: error-driven LLM repair up to max_rounds
+//   4. Iterative refinement: error-driven LLM repair up to iterations
 //   5. Composable pipeline: extract subgraphs → dispatch → compose
 //
 // Usage:
 //   Workflow({name: 'kernelagent-triton-synthesis', args: {
 //     problem_path: '/path/to/problem.py',
-//     problem_description: 'Implement ReLU over a contiguous 1D tensor of length 1024',
+//     problem_definition: 'Implement ReLU over a contiguous 1D tensor of length 1024',
 //     num_workers: 4,
-//     max_rounds: 10,
+//     iterations: 10,
 //     model_name: 'gpt-5',
 //     verify: true,
 //     compose: true,
@@ -46,17 +46,17 @@ export const meta = {
 
 // --- Required Args ---
 const PROBLEM_PATH = args.problem_path || ''
-const PROBLEM_DESC = args.problem_description || ''
+const PROBLEM_DESC = args.problem_definition || ''
 
 // --- Optional Args ---
 const NUM_WORKERS = args.num_workers || 4
-const MAX_ROUNDS = args.max_rounds || 10
+const MAX_ROUNDS = args.iterations || 10
 const MODEL_NAME = args.model_name || 'claude-sonnet-4-20250514'
 const VERIFY = args.verify !== false
 const COMPOSE = args.compose !== false
 const EXP_DIR = args.exp_dir || '/tmp/kernelagent_exp'
 const TEMPERATURE_BASE = args.temperature_base || 0.8
-const MAX_SEEDS = args.max_seeds || NUM_WORKERS
+const MAX_SEEDS = args.seed_candidates || NUM_WORKERS
 const FUSER_EXTRACT_MODEL = args.fuser_extract_model || MODEL_NAME
 const FUSER_DISPATCH_MODEL = args.fuser_dispatch_model || MODEL_NAME
 const FUSER_COMPOSE_MODEL = args.fuser_compose_model || MODEL_NAME
@@ -183,7 +183,7 @@ ${PROBLEM_DESC ? `Description: ${PROBLEM_DESC}` : ''}
 4. Note any special requirements (numerical precision, edge cases, memory layout)
 
 Return a JSON object with:
-- problem_description: detailed text description
+- problem_definition: detailed text description
 - input_tensors: list of {name, shape, dtype} for each input
 - operations: list of operation names in order
 - output_spec: {shape, dtype} of the output
@@ -194,17 +194,17 @@ Return a JSON object with:
   schema: {
     type: 'object',
     properties: {
-      problem_description: { type: 'string' },
+      problem_definition: { type: 'string' },
       input_tensors: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, shape: { type: 'string' }, dtype: { type: 'string' } } } },
       operations: { type: 'array', items: { type: 'string' } },
       output_spec: { type: 'object', properties: { shape: { type: 'string' }, dtype: { type: 'string' } } },
       complexity_signals: { type: 'array', items: { type: 'string' } },
     },
-    required: ['problem_description', 'operations'],
+    required: ['problem_definition', 'operations'],
   },
 })
 
-problemDescription = setupResult.problem_description
+problemDescription = setupResult.problem_definition
 log(`Problem parsed: ${setupResult.operations.length} ops detected`)
 
 // Generate test harness
@@ -468,7 +468,7 @@ ${testCode.substring(0, 3000)}
 # Instructions
 1. Write the kernel code to a file named kernel.py
 2. Write the test harness to a file named test_kernel.py
-3. Execute: \`python test_kernel.py\`
+3. Execute the generated/user-provided test harness command for this workspace; do not assume a fixed interpreter or filename.
 4. Capture stdout, stderr, and exit code
 5. If exit code is 0 and output contains "PASS", the kernel is verified
 6. If exit code is non-zero or output contains "FAIL", report the error
@@ -906,11 +906,20 @@ Return a JSON object with:
 log(`Synthesis ${reportResult?.outcome || 'unknown'}: ${reportResult?.summary || ''}`)
 
 return {
+  input_mode: 'generate_then_optimize',
+  problem_definition: PROBLEM_DESC || problemDescription,
+  problem_path: PROBLEM_PATH,
+  generated_kernel_path: sessionDir ? `${sessionDir}/best_kernel.py` : '',
+  initial_candidates: candidates,
+  initial_generation_result: {
+    verified: verifiedKernels.length > 0,
+    selected_candidate_id: bestKernel?.id || '',
+  },
   outcome: reportResult?.outcome || 'unknown',
   summary: reportResult?.summary || '',
   routing_path: routingDecision.path,
   routing_reason: routingDecision.reason,
-  problem_description: problemDescription,
+  problem_definition_resolved: problemDescription,
   total_candidates: candidates.length,
   verified_count: verifiedKernels.length,
   refinement_rounds: currentRound,

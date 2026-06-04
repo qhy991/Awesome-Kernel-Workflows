@@ -47,10 +47,10 @@ export const meta = {
 //   Workflow({name: 'argus-kernel-optimization', args: {
 //     kernel_path: '/path/to/kernel.py',       // Argus DSL or CUDA/Triton
 //     kernel_spec: 'Flash attention GQA, bf16, d=128, Br=256, Bc=64',
-//     hardware_target: 'AMD MI300X' | 'NVIDIA H100',
-//     test_command: 'python test_kernel.py',
-//     benchmark_command: 'python bench_kernel.py',
-//     invariant_check_command: 'python check_invariants.py --kernel {kernel_path} --json {invariant_result_path}',
+//     target_gpu: 'AMD MI300X' | 'NVIDIA H100',
+//     test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
+//     benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+//     invariant_check_command: '<user-provided invariant checker command with {kernel_path}/{invariant_result_path}>',
 //     invariant_result_path: '/tmp/argus_exp/invariants/result.json',
 //     knowledge_base_path: '',
 //     iterations: 10,
@@ -61,11 +61,14 @@ export const meta = {
 // =============================================================================
 
 // --- Required Args ---
-const KERNEL_PATH = args.kernel_path
+let KERNEL_PATH = args.kernel_path || ''
+const PROBLEM_DEFINITION = args.problem_definition || ''
+const PROBLEM_PATH = args.problem_path || ''
+const INPUT_MODE = KERNEL_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const KERNEL_SPEC = args.kernel_spec || ''
 
 // --- Optional Args ---
-const HARDWARE_TARGET = args.hardware_target || 'NVIDIA H100'
+const HARDWARE_TARGET = args.target_gpu || 'NVIDIA H100'
 const TEST_CMD = args.test_command || ''
 const BENCH_CMD = args.benchmark_command || ''
 const INVARIANT_CHECK_CMD = args.invariant_check_command || ''
@@ -76,6 +79,16 @@ const INNER_STEPS = args.inner_steps || 3
 const EXP_DIR = args.exp_dir || '/tmp/argus_exp'
 const OPT_CATEGORIES = args.optimization_categories || ['global_intrusive', 'local_source', 'isa_specific']
 const invariantEvidenceMode = INVARIANT_CHECK_CMD ? 'executable_checker' : 'missing_invariant_evidence'
+
+if (!KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH && !KERNEL_SPEC) {
+  throw new Error('Provide one of kernel_path, problem_definition, problem_path, or kernel_spec')
+}
+
+const LANGUAGE = args.language || 'cuda'
+const SEED_CANDIDATES = args.seed_candidates || 3
+let generatedKernelPath = ''
+let initialCandidates = []
+let initialGenerationResult = null
 
 // State (ICRL)
 let bestKernelCode = null
@@ -111,6 +124,44 @@ const KNOWLEDGE_BASE = {
 // Phase 1: Setup — Read kernel, hardware specs, initialize
 // =============================================================================
 phase('Setup')
+
+if (INPUT_MODE === 'generate_then_optimize') {
+  const generated = await agent(`No kernel_path was provided. Generate and verify an initial kernel before starting ARGUS ICRL optimization.
+
+# Problem Input
+- problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
+- problem_path: ${PROBLEM_PATH || '(not provided)'}
+- kernel_spec: ${KERNEL_SPEC || '(not provided)'}
+- language: ${LANGUAGE}
+- target_gpu: ${HARDWARE_TARGET}
+- seed_candidates: ${SEED_CANDIDATES}
+
+# Evidence Commands
+- test_command: ${TEST_CMD || '(not provided)'}
+- benchmark_command: ${BENCH_CMD || '(not provided)'}
+- invariant_check_command: ${INVARIANT_CHECK_CMD || '(not provided)'}
+
+# Contract
+Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run available commands using {kernel_path}/{result_path}. Return the best verified generated kernel path before ARGUS learns invariants or planner policy.`, {
+    label: 'generate-initial-kernel',
+    phase: 'Setup',
+    schema: {
+      type: 'object',
+      properties: {
+        generated_kernel_path: { type: 'string' },
+        initial_candidates: { type: 'array', items: { type: 'object' } },
+        initial_generation_result: { type: 'object' },
+      },
+      required: ['generated_kernel_path', 'initial_candidates', 'initial_generation_result'],
+    },
+  })
+  initialCandidates = generated.initial_candidates || []
+  initialGenerationResult = generated.initial_generation_result || { verified: false }
+  generatedKernelPath = generated.generated_kernel_path || ''
+  if (!generatedKernelPath) throw new Error('Generation mode did not produce generated_kernel_path')
+  if ((TEST_CMD || BENCH_CMD) && initialGenerationResult.verified === false) throw new Error('No generated seed passed correctness evidence')
+  KERNEL_PATH = generatedKernelPath
+}
 
 const setupResult = await agent(`You are a GPU kernel optimization expert. Read and analyze the initial kernel implementation.
 
@@ -164,8 +215,8 @@ const computationType = setupResult.computation_type
 const baselineResult = await agent(`You are a GPU kernel validator. Run the baseline kernel to establish performance.
 
 # Kernel: ${KERNEL_PATH}
-# Test command: ${TEST_CMD || '(determine from project structure)'}
-# Benchmark command: ${BENCH_CMD || '(determine from project structure)'}
+# Test command: ${TEST_CMD || '(not provided; do not infer from project structure)'}
+# Benchmark command: ${BENCH_CMD || '(not provided; do not infer from project structure)'}
 # Experiment directory: ${EXP_DIR}
 
 # Steps:
@@ -174,7 +225,7 @@ const baselineResult = await agent(`You are a GPU kernel validator. Run the base
 3. Run performance benchmark: ${BENCH_CMD}
 4. Record: throughput (TFLOPS or GB/s), latency, and any profiling data
 
-If commands are not available, estimate baseline performance from the code structure.
+If commands are not available, do static characterization only and mark baseline performance as unmeasured.
 
 Return baseline metrics.`, {
   label: 'baseline-perf',
@@ -609,8 +660,14 @@ Write:
 })
 
 return {
+  input_mode: INPUT_MODE,
+  problem_definition: PROBLEM_DEFINITION,
+  problem_path: PROBLEM_PATH,
+  generated_kernel_path: generatedKernelPath,
+  initial_candidates: initialCandidates,
+  initial_generation_result: initialGenerationResult,
   computation_type: computationType,
-  hardware_target: HARDWARE_TARGET,
+  target_gpu: HARDWARE_TARGET,
   baseline_throughput_tflops: baselineResult.throughput_tflops || 0,
   best_throughput_tflops: bestThroughput,
   overall_speedup: bestThroughput / (baselineResult.throughput_tflops || 1),

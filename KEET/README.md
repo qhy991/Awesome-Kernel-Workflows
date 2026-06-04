@@ -142,7 +142,7 @@ Workflow({name: 'keet-kernel-explanation', args: {
 ```javascript
 Workflow({name: 'keet-kernel-explanation', args: {
   kernel_path: '/path/to/kernel.cu',
-  harness_build_cmd: 'nvcc -O3 -lineinfo -arch=sm_90 -o bench harness.cu',
+  harness_build_cmd: '<user-provided harness build command>',
   harness_run_args: '--size 4096',
   kernel_name_regex: 'my_kernel',
   op_description: 'Custom reduction kernel',

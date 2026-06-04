@@ -60,7 +60,7 @@
 
 优先使用具体 artifact，而不是自然语言说明。好的证据契约包括：
 
-- `eval_command` 写出包含 `compiled`、`correct`、`speedup`、`latency_ms` 的 JSON。
+- `benchmark_command` 写出包含 `compiled`、`correct`、`speedup`、`latency_ms` 的 JSON。
 - `ncu_command` 或 `ncu_binary` 在 `exp_dir` 下写出 profile report。
 - `invariant_check_command` 写出 program point、thread/tile coordinates、assertion id 等不变量违规细节。
 - `descriptor_result_path` 和 `archive_update_result_path` 记录 MAP-Elites descriptor 分类和 insert/update 决策。
@@ -69,6 +69,14 @@
 - `strict_harness` 或等价字段让 TritorX-style linter/OpInfo 声明可验证。
 
 如果 workflow 只是要求 agent "analyze" 这些信号，但没有真实命令或 artifact，必须在 README 或 manifest 中把它写成限制。
+
+## 参数命名规范
+
+新增或修改 workflow 时，共通入口参数使用统一名称：`kernel_path`、`problem_definition`、`problem_path`、`language`、`target_gpu`、`compile_command`、`test_command`、`benchmark_command`、`iterations`、`seed_candidates`、`exp_dir`。
+
+如果只提供 `problem_definition` 或 `problem_path`，支持生成的 workflow 必须先生成并验证初始 kernel，再进入优化循环。证据契约参数如 `ncu_command`、`invariant_result_path`、`descriptor_result_path`、`archive_update_result_path` 不为统一命名而改写。
+
+`compile_command`、`test_command`、`benchmark_command`、`profile_command`、`ncu_command`、`harness_build_cmd` 等执行命令必须由用户或问题定义显式提供。workflow JS 可以描述命令需要产出的 JSON/artifact 契约，但不能写死 `python ...`、`nvcc ...`、`bash ...`、`ncu --...` 这类默认命令；缺少命令时应标记 measured evidence 缺失，只做静态分析或保守估计。
 
 ## 文档标准
 

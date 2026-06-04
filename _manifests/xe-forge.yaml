@@ -87,7 +87,7 @@ methodology:
         - "Generate candidate optimization (LLM)"
         - "Verify: compile + correctness + performance (automated tools)"
         - "Track best-in-stage (≥2% improvement gate)"
-        - "Repeat for max_iterations_per_stage"
+        - "Repeat for iterations_per_stage"
         - "Promote best-in-stage to next stage baseline"
 
     - name: "Report"

@@ -1,7 +1,7 @@
 export const meta = {
   name: 'adaexplore-kernel-optimization',
   description: 'Standalone AdaExplore-style workflow: failure-driven skill memory plus diversity-preserving MCTS for Triton kernel optimization',
-  whenToUse: 'When an agent must optimize Triton GPU kernels from a PyTorch operator specification without calling the AdaExplore repository. Requires a standalone evaluator command or enough task context for the agent to build one. Explore mode reads skill memory; Adapt mode may update skill memory from failure logs.',
+  whenToUse: 'When an agent must optimize Triton GPU kernels from a PyTorch operator specification without calling the AdaExplore repository. Requires a user-provided evaluator command for measured correctness/performance evidence. Explore mode reads skill memory; Adapt mode may update skill memory from failure logs.',
   phases: [
     { title: 'Setup', detail: 'Materialize operator spec, evaluator contract, experiment folders, and skill memory' },
     { title: 'Select', detail: 'Use UCB1 plus expand-UCB1 to choose whether to deepen or create a sibling' },
@@ -35,22 +35,22 @@ export const meta = {
 //   2. Explore: MCTS alternates large structural proposals and small local edits.
 //
 // Important execution contract:
-//   - Correctness and speedup must come from a real evaluator command or a
-//     workflow-created standalone harness. The evaluator result is authoritative.
+//   - Correctness and speedup must come from a real user-provided evaluator
+//     command. The evaluator result is authoritative.
 //   - In normal benchmark Explore mode, memory is read-only.
 //   - Memory update is explicit via memory_update/adapt mode and is driven by
 //     evaluated failure logs, not by speculative LLM self-assessment.
 //
 // Usage:
 //   Workflow({name: 'adaexplore-kernel-optimization', args: {
-//     operator_spec: 'class Model(nn.Module): ...',
+//     problem_definition: 'class Model(nn.Module): ...',
 //     op_description: 'Fused LayerNorm + GELU activation',
-//     eval_command: 'python eval_kernel.py --kernel {kernel_path} --json {result_path}',
-//     baseline_command: 'python eval_baseline.py --json {baseline_path}',
+//     benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+//     baseline_command: '<user-provided baseline command with {baseline_path}>',
 //     skill_memory_path: 'general_memory.txt',
 //     mode: 'explore',               // 'explore' or 'adapt'
 //     memory_update: false,          // explore defaults read-only
-//     steps: 50,
+//     iterations: 50,
 //     small_step_limit: 2,
 //     p_large: 0.2,
 //     exploration_weight: 0.3,
@@ -78,16 +78,17 @@ export const meta = {
 // =============================================================================
 
 // --- Required Args ---
-const OPERATOR_SPEC = args.operator_spec || ''
+const OPERATOR_SPEC = args.problem_definition || ''
+const PROBLEM_PATH = args.problem_path || ''
 const OP_DESC = args.op_description || 'PyTorch operator'
 
 // --- Optional Args ---
 const MODE = args.mode || 'explore'
 const BASELINE_CMD = args.baseline_command || ''
-const EVAL_CMD = args.eval_command || ''
+const EVAL_CMD = args.benchmark_command || ''
 const SKILL_MEMORY_PATH = args.skill_memory_path || ''
 const MEMORY_UPDATE = args.memory_update ?? (MODE === 'adapt')
-const STEPS = args.steps || 30
+const STEPS = args.iterations || 30
 const SMALL_STEP_LIMIT = args.small_step_limit || 2
 const P_LARGE = args.p_large ?? 0.2
 const EXPLORATION_WEIGHT = args.exploration_weight ?? 0.3
@@ -100,8 +101,13 @@ const CORRECTNESS_ATOL = args.correctness_atol ?? 0.05
 const CORRECTNESS_RTOL = args.correctness_rtol ?? 0.05
 const EXP_DIR = args.exp_dir || '/tmp/adaexplore_workflow_exp'
 const KERNEL_PATH = args.kernel_path || ''
+const INPUT_MODE = KERNEL_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const MAX_MEMORY_RULES = args.max_memory_rules || 40
 const EST_PER_ROUND = args.est_tokens_per_round || 60000
+
+if (!KERNEL_PATH && !OPERATOR_SPEC && !PROBLEM_PATH) {
+  throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
+}
 
 // --- Model routing ---
 const MODEL = {
@@ -289,7 +295,9 @@ const setupResult = await agent(`Set up a standalone AdaExplore-style Triton ker
 Do not call the AdaExplore repository or any AdaExplore Python entrypoint. This workflow must run from the operator spec, local files, and the evaluator command provided here.
 
 # Operator source
-${KERNEL_PATH ? `Read the operator spec from: ${KERNEL_PATH}` : `\`\`\`python\n${OPERATOR_SPEC.substring(0, 5000)}\n\`\`\``}
+${KERNEL_PATH ? `Read the operator spec from: ${KERNEL_PATH}` : ''}
+${PROBLEM_PATH ? `Read the operator spec from problem_path: ${PROBLEM_PATH}` : ''}
+${OPERATOR_SPEC ? `\`\`\`python\n${OPERATOR_SPEC.substring(0, 5000)}\n\`\`\`` : ''}
 
 # Operation
 ${OP_DESC}
@@ -304,12 +312,12 @@ Create:
 # Evaluator contract
 ${EVAL_CMD
   ? `Use this evaluator command template for every candidate:\n${EVAL_CMD}`
-  : `No evaluator command was provided. Build a standalone evaluator under ${EXP_DIR}/eval if the operator spec is sufficient. It must compile the Triton candidate, compare against the PyTorch reference with atol=${CORRECTNESS_ATOL}, rtol=${CORRECTNESS_RTOL}, measure runtime, and write JSON results.`}
+  : `No evaluator command was provided. Do not build or infer one. Describe the required evaluator contract and mark measured correctness/performance evidence as unavailable.`}
 
 # Baseline
 ${BASELINE_CMD
   ? `Run this baseline command template once if needed:\n${BASELINE_CMD}`
-  : 'If the evaluator reports speedup directly, no separate baseline command is required. Otherwise measure a PyTorch baseline in the standalone evaluator.'}
+  : 'If the evaluator reports speedup directly, no separate baseline command is required. Otherwise mark baseline measurement as unavailable unless a baseline_command is provided.'}
 
 # Skill memory
 ${SKILL_MEMORY_PATH
@@ -537,13 +545,13 @@ Return the edited candidate kernel code.`, {
 # Hard rules
 1. Write the candidate code exactly to: ${kernelPath}
 2. Do not judge correctness or speedup by inspection.
-3. Run the evaluator command if provided. If not provided, create and run a standalone evaluator under ${EXP_DIR}/eval.
+3. Run the evaluator command if provided. If not provided, do not create one; mark compiled=false, correct=false, speedup=0, and explain missing evidence.
 4. The evaluator must compile the Triton code, compare against PyTorch reference with atol=${CORRECTNESS_ATOL}, rtol=${CORRECTNESS_RTOL}, and measure speed if possible.
 5. Write or read JSON result at: ${resultPath}
 6. Do not call any AdaExplore repository code.
 
 # Evaluator command
-${evaluatorCommand || '(No command provided; build a standalone evaluator.)'}
+${evaluatorCommand || '(No benchmark_command provided; measured evidence unavailable.)'}
 
 # Candidate code
 \`\`\`python
@@ -741,6 +749,15 @@ Cover:
 })
 
 return {
+  input_mode: INPUT_MODE,
+  problem_definition: OPERATOR_SPEC,
+  problem_path: PROBLEM_PATH,
+  generated_kernel_path: globalBest.id !== 'none' ? `${EXP_DIR}/${globalBest.id}.py` : '',
+  initial_candidates: mctsNodes.filter(n => n.parent_id == null),
+  initial_generation_result: {
+    verified: globalBest.speedup > 0,
+    selected_candidate_id: globalBest.id || '',
+  },
   operation: OP_DESC,
   mode: MODE,
   memory_update: MEMORY_UPDATE,

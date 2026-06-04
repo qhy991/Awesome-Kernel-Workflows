@@ -48,20 +48,20 @@ export const meta = {
 //   Workflow({name: 'ako4x-kernel-optimizer', args: {
 //     kernel_path: '/path/to/kernel.py',
 //     op_description: 'Multi-head Latent Attention paged decode',
-//     kernel_language: 'triton',                    // or 'cuda', 'cute-dsl', 'tilelang', 'cpp', 'pytorch'
-//     benchmark_command: 'bash scripts/bench.sh',   // full bench command
-//     smoke_test_command: '',                        // quick compile+correctness check (default: bench --first 1)
-//     correctness_command: '',                       // optional: separate correctness check
-//     ncu_binary: 'ncu',                             // path to ncu (optional)
+//     language: 'triton',                    // or 'cuda', 'cute-dsl', 'tilelang', 'cpp', 'pytorch'
+//     benchmark_command: '<user-provided full benchmark command>',
+//     smoke_test_command: '<user-provided quick compile+correctness command>',
+//     test_command: '<user-provided separate correctness command>',
+//     ncu_binary: '<user-provided ncu binary path>',
 //     harness_path: '',                              // standalone profiling harness (optional)
 //     harness_build_cmd: '',                         // build command for harness (optional)
 //     harness_run_args: '',                          // runtime args for harness (optional)
 //     kernel_name_regex: '',                         // ncu -k regex (optional)
 //     exp_dir: '/tmp/ako4x_exp',                     // experiment output directory
-//     rounds: 5,                                     // max optimization rounds
+//     iterations: 5,                                 // max optimization rounds
 //     iters_per_round: 5,                            // max iterations per round
 //     breadth: 3,                                    // hypotheses per round
-//     samples_per_hypothesis: 2,                     // variants per hypothesis
+//     samples_per_plan: 2,                     // variants per hypothesis
 //     target_gpu: 'b200',                            // target GPU
 //     mode: 2,                                       // 2 = static harness, 3 = harness co-evolution
 //     use_ako4x_skills: true,                        // reference AKO4X SKILLs for DSL knowledge
@@ -69,25 +69,37 @@ export const meta = {
 //
 // =============================================================================
 
-const KERNEL_PATH = args.kernel_path
+let KERNEL_PATH = args.kernel_path || ''
+const PROBLEM_DEFINITION = args.problem_definition || ''
+const PROBLEM_PATH = args.problem_path || ''
+const INPUT_MODE = KERNEL_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const OP_DESC = args.op_description || 'GPU kernel'
-const KERNEL_LANG = args.kernel_language || 'auto'
+const KERNEL_LANG = args.language || 'auto'
 const BENCHMARK_CMD = args.benchmark_command || ''
 const SMOKE_TEST_CMD = args.smoke_test_command || ''
-const CORRECTNESS_CMD = args.correctness_command || ''
-const NCU_BINARY = args.ncu_binary || 'ncu'
+const TEST_CMD = args.test_command || ''
+const NCU_BINARY = args.ncu_binary || ''
 const HARNESS_PATH = args.harness_path || ''
 const HARNESS_BUILD_CMD = args.harness_build_cmd || ''
 const HARNESS_RUN_ARGS = args.harness_run_args || ''
 const KERNEL_NAME_REGEX = args.kernel_name_regex || ''
 const EXP_DIR = args.exp_dir || '/tmp/ako4x_exp'
-const ROUNDS = args.rounds || 5
+const ROUNDS = args.iterations || 5
 const ITERS_PER_ROUND = args.iters_per_round || 5
 const BREADTH = args.breadth || 3
-const SAMPLES_PER_HYPOTHESIS = args.samples_per_hypothesis || 2
+const SAMPLES_PER_HYPOTHESIS = args.samples_per_plan || 2
 const TARGET_GPU = args.target_gpu || 'b200'
 const MODE = args.mode || 2  // 2 = static harness, 3 = harness co-evolution
 const USE_AKO4X_SKILLS = args.use_ako4x_skills !== false
+
+if (!KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
+  throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
+}
+
+const SEED_CANDIDATES = args.seed_candidates || 3
+let generatedKernelPath = ''
+let initialCandidates = []
+let initialGenerationResult = null
 
 // Model routing by agent role
 const MODEL = {
@@ -98,6 +110,66 @@ const MODEL = {
 
 // Token budget guard
 const EST_PER_ROUND = args.est_tokens_per_round || 60000
+
+async function resolveInitialKernelFromProblem({ language, compileCommand, testCommand, benchmarkCommand }) {
+  if (INPUT_MODE !== 'generate_then_optimize') return ''
+
+  const generated = await agent(`No kernel_path was provided. Generate and verify an initial kernel before starting the AKO4X optimization loop.
+
+# Problem Input
+- problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
+- problem_path: ${PROBLEM_PATH || '(not provided)'}
+- op_description: ${OP_DESC}
+- language: ${language}
+- target_gpu: ${TARGET_GPU}
+- seed_candidates: ${SEED_CANDIDATES}
+
+# Evidence Commands
+- compile_command: ${compileCommand || '(not provided)'}
+- test_command: ${testCommand || '(not provided)'}
+- benchmark_command: ${benchmarkCommand || '(not provided)'}
+
+# Contract
+1. If problem_path is provided, read it first.
+2. Generate ${SEED_CANDIDATES} complete kernel candidates.
+3. Materialize candidates under ${EXP_DIR}/generated/.
+4. When commands are available, substitute {kernel_path} and {result_path}, then run them.
+5. Select the best candidate that compiles and passes correctness. If no real evaluator is available, select the strongest candidate and mark verified=false.
+6. Return the selected generated_kernel_path and evidence summary.`, {
+    label: 'generate-initial-kernel',
+    phase: 'Setup',
+    model: MODEL.judgment,
+    schema: {
+      type: 'object',
+      properties: {
+        generated_kernel_path: { type: 'string' },
+        initial_candidates: { type: 'array', items: { type: 'object' } },
+        initial_generation_result: {
+          type: 'object',
+          properties: {
+            verified: { type: 'boolean' },
+            selected_candidate_id: { type: 'string' },
+            evidence_summary: { type: 'string' },
+          },
+        },
+      },
+      required: ['generated_kernel_path', 'initial_candidates', 'initial_generation_result'],
+    },
+  })
+
+  initialCandidates = generated.initial_candidates || []
+  initialGenerationResult = generated.initial_generation_result || { verified: false }
+  generatedKernelPath = generated.generated_kernel_path || ''
+
+  if (!generatedKernelPath) {
+    throw new Error('Generation mode did not produce generated_kernel_path')
+  }
+  if ((testCommand || benchmarkCommand) && initialGenerationResult.verified === false) {
+    throw new Error('No generated seed passed correctness evidence')
+  }
+
+  return generatedKernelPath
+}
 
 // =============================================================================
 // State: cross-round memory
@@ -175,11 +247,20 @@ function formatTraps() {
 // =============================================================================
 phase('Setup')
 
+if (INPUT_MODE === 'generate_then_optimize') {
+  KERNEL_PATH = await resolveInitialKernelFromProblem({
+    language: KERNEL_LANG,
+    compileCommand: '',
+    testCommand: TEST_CMD || SMOKE_TEST_CMD,
+    benchmarkCommand: BENCHMARK_CMD,
+  })
+}
+
 const setupResult = await agent(`Read the kernel file at: ${KERNEL_PATH}
 
 Analyze it and return a JSON object with:
 - kernel_code: the full source code
-- kernel_language: detected language (triton/cuda/cute-dsl/tilelang/cpp/pytorch)
+- language: detected language (triton/cuda/cute-dsl/tilelang/cpp/pytorch)
 - op_type: operation type (e.g., "attention", "gemm", "rmsnorm", "softmax", "reduction")
 - key_functions: list of key function names (especially __global__ or @triton.jit functions)
 - current_approach: brief description of the implementation strategy
@@ -197,7 +278,7 @@ Return ONLY the JSON object.`, {
     type: 'object',
     properties: {
       kernel_code: { type: 'string' },
-      kernel_language: { type: 'string' },
+      language: { type: 'string' },
       op_type: { type: 'string' },
       key_functions: { type: 'array', items: { type: 'string' } },
       current_approach: { type: 'string' },
@@ -207,11 +288,11 @@ Return ONLY the JSON object.`, {
       potential_bottlenecks: { type: 'string' },
       imports_used: { type: 'array', items: { type: 'string' } },
     },
-    required: ['kernel_code', 'kernel_language', 'op_type', 'key_functions', 'current_approach'],
+    required: ['kernel_code', 'language', 'op_type', 'key_functions', 'current_approach'],
   },
 })
 
-const detectedLang = KERNEL_LANG === 'auto' ? setupResult.kernel_language : KERNEL_LANG
+const detectedLang = KERNEL_LANG === 'auto' ? setupResult.language : KERNEL_LANG
 baselineKernelCode = setupResult.kernel_code
 bestKernelCode = baselineKernelCode
 
@@ -240,7 +321,7 @@ Create ${EXP_DIR}/state.json:
   "round": 0,
   "best_score": null,
   "best_variant": null,
-  "kernel_language": "${detectedLang}",
+  "language": "${detectedLang}",
   "op_type": "${setupResult.op_type}",
   "benchmark_command": "${BENCHMARK_CMD}",
   "mode": ${MODE},
@@ -263,12 +344,12 @@ if (HARNESS_PATH || HARNESS_BUILD_CMD) {
   const ncuSetup = await agent(`Profile the baseline kernel with Nsight Compute (ncu).
 
 # Environment
-- NCU binary: ${NCU_BINARY}
+- NCU binary: ${NCU_BINARY || '(not provided)'}
 - Experiment directory: ${EXP_DIR}
 - Kernel file: ${KERNEL_PATH}
 - Kernel name regex: ${KERNEL_NAME_REGEX || '(auto-detect)'}
-- Harness path: ${HARNESS_PATH || '(need to build one)'}
-- Harness build command: ${HARNESS_BUILD_CMD || '(need to determine)'}
+- Harness path: ${HARNESS_PATH || '(not provided)'}
+- Harness build command: ${HARNESS_BUILD_CMD || '(not provided)'}
 - Harness run args: ${HARNESS_RUN_ARGS}
 
 # Kernel Source:
@@ -278,9 +359,9 @@ ${baselineKernelCode.substring(0, 4000)}
 
 # Instructions
 1. mkdir -p ${EXP_DIR}/baseline/{harness,reports,analysis}
-2. Build harness with -lineinfo
-3. Run: ${NCU_BINARY} --set full --section PmSampling --section PmSampling_WarpStates -k "regex:${KERNEL_NAME_REGEX || '.*'}" -c 1 -o ${EXP_DIR}/baseline/reports/full_baseline ${HARNESS_PATH || '<harness>'} ${HARNESS_RUN_ARGS}
-4. Extract: gpu__time_duration.sum, sm__throughput, dram__throughput, achieved_occupancy, registers_per_thread, top_stall_reason, sectors_per_request, ncu_rule_suggestions
+2. Build harness only if harness_build_cmd is provided; otherwise do not invent one.
+3. Profile only if ncu_binary and a runnable harness contract are provided; do not invent profiler flags, benchmark binaries, or harness code.
+4. Extract: gpu__time_duration.sum, sm__throughput, dram__throughput, achieved_occupancy, registers_per_thread, top_stall_reason, sectors_per_request, ncu_rule_suggestions when available; otherwise mark profiler evidence as missing.
 
 Return structured profile results.`, {
     label: 'ncu-baseline',
@@ -979,7 +1060,7 @@ Execute this step.`, {
   "round": ${round + 1},
   "best_score": ${bestScore},
   "best_variant": "${bestVariantName || currentParentName}",
-  "kernel_language": "${detectedLang}",
+  "language": "${detectedLang}",
   "op_type": "${setupResult.op_type}",
   "benchmark_command": "${BENCHMARK_CMD}",
   "mode": ${MODE},
@@ -1055,6 +1136,12 @@ Write a report covering:
 })
 
 return {
+  input_mode: INPUT_MODE,
+  problem_definition: PROBLEM_DEFINITION,
+  problem_path: PROBLEM_PATH,
+  generated_kernel_path: generatedKernelPath,
+  initial_candidates: initialCandidates,
+  initial_generation_result: initialGenerationResult,
   baseline_score: baselineScore,
   best_score: bestScore,
   overall_speedup: baselineScore ? baselineScore / bestScore : null,

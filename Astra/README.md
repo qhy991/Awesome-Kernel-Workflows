@@ -31,14 +31,14 @@ The workflow is aimed at production-style CUDA kernels, especially SGLang-like k
 
 Primary arguments accepted by this workflow:
 
-- `initial_kernel_path`: path to initial CUDA kernel file
+- `kernel_path`: path to initial CUDA kernel file
 - `compare_kind`: comparison mode tag such as `generic`, `rmsnorm`, `silu`, or `mergestate`
 - `baseline_module`: Python module containing the baseline function, default `sgl_kernel`
 - `baseline_func`: baseline function name
 - `generated_export_func`: export function expected in the generated PyBind module
 - `test_command`: correctness command using `{kernel_path}` and `{result_path}`
 - `benchmark_command`: benchmark command using `{kernel_path}` and `{result_path}`
-- `max_iterations`: optimization iteration budget, default `5`
+- `iterations`: optimization iteration iterations, default `5`
 - `target_gpu`: target GPU, default `H100`
 - `exp_dir`: experiment output directory
 
@@ -64,14 +64,14 @@ Evaluator JSON should contain:
 Workflow({
   name: 'astra-kernel-optimization',
   args: {
-    initial_kernel_path: '/path/to/rms_v1.cu',
+    kernel_path: '/path/to/rms_v1.cu',
     compare_kind: 'rmsnorm',
     baseline_module: 'sgl_kernel',
     baseline_func: 'fused_add_rmsnorm',
     generated_export_func: 'sgl_fused_add_rmsnorm',
-    test_command: 'python test_kernel.py --kernel {kernel_path} --json {result_path}',
-    benchmark_command: 'python bench_kernel.py --kernel {kernel_path} --json {result_path}',
-    max_iterations: 5,
+    test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
+    benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+    iterations: 5,
     target_gpu: 'H100',
     exp_dir: '/tmp/astra_exp',
   },

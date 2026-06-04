@@ -39,6 +39,22 @@ workflow:
   directory: ""            # [R] Subdirectory name, e.g. "MethodName/" (string)
 
 # ---------------------------------------------------------------------------
+# INPUT CONTRACT — How callers provide the starting point
+# ---------------------------------------------------------------------------
+inputs:
+  supports_existing_kernel: true
+  supports_problem_definition: true
+  required_one_of:
+    - kernel_path
+    - problem_definition
+    - problem_path
+  generation:
+    enabled: true
+    seed_candidates_arg: seed_candidates
+    output_arg: generated_kernel_path
+    requires_correctness_evidence: true
+
+# ---------------------------------------------------------------------------
 # METHOD CATEGORY — What kind of optimization approach is this?
 # ---------------------------------------------------------------------------
 method:
@@ -74,7 +90,7 @@ topology:
   # --- Fields for type=iterative ---
   iterative:
     # [O] Arg name controlling max iterations (string, default: "iterations")
-    max_iterations_arg: "iterations"
+    iterations_arg: "iterations"
     # [O] When to stop early (string)
     convergence_condition: ""
     # [R for iterative] Mutable state carried across iterations

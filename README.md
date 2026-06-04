@@ -189,7 +189,7 @@ Use this matrix as the primary taxonomy when adding or reviewing workflows. Back
 | [AKO4X](AKO4X/) | `iterative_self_improving` | Round-level loop with inner iterations | Smoke/full benchmark, optional NCU | Experience headers, `TRAPS.md`, archive | High-fidelity to AKO4X round/archive protocol |
 | [KDA](KDA/) | `iterative_self_improving` | One-candidate-at-a-time evidence loop | Validation command and target metric | Draft/plan docs, candidate records | High-fidelity to KDA agent-flow contract |
 | [K-Search](KSearch/) | `tree_exploration` | Co-evolving world-model tree with backtracking | Evaluator speedup and pass/fail result | Decision tree, solution DB, best solution | High-fidelity inference/search translation |
-| [AdaExplore](AdaExplore/) | `tree_exploration` | MCTS with large/small expansion steps | Compile/correctness/performance evaluator | MCTS statistics, diversity pool, skill memory | High-fidelity standalone method translation |
+| [AdaExplore](AdaExplore/) | `tree_exploration` | MCTS with large/small expansion iterations | Compile/correctness/performance evaluator | MCTS statistics, diversity pool, skill memory | High-fidelity standalone method translation |
 | [KernelFoundry](KernelFoundry/) | `search_based` | MAP-Elites quality-diversity evolution | Compile, correctness, benchmark, descriptor evidence | Elite archive, descriptors, meta-prompts | Needs deterministic archive/descriptor artifacts for strictness |
 | [CUDA Agent](CUDAAgent/) | `iterative_self_improving` | Profile/Implement/Verify/Refine loop | Compile, correctness, speedup reward | Interaction history and skill-loop notes | Inference-time loop only; no RL/PPO training reproduction |
 | [cuPilot](cuPilot/) | `search_based` | Strategy-level evolutionary loop | NVCC/function check, NCU, roofline evidence | Strategy pool, population, RAG corpus | Strictness depends on concrete roofline/RAG/NCU artifacts |
@@ -203,7 +203,7 @@ Use this matrix as the primary taxonomy when adding or reviewing workflows. Back
 | [CutlassGEMM](CutlassGEMM/) | `iterative_self_improving` | NCU-guided multi-config CUTLASS dispatch tuning loop | SOL-ExecBench correctness/speedup, NCU metrics, MFU | Tile configs, dispatch thresholds, per-M performance regimes | Engineering workflow adaptation for CUTLASS GEMM tuning |
 | [ArchAgent](ArchAgent/) | `search_based` | Population evolution with short-to-long evaluation cascade | ChampSim IPC/MPKI and speedup vs baseline | Policy population, fitness history, diversity records | Workflow adaptation for CPU-cache policy search, outside CUDA-kernel execution |
 | [FACT](FACT/) | `multi_stage_refinement` | Pattern discovery, realization, composition, and ablation | CUTLASS compile/correctness/performance and ablation speedup | Pattern registry, dependency graph, composed candidates | Faithful but simplified compositional synthesis workflow |
-| [GPU Forecasters](GPUForecasters/) | `tree_exploration` | PUCT tree search guided by learned forecaster with abstain | GPU speedup evaluator plus forecast/abstain calibration | Forecaster model, search tree, GPU budget ledger | Workflow adaptation; surrogate training/calibration must be concrete for strictness |
+| [GPU Forecasters](GPUForecasters/) | `tree_exploration` | PUCT tree search guided by learned forecaster with abstain | GPU speedup evaluator plus forecast/abstain calibration | Forecaster model, search tree, GPU iterations ledger | Workflow adaptation; surrogate training/calibration must be concrete for strictness |
 | [KernelBlaster](KernelBlaster/) | `iterative_self_improving` | MAIC-RL rollouts keyed by hardware performance state | NCU Elapsed Cycles, correctness, reward | Optimization database, trajectories, replay buffer | Faithful in-context RL adaptation with persistent memory |
 | [KernelFoundryDx](KernelFoundryDx/) | `search_based` | Multi-island evolutionary Triton search with diagnosis hints | Compile/correctness/speedup plus anti-cheating checks | Island populations, elite archives, hint library | Faithful paper adaptation; no public runtime/source repo available |
 | [KernelSkill](KernelSkill/) | `iterative_self_improving` | Seed/review plus repair-or-optimize refinement loop | Compiler/verifier/profiler, speedup, NCU/nsys evidence | Long-term skill library, optimize history, repair chain | Faithful decision-process adaptation; gate is prompt/workflow mediated |
@@ -260,17 +260,40 @@ cp Awesome-Kernel-Workflows/AccelOpt/accelopt-kernel-optimization.js \
 
 From your kernel project root, start Claude Code and call the workflow (parameters are documented in each `.js` file). AccelOpt example:
 
+Problem-definition entry:
+
+```javascript
+Workflow({
+  name: 'accelopt-kernel-optimization',
+  args: {
+    problem_definition: 'Implement y = gelu(x) for a contiguous fp32 tensor',
+    language: 'cuda',
+    target_gpu: 'H100',
+    test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
+    benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+    iterations: 5,
+    seed_candidates: 3,
+    exp_dir: '/tmp/kernel_workflow_exp',
+  },
+})
+```
+
+Existing-kernel entry:
+
 ```javascript
 Workflow({
   name: 'accelopt-kernel-optimization',
   args: {
     kernel_path: '/path/to/kernel.cu',
     op_description: 'Quantized GEMM Q4_0 weight × FP32 activation',
+    target_gpu: 'H100',
+    test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
+    benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
     harness_path: '/path/to/harness.cu',
-    harness_build_cmd: 'nvcc -O3 -lineinfo -arch=sm_90 ...',
+    harness_build_cmd: '<user-provided harness build command>',
     harness_run_args: '',
     kernel_name_regex: 'forward_kernel',
-    ncu_binary: 'ncu',
+    ncu_binary: '<user-provided ncu binary path>',
     exp_dir: '/path/to/experiment/output',
     iterations: 3,
     breadth: 3,

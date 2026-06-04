@@ -261,16 +261,25 @@ Return the phase design.`, {
 - Usage examples: ${JSON.stringify(repoResearch?.usage_examples || [])}
 
 # Standard args patterns for kernel optimization workflows:
-Required (almost always):
-- kernel_path: path to the target kernel file
-
-Optional (common):
-- op_description: human description of what the kernel does
-- iterations: max optimization iterations (default: 2-3)
-- breadth: parallel plans per iteration (default: 3)
-- samples_per_plan: variants per plan (default: 2)
-- exp_dir: experiment output directory
+Use canonical common args:
+- kernel_path: existing kernel/source file to optimize
+- problem_definition: inline problem definition when no initial kernel exists
+- problem_path: file containing the problem definition
+- language: implementation language
+- target_gpu: target accelerator string
+- compile_command: compile/import command with {kernel_path}/{result_path}
+- test_command: correctness command with {kernel_path}/{result_path}
+- benchmark_command: performance command with {kernel_path}/{result_path}
+- iterations: outer-loop budget unless a paper-specific budget name is required
+- seed_candidates: number of initial generated kernels for generation mode
+- breadth: parallel plans per iteration
+- samples_per_plan: variants per plan
+- exp_dir: artifact directory
 - [profiling tool args]: paths, commands, configurations for the tool
+
+At least one of kernel_path, problem_definition, or problem_path must be available for optimization/generation workflows.
+Do not emit old aliases such as gpu_target, bench_command, eval_command, rounds, problem_description, task_spec, or task_path.
+Do not emit concrete default commands such as python ..., nvcc ..., bash ..., or ncu --.... Commands must be user-provided through compile_command, test_command, benchmark_command, profile_command, ncu_command, or method-specific tool args. If a command is missing, the workflow must mark measured evidence as unavailable instead of inventing an evaluator/harness.
 
 Method-specific args:
 - Anything unique to this paper's approach
@@ -425,6 +434,16 @@ ${JSON.stringify(anglesResult?.plan_angles || [], null, 2)}
 - required: ${JSON.stringify(argsModel?.required_args || [])}
 - optional: ${JSON.stringify(argsModel?.optional_args || [])}
 
+## Inputs
+- supports_existing_kernel: true
+- supports_problem_definition: true
+- required_one_of: ["kernel_path", "problem_definition", "problem_path"]
+- generation:
+  - enabled: true
+  - seed_candidates_arg: "seed_candidates"
+  - output_arg: "generated_kernel_path"
+  - requires_correctness_evidence: true
+
 ## Template
 - base: "${topologyModel?.topology_type === 'iterative' ? 'iterative-loop' : topologyModel?.topology_type === 'search' ? 'search-based' : 'single-pass'}"
 - customizations: [${paperResearch?.has_experience_accumulation ? '"experience_memory"' : ''}${paperResearch?.profiling_tool === 'ncu' ? ', "ncu_profiling"' : paperResearch?.profiling_tool ? ', "custom_profiling"' : ''}]
@@ -432,7 +451,7 @@ ${JSON.stringify(anglesResult?.plan_angles || [], null, 2)}
 ${PARTIAL_MANIFEST ? `# User-provided partial manifest (override above values where specified):\n${PARTIAL_MANIFEST}` : ''}
 
 # Instructions:
-Generate a complete, valid YAML manifest. Include ALL sections: source, workflow, method, topology, phases (with full agent schemas), plan_angles, args, correctness, return_fields, template.
+Generate a complete, valid YAML manifest. Include ALL sections: source, workflow, inputs, method, topology, phases (with full agent schemas), plan_angles, args, correctness, return_fields, template.
 
 For agent output_schema fields, design sensible JSON schemas based on what each agent needs to return.
 
@@ -474,15 +493,17 @@ ${manifestResult.manifest_yaml}
 1. Start with \`export const meta = {...}\` — fill from manifest workflow.* and phases[].name/detail
 2. Add header comment block documenting: source paper, usage example with all args, arg descriptions
 3. Emit const declarations for all args (required without default, optional with || default)
-4. Emit let declarations for all state_variables
-5. Emit phase('Setup') with the Setup phase agents
-6. Emit the main loop (for iterative: for loop; for search: while loop with budget)
-7. Inside loop: emit each loop_body phase with its agents, using correct parallelism pattern:
+4. Emit canonical input resolution: optimize args.kernel_path when present; otherwise require args.problem_definition or args.problem_path, generate seed_candidates initial kernels, verify with test_command or benchmark_command, and optimize the best verified seed
+5. Emit let declarations for all state_variables
+6. Emit phase('Setup') with the Setup phase agents
+7. Emit the main loop (for iterative/search: for loop controlled by iterations unless the source method requires a specific budget name)
+8. Inside loop: emit each loop_body phase with its agents, using correct parallelism pattern:
    - "single" → await agent(...)
    - "parallel_fan_out" → await parallel(array.map(item => () => agent(...)))
    - "pipeline_then_parallel" → await pipeline(items, item => parallel([...]))
-8. Emit epilogue (final report agent)
-9. Emit return {...} with all return_fields
+9. Never hardcode an evaluator/compiler/profiler command in Usage examples or agent prompts. Describe the JSON/artifact contract and consume user-provided command args.
+9. Emit epilogue (final report agent)
+10. Emit return {...} with all return_fields, including input_mode, generated_kernel_path, initial_candidates, and initial_generation_result when generation is supported
 
 # Critical constraints:
 - Every agent() call MUST have: label, phase, schema (except final report which can omit schema)

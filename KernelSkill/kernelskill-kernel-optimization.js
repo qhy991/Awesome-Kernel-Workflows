@@ -24,7 +24,7 @@ export const meta = {
 //
 //   1. SEED         Generator produces a SET of seed kernels (correctness-first);
 //                   Reviewer evaluates; the best valid seed becomes the working kernel.
-//   2. REFINE LOOP  For up to `rounds` rounds, each round is a TWO-BRANCH control flow:
+//   2. REFINE LOOP  For up to `iterations` rounds, each round is a TWO-BRANCH control flow:
 //                     - if the current kernel is INVALID (compile/correctness fail):
 //                         REPAIR branch: Diagnoser -> Repairer, conditioned on a CHAINED
 //                         repair memory so the model does not oscillate between the same
@@ -64,11 +64,11 @@ export const meta = {
 //     reference_path: '/path/to/level1/19_ReLU.py',  // PyTorch reference task (required)
 //     op_description: 'ReLU activation',
 //     target_gpu: 'A100-80GB',
-//     rounds: 15,                       // refinement rounds (paper uses 15)
+//     iterations: 15,                   // refinement rounds (paper uses 15)
 //     seed_candidates: 3,               // number of seed kernels generated
-//     bench_command: 'python eval.py --kernel',
-//     ncu_binary: 'ncu',
-//     nsys_binary: 'nsys',
+//     benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+//     ncu_binary: '<user-provided ncu binary path>',
+//     nsys_binary: '<user-provided nsys binary path>',
 //     exp_dir: '/tmp/kernelskill_exp',
 //     skill_library_path: '',           // optional: load/override the long-term skill library (JSON)
 //     rtol: 0.01,
@@ -81,16 +81,18 @@ export const meta = {
 // =============================================================================
 
 // --- Required args ---
-const REFERENCE_PATH = args.reference_path
+const REFERENCE_PATH = args.problem_path
+const PROBLEM_DEFINITION = args.problem_definition || ''
+const INPUT_MODE = 'generate_then_optimize'
 
 // --- Optional args ---
 const OP_DESC = args.op_description || 'CUDA kernel from PyTorch reference'
 const TARGET_GPU = args.target_gpu || 'A100-80GB'
-const ROUNDS = args.rounds || 15
+const ROUNDS = args.iterations || 15
 const SEED_CANDIDATES = args.seed_candidates || 3
-const BENCH_CMD = args.bench_command || ''
-const NCU_BINARY = args.ncu_binary || 'ncu'
-const NSYS_BINARY = args.nsys_binary || 'nsys'
+const BENCH_CMD = args.benchmark_command || ''
+const NCU_BINARY = args.ncu_binary || ''
+const NSYS_BINARY = args.nsys_binary || ''
 const EXP_DIR = args.exp_dir || '/tmp/kernelskill_exp'
 const SKILL_LIBRARY_PATH = args.skill_library_path || ''
 const RTOL = args.rtol != null ? args.rtol : 0.01
@@ -98,6 +100,10 @@ const ATOL = args.atol != null ? args.atol : 0.01
 const WARMUP = args.warmup || 25
 const REPEAT = args.repeat || 100
 const RUN_TS = args.run_timestamp_iso || 'unknown'
+
+if (!REFERENCE_PATH && !PROBLEM_DEFINITION) {
+  throw new Error('Provide one of problem_path or problem_definition')
+}
 
 // --- State ---
 let baselineLatency = null      // Torch Eager reference latency (ms), set once
@@ -303,7 +309,9 @@ Return ONLY the JSON object.`, {
   }
 }
 
-const setup = await agent(`Read the PyTorch reference task at: ${REFERENCE_PATH}
+const setup = await agent(`Read the PyTorch reference task at: ${REFERENCE_PATH || '(not provided)'}
+If problem_definition is provided, use it as the authoritative task:
+${PROBLEM_DEFINITION || '(not provided)'}
 
 This is a KernelBench-style task: a PyTorch \`Model\` (forward pass) plus \`get_inputs()\` / \`get_init_inputs()\`. Analyze it and return:
 - reference_code: the full source
@@ -345,11 +353,10 @@ const baseline = await agent(`You are a GPU benchmarking expert. Establish the T
 
 # Instructions
 1. Create ${EXP_DIR}/baseline/.
-2. Run the reference forward pass under torch eager with ${WARMUP} warm-up + ${REPEAT} timed iterations using CUDA events (KernelBench harness convention).
-${BENCH_CMD ? `   You may use: ${BENCH_CMD}` : '   Construct a minimal timing harness if no bench command is configured.'}
-3. Report the mean forward latency in milliseconds.
+2. ${BENCH_CMD ? `Run the reference benchmark using the user-provided command: ${BENCH_CMD}` : 'No benchmark_command provided; do not construct a timing harness.'}
+3. Report the mean forward latency in milliseconds only when measured.
 
-If the GPU/torch environment is unavailable, return baseline_available=false and give your best analytical estimate of the relative cost in baseline_latency_ms (it will be treated as a relative unit).
+If the GPU/torch environment or benchmark_command is unavailable, return baseline_available=false and mark baseline_latency_ms as unmeasured.
 
 Return the baseline result.`, {
   label: 'eager-baseline',
@@ -429,10 +436,10 @@ ${seed.code.substring(0, 4000)}
 # Steps
 1. Compiler: does it build? (check includes, pybind/load_inline, CUDA syntax)
 2. Verifier: would its output match the reference within tolerance? (check shapes, indexing, reduction logic, race conditions)
-3. Profiler: if it builds and is correct, estimate/measure latency (ms) and compute speedup = ${baselineLatency} / latency.
+3. Profiler: if it builds and is correct and benchmark_command is provided, measure latency (ms) and compute speedup = ${baselineLatency} / latency.
 ${BENCH_CMD ? `   Benchmark with: ${BENCH_CMD}` : ''}
 
-If the environment cannot run code, do a rigorous static evaluation and estimate latency.
+If the environment cannot run code or benchmark_command is missing, do a rigorous static evaluation and mark latency/speedup as unmeasured.
 
 Return the evaluation.`, {
       label: `seed-eval-${i}`,
@@ -509,13 +516,14 @@ ${currentKernelCode.substring(0, 4500)}
 # Steps
 1. Compiler: build the kernel; capture status + first errors/warnings.
 2. Verifier: compare output to the PyTorch reference within tolerance; report pass/fail + a short error excerpt if failing.
-3. Profiler (only if compiles+correct): collect ncu + nsys signals into ${EXP_DIR}/round_${round}/:
-   - ${NCU_BINARY} for: dram/l2/l1/sm throughput %, achieved occupancy %, registers/thread, kernel duration, long/short scoreboard stall ratios, branch divergent/uniform counts.
-   - ${NSYS_BINARY} for: kernel_launch_count.
-   Then measure latency (${WARMUP} warmup + ${REPEAT} timed) and compute speedup = ${baselineLatency} / latency.
+3. Profiler (only if compiles+correct): collect profiler signals into ${EXP_DIR}/round_${round}/ only through user-provided profiler binaries/commands:
+   - ncu_binary: ${NCU_BINARY || '(not provided)'} for dram/l2/l1/sm throughput %, achieved occupancy %, registers/thread, kernel duration, long/short scoreboard stall ratios, branch divergent/uniform counts.
+   - nsys_binary: ${NSYS_BINARY || '(not provided)'} for kernel_launch_count.
+   If profiler binaries/commands are missing, do not invent them; mark profiler metrics as missing evidence.
+   Then measure latency only through benchmark_command and compute speedup = ${baselineLatency} / latency when both values are measured.
 ${BENCH_CMD ? `   You may use: ${BENCH_CMD}` : ''}
 
-If the environment cannot run tools, do a rigorous static evaluation: decide is_compilable / is_correct and provide best-estimate metric values (set fields you cannot determine to 0).
+If the environment cannot run tools or commands are missing, do a rigorous static evaluation: decide is_compilable / is_correct where possible, set unmeasured metric fields to 0, and mark missing evidence in the notes.
 
 Return the structured review. Always include the normalized ncu_metrics object (keys: dram_throughput_pct, l2_throughput_pct, l1_throughput_pct, sm_throughput_pct, achieved_occupancy_pct, registers_per_thread, kernel_duration_ns, stall_long_scoreboard_ratio, stall_short_scoreboard_ratio, branch_divergent_cnt, branch_uniform_cnt, kernel_launch_count).`, {
     label: `review-${round}`,
@@ -892,6 +900,15 @@ Write:
 })
 
 return {
+  input_mode: INPUT_MODE,
+  problem_definition: PROBLEM_DEFINITION,
+  problem_path: REFERENCE_PATH,
+  generated_kernel_path: bestKernelCode ? `${EXP_DIR}/best_kernel.cu` : '',
+  initial_candidates: [],
+  initial_generation_result: {
+    verified: bestSpeedup != null,
+    selected_candidate_id: bestKernelCode ? 'best' : '',
+  },
   baseline_latency_ms: baselineLatency,
   best_speedup: bestSpeedup,
   best_kernel_code: bestKernelCode || currentKernelCode,

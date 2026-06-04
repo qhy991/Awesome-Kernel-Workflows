@@ -64,12 +64,12 @@ phases:
         output_schema:
           type: "object"
           properties:
-            problem_description: { type: "string" }
+            problem_definition: { type: "string" }
             input_tensors: { type: "array" }
             operations: { type: "array", items: { type: "string" } }
             output_spec: { type: "object" }
             complexity_signals: { type: "array", items: { type: "string" } }
-          required: ["problem_description", "operations"]
+          required: ["problem_definition", "operations"]
       - label: "setup-test"
         description: "Generate Python test harness that verifies kernel output against PyTorch reference"
         parallelism: "single"
@@ -115,7 +115,7 @@ phases:
         description: "Generate a single Triton kernel seed with specified temperature/strategy"
         parallelism: "parallel_fan_out"
         parallel_axis: "synthesisTargets × MAX_SEEDS"
-        count_arg: "max_seeds"
+        count_arg: "seed_candidates"
         input_variables: ["target.description", "testCode", "seedIdx", "temperature"]
         output_schema:
           type: "object"
@@ -229,7 +229,7 @@ args:
       description: "Path to a Python file containing the PyTorch problem/module to synthesize"
       example: "/path/to/KernelBench/level1/19_ReLU.py"
   optional:
-    - name: "problem_description"
+    - name: "problem_definition"
       type: "string"
       default: "''"
       description: "Alternative to problem_path: direct text description of the kernel to generate"
@@ -239,12 +239,12 @@ args:
       default: "4"
       description: "Number of parallel verification workers"
       example: "4"
-    - name: "max_rounds"
+    - name: "iterations"
       type: "number"
       default: "10"
-      description: "Maximum refinement rounds per failed candidate"
+      description: "Maximum refinement iterations per failed candidate"
       example: "10"
-    - name: "max_seeds"
+    - name: "seed_candidates"
       type: "number"
       default: "4"
       description: "Number of diverse kernel seeds to generate per target"
@@ -328,7 +328,7 @@ return_fields:
     required: true
   - name: "refinement_rounds"
     type: "number"
-    description: "Number of refinement rounds executed"
+    description: "Number of refinement iterations executed"
     required: true
   - name: "best_kernel_code"
     type: "string"

@@ -49,8 +49,8 @@ export const meta = {
 //     correctness_requirements: 'Output must match baseline within 1e-5 relative error',
 //     performance_target: 'Achieve < 0.5ms on M=4096, N=4096, K=4096',
 //     allowed_approaches: 'CUDA C++, shared memory tiling, warp-level primitives',
-//     validation_command: 'python validate.py --kernel-path KERNEL_PATH',
-//     evaluation_command: 'python benchmark.py --kernel-path KERNEL_PATH --output benchmark.csv',
+//     test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
+//     benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
 //     promotion_criteria: 'Speedup >= 1.2x over baseline AND passes validation',
 //     max_candidates: 5,
 //   }})
@@ -58,16 +58,26 @@ export const meta = {
 // =============================================================================
 
 // ---- Task Contract (from args) ----
-const KERNEL_PATH = args.kernel_path
+let KERNEL_PATH = args.kernel_path || ''
+const PROBLEM_DEFINITION = args.problem_definition || ''
+const PROBLEM_PATH = args.problem_path || ''
+const INPUT_MODE = KERNEL_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const TASK_NAME = args.task_name || 'unnamed-task'
 const OBJECTIVE = args.objective || 'Optimize the target kernel'
 const CORRECTNESS = args.correctness_requirements || 'Must produce correct output'
 const PERF_TARGET = args.performance_target || 'Improve over baseline'
 const ALLOWED = args.allowed_approaches || 'Any approach within the language'
-const VALIDATION_CMD = args.validation_command
-const EVAL_CMD = args.evaluation_command || VALIDATION_CMD
+const VALIDATION_CMD = args.test_command
+const EVAL_CMD = args.benchmark_command || VALIDATION_CMD
 const PROMOTION = args.promotion_criteria || 'Passes validation and improves target metric'
 const MAX_CANDIDATES = args.max_candidates || 5
+const LANGUAGE = args.language || 'cuda'
+const TARGET_GPU = args.target_gpu || 'unknown GPU'
+const SEED_CANDIDATES = args.seed_candidates || 3
+
+if (!KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
+  throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
+}
 
 // ---- State ----
 let baselineCode = ''
@@ -78,6 +88,9 @@ let currentBestId = 'baseline'
 let candidates = [] // candidates.jsonl equivalent
 let iteration = 0
 let promotionMet = false
+let generatedKernelPath = ''
+let initialCandidates = []
+let initialGenerationResult = null
 
 // ---- Helpers ----
 function recordCandidate(id, parentId, status, code, metrics, reason) {
@@ -100,6 +113,44 @@ function recordCandidate(id, parentId, status, code, metrics, reason) {
 //            and task documentation."
 // =============================================================================
 phase('Inspect')
+
+if (INPUT_MODE === 'generate_then_optimize') {
+  const generated = await agent(`No kernel_path was provided. Generate and verify an initial kernel before KDA inspects and optimizes the workspace.
+
+# Problem Input
+- problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
+- problem_path: ${PROBLEM_PATH || '(not provided)'}
+- objective: ${OBJECTIVE}
+- correctness_requirements: ${CORRECTNESS}
+- language: ${LANGUAGE}
+- target_gpu: ${TARGET_GPU}
+- seed_candidates: ${SEED_CANDIDATES}
+
+# Evidence Commands
+- test_command: ${VALIDATION_CMD || '(not provided)'}
+- benchmark_command: ${EVAL_CMD || '(not provided)'}
+
+# Contract
+Generate ${SEED_CANDIDATES} complete candidates under ./generated or the task workspace. Run available commands using {kernel_path}/{result_path}. Return the best verified generated kernel path.`, {
+    label: 'generate-initial-kernel',
+    phase: 'Inspect',
+    schema: {
+      type: 'object',
+      properties: {
+        generated_kernel_path: { type: 'string' },
+        initial_candidates: { type: 'array', items: { type: 'object' } },
+        initial_generation_result: { type: 'object' },
+      },
+      required: ['generated_kernel_path', 'initial_candidates', 'initial_generation_result'],
+    },
+  })
+  initialCandidates = generated.initial_candidates || []
+  initialGenerationResult = generated.initial_generation_result || { verified: false }
+  generatedKernelPath = generated.generated_kernel_path || ''
+  if (!generatedKernelPath) throw new Error('Generation mode did not produce generated_kernel_path')
+  if ((VALIDATION_CMD || EVAL_CMD) && initialGenerationResult.verified === false) throw new Error('No generated seed passed correctness evidence')
+  KERNEL_PATH = generatedKernelPath
+}
 
 const inspection = await agent(`You are in a task implementation workspace. Inspect the workspace and the target kernel.
 
@@ -361,11 +412,11 @@ ${candidateCode.substring(0, 3000)}
    - Out-of-bounds (index computations)
    - Missing synchronization
    - Correct reductions (warp shuffle logic)
-3. CORRECTNESS VALIDATION — If validation_command is provided:
+3. CORRECTNESS VALIDATION — If test_command is provided:
    - Run it: \`${VALIDATION_CMD || 'N/A'}\`
    - Report whether it passes or fails, and any error output.
    - If not provided, rely on static analysis only.
-4. PERFORMANCE EVALUATION — If evaluation_command is provided:
+4. PERFORMANCE EVALUATION — If benchmark_command is provided:
    - Run it: \`${EVAL_CMD || 'N/A'}\`
    - Extract the measured latency/throughput from the output.
    - Compare against baseline: ${currentBestMetrics.latency_ms ? currentBestMetrics.latency_ms + 'ms' : 'not yet measured'}.
@@ -468,6 +519,12 @@ Also write the candidates list to candidates.jsonl (one JSON object per line).`,
 })
 
 return {
+  input_mode: INPUT_MODE,
+  problem_definition: PROBLEM_DEFINITION,
+  problem_path: PROBLEM_PATH,
+  generated_kernel_path: generatedKernelPath,
+  initial_candidates: initialCandidates,
+  initial_generation_result: initialGenerationResult,
   task_name: TASK_NAME,
   candidates_tried: candidates.length,
   promoted: candidates.filter(c => c.status === 'promoted').length,

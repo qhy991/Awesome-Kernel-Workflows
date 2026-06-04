@@ -216,7 +216,7 @@ plan_angles:
 
 args:
   required:
-    - name: "reference_kernel_path"
+    - name: "kernel_path"
       type: "string"
       description: "Path to the reference CUDA kernel file (.cu) to optimize"
       example: "/path/to/reference.cu"
@@ -225,7 +225,7 @@ args:
       description: "Path to the test harness that validates kernel correctness and measures runtime"
       example: "/path/to/test.py"
   optional:
-    - name: "budget"
+    - name: "iterations"
       type: "number"
       default: "30"
       description: "Maximum optimization attempts (tree nodes generated)"
@@ -284,12 +284,12 @@ args:
       type: "string"
       default: "''"
       description: "Command to compile the CUDA kernel"
-      example: "nvcc -O3 -arch=sm_80 -o kernel reference.cu"
+      example: "<user-provided compile command with {kernel_path}/{result_path}>"
     - name: "benchmark_command"
       type: "string"
       default: "''"
       description: "Command to run the benchmark/test harness"
-      example: "python test.py"
+      example: "<user-provided benchmark command with {kernel_path}/{result_path}>"
     - name: "exp_dir"
       type: "string"
       default: "'/tmp/stark_exp'"

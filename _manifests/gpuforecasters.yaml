@@ -27,7 +27,7 @@ methodology:
     - "Learned speedup forecaster: LM predicts relative speedup (8 ordinal bins)"
     - "Native abstain: forecaster can defer to actual GPU execution when uncertain"
     - "PUCT search: balance exploration (high uncertainty) and exploitation (high predicted speedup)"
-    - "Fixed GPU budget: M actual evaluations across entire search"
+    - "Fixed GPU iterations: M actual evaluations across entire search"
     - "Curriculum training: train forecaster on initial generations, apply in later generations"
     - "Ordinal classification: speedup bins (e.g., [0.5x, 0.7x, 0.9x, 1.0x, 1.2x, 1.5x, 2.0x, 3.0x+])"
 
@@ -55,10 +55,10 @@ methodology:
         - "  1. Select node: PUCT = speedup_estimate + C * sqrt(log(N_parent) / N_node)"
         - "  2. Generate child candidates (mutations, variations)"
         - "  3. Forecast speedup: LM predicts bin or abstains"
-        - "  4. If abstain or high uncertainty: execute on GPU (use budget)"
+        - "  4. If abstain or high uncertainty: execute on GPU (use iterations)"
         - "  5. If predict: use forecasted speedup (no GPU cost)"
         - "  6. Update tree statistics"
-        - "Repeat until GPU budget exhausted"
+        - "Repeat until GPU iterations exhausted"
 
       puct_formula: "PUCT(node) = Q(node) + C * sqrt(log(N_parent) / N_node)"
       gpu_budget: "M evaluations (e.g., M=100-500)"
@@ -113,7 +113,7 @@ methodology:
       N_parent: "Parent node visit count"
       N_node: "Current node visit count"
 
-    budget: "M GPU evaluations total"
+    iterations: "M GPU evaluations total"
     abstain_usage: "Abstain → consume 1 GPU eval"
     predict_usage: "Predict → no GPU cost"
 
@@ -139,9 +139,9 @@ metrics:
 
 convergence:
   criteria:
-    - "GPU budget exhausted (M evaluations)"
+    - "GPU iterations exhausted (M evaluations)"
     - "Search tree fully explored"
-    - "No improvement in top-K nodes for N steps"
+    - "No improvement in top-K nodes for N iterations"
 
   typical_gpu_budget: 100-500
   typical_forecaster_accuracy: "60-80% (ordinal bins)"
@@ -149,14 +149,14 @@ convergence:
 workflow_structure:
   entry_point: "gpuforecasters-kernel-optimization.js"
   phases: 5
-  estimated_runtime: "30-120 minutes (depends on GPU budget)"
+  estimated_runtime: "30-120 minutes (depends on GPU iterations)"
 
 results:
   output:
     - "Optimized CUDA kernel"
     - "Search tree trajectory"
     - "Forecaster performance analysis (accuracy, abstain rate)"
-    - "GPU budget usage breakdown"
+    - "GPU iterations usage breakdown"
     - "Best kernel vs baseline comparison"
 
   typical_speedup: "1.5x - 4x vs baseline"
@@ -168,7 +168,7 @@ usage:
     2. PUCT search with forecaster guidance:
        - Select promising nodes (high PUCT score)
        - Forecast speedup or abstain
-       - Use GPU budget selectively
+       - Use GPU iterations selectively
     3. Evaluate top candidates
     4. Return best kernel with analysis
 
@@ -176,7 +176,7 @@ notes:
   - "Selective surrogate: forecaster defers to GPU when uncertain (abstain mechanism)"
   - "PUCT search: balances exploration (uncertainty) and exploitation (predicted speedup)"
   - "Ordinal bins: speedup is discretized into 8 categories for classification"
-  - "Fixed GPU budget: M evaluations across entire search (not per-generation)"
+  - "Fixed GPU iterations: M evaluations across entire search (not per-generation)"
   - "Curriculum training: train forecaster on initial data, apply in later search"
-  - "Abstain rate: key metric for forecaster quality (too high → wastes budget; too low → poor guidance)"
-  - "GPU budget efficiency: best_speedup / num_gpu_evals (higher is better)"
+  - "Abstain rate: key metric for forecaster quality (too high → wastes iterations; too low → poor guidance)"
+  - "GPU iterations efficiency: best_speedup / num_gpu_evals (higher is better)"

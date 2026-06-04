@@ -14,7 +14,7 @@ AdaExplore addresses two key challenges in LLM-based kernel generation:
 
 **Stage 1 — Adapt** (Skill Memory): Collect failures → extract "You cannot..." constraint rules → inject into future prompts to prevent repeat errors.
 
-**Stage 2 — Explore** (MCTS): Organize candidates as a tree, balance generating wholly new kernels (large steps) vs refining existing ones (small steps), using diversity-preserving context pools.
+**Stage 2 — Explore** (MCTS): Organize candidates as a tree, balance generating wholly new kernels (large iterations) vs refining existing ones (small iterations), using diversity-preserving context pools.
 
 ## Architecture
 
@@ -79,7 +79,7 @@ Compile error: "SyntaxError: invalid syntax at line 42"
 
 ### Diverse Pool (Explore Stage)
 
-For **large steps** (proposer), context uses at most 1 kernel per MCTS branch:
+For **large iterations** (proposer), context uses at most 1 kernel per MCTS branch:
 - Prevents mode collapse (seeing many similar kernels → generating more of the same)
 - Ensures structural diversity in the proposer's context
 - Pool selection uses softmax-weighted sampling
@@ -111,12 +111,12 @@ Two separate scores:
 
 ```javascript
 Workflow({name: 'adaexplore-kernel-optimization', args: {
-  operator_spec: 'class Model(nn.Module):\n  def forward(self, x):\n    return F.layer_norm(x, ...) * F.gelu(x)',
+  problem_definition: 'class Model(nn.Module):\n  def forward(self, x):\n    return F.layer_norm(x, ...) * F.gelu(x)',
   op_description: 'Fused LayerNorm + GELU',
-  baseline_command: 'python eval_baseline.py',
-  eval_command: 'python eval_kernel.py --kernel KERNEL_PATH',
+  baseline_command: '<user-provided baseline command with {baseline_path}>',
+  benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
   skill_memory_path: '/path/to/general_memory_v1_200.txt',
-  steps: 50,
+  iterations: 50,
   small_step_limit: 2,
   p_large: 0.2,
 }})
@@ -126,13 +126,13 @@ Workflow({name: 'adaexplore-kernel-optimization', args: {
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `operator_spec` | `''` | PyTorch operator source code |
+| `problem_definition` | `''` | PyTorch operator source code |
 | `op_description` | `'PyTorch operator'` | Human description |
 | `baseline_command` | `''` | Command to measure PyTorch baseline |
-| `eval_command` | `''` | Command to evaluate generated kernel |
+| `benchmark_command` | `''` | Command to evaluate generated kernel |
 | `skill_memory_path` | `''` | Pre-built skill memory file |
-| `steps` | `30` | MCTS search budget (total expansions) |
-| `small_step_limit` | `2` | Max small steps before forcing large |
+| `iterations` | `30` | MCTS search iterations (total expansions) |
+| `small_step_limit` | `2` | Max small iterations before forcing large |
 | `p_large` | `0.2` | Random large step probability |
 | `ucb_c` | `1.41` | UCB1 exploration constant |
 | `diversity_pool_size` | `5` | Max kernels in proposer context |
@@ -204,10 +204,10 @@ AdaExplore 解决 LLM 内核生成的两个关键挑战：
 
 ```javascript
 Workflow({name: 'adaexplore-kernel-optimization', args: {
-  operator_spec: 'class Model(nn.Module): ...',
+  problem_definition: 'class Model(nn.Module): ...',
   op_description: '融合 LayerNorm + GELU',
-  eval_command: 'python eval_kernel.py',
-  steps: 50,
+  benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+  iterations: 50,
 }})
 ```
 

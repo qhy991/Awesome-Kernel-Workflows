@@ -38,7 +38,7 @@ method:
 topology:
   type: "iterative"
   iterative:
-    max_iterations_arg: "iterations"
+    iterations_arg: "iterations"
     convergence_condition: ""  # AccelOpt uses fixed iteration count, no early stopping
     state_variables:
       - name: "experienceMemory"
@@ -236,7 +236,7 @@ args:
       type: "string"
       default: "''"
       description: "Command to build the profiling harness"
-      example: "nvcc -O3 -lineinfo -arch=sm_90 -o bench harness.cu"
+      example: "<user-provided harness build command>"
     - name: "harness_run_args"
       type: "string"
       default: "''"
@@ -251,7 +251,7 @@ args:
       type: "string"
       default: "'ncu'"
       description: "Path to the Nsight Compute binary"
-      example: "ncu"
+      example: "<user-provided ncu binary path>"
     - name: "exp_dir"
       type: "string"
       default: "'/tmp/accelopt_exp'"
@@ -276,12 +276,12 @@ args:
       type: "string"
       default: "''"
       description: "Fallback test command when NCU is unavailable"
-      example: "python test_kernel.py"
+      example: "<user-provided correctness command with {kernel_path}/{result_path}>"
     - name: "benchmark_command"
       type: "string"
       default: "''"
       description: "Fallback benchmark command when NCU is unavailable"
-      example: "python bench_kernel.py"
+      example: "<user-provided benchmark command with {kernel_path}/{result_path}>"
 
 correctness:
   criteria:

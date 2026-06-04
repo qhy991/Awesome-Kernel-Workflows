@@ -33,14 +33,14 @@ export const meta = {
 //
 // Usage:
 //   Workflow({name: 'astra-kernel-optimization', args: {
-//     initial_kernel_path: '/path/to/kernel.cu',
+//     kernel_path: '/path/to/kernel.cu',
 //     compare_kind: 'rmsnorm',
 //     baseline_func: 'fused_add_rmsnorm',
 //     generated_export_func: 'sgl_fused_add_rmsnorm',
 //     baseline_module: 'sgl_kernel',
-//     test_command: 'python test_kernel.py --kernel {kernel_path} --json {result_path}',
-//     benchmark_command: 'python bench_kernel.py --kernel {kernel_path} --json {result_path}',
-//     max_iterations: 5,
+//     test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
+//     benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+//     iterations: 5,
 //     target_gpu: 'H100',
 //     exp_dir: '/tmp/astra_exp',
 //   }})
@@ -60,7 +60,10 @@ export const meta = {
 // =============================================================================
 
 // --- Required Args ---
-const INITIAL_KERNEL_PATH = args.initial_kernel_path || args.kernel_path || ''
+let INITIAL_KERNEL_PATH = args.kernel_path || ''
+const PROBLEM_DEFINITION = args.problem_definition || ''
+const PROBLEM_PATH = args.problem_path || ''
+const INPUT_MODE = INITIAL_KERNEL_PATH ? 'optimize_existing' : 'generate_then_optimize'
 
 // --- Optional Args matching Astra repo concepts ---
 const COMPARE_KIND = args.compare_kind || 'generic'
@@ -69,10 +72,16 @@ const BASELINE_FUNC = args.baseline_func || 'sgl_fused_add_rmsnorm'
 const GENERATED_EXPORT_FUNC = args.generated_export_func || BASELINE_FUNC
 const TEST_CMD = args.test_command || ''
 const BENCH_CMD = args.benchmark_command || ''
-const MAX_ITERATIONS = args.max_iterations || 5
+const MAX_ITERATIONS = args.iterations || 5
 const TARGET_GPU = args.target_gpu || 'H100'
 const EXP_DIR = args.exp_dir || '/tmp/astra_exp'
 const INTEGRATION_MODE = args.integration_mode || 'standalone' // standalone | sglang
+const LANGUAGE = args.language || 'cuda'
+const SEED_CANDIDATES = args.seed_candidates || 3
+
+if (!INITIAL_KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
+  throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
+}
 
 // --- State ---
 let initialKernelCode = ''
@@ -82,6 +91,9 @@ let bestResult = null
 let testSuite = []
 let runLog = []
 let lessons = []
+let generatedKernelPath = ''
+let initialCandidates = []
+let initialGenerationResult = null
 
 function scoreResult(result) {
   if (!result || !result.compiled) return [0, 0, 0]
@@ -104,10 +116,50 @@ function isBetter(candidate, incumbent) {
 // =============================================================================
 phase('Setup')
 
+if (INPUT_MODE === 'generate_then_optimize') {
+  const generated = await agent(`No kernel_path was provided. Generate and verify an initial CUDA kernel before starting Astra optimization.
+
+# Problem Input
+- problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
+- problem_path: ${PROBLEM_PATH || '(not provided)'}
+- compare_kind: ${COMPARE_KIND}
+- baseline_func: ${BASELINE_FUNC}
+- generated_export_func: ${GENERATED_EXPORT_FUNC}
+- integration_mode: ${INTEGRATION_MODE}
+- language: ${LANGUAGE}
+- target_gpu: ${TARGET_GPU}
+- seed_candidates: ${SEED_CANDIDATES}
+
+# Evidence Commands
+- test_command: ${TEST_CMD || '(not provided)'}
+- benchmark_command: ${BENCH_CMD || '(not provided)'}
+
+# Contract
+Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run available commands using {kernel_path}/{result_path}. Return the best verified generated kernel path.`, {
+    label: 'generate-initial-kernel',
+    phase: 'Setup',
+    schema: {
+      type: 'object',
+      properties: {
+        generated_kernel_path: { type: 'string' },
+        initial_candidates: { type: 'array', items: { type: 'object' } },
+        initial_generation_result: { type: 'object' },
+      },
+      required: ['generated_kernel_path', 'initial_candidates', 'initial_generation_result'],
+    },
+  })
+  initialCandidates = generated.initial_candidates || []
+  initialGenerationResult = generated.initial_generation_result || { verified: false }
+  generatedKernelPath = generated.generated_kernel_path || ''
+  if (!generatedKernelPath) throw new Error('Generation mode did not produce generated_kernel_path')
+  if ((TEST_CMD || BENCH_CMD) && initialGenerationResult.verified === false) throw new Error('No generated seed passed correctness evidence')
+  INITIAL_KERNEL_PATH = generatedKernelPath
+}
+
 const setup = await agent(`You are the Astra setup agent for production CUDA kernel optimization.
 
 # Inputs
-- initial_kernel_path: ${INITIAL_KERNEL_PATH}
+- kernel_path: ${INITIAL_KERNEL_PATH}
 - compare_kind: ${COMPARE_KIND}
 - baseline_module: ${BASELINE_MODULE}
 - baseline_func: ${BASELINE_FUNC}
@@ -117,7 +169,7 @@ const setup = await agent(`You are the Astra setup agent for production CUDA ker
 - exp_dir: ${EXP_DIR}
 
 # Tasks
-1. Read the initial CUDA kernel from initial_kernel_path.
+1. Read the initial CUDA kernel from kernel_path.
 2. Identify exported PyBind/CUDA entry points and the function that must remain callable as generated_export_func.
 3. Summarize the baseline function contract and compare_kind semantics.
 4. Identify whether this should be optimized as a standalone kernel or reintegrated into SGLang-style code.
@@ -167,10 +219,10 @@ ${setup.kernel_summary || ''}
 
 # Requirements
 1. If test_command is provided, treat it as authoritative and document its JSON contract.
-2. If no command is provided, propose a concrete Python harness that imports baseline_module and generated module.
+2. If no command is provided, do not propose a concrete program or harness; describe the required command contract and mark evidence as missing.
 3. Generate representative shapes for compare_kind. Cover small, medium, and large cases.
 4. Include tolerance rules for floating-point comparison.
-5. Do not accept performance measurements unless they come from benchmark_command or an explicit harness.
+5. Do not accept performance measurements unless they come from benchmark_command or an explicit user-provided harness.
 
 Return the test plan and shape suite.`, {
   label: 'prepare-tests',
@@ -498,7 +550,13 @@ Cover:
 })
 
 return {
-  initial_kernel_path: INITIAL_KERNEL_PATH,
+  input_mode: INPUT_MODE,
+  problem_definition: PROBLEM_DEFINITION,
+  problem_path: PROBLEM_PATH,
+  kernel_path: INITIAL_KERNEL_PATH,
+  generated_kernel_path: generatedKernelPath,
+  initial_candidates: initialCandidates,
+  initial_generation_result: initialGenerationResult,
   compare_kind: COMPARE_KIND,
   baseline_func: BASELINE_FUNC,
   generated_export_func: GENERATED_EXPORT_FUNC,

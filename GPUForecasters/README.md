@@ -5,11 +5,11 @@
 
 ## Overview
 
-GPU Forecasters implements **PUCT search with learned speedup forecaster and native abstain mechanism**. The workflow trains a language model to predict kernel speedup in 8 ordinal bins, then uses PUCT tree search to explore the optimization space. The forecaster can abstain when uncertain, deferring to actual GPU execution. This balances exploration (high uncertainty) and exploitation (high predicted speedup) under a fixed GPU budget.
+GPU Forecasters implements **PUCT search with learned speedup forecaster and native abstain mechanism**. The workflow trains a language model to predict kernel speedup in 8 ordinal bins, then uses PUCT tree search to explore the optimization space. The forecaster can abstain when uncertain, deferring to actual GPU execution. This balances exploration (high uncertainty) and exploitation (high predicted speedup) under a fixed GPU iterations.
 
 ## Core Insight
 
-**Selective surrogate with abstain mechanism**: Training a surrogate model to predict speedup saves GPU evaluations, but surrogate errors can mislead search. GPU Forecasters' key innovation is the **native abstain mechanism**: the forecaster defers to GPU execution when uncertain. PUCT search leverages this: explore high-uncertainty regions (abstain → GPU eval), exploit high-confidence high-speedup regions (predict → no GPU cost). This achieves better GPU budget efficiency than either pure surrogate or pure search.
+**Selective surrogate with abstain mechanism**: Training a surrogate model to predict speedup saves GPU evaluations, but surrogate errors can mislead search. GPU Forecasters' key innovation is the **native abstain mechanism**: the forecaster defers to GPU execution when uncertain. PUCT search leverages this: explore high-uncertainty regions (abstain → GPU eval), exploit high-confidence high-speedup regions (predict → no GPU cost). This achieves better GPU iterations efficiency than either pure surrogate or pure search.
 
 ## Loop Topology
 
@@ -26,14 +26,14 @@ PHASE 1: TRAIN FORECASTER (Curriculum Phase)
 PHASE 2: PUCT SEARCH (Fixed GPU Budget)
   Initialize search tree (root = baseline kernel)
   
-  For each search step (until GPU budget M exhausted):
+  For each search step (until GPU iterations M exhausted):
     1. SELECT: Choose node with highest PUCT score
        PUCT(node) = Q(node) + C * sqrt(log(N_parent) / N_node)
     
     2. GENERATE: Create child candidates (mutations, variations)
     
     3. FORECAST: LM predicts speedup bin or abstains
-       - If ABSTAIN or high uncertainty: execute on GPU (use budget)
+       - If ABSTAIN or high uncertainty: execute on GPU (use iterations)
        - If PREDICT: use forecasted speedup (no GPU cost)
     
     4. UPDATE: Update tree statistics (Q values, visit counts)
@@ -45,7 +45,7 @@ EVALUATE:
   → Best kernel + search trajectory
 
 REPORT:
-  Best kernel + forecaster analysis + GPU budget usage
+  Best kernel + forecaster analysis + GPU iterations usage
 ```
 
 ## Components
@@ -81,10 +81,10 @@ REPORT:
 - **C**: Exploration constant (tunable, default: 2.0)
 
 **Budget management**:
-- Fixed GPU budget: M evaluations total (e.g., M=100-500)
+- Fixed GPU iterations: M evaluations total (e.g., M=100-500)
 - Abstain → consumes 1 GPU eval
 - Predict → no GPU cost
-- Search terminates when budget exhausted
+- Search terminates when iterations exhausted
 
 **Selection strategy**:
 - Greedy: always select highest PUCT score
@@ -117,11 +117,11 @@ REPORT:
 ## Typical Results
 
 - **Speedup**: 1.5x - 4x vs baseline
-- **GPU budget**: 100-500 evaluations
+- **GPU iterations**: 100-500 evaluations
 - **Forecaster accuracy**: 60-80% (ordinal bins)
 - **Abstain rate**: 20-40% (depends on calibration)
-- **GPU budget efficiency**: best_speedup / num_gpu_evals (higher is better)
-- **Runtime**: 30-120 minutes (depends on GPU budget)
+- **GPU iterations efficiency**: best_speedup / num_gpu_evals (higher is better)
+- **Runtime**: 30-120 minutes (depends on GPU iterations)
 
 ## Example Usage
 
@@ -134,7 +134,7 @@ REPORT:
 // 2. PUCT search with forecaster guidance:
 //    - Select promising nodes (high PUCT score)
 //    - Forecast speedup or abstain
-//    - Use GPU budget selectively
+//    - Use GPU iterations selectively
 // 3. Evaluate top candidates
 // 4. Return best kernel with analysis
 ```
@@ -142,7 +142,7 @@ REPORT:
 ## Key Parameters
 
 - **curriculum_size**: Number of initial kernels for forecaster training (default: 100)
-- **gpu_budget**: Fixed GPU evaluation budget (default: 200)
+- **gpu_budget**: Fixed GPU evaluation iterations (default: 200)
 - **puct_c**: Exploration constant (default: 2.0)
 - **abstain_threshold**: Uncertainty threshold for abstain (default: 0.3)
 - **speedup_bins**: Ordinal bins for speedup classification (default: [0.5, 0.7, 0.9, 1.0, 1.2, 1.5, 2.0, 3.0])
@@ -153,13 +153,13 @@ REPORT:
 - **Selective surrogate**: Forecaster defers to GPU when uncertain (abstain mechanism)
 - **PUCT search**: Balances exploration (uncertainty) and exploitation (predicted speedup)
 - **Ordinal bins**: Speedup is discretized into 8 categories for classification
-- **Fixed GPU budget**: M evaluations across entire search (not per-generation)
+- **Fixed GPU iterations**: M evaluations across entire search (not per-generation)
 - **Curriculum training**: Train forecaster on initial data, apply in later search
 - **Abstain rate**: Key metric for forecaster quality
-  - Too high → wastes budget (frequent GPU evals)
+  - Too high → wastes iterations (frequent GPU evals)
   - Too low → poor guidance (low-confidence predictions mislead search)
-- **GPU budget efficiency**: best_speedup / num_gpu_evals (higher is better)
-- **GRPO calibration**: Tunes abstain threshold to optimize budget efficiency
+- **GPU iterations efficiency**: best_speedup / num_gpu_evals (higher is better)
+- **GRPO calibration**: Tunes abstain threshold to optimize iterations efficiency
 
 ## Related Workflows
 
