@@ -78,6 +78,16 @@ export const meta = {
 const KERNEL_PATH = args.kernel_path || ''
 const OP_DESCRIPTION = args.op_description || 'GPU kernel'
 
+// --- Model Routing ---
+const MODEL = {
+  mechanical: args.model_mechanical || 'haiku',  // runs shell/scripts, parses output, bandit/cluster bookkeeping
+  profile: args.model_profile || 'sonnet',       // profiling / feature-vector / metric analysis
+  judgment: args.model_judgment || 'opus',       // planning, code gen/edit/debug, final report
+}
+
+// --- Token Budget ---
+const EST_PER_ROUND = args.est_tokens_per_round || 60000
+
 // --- Optional Args ---
 const HARNESS_PATH = args.harness_path || ''
 const COMPILE_CMD = args.compile_command || ''
@@ -158,6 +168,7 @@ const setupResult = await agent(`You are setting up a KernelBand optimization se
 Return the baseline metrics and hardware signature.`, {
   label: 'setup',
   phase: 'Setup',
+  model: MODEL.profile,
   schema: {
     type: 'object',
     properties: {
@@ -214,6 +225,7 @@ log(`Hardware: DRAM=${hwSignature.dram_throughput_pct}% L2=${hwSignature.l2_thro
 // =============================================================================
 
 for (let t = 1; t <= ITERATIONS; t++) {
+  if (typeof budget !== 'undefined' && budget.total && budget.remaining() < EST_PER_ROUND) { log(`token budget ~exhausted — stop`); break }
   log(`\n--- Iteration ${t}/${ITERATIONS} ---`)
 
   // ===========================================================================
@@ -245,6 +257,7 @@ ${candidatePool.map((c, idx) => `Kernel ${c.id}: φ = [T̄=${c.features.normaliz
 Return cluster assignments and centroids.`, {
       label: `cluster-t${t}`,
       phase: 'Cluster',
+      model: MODEL.mechanical,
       schema: {
         type: 'object',
         properties: {
@@ -323,6 +336,7 @@ A strategy s is VALID for cluster i only if: h(k_c^(i))[Target(s)] < ${SATURATIO
 Return updated hardware signatures and masks.`, {
       label: `profile-t${t}`,
       phase: 'Profile',
+      model: MODEL.profile,
       schema: {
         type: 'object',
         properties: {
@@ -455,6 +469,7 @@ ${selectedStrategy === 'access_layout' ? `ACCESS & LAYOUT: Optimize memory layou
 Return the optimized kernel code.`, {
     label: `generate-t${t}-${selectedStrategy}`,
     phase: 'Generate',
+    model: MODEL.judgment,
     schema: {
       type: 'object',
       properties: {
@@ -499,6 +514,7 @@ ${generatedCode.substring(0, 6000)}
 Return evaluation results.`, {
     label: `eval-t${t}`,
     phase: 'Evaluate',
+    model: MODEL.mechanical,
     schema: {
       type: 'object',
       properties: {
@@ -657,6 +673,7 @@ Analyze:
 5. Recommendations for further optimization (more iterations, different K, etc.)`, {
   label: 'report',
   phase: 'Report',
+  model: MODEL.judgment,
 })
 
 return {

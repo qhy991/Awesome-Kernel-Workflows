@@ -104,6 +104,29 @@ separate agent on the structured task-spec only.
 
 ---
 
+## Tier-1 rollout status (safe harness upgrades to existing solvers)
+
+The zero-fidelity-risk harness upgrades — **model routing**, **token budget**,
+**worktree isolation** — must live inside each solver (they control how it spawns
+its own agents). Applied (additive-only, syntax-verified) to the experiment 5-pool:
+
+| Solver | model-routed agents | budget guard | worktree isolation |
+|---|---|---|---|
+| AKO4X | 17 (10 mech / 1 prof / 6 judg) | ✅ | ✅ (parallel impl) |
+| AdaExplore | 7 (3 / 0 / 4) | ✅ | — (sequential MCTS) |
+| KernelBand | 6 (2 / 2 / 2) | ✅ | — (sequential loop) |
+| cuPilot | 6 (0 / 0 / 6) | ✅ | ✅ (parallel translate/revise) |
+| KernelAgent | 11 (4 / 3 / 4) | ✅ | ✅ (parallel seeds/refine) |
+
+Remaining 21 solvers: TODO (same additive recipe).
+
+The other two Tier-1 items — **Layer A output normalization** and **anti-cheat
+detection** — are NOT applied per-solver. They are best centralized **once** in
+KerSor's `result-analyzer` (already normalizes heterogeneous outputs; can also call
+`anti_cheat.py`), so they cover all 26 solvers without editing them. That is a
+KernelNav-repo change, deferred. Note: anti-cheat *reward thresholds* (beat eager
+AND compile) must be matched to each paper's acceptance criterion — Tier-2.
+
 ## What NOT to change (keep the advantage)
 - Keep deterministic ground-truth checks (compile/correct/speedup, anti-cheat reward,
   diagnosis thresholds, method gate, beam top-K). Do not replace them with LLM verifiers

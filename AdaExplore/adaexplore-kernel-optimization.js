@@ -101,6 +101,14 @@ const CORRECTNESS_RTOL = args.correctness_rtol ?? 0.05
 const EXP_DIR = args.exp_dir || '/tmp/adaexplore_workflow_exp'
 const KERNEL_PATH = args.kernel_path || ''
 const MAX_MEMORY_RULES = args.max_memory_rules || 40
+const EST_PER_ROUND = args.est_tokens_per_round || 60000
+
+// --- Model routing ---
+const MODEL = {
+  mechanical: args.model_mechanical || 'haiku',  // runs shell/scripts, parses output, bookkeeping
+  profile: args.model_profile || 'sonnet',       // profiling / metric analysis
+  judgment: args.model_judgment || 'opus',       // planning, code gen/edit/debug, final report
+}
 
 // --- State: MCTS Tree ---
 let mctsNodes = []
@@ -311,6 +319,7 @@ ${SKILL_MEMORY_PATH
 Return the materialized operator code, evaluator command template, optional baseline time, and loaded memory rules.`, {
   label: 'setup',
   phase: 'Setup',
+  model: MODEL.mechanical,
   schema: {
     type: 'object',
     properties: {
@@ -354,6 +363,8 @@ log(`Setup: mode=${MODE} | steps=${STEPS} | memory_update=${MEMORY_UPDATE} | ski
 // =============================================================================
 
 for (let searchStep = 0; searchStep < STEPS; searchStep++) {
+  if (typeof budget !== 'undefined' && budget.total && budget.remaining() < EST_PER_ROUND) { log(`token budget ~exhausted — stop`); break }
+
   phase('Select')
 
   const selectedNode = selectNode()
@@ -413,6 +424,7 @@ ${poolContext}
 Return the complete candidate kernel code.`, {
       label: `propose-${searchStep + 1}`,
       phase: 'Expand',
+      model: MODEL.judgment,
       schema: {
         type: 'object',
         properties: {
@@ -456,6 +468,7 @@ ${memoryLines(20).join('\n') || 'No constraints yet.'}
 Return specific, surgical suggestions only.`, {
       label: `revise-${searchStep + 1}`,
       phase: 'Expand',
+      model: MODEL.judgment,
       schema: {
         type: 'object',
         properties: {
@@ -492,6 +505,7 @@ ${memoryLines(20).join('\n') || 'No constraints yet.'}
 Return the edited candidate kernel code.`, {
       label: `tune-${searchStep + 1}`,
       phase: 'Expand',
+      model: MODEL.judgment,
       schema: {
         type: 'object',
         properties: {
@@ -544,6 +558,7 @@ ${operatorCode.substring(0, 5000)}
 Return the parsed evaluation result.`, {
     label: `eval-${searchStep + 1}`,
     phase: 'Evaluate',
+    model: MODEL.mechanical,
     schema: {
       type: 'object',
       properties: {
@@ -649,6 +664,7 @@ ${JSON.stringify(failureLogs, null, 2).substring(0, 12000)}
 Return updated memory rules.`, {
     label: 'adapt-memory',
     phase: 'AdaptMemory',
+    model: MODEL.mechanical,
     schema: {
       type: 'object',
       properties: {
@@ -721,6 +737,7 @@ Cover:
 4. Any remaining optimization opportunities.`, {
   label: 'final-report',
   phase: 'Report',
+  model: MODEL.judgment,
 })
 
 return {
