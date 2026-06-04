@@ -119,6 +119,14 @@ function shouldCheckHardcodedCommands(file) {
     && !file.startsWith('_meta/tools/')
 }
 
+function isTopLevelWorkflow(file) {
+  return workflowFilePattern.test(file)
+    && !file.startsWith('scripts/')
+    && !file.startsWith('_tools/')
+    && !file.startsWith('_meta/')
+    && !file.startsWith('_templates/')
+}
+
 function lineNumberAt(text, index) {
   return text.slice(0, index).split('\n').length
 }
@@ -145,6 +153,23 @@ for (const file of walk(root)) {
       const arg = match[1]
       if (forbiddenArgs.has(arg) && !isAllowedArg(file, arg)) {
         failures.push(`${file}: args.${arg} should be args.${forbiddenArgs.get(arg)}`)
+      }
+    }
+  }
+
+  if (isTopLevelWorkflow(file)) {
+    const requiredSuitabilitySnippets = [
+      'const WORKFLOW_SUITABILITY =',
+      'supported_languages:',
+      'supported_problem_types:',
+      'problem_types:',
+      'reason:',
+      'function assertWorkflowSuitability()',
+      'assertWorkflowSuitability()',
+    ]
+    for (const snippet of requiredSuitabilitySnippets) {
+      if (!text.includes(snippet)) {
+        failures.push(`${file}: missing workflow suitability contract snippet: ${snippet}`)
       }
     }
   }

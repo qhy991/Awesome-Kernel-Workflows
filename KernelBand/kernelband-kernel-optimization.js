@@ -14,6 +14,65 @@ export const meta = {
   ],
 }
 
+const WORKFLOW_SUITABILITY = {
+  supported_languages: ['triton', 'cuda'],
+  supported_problem_types: ['gpu-kernel-optimization', 'kernel-search'],
+  problem_types: ['bandit-guided CUDA/Triton kernel search', 'hardware-aware profiling and pruning'],
+  reason: 'KernelBand needs CUDA/Triton-style profiling features and evaluator rewards; unsupported languages lack the required feature/mask contract.',
+}
+
+function normalizeSuitabilityValue(value) {
+  const raw = String(value || '').trim().toLowerCase().replace(/_/g, '-')
+  const aliases = {
+    'c++': 'cpp',
+    cxx: 'cpp',
+    cplusplus: 'cpp',
+    cute: 'cute-dsl',
+    hip: 'rocm',
+    'intel-xpu': 'xpu',
+    optimize: 'kernel-optimization',
+    optimization: 'kernel-optimization',
+    generate: 'kernel-generation',
+    generation: 'kernel-generation',
+    explain: 'performance-explanation',
+    explanation: 'performance-explanation',
+  }
+  return aliases[raw] || raw
+}
+
+function supportsSuitabilityValue(supported, requested) {
+  return supported.includes(requested) || supported.some(value => value.endsWith(`-${requested}`))
+}
+
+function assertWorkflowSuitability() {
+  const requestedLanguage = normalizeSuitabilityValue(args.language)
+  if (requestedLanguage && requestedLanguage !== 'auto') {
+    const supported = WORKFLOW_SUITABILITY.supported_languages.map(normalizeSuitabilityValue)
+    if (!supported.includes(requestedLanguage)) {
+      throw new Error(
+        `${meta.name} is not suitable for language="${args.language}". ` +
+        `Supported languages/backends: ${WORKFLOW_SUITABILITY.supported_languages.join(', ')}. ` +
+        `Reason: ${WORKFLOW_SUITABILITY.reason}`
+      )
+    }
+  }
+
+  const requestedProblemType = normalizeSuitabilityValue(args.problem_type)
+  if (requestedProblemType && requestedProblemType !== 'auto') {
+    const supportedProblemTypes = (WORKFLOW_SUITABILITY.supported_problem_types || []).map(normalizeSuitabilityValue)
+    if (supportedProblemTypes.length && !supportsSuitabilityValue(supportedProblemTypes, requestedProblemType)) {
+      throw new Error(
+        `${meta.name} is not suitable for problem_type="${args.problem_type}". ` +
+        `Supported problem types: ${WORKFLOW_SUITABILITY.supported_problem_types.join(', ')}. ` +
+        `Typical use cases: ${WORKFLOW_SUITABILITY.problem_types.join('; ')}. ` +
+        `Reason: ${WORKFLOW_SUITABILITY.reason}`
+      )
+    }
+  }
+}
+
+assertWorkflowSuitability()
+
 // =============================================================================
 // KernelBand: Steering LLM-based Kernel Optimization via Hardware-Aware
 //             Multi-Armed Bandits

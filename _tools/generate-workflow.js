@@ -491,19 +491,20 @@ ${manifestResult.manifest_yaml}
 
 # Generation Rules:
 1. Start with \`export const meta = {...}\` — fill from manifest workflow.* and phases[].name/detail
-2. Add header comment block documenting: source paper, usage example with all args, arg descriptions
-3. Emit const declarations for all args (required without default, optional with || default)
-4. Emit canonical input resolution: optimize args.kernel_path when present; otherwise require args.problem_definition or args.problem_path, generate seed_candidates initial kernels, verify with test_command or benchmark_command, and optimize the best verified seed
-5. Emit let declarations for all state_variables
-6. Emit phase('Setup') with the Setup phase agents
-7. Emit the main loop (for iterative/search: for loop controlled by iterations unless the source method requires a specific budget name)
-8. Inside loop: emit each loop_body phase with its agents, using correct parallelism pattern:
+2. Immediately after meta, emit \`WORKFLOW_SUITABILITY\` with supported_languages, supported_problem_types, problem_types, reason, plus \`assertWorkflowSuitability()\` that hard-fails only when explicit \`args.language\` or \`args.problem_type\` is incompatible
+3. Add header comment block documenting: source paper, usage example with all args, arg descriptions
+4. Emit const declarations for all args (required without default, optional with || default)
+5. Emit canonical input resolution: optimize args.kernel_path when present; otherwise require args.problem_definition or args.problem_path, generate seed_candidates initial kernels, verify with test_command or benchmark_command, and optimize the best verified seed
+6. Emit let declarations for all state_variables
+7. Emit phase('Setup') with the Setup phase agents
+8. Emit the main loop (for iterative/search: for loop controlled by iterations unless the source method requires a specific budget name)
+9. Inside loop: emit each loop_body phase with its agents, using correct parallelism pattern:
    - "single" → await agent(...)
    - "parallel_fan_out" → await parallel(array.map(item => () => agent(...)))
    - "pipeline_then_parallel" → await pipeline(items, item => parallel([...]))
-9. Never hardcode an evaluator/compiler/profiler command in Usage examples or agent prompts. Describe the JSON/artifact contract and consume user-provided command args.
-9. Emit epilogue (final report agent)
-10. Emit return {...} with all return_fields, including input_mode, generated_kernel_path, initial_candidates, and initial_generation_result when generation is supported
+10. Never hardcode an evaluator/compiler/profiler command in Usage examples or agent prompts. Describe the JSON/artifact contract and consume user-provided command args.
+11. Emit epilogue (final report agent)
+12. Emit return {...} with all return_fields, including input_mode, generated_kernel_path, initial_candidates, and initial_generation_result when generation is supported
 
 # Critical constraints:
 - Every agent() call MUST have: label, phase, schema (except final report which can omit schema)
@@ -556,29 +557,34 @@ ${workflowCode.workflow_code}
 - [ ] Each phase has title and detail strings
 - [ ] meta.name is kebab-case
 
-## 2. Phase consistency
+## 2. Suitability contract
+- [ ] WORKFLOW_SUITABILITY exists immediately after meta
+- [ ] supported_languages, supported_problem_types, problem_types, and reason are present
+- [ ] assertWorkflowSuitability() checks explicit args.language and args.problem_type before work starts
+
+## 3. Phase consistency
 - [ ] Every phase() call matches a meta.phases title
 - [ ] No orphan phase() calls
 
-## 3. Agent schemas
+## 4. Agent schemas
 - [ ] Every agent() has options.label (kebab-case string)
 - [ ] Every agent() has options.phase matching a valid phase title
 - [ ] Every agent() with schema has type:'object', properties, required
 - [ ] Every required field exists in properties
 
-## 4. Args documentation
+## 5. Args documentation
 - [ ] Header comment block exists
 - [ ] All args.X references documented in header
 
-## 5. Return envelope
+## 6. Return envelope
 - [ ] Final return {} exists outside the loop
 - [ ] Return object is non-empty
 
-## 6. Parallelism integrity
+## 7. Parallelism integrity
 - [ ] parallel() receives array of () => agent(...) thunks
 - [ ] pipeline() has correct signature
 
-## 7. Syntax
+## 8. Syntax
 - [ ] Valid JavaScript (no TS annotations)
 - [ ] No undefined variable references
 - [ ] Template literals properly closed

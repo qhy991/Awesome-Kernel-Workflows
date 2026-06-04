@@ -13,6 +13,65 @@ export const meta = {
   ],
 }
 
+const WORKFLOW_SUITABILITY = {
+  supported_languages: ['triton', 'cuda', 'python'],
+  supported_problem_types: ['gpu-kernel-optimization', 'kernel-search'],
+  problem_types: ['world-model-guided kernel/operator search', 'benchmark-driven optimization with evaluator feedback'],
+  reason: 'K-Search relies on an evaluator-backed search tree and is intended for kernel/operator optimization in supported implementation languages.',
+}
+
+function normalizeSuitabilityValue(value) {
+  const raw = String(value || '').trim().toLowerCase().replace(/_/g, '-')
+  const aliases = {
+    'c++': 'cpp',
+    cxx: 'cpp',
+    cplusplus: 'cpp',
+    cute: 'cute-dsl',
+    hip: 'rocm',
+    'intel-xpu': 'xpu',
+    optimize: 'kernel-optimization',
+    optimization: 'kernel-optimization',
+    generate: 'kernel-generation',
+    generation: 'kernel-generation',
+    explain: 'performance-explanation',
+    explanation: 'performance-explanation',
+  }
+  return aliases[raw] || raw
+}
+
+function supportsSuitabilityValue(supported, requested) {
+  return supported.includes(requested) || supported.some(value => value.endsWith(`-${requested}`))
+}
+
+function assertWorkflowSuitability() {
+  const requestedLanguage = normalizeSuitabilityValue(args.language)
+  if (requestedLanguage && requestedLanguage !== 'auto') {
+    const supported = WORKFLOW_SUITABILITY.supported_languages.map(normalizeSuitabilityValue)
+    if (!supported.includes(requestedLanguage)) {
+      throw new Error(
+        `${meta.name} is not suitable for language="${args.language}". ` +
+        `Supported languages/backends: ${WORKFLOW_SUITABILITY.supported_languages.join(', ')}. ` +
+        `Reason: ${WORKFLOW_SUITABILITY.reason}`
+      )
+    }
+  }
+
+  const requestedProblemType = normalizeSuitabilityValue(args.problem_type)
+  if (requestedProblemType && requestedProblemType !== 'auto') {
+    const supportedProblemTypes = (WORKFLOW_SUITABILITY.supported_problem_types || []).map(normalizeSuitabilityValue)
+    if (supportedProblemTypes.length && !supportsSuitabilityValue(supportedProblemTypes, requestedProblemType)) {
+      throw new Error(
+        `${meta.name} is not suitable for problem_type="${args.problem_type}". ` +
+        `Supported problem types: ${WORKFLOW_SUITABILITY.supported_problem_types.join(', ')}. ` +
+        `Typical use cases: ${WORKFLOW_SUITABILITY.problem_types.join('; ')}. ` +
+        `Reason: ${WORKFLOW_SUITABILITY.reason}`
+      )
+    }
+  }
+}
+
+assertWorkflowSuitability()
+
 // =============================================================================
 // K-Search: Co-Evolving World Model Kernel Optimization Workflow
 // =============================================================================
