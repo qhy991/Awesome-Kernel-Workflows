@@ -123,6 +123,43 @@ Workflow 文件遵循 Claude Code 约定：导出 `meta`（名称、描述、阶
 
 ---
 
+## Workflow 适配矩阵
+
+每个顶层 workflow 都会在 `meta` 后声明 `WORKFLOW_SUITABILITY`。如果你显式传入了不支持的 `args.language` 或 `args.problem_type`，workflow 会在开始工作前失败，并说明支持范围和不适合原因。这个检查刻意保持保守：不会从自然语言 `problem_definition` 里猜语言或问题类型，避免误判开放题面。
+
+| Workflow | 支持语言 / 后端 | 支持的 `problem_type` | 适合处理 | 不适合 |
+|----------|-----------------|-----------------------|----------|--------|
+| [AccelOpt](AccelOpt/) | CUDA | `cuda-kernel-optimization`, `cuda-kernel-generation` | 已有 CUDA kernel，或先生成 CUDA seed 再用 NCU/benchmark 优化 | Triton/SYCL/XPU 任务，或没有 benchmark/profile 契约 |
+| [KEET](KEET/) | CUDA | `performance-explanation` | 基于 CUDA 源码和 Nsight Compute profile 做性能解释 | 生成或优化 kernel，尤其是没有 profile artifact 时 |
+| [ARGUS](ARGUS/) | Argus DSL, CUDA, ROCm, Triton | `invariant-guided-kernel-optimization`, `gpu-kernel-optimization` | 带 invariant checker / 测试反馈的 GPU kernel 优化 | 没有不变量或验证证据的任务 |
+| [AKO4X](AKO4X/) | Triton, CUDA, CuTe DSL, TileLang, C++, PyTorch | `gpu-kernel-optimization`, `kernel-generation` | 多轮 benchmark 驱动的 GPU kernel/DSL 优化 | 非 kernel 应用代码，或不支持的后端工具链 |
+| [KDA](KDA/) | CUDA | `cuda-kernel-optimization`, `cuda-kernel-generation` | 证据驱动的 CUDA 实现、验证和优化循环 | 非 CUDA 后端，除非后续泛化 KDA skill flow |
+| [K-Search](KSearch/) | Triton, CUDA, Python | `gpu-kernel-optimization`, `kernel-search` | 带 evaluator/benchmark 契约的 world-model tree search | 没有可执行 evaluator 反馈的任务 |
+| [AdaExplore](AdaExplore/) | Triton | `triton-kernel-optimization`, `triton-kernel-generation` | 从 PyTorch 算子规格生成/优化 Triton kernel，使用 MCTS 和失败记忆 | 直接 CUDA/CUTLASS/SYCL 优化 |
+| [KernelFoundry](KernelFoundry/) | SYCL, CUDA, Triton | `gpu-kernel-optimization`, `kernel-generation`, `kernel-search` | MAP-Elites 质量-多样性 kernel 搜索，需要 descriptor/archive 反馈 | 没有 archive 状态的单次确定性 patch |
+| [CUDA Agent](CUDAAgent/) | CUDA | `cuda-kernel-generation`, `cuda-kernel-optimization` | PyTorch model/operator 到自定义 CUDA ops 和 bindings | Triton/SYCL/CUTLASS-only 任务 |
+| [cuPilot](cuPilot/) | CUDA | `cuda-kernel-optimization` | 带 roofline/profiler 证据的策略级 CUDA 进化 | 非 CUDA kernels |
+| [TritorX](TritorX/) | Triton | `aten-triton-operator-generation`, `operator-generation` | ATen/Triton operator coverage 生成，以及 compile/lint/test/debug 循环 | 以性能为首要目标的 CUDA 调优 |
+| [KernelBand](KernelBand/) | Triton, CUDA | `gpu-kernel-optimization`, `kernel-search` | 使用硬件特征和 profiling 的 bandit-guided search | 缺少类似 profiling/evaluator 证据的后端 |
+| [KernelAgent](KernelAgent/) | Triton | `triton-kernel-generation`, `operator-generation` | 带 PyTorch-style verification harness 的 Triton 合成 | CUDA/C++/CUTLASS kernels |
+| [STARK](STARK/) | CUDA | `cuda-kernel-optimization`, `kernel-search` | 多 Agent 规划/调试的 CUDA tree-search refinement | 非 CUDA 后端，除非有对应 code-context adapter |
+| [ReGraphT](ReGraphT/) | CUDA | `cuda-kernel-optimization`, `kernel-search` | CUDA reasoning graph 和 Monte Carlo graph search | 非 CUDA 优化轨迹 |
+| [Astra](Astra/) | CUDA | `cuda-kernel-optimization` | 已有生产 CUDA/PyBind kernel，具备 tests 和 profiling | 从零生成 Triton/SYCL |
+| [CUDA-LLM](CUDALLM/) | CUDA | `cuda-kernel-generation`, `cuda-kernel-optimization` | 基于 task spec 的 CUDA feature search / reinforcement | 非 CUDA 输出语言 |
+| [CutlassGEMM](CutlassGEMM/) | CUTLASS, CUDA, C++ | `cutlass-gemm-optimization` | CUTLASS GEMM / SOL-ExecBench dispatch 调优 | CUTLASS GEMM 之外的通用 elementwise/attention kernel |
+| [ArchAgent](ArchAgent/) | C++ | `cache-policy-search` | ChampSim-style CPU cache replacement policy search | GPU kernel 优化 |
+| [FACT](FACT/) | CUTLASS, CUDA, C++ | `cutlass-pattern-synthesis`, `cutlass-gemm-optimization` | CUTLASS pattern 发现、实现、组合和消融 | 独立 Triton/SYCL kernels |
+| [GPU Forecasters](GPUForecasters/) | CUDA | `cuda-kernel-optimization`, `kernel-search` | 带 speedup forecaster 和 execute/abstain 反馈的 CUDA/GPU 搜索 | 没有 GPU 执行或预测器校准反馈的任务 |
+| [KernelBlaster](KernelBlaster/) | CUDA | `cuda-kernel-optimization` | 基于 NCU elapsed cycles 和持久记忆的 CUDA 优化 | 非 CUDA 后端 |
+| [KernelFoundryDx](KernelFoundryDx/) | Triton | `triton-kernel-optimization`, `triton-kernel-generation` | PyTorch reference 到 Triton 的多岛进化 | CUDA/CUTLASS/SYCL kernels |
+| [KernelSkill](KernelSkill/) | CUDA | `cuda-kernel-optimization`, `cuda-kernel-generation` | 从 PyTorch reference 生成/优化 CUDA custom kernels，并使用 memory/profiler guidance | Triton/SYCL/Metal 任务 |
+| [StitchCUDA](StitchCUDA/) | CUDA | `cuda-kernel-generation`, `cuda-kernel-optimization` | Planner/Coder/Verifier CUDA 合成和重规划 | 非 CUDA 后端 |
+| [Xe-Forge](Xe-Forge/) | Triton, SYCL, Intel XPU | `xpu-kernel-optimization`, `triton-kernel-optimization` | Intel XPU CoVeR staged refinement | NVIDIA CUDA-only 调优 |
+| [Generalist](Generalist/) | CUDA | `cuda-kernel-generation`, `cuda-kernel-optimization` | CUDA benchmark-driven default solver substrate | 后端无关求解；当前还未泛化 |
+| [Meta-Workflow](_meta/) | Tooling | N/A | 生成和验证 workflow 定义 | 直接 kernel 优化 |
+
+---
+
 ## 已收录 Workflows {#catalog}
 
 | 方法 | 标签 | 核心循环 | 论文 / 项目 |
@@ -207,9 +244,9 @@ Workflow 文件遵循 Claude Code 约定：导出 `meta`（名称、描述、阶
 ## 环境要求
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)（支持 Workflows 的版本）
-- NVIDIA GPU + CUDA 工具链（或 AMD GPU + ROCm，视 workflow 而定）
-- 推荐：**NVIDIA Nsight Compute**（`ncu`）— AccelOpt / KEET 等 workflow 以 profiling 证据驱动优化
-- 各 workflow 可能额外要求：独立 benchmark harness、`nvcc` 编译命令、实验输出目录等（见各 workflow 文件头部注释）
+- 按 workflow 后端准备对应工具链。CUDA workflow 需要 NVIDIA GPU + CUDA；Triton/SYCL/XPU/C++ workflow 需要对应 runtime 和 compiler stack。
+- CUDA profiling workflow 推荐：**NVIDIA Nsight Compute**（`ncu`）— AccelOpt / KEET 等 workflow 以 profiling 证据驱动优化
+- 各 workflow 可能额外要求：独立 benchmark harness、编译/构建命令、实验输出目录等（见各 workflow 文件头部注释）
 
 建议在容器或独立虚拟环境中运行；agent 可能会执行编译、`pip install` 等操作。
 
@@ -237,7 +274,7 @@ cd Awesome-Kernel-Workflows
 
 ### 3. 或仅安装到单个 kernel 项目
 
-在**待优化的 CUDA 工程**根目录下复制到项目级 `.claude/workflows/`：
+在**待优化的 kernel 工程**根目录下复制到项目级 `.claude/workflows/`：
 
 ```bash
 mkdir -p /path/to/your-kernel-project/.claude/workflows
@@ -257,6 +294,7 @@ Workflow({
   args: {
     problem_definition: 'Implement y = gelu(x) for a contiguous fp32 tensor',
     language: 'cuda',
+    problem_type: 'cuda-kernel-generation',
     target_gpu: 'H100',
     test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
     benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
@@ -275,6 +313,8 @@ Workflow({
   args: {
     kernel_path: '/path/to/kernel.cu',
     op_description: 'Quantized GEMM Q4_0 weight × FP32 activation',
+    language: 'cuda',
+    problem_type: 'cuda-kernel-optimization',
     target_gpu: 'H100',
     test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
     benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
