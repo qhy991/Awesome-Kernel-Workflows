@@ -61,6 +61,14 @@ const FUSER_EXTRACT_MODEL = args.fuser_extract_model || MODEL_NAME
 const FUSER_DISPATCH_MODEL = args.fuser_dispatch_model || MODEL_NAME
 const FUSER_COMPOSE_MODEL = args.fuser_compose_model || MODEL_NAME
 
+// --- Model routing (additive harness wiring) ---
+const MODEL = {
+  mechanical: args.model_mechanical || 'haiku',  // runs shell/scripts, sandboxed test exec, parses output, bookkeeping
+  profile: args.model_profile || 'sonnet',       // routing/complexity analysis
+  judgment: args.model_judgment || 'opus',       // generating or editing Triton kernel code, refinement/debug, composition, report
+}
+const EST_PER_ROUND = args.est_tokens_per_round || 60000
+
 // --- State ---
 let routingDecision = null        // { path: 'direct' | 'pipeline', reason: string }
 let problemDescription = ''       // Full problem description (from file or arg)
@@ -182,6 +190,7 @@ Return a JSON object with:
 - complexity_signals: any signals that suggest this needs multi-subgraph decomposition`, {
   label: 'setup-problem',
   phase: 'Setup',
+  model: MODEL.profile,
   schema: {
     type: 'object',
     properties: {
@@ -223,6 +232,7 @@ The test harness must:
 Return ONLY the Python test code (no markdown, no explanation).`, {
   label: 'setup-test',
   phase: 'Setup',
+  model: MODEL.mechanical,
   schema: {
     type: 'object',
     properties: {
@@ -275,6 +285,7 @@ Return a JSON object with:
 - estimated_difficulty: 'easy', 'medium', 'hard'`, {
   label: 'route-analysis',
   phase: 'Route',
+  model: MODEL.profile,
   schema: {
     type: 'object',
     properties: {
@@ -310,6 +321,7 @@ Return a JSON object with:
 - subgraphs: array of {id, operations, inputs, outputs, shape_signature, description}`, {
     label: 'route-subgraphs',
     phase: 'Route',
+    model: MODEL.profile,
     schema: {
       type: 'object',
       properties: {
@@ -391,6 +403,8 @@ Return a JSON object with:
 - potential_issues: any concerns about correctness or performance`, {
         label: `gen-${target.id}-seed${seedIdx}`,
         phase: 'Generate',
+        model: MODEL.judgment,
+        isolation: 'worktree',
         schema: {
           type: 'object',
           properties: {
@@ -473,6 +487,7 @@ Return a JSON object with:
 - verification_result: 'pass' | 'fail' | 'timeout' | 'error'`, {
       label: `verify-${candidate.id}`,
       phase: 'Verify',
+      model: MODEL.mechanical,
       schema: {
         type: 'object',
         properties: {
@@ -544,6 +559,7 @@ const failedCandidates = candidates.filter(c => c.status === 'failed')
 let currentRound = 0
 
 while (failedCandidates.length > 0 && currentRound < MAX_ROUNDS && verifiedKernels.length === 0) {
+  if (typeof budget !== 'undefined' && budget.total && budget.remaining() < EST_PER_ROUND) { log(`token budget ~exhausted — stop`); break }
   currentRound++
   log(`Refinement round ${currentRound}/${MAX_ROUNDS} — ${failedCandidates.length} candidates to fix`)
 
@@ -594,6 +610,8 @@ Return a JSON object with:
 - fix_explanation: brief explanation of what was wrong and how it was fixed`, {
       label: `refine-${candidate.id}-r${currentRound}`,
       phase: 'Refine',
+      model: MODEL.judgment,
+      isolation: 'worktree',
       schema: {
         type: 'object',
         properties: {
@@ -662,6 +680,7 @@ Execute the test and report results. Return JSON with:
 - verification_result: 'pass' | 'fail' | 'timeout' | 'error'`, {
         label: `reverify-${candidate.id}-r${currentRound}`,
         phase: 'Refine',
+        model: MODEL.mechanical,
         schema: {
           type: 'object',
           properties: {
@@ -755,6 +774,7 @@ Return a JSON object with:
 - intermediate_tensors: list of intermediate tensor allocations needed`, {
     label: 'compose-stitch',
     phase: 'Compose',
+    model: MODEL.judgment,
     schema: {
       type: 'object',
       properties: {
@@ -791,6 +811,7 @@ Execute the test and report results. Return JSON with:
 - verification_result: 'pass' | 'fail' | 'timeout' | 'error'`, {
       label: 'compose-verify',
       phase: 'Compose',
+      model: MODEL.mechanical,
       schema: {
         type: 'object',
         properties: {
@@ -867,6 +888,7 @@ Return a JSON object with:
 - artifacts_path: string`, {
   label: 'report-summary',
   phase: 'Report',
+  model: MODEL.judgment,
   schema: {
     type: 'object',
     properties: {

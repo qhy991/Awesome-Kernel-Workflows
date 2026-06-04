@@ -89,6 +89,16 @@ const TARGET_GPU = args.target_gpu || 'b200'
 const MODE = args.mode || 2  // 2 = static harness, 3 = harness co-evolution
 const USE_AKO4X_SKILLS = args.use_ako4x_skills !== false
 
+// Model routing by agent role
+const MODEL = {
+  mechanical: args.model_mechanical || 'haiku',  // runs shell/scripts, parses output, bookkeeping
+  profile: args.model_profile || 'sonnet',       // profiling / metric analysis
+  judgment: args.model_judgment || 'opus',       // planning, code gen/edit/debug, final report
+}
+
+// Token budget guard
+const EST_PER_ROUND = args.est_tokens_per_round || 60000
+
 // =============================================================================
 // State: cross-round memory
 // =============================================================================
@@ -182,6 +192,7 @@ Analyze it and return a JSON object with:
 Return ONLY the JSON object.`, {
   label: 'read-baseline',
   phase: 'Setup',
+  model: MODEL.mechanical,
   schema: {
     type: 'object',
     properties: {
@@ -241,6 +252,7 @@ Create ${EXP_DIR}/state.json:
 Execute these commands.`, {
   label: 'create-workspace',
   phase: 'Setup',
+  model: MODEL.mechanical,
 })
 
 // Establish baseline (NCU profile if available, else benchmark)
@@ -273,6 +285,7 @@ ${baselineKernelCode.substring(0, 4000)}
 Return structured profile results.`, {
     label: 'ncu-baseline',
     phase: 'Setup',
+    model: MODEL.profile,
     schema: {
       type: 'object',
       properties: {
@@ -312,6 +325,7 @@ Run the benchmark and extract the performance score (latency in ms or speedup).
 Return the baseline performance metric.`, {
     label: 'benchmark-baseline',
     phase: 'Setup',
+    model: MODEL.mechanical,
     schema: {
       type: 'object',
       properties: {
@@ -334,6 +348,8 @@ Return the baseline performance metric.`, {
 // Multi-Round Loop
 // =============================================================================
 for (let round = 0; round < ROUNDS; round++) {
+  if (typeof budget !== 'undefined' && budget.total && budget.remaining() < EST_PER_ROUND) { log(`token budget ~exhausted — stop`); break }
+
   log(`\n=== Round ${round + 1}/${ROUNDS} | Best: ${bestScore} | Parent: ${currentParentName} | Experience: ${experienceMemory.length} | Dead-ends: ${deadEnds.length} ===`)
 
   // =========================================================================
@@ -410,6 +426,7 @@ Optimization levers (pick ONE):
 - DSL-specific: num_warps/num_stages (Triton), layout composition (CuTe), schedule (TileLang)`, {
         label: `hypothesis-${round}-${i}`,
         phase: 'Iterate',
+        model: MODEL.judgment,
         schema: {
           type: 'object',
           properties: {
@@ -469,6 +486,8 @@ ${deadEndsSection}
 Return the complete kernel code.`, {
           label: `impl-${round}-${plan.title.substring(0, 10)}-v${si}`,
           phase: 'Iterate',
+          model: MODEL.judgment,
+          isolation: 'worktree',
           schema: {
             type: 'object',
             properties: {
@@ -513,6 +532,7 @@ Run the command and check:
 Return pass/fail with error details if failed.`, {
           label: `smoke-${iterLabel}`,
           phase: 'Iterate',
+          model: MODEL.mechanical,
           schema: {
             type: 'object',
             properties: {
@@ -561,6 +581,7 @@ ${impl.code.substring(0, 4000)}
 Return benchmark results.`, {
         label: `bench-${iterLabel}`,
         phase: 'Iterate',
+        model: MODEL.mechanical,
         schema: {
           type: 'object',
           properties: {
@@ -642,6 +663,7 @@ ${roundIterations.map(it => `- **${it.iter}**: ${it.expected}`).join('\n')}
 Execute this step.`, {
     label: `iterations-${round + 1}`,
     phase: 'Iterate',
+    model: MODEL.mechanical,
   })
 
   // =========================================================================
@@ -681,6 +703,7 @@ ${roundBest.code.substring(0, 3000)}
 Return verdict: is this a legitimate improvement or suspicious?`, {
       label: `silent-skip-check-${round + 1}`,
       phase: 'Archive',
+      model: MODEL.judgment,
       schema: {
         type: 'object',
         properties: {
@@ -724,6 +747,7 @@ ${roundBest.code.substring(0, 5000)}
 Return verdict.`, {
       label: `lib-check-${round + 1}`,
       phase: 'Archive',
+      model: MODEL.judgment,
       schema: {
         type: 'object',
         properties: {
@@ -798,6 +822,7 @@ ${roundBest.code.substring(0, 5000)}
 Execute these steps.`, {
         label: `archive-${variantName}`,
         phase: 'Archive',
+        model: MODEL.mechanical,
       })
 
       currentParentName = variantName
@@ -828,6 +853,7 @@ Append these to the existing TRAPS.md file. Format each as:
 Execute this step.`, {
           label: `update-traps-${round + 1}`,
           phase: 'Archive',
+          model: MODEL.mechanical,
         })
       }
     } else {
@@ -874,6 +900,7 @@ ${failedIters.map(it => `## ${it.iter}: ${it.title}
 Execute this step.`, {
       label: `archive-failed-${round + 1}`,
       phase: 'Archive',
+      model: MODEL.mechanical,
     })
   }
 
@@ -936,6 +963,7 @@ Or if no proposals: just write "none".
 Execute this step.`, {
       label: `retrospect-${round + 1}`,
       phase: 'Retrospect',
+      model: MODEL.judgment,
     })
 
     // Master gates the proposals (simplified for workflow)
@@ -967,6 +995,7 @@ Execute this step.`, {
 Execute.`, {
     label: `update-state-${round + 1}`,
     phase: 'Archive',
+    model: MODEL.mechanical,
   })
 
   log(`Round ${round + 1} done. Best: ${bestScore} | Consecutive no-improve: ${consecutiveNoImprove}`)
@@ -1022,6 +1051,7 @@ Write a report covering:
 5. Recommendations for further optimization`, {
   label: 'final-report',
   phase: 'Report',
+  model: MODEL.judgment,
 })
 
 return {

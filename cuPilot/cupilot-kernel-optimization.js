@@ -84,6 +84,14 @@ const STRATEGY_POOL_PATH = args.strategy_pool_path || ''
 const EXP_DIR = args.exp_dir || '/tmp/cupilot_exp'
 const KERNEL_PATH = args.kernel_path || ''
 const MAX_REVISE_LOOPS = args.max_revise_loops || 3
+const EST_PER_ROUND = args.est_tokens_per_round || 60000
+
+// --- Model routing ---
+const MODEL = {
+  mechanical: args.model_mechanical || 'haiku',  // runs shell/scripts, parses output, population/strategy bookkeeping
+  profile: args.model_profile || 'sonnet',       // profiling / roofline / NCU metric analysis
+  judgment: args.model_judgment || 'opus',       // strategy gen, code translation/gen/edit/debug, final report
+}
 const EVIDENCE_MODE = (COMPILE_CMD && TEST_CMD && NCU_CMD && STRATEGY_CORPUS_PATH)
   ? 'measured'
   : 'conservative_missing_evidence'
@@ -137,6 +145,7 @@ ${KERNEL_SPEC ? `\`\`\`python\n${KERNEL_SPEC.substring(0, 3000)}\n\`\`\`` : `Ope
 4. Generate initial optimization guidance based on roofline position.
 
 Return the initial kernel and roofline analysis.`, {
+    model: MODEL.judgment,
     label: 'setup-kernel-roofline',
     phase: 'Setup',
     schema: {
@@ -193,6 +202,7 @@ For each strategy, provide:
 - expected_metrics: which NCU metrics should improve
 
 Return the strategy pool.`, {
+    model: MODEL.judgment,
     label: 'setup-strategy-pool',
     phase: 'Setup',
     schema: {
@@ -237,6 +247,7 @@ log(`Guidance: ${kernelSetup?.roofline_guidance?.substring(0, 100)}...`)
 
 for (epoch = 0; epoch < EPOCHS; epoch++) {
   for (generation = 0; generation < GENERATIONS; generation++) {
+    if (typeof budget !== 'undefined' && budget.total && budget.remaining() < EST_PER_ROUND) { log(`token budget ~exhausted — stop`); break }
     log(`\n=== Epoch ${epoch + 1}/${EPOCHS}, Gen ${generation + 1}/${GENERATIONS} | Pop: ${population.length} | Best: ${bestKernel.speedup.toFixed(2)}x ===`)
 
     // =========================================================================
@@ -275,6 +286,7 @@ ${rooflineClass === 'compute-bound' ? '   - Tensor core usage, compute throughpu
 6. Include at least one "exploratory" strategy that tries something novel
 
 Return new strategies for this generation.`, {
+      model: MODEL.judgment,
       label: `strategize-e${epoch}-g${generation}`,
       phase: 'Strategize',
       schema: {
@@ -334,6 +346,8 @@ ${strat.strategy}
 5. Include proper error checking and bounds handling
 
 Return the optimized kernel.`, {
+          model: MODEL.judgment,
+          isolation: 'worktree',
           label: `translate-e${epoch}-g${generation}-s${idx}`,
           phase: 'Translate',
           schema: {
@@ -391,6 +405,8 @@ Then return to Step 1.
 If a kernel cannot be fixed after ${MAX_REVISE_LOOPS} attempts, mark it as failed.
 
 Return the final revised kernel and its metrics.`, {
+          model: MODEL.judgment,
+          isolation: 'worktree',
           label: `revise-e${epoch}-g${generation}-k${idx}`,
           phase: 'Revise',
           schema: {
@@ -498,6 +514,7 @@ Write:
 3. Strategy-level crossover: which combinations were most productive?
 4. Hardware utilization achieved vs theoretical peak
 5. Remaining optimization opportunities`, {
+  model: MODEL.judgment,
   label: 'final-report',
   phase: 'Report',
 })
