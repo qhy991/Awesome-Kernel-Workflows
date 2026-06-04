@@ -27,6 +27,7 @@ These are the fidelity anchor — real, deterministic, unit-tested. The Claude C
 | `diagnose.py` | C | `diagnose.py --metrics m.json` — metrics → `bottleneck_class` |
 | `memory_store.py` | D | `memory_store.py --db DB retrieve|update|add-deadend` — persistent state-keyed memory |
 | `method_gate.py` | E | `method_gate.py --class memory_bound` — `bottleneck_class` → `allowed_methods` |
+| `verify_insight.py` | B+ | `verify_insight.py --insight i.json --refuted 1` — deterministic confidence downgrade (pairs with an LLM refuter) |
 
 Layer F (cost-control: ceiling / stagnation / early-term) is inline JS in the solver.
 

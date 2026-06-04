@@ -22,9 +22,9 @@ is our advantage over generic agent-orchestration — don't dilute it.
 | 1 | Token-budget wiring | token budgets | generalist loop, experiment | scale depth to budget; hard cap | **P0 ✅ done** |
 | 2 | Worktree isolation for parallel candidates | migrations | generalist Evaluate | prevents parallel file-edit conflicts | **P0 ✅ done** |
 | 3 | Model/intelligence routing | model routing | generalist `agent({model})`, profile | big token savings | **P0 ✅ done** |
-| 4 | Adversarial insight verifier | adversarial verification | KerSor analyzer/synthesizer | sharper transfer-object confidence | P1 |
-| 5 | Loop-until-dry stop condition | loop until done | KerSor hook / generalist | covers the tail, fewer premature stops | P1 |
-| 6 | `/loop` + `/goal` experiment harness | loop+goal | experiment runner | reproducible, unattended batch runs | P1 |
+| 4 | Adversarial insight verifier | adversarial verification | generalist Learn (+ KerSor analyzer TODO) | sharper transfer-object confidence | P1 ✅ done (generalist) |
+| 5 | Loop-until-dry stop condition | loop until done | generalist (+ KerSor hook TODO) | covers the tail, fewer premature stops | P1 ✅ done (generalist) |
+| 6 | `/loop` + `/goal` experiment harness | loop+goal | experiment-design.md | reproducible, unattended batch runs | P1 ✅ documented |
 | 7 | Dynamic solver synthesis | dynamic vs static | KerSor + `_meta` generator | bespoke-per-kernel (future work) | P2 |
 | 8 | Tournament for subjective sub-choices | tournament | generalist Plan | only for plan choice, NOT kernel ranking | P2 |
 | 9 | Quarantine for spec-to-kernel mode | triage quarantine | KerSor task-directory mode | security hygiene on untrusted task dirs | P2 |
@@ -65,6 +65,11 @@ transfer object as `confidence: measured`, spawn a refuter agent ("try to refute
 attribution from the profile data; default to refuted if uncertain"). If refuted →
 downgrade to `hypothesized`. This raises the trust of transferred evidence without
 touching the deterministic path. (Article: "panel of verifiers and refuters.")
+**Done in the generalist**: a refuter agent (judgment) produces `{refuted}`, then the
+deterministic `verify_insight.py` applies the downgrade rules (non-executable evidence
+caps at `inferred`; refuted downgrades one level). **TODO**: wire the same
+`verify_insight.py` into KerSor's `result-analyzer` so the cross-solver transfer object
+gets the same treatment (a KernelNav-repo change, deferred).
 
 ### 5. Loop-until-dry stop condition
 Today the meta-loop stops at `max_workflows` or an LLM `STALLED`. Add a deterministic
