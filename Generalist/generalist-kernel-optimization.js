@@ -61,6 +61,16 @@ const TARGET = args.target_speedup || 1.5
 const STAGNATION_EPS = 0.02   // < 2% improvement counts as no progress (Xe-Forge/KSearch)
 const STAGNATION_LIMIT = 2    // consecutive stagnant rounds -> stop
 
+// P0 — model/intelligence routing: mechanical steps don't need Opus (token savings).
+const MODEL = {
+  mechanical: args.model_mechanical || 'haiku',  // run substrate scripts, parse JSON
+  profile: args.model_profile || 'sonnet',       // run eval/ncu, normalize metrics
+  judgment: args.model_judgment || 'opus',       // plan / implement / report (override per kernel complexity)
+}
+// P0 — token-budget wiring: rough per-unit output-token estimates for scaling + stopping.
+const EST_PER_CANDIDATE = args.est_tokens_per_candidate || 20000
+const EST_PER_ROUND = EST_PER_CANDIDATE * BREADTH + 15000
+
 // Schemas for structured agent returns
 const METRICS_SCHEMA = {
   type: 'object',
@@ -86,7 +96,7 @@ const ANTICHEAT_SCHEMA = {
 }
 
 phase('Setup')
-log(`Generalist solver | beam topology | breadth=${BREADTH} topk=${TOPK} iterations=${ITERATIONS} target=${TARGET}x`)
+log(`Generalist solver | beam | breadth=${BREADTH} topk=${TOPK} iters=${ITERATIONS} target=${TARGET}x | models ${MODEL.mechanical}/${MODEL.profile}/${MODEL.judgment} | budget ${(typeof budget !== 'undefined' && budget.total) ? Math.round(budget.total / 1000) + 'k' : 'unbounded'}`)
 
 // Baseline candidate seeds the beam.
 let candidateBeam = [{ id: 'baseline', parent_id: null, code_path: KERNEL_PATH, speedup: 1.0, metrics: {}, planTitle: 'baseline' }]
@@ -98,6 +108,15 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
   const best = candidateBeam[0]
   log(`\n=== Iteration ${iter}/${ITERATIONS} | best ${bestSpeedup.toFixed(3)}x | beam ${candidateBeam.length} ===`)
 
+  // P0 — token budget: stop if a full round can't fit; scale breadth to remaining budget.
+  if (typeof budget !== 'undefined' && budget.total && budget.remaining() < EST_PER_ROUND) {
+    log(`token budget ~exhausted (${Math.round(budget.remaining() / 1000)}k < ${Math.round(EST_PER_ROUND / 1000)}k/round) — stop`)
+    break
+  }
+  const effBreadth = (typeof budget !== 'undefined' && budget.total)
+    ? Math.max(1, Math.min(BREADTH, Math.floor(budget.remaining() / EST_PER_CANDIDATE)))
+    : BREADTH
+
   // ---- Profile (Layer C input) ----
   phase('Profile')
   const metrics = await agent(
@@ -108,7 +127,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
     `Return the JSON exactly per the schema: compiled, correct, candidate_latency_ms, ` +
     `eager_latency_ms, compile_latency_ms, speedup, and metrics{dram_pct, sm_pct, occupancy, latency_ms}. ` +
     `Use null for unknown numbers. Do not fabricate; missing => null.`,
-    { label: `profile-${iter}`, phase: 'Profile', schema: METRICS_SCHEMA })
+    { label: `profile-${iter}`, phase: 'Profile', schema: METRICS_SCHEMA, model: MODEL.profile })
 
   // ---- Diagnose (Layer C, deterministic script) ----
   phase('Diagnose')
@@ -116,7 +135,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
     `Write these metrics to ${EXP_DIR}/run-${iter}/metrics.json:\n${JSON.stringify(metrics.metrics || {})}\n` +
     `Then run exactly: \`python3 ${SUBSTRATE}/diagnose.py --metrics ${EXP_DIR}/run-${iter}/metrics.json\` ` +
     `and return its stdout JSON verbatim ({bottleneck_class, evidence}).`,
-    { label: `diagnose-${iter}`, phase: 'Diagnose', schema: JSON_PASSTHROUGH })
+    { label: `diagnose-${iter}`, phase: 'Diagnose', schema: JSON_PASSTHROUGH, model: MODEL.mechanical })
   const bclass = diag.bottleneck_class || 'unknown'
   log(`bottleneck_class = ${bclass}`)
 
@@ -126,11 +145,11 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
     () => agent(
       `Run exactly: \`python3 ${SUBSTRATE}/memory_store.py --db ${MEMORY_DB} retrieve --class ${bclass}\` ` +
       `and return its stdout JSON verbatim ({bottleneck_class, techniques, dead_ends}).`,
-      { label: `retrieve-${iter}`, phase: 'Retrieve', schema: JSON_PASSTHROUGH }),
+      { label: `retrieve-${iter}`, phase: 'Retrieve', schema: JSON_PASSTHROUGH, model: MODEL.mechanical }),
     () => agent(
       `Run exactly: \`python3 ${SUBSTRATE}/method_gate.py --class ${bclass} --metrics ${EXP_DIR}/run-${iter}/metrics.json\` ` +
       `and return its stdout JSON verbatim ({bottleneck_class, allowed_methods, rationale}).`,
-      { label: `gate-${iter}`, phase: 'Retrieve', schema: JSON_PASSTHROUGH }),
+      { label: `gate-${iter}`, phase: 'Retrieve', schema: JSON_PASSTHROUGH, model: MODEL.mechanical }),
   ])
   const allowed = (gate && gate.allowed_methods) || []
   const priorTech = (mem && mem.techniques) || []
@@ -145,12 +164,12 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
     `# Dead-ends to AVOID (re-allowed only if revalidate_if holds): ${JSON.stringify(deadEnds)}\n` +
     `# Current best: ${best.code_path} @ ${best.speedup.toFixed(2)}x`
   const plans = (await parallel(
-    Array.from({ length: BREADTH }, (_, i) => () => agent(
-      `You are planner #${i + 1}/${BREADTH} for a ${OP} kernel.\n${planContext}\n\n` +
+    Array.from({ length: effBreadth }, (_, i) => () => agent(
+      `You are planner #${i + 1}/${effBreadth} for a ${OP} kernel.\n${planContext}\n\n` +
       `Propose ONE optimization plan that uses ONLY an allowed method. Mark the exact code region to change with ` +
       `grounded anchors <<<IMPROVE BEGINS>>> ... <<<IMPROVE ENDS>>>. Pick the highest-confidence prior technique ` +
       `that fits, unless a dead-end forbids it. Return {method, plan, anchors}.`,
-      { label: `plan-${iter}-${i + 1}`, phase: 'Plan', schema: JSON_PASSTHROUGH })))
+      { label: `plan-${iter}-${i + 1}`, phase: 'Plan', schema: JSON_PASSTHROUGH, model: MODEL.judgment })))
   ).filter(Boolean)
 
   // ---- Evaluate each plan: implement -> eval -> anti-cheat (Layers B, A) ----
@@ -161,13 +180,13 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
       `Implement this plan on a COPY of ${best.code_path} into ${runDir}/kernel, respecting the ` +
       `<<<IMPROVE BEGINS/ENDS>>> anchors. Method: ${p.method}. Plan: ${JSON.stringify(p.plan)}.\n` +
       `Then run \`${EVAL_CMD}\` and return the JSON metrics per schema.`,
-      { label: `impl-${iter}-${i + 1}`, phase: 'Evaluate', schema: METRICS_SCHEMA })
+      { label: `impl-${iter}-${i + 1}`, phase: 'Evaluate', schema: METRICS_SCHEMA, model: MODEL.judgment, isolation: 'worktree' })
     const ac = await agent(
       `Write these metrics to ${runDir}/metrics.json:\n${JSON.stringify({ ...m, claimed_speedup: m.speedup })}\n` +
       `Then run exactly: \`python3 ${SUBSTRATE}/anti_cheat.py --source ${runDir}/kernel --metrics ${runDir}/metrics.json\` ` +
       `and return its stdout JSON verbatim. Then run ` +
       `\`python3 ${SUBSTRATE}/evidence_schema.py validate ${runDir}/metrics.json\` to confirm it is well-formed.`,
-      { label: `anticheat-${iter}-${i + 1}`, phase: 'Evaluate', schema: ANTICHEAT_SCHEMA })
+      { label: `anticheat-${iter}-${i + 1}`, phase: 'Evaluate', schema: ANTICHEAT_SCHEMA, model: MODEL.mechanical })
     return { plan: p, metrics: m, anticheat: ac, code_path: `${runDir}/kernel`,
              recorded_speedup: ac.valid ? ac.recorded_speedup : 0 }
   })()))).filter(Boolean)
@@ -181,7 +200,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
       ` ; then run \`python3 ${SUBSTRATE}/memory_store.py --db ${MEMORY_DB} add-deadend ` +
       `--claim ${JSON.stringify(e.plan.method)} --why ${JSON.stringify(e.anticheat.reward_reason || (e.anticheat.blocking_flags || []).join(','))} --revalidate-if "metrics change"\``) +
     ` and return {updated:true}.`,
-    { label: `learn-${iter}-${e.plan.method}`, phase: 'Learn', schema: JSON_PASSTHROUGH })))
+    { label: `learn-${iter}-${e.plan.method}`, phase: 'Learn', schema: JSON_PASSTHROUGH, model: MODEL.mechanical })))
 
   // ---- Beam update (deterministic JS): merge, keep top-K by recorded speedup ----
   const newCandidates = evaluated
@@ -213,7 +232,7 @@ await agent(
   `All attempts: ${JSON.stringify(allAttempts)}\n` +
   `Cover: which methods the gate allowed, what the persistent memory recommended, ` +
   `which attempts were rejected by anti-cheat and why, and the final best kernel path.`,
-  { label: 'final-report', phase: 'Report' })
+  { label: 'final-report', phase: 'Report', model: MODEL.judgment })
 
 return {
   solver: 'generalist-kernel-optimization',
