@@ -12,6 +12,7 @@ not a monolith.
 | [`SOLVER-SDK.md`](./SOLVER-SDK.md) | The substrate contract: Layers A–F, conformance levels L0–L3 |
 | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | substrate ↔ generalist solver ↔ KerSor relationship + invocation |
 | [`EXPERIMENT-SOLVER-SET.md`](./EXPERIMENT-SOLVER-SET.md) | topology-deduplicated 5-solver experiment pool |
+| [`IMPROVEMENTS.md`](./IMPROVEMENTS.md) | prioritized pattern improvements (token budget, model routing, worktree isolation, adversarial verify, …) |
 
 ## Deterministic scripts (stdlib Python; run by agent Bash steps)
 

@@ -40,8 +40,20 @@ Workflow({ name: 'generalist-kernel-optimization', args: {
   exp_dir: '/path/to/experiment/output',
   memory_db: '/path/to/experiment/memory.json', // persistent; defaults to exp_dir/memory.json
   iterations: 3, breadth: 3, topk: 3, target_speedup: 1.5,
+  // P0 — optional cost/robustness controls:
+  model_mechanical: 'haiku',   // script-running / parsing steps
+  model_profile: 'sonnet',     // profiling + metric normalization
+  model_judgment: 'opus',      // planning / implementation / report
+  est_tokens_per_candidate: 20000,  // budget-scaling estimate
 }})
 ```
+
+**P0 applied** (see [`../_substrate/IMPROVEMENTS.md`](../_substrate/IMPROVEMENTS.md)):
+token-budget wiring (scales `breadth` to `budget.remaining()`, hard-stops when a
+round won't fit), **worktree isolation** on parallel candidate implementation
+(no file-edit conflicts), and **model routing** (mechanical steps run on Haiku/Sonnet,
+only planning/codegen on Opus — most tokens are mechanical, so this is the cheapest
+large saving).
 
 `eval_command` must write JSON: `{compiled, correct, candidate_latency_ms,
 eager_latency_ms, compile_latency_ms, speedup, metrics:{dram_pct, sm_pct,
