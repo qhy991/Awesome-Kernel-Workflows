@@ -62,12 +62,12 @@ Workflow({
     kernel_path: '/path/to/kernelbench-cuda/level1/001_Square_matrix_multiplication/init.cu',
     op_description: 'Square matrix multiplication',
     optimization_db_path: '/path/to/optimization_database.json',
-    harness_build_cmd: 'nvcc -O3 -lineinfo -arch=sm_89 -o bench driver.cpp init.cu',
+    harness_build_cmd: '<user-provided harness build command>',
     kernel_name_regex: 'matmul_kernel',
-    ncu_binary: 'ncu',
+    ncu_binary: '<user-provided ncu binary path>',
     rl_iterations: 3,
     rollout_steps: 4,
-    gpu_type: 'L40S',
+    target_gpu: 'L40S',
   },
 })
 ```

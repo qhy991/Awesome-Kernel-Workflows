@@ -52,7 +52,7 @@ Return JSON:
   "tree_depth_limit": <int>,
   "baseline_perf": <float>,
   "backend": "modal|local",
-  "gpu_target": "A100|H100|V100|..."
+  "target_gpu": "A100|H100|V100|..."
 }`,
     {
       label: 'Setup GPUForecasters',
@@ -69,7 +69,7 @@ Return JSON:
           tree_depth_limit: { type: 'integer' },
           baseline_perf: { type: 'number' },
           backend: { type: 'string' },
-          gpu_target: { type: 'string' },
+          target_gpu: { type: 'string' },
         },
         required: ['kernel_name', 'optimization_space', 'forecaster_models', 'baseline_perf'],
       },
@@ -81,7 +81,7 @@ Return JSON:
     return { success: false, reason: 'setup_failed' };
   }
 
-  log(`Optimizing ${setupResult.kernel_name} on ${setupResult.gpu_target}`);
+  log(`Optimizing ${setupResult.kernel_name} on ${setupResult.target_gpu}`);
   log(`Search space: ${setupResult.optimization_space.search_space_size} configurations`);
   log(`Forecaster models: ${setupResult.forecaster_models.join(', ')}`);
 
@@ -111,7 +111,7 @@ Forecaster models: ${setupResult.forecaster_models.join(', ')}
 
 Training process:
 1. Sample initial configurations (random, LHS, Sobol)
-2. Execute each config on ${setupResult.gpu_target} and measure speedup
+2. Execute each config on ${setupResult.target_gpu} and measure speedup
 3. Collect training dataset: (config, speedup) pairs
 4. Train each forecaster model:
    - Input: configuration vector
@@ -445,7 +445,7 @@ Best config: ${bestConfig}
 Best speedup: ${bestSpeedup.toFixed(3)}x
 
 Validation:
-1. Execute on target hardware (${setupResult.gpu_target}) multiple times
+1. Execute on target hardware (${setupResult.target_gpu}) multiple times
 2. Measure performance statistics:
    - Mean speedup
    - Std dev
@@ -517,7 +517,7 @@ Return JSON:
 
 Summary:
 - Kernel: ${setupResult.kernel_name}
-- Target GPU: ${setupResult.gpu_target}
+- Target GPU: ${setupResult.target_gpu}
 - Search space: ${setupResult.optimization_space.search_space_size} configs
 - Training budget: ${trainingResult.training_samples} samples
 - PUCT simulations: ${puctResult.simulations}
@@ -577,7 +577,7 @@ Return JSON:
     method: 'GPU Forecasters',
     approach: 'Learned speedup forecasting + PUCT search',
     kernel: setupResult.kernel_name,
-    gpu_target: setupResult.gpu_target,
+    target_gpu: setupResult.target_gpu,
     search_space_size: setupResult.optimization_space.search_space_size,
     training_budget: trainingResult.training_samples,
     forecaster_models: trainingResult.trained_models.map(m => m.model_name),

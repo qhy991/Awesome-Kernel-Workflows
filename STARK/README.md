@@ -113,29 +113,29 @@ Each agent receives a tailored view of history:
 
 ## Usage
 
-### Basic — Optimize a reference kernel with default budget (30 attempts)
+### Basic — Optimize a reference kernel with default iterations (30 attempts)
 
 ```javascript
 Workflow({name: 'stark-kernel-optimization', args: {
-  reference_kernel_path: '/path/to/reference.cu',
+  kernel_path: '/path/to/reference.cu',
   test_harness_path: '/path/to/test.py',
 }})
 ```
 
-### Tuned — Higher budget, custom temperatures
+### Tuned — Higher iterations, custom temperatures
 
 ```javascript
 Workflow({name: 'stark-kernel-optimization', args: {
-  reference_kernel_path: '/path/to/reference.cu',
+  kernel_path: '/path/to/reference.cu',
   test_harness_path: '/path/to/test.py',
-  budget: 50,
+  iterations: 50,
   epsilon: 0.4,
   plan_temperature: 0.9,
   code_temperature: 0.05,
   n_root: 8,
   leaderboard_size: 10,
-  compile_command: 'nvcc -O3 -arch=sm_90 -lineinfo -o kernel reference.cu',
-  benchmark_command: 'python test.py --profile',
+  compile_command: '<user-provided compile command with {kernel_path}/{result_path}>',
+  benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
 }})
 ```
 
@@ -143,9 +143,9 @@ Workflow({name: 'stark-kernel-optimization', args: {
 
 ```javascript
 Workflow({name: 'stark-kernel-optimization', args: {
-  reference_kernel_path: '/path/to/kernel.cu',
+  kernel_path: '/path/to/kernel.cu',
   test_harness_path: '',
-  budget: 20,
+  iterations: 20,
 }})
 ```
 
@@ -153,9 +153,9 @@ Workflow({name: 'stark-kernel-optimization', args: {
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
-| `reference_kernel_path` | string | — | Path to reference CUDA kernel (**required**) |
+| `kernel_path` | string | — | Path to reference CUDA kernel (**required**) |
 | `test_harness_path` | string | — | Path to Python test harness (**required**) |
-| `budget` | number | `30` | Max optimization attempts (tree nodes) |
+| `iterations` | number | `30` | Max optimization attempts (tree nodes) |
 | `epsilon` | number | `0.35` | ε-greedy exploration rate (0 = pure exploitation, 1 = pure random) |
 | `n_root` | number | `5` | Root throttling cap (max direct children of root) |
 | `n_child_max` | number | `3` | Dead-branch threshold (if all children fail) |
@@ -241,9 +241,9 @@ Sampling Agent achieves only 57% L1 success; Reflexion Agent succeeds but often 
 
 ```javascript
 Workflow({name: 'stark-kernel-optimization', args: {
-  reference_kernel_path: '/path/to/reference.cu',
+  kernel_path: '/path/to/reference.cu',
   test_harness_path: '/path/to/test.py',
-  budget: 30,
+  iterations: 30,
   epsilon: 0.35,
 }})
 ```
@@ -252,9 +252,9 @@ Workflow({name: 'stark-kernel-optimization', args: {
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `reference_kernel_path` | string | — | 参考 CUDA 内核文件路径（必填） |
+| `kernel_path` | string | — | 参考 CUDA 内核文件路径（必填） |
 | `test_harness_path` | string | — | Python 测试 harness 路径（必填） |
-| `budget` | number | `30` | 最大优化尝试次数 |
+| `iterations` | number | `30` | 最大优化尝试次数 |
 | `epsilon` | number | `0.35` | ε-greedy 探索率 |
 | `n_root` | number | `5` | 根节点子节点上限（根节点限流） |
 | `n_child_max` | number | `3` | 死枝剪枝阈值 |

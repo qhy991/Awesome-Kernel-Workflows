@@ -27,16 +27,16 @@ export const meta = {
 //
 // Usage:
 //   Workflow({name: 'ksearch-kernel-optimization', args: {
-//     kernel_spec_path: '/path/to/spec.yaml',
+//     problem_path: '/path/to/spec.yaml',
 //     op_description: 'MLA decode attention kernel',
 //     language: 'triton',                 // triton | cuda | python
 //     target_gpu: 'H100',
-//     max_cycles: 10,                     // search cycles
+//     iterations: 10,                     // search cycles
 //     attempts_per_cycle: 5,              // generate/improve rounds per cycle
 //     stagnation_window: 3,              // non-improving attempts before cycle ends
 //     max_difficulty: 4,                  // max action difficulty (1-5)
-//     bench_command: 'python eval.py --kernel',
-//     baseline_code_path: '/path/to/baseline.py',
+//     benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+//     kernel_path: '/path/to/baseline.py',
 //     rtol: 0.01,
 //     atol: 0.01,
 //     exp_dir: '/tmp/ksearch_exp',
@@ -44,19 +44,25 @@ export const meta = {
 //
 // =============================================================================
 
-const KERNEL_SPEC_PATH = args.kernel_spec_path
+const PROBLEM_DEFINITION = args.problem_definition || ''
+const KERNEL_SPEC_PATH = args.problem_path
 const OP_DESC = args.op_description || 'GPU kernel'
 const LANGUAGE = args.language || 'triton'
 const TARGET_GPU = args.target_gpu || 'H100'
-const MAX_CYCLES = args.max_cycles || 10
+const MAX_CYCLES = args.iterations || 10
 const ATTEMPTS_PER_CYCLE = args.attempts_per_cycle || 5
 const STAGNATION_WINDOW = args.stagnation_window || 3
 const MAX_DIFFICULTY = args.max_difficulty || 4
-const BENCH_CMD = args.bench_command || ''
-const BASELINE_CODE_PATH = args.baseline_code_path || ''
+const BENCH_CMD = args.benchmark_command || ''
+const BASELINE_CODE_PATH = args.kernel_path || ''
+const INPUT_MODE = BASELINE_CODE_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const RTOL = args.rtol || 0.01
 const ATOL = args.atol || 0.01
 const EXP_DIR = args.exp_dir || '/tmp/ksearch_exp'
+
+if (!KERNEL_SPEC_PATH && !PROBLEM_DEFINITION && !BASELINE_CODE_PATH) {
+  throw new Error('Provide one of problem_path, problem_definition, or kernel_path')
+}
 
 // State
 let decisionTree = null
@@ -76,7 +82,9 @@ phase('Setup')
 const setupResult = await agent(`You are a GPU kernel optimization expert. Read and analyze the kernel specification.
 
 # Task
-Read the kernel specification file at: ${KERNEL_SPEC_PATH}
+Read the kernel specification file at: ${KERNEL_SPEC_PATH || '(not provided)'}
+If problem_definition is provided, use it as the authoritative kernel specification:
+${PROBLEM_DEFINITION || '(not provided)'}
 ${BASELINE_CODE_PATH ? `Also read the baseline kernel at: ${BASELINE_CODE_PATH}` : ''}
 
 # Analyze and return:
@@ -127,10 +135,10 @@ ${(setupResult.baseline_code || '').substring(0, 3000)}
 \`\`\`
 
 # Evaluation Instructions:
-${BENCH_CMD ? `Run: ${BENCH_CMD}` : 'Perform static analysis to estimate baseline performance.'}
+${BENCH_CMD ? `Run: ${BENCH_CMD}` : 'No benchmark_command provided; perform static characterization only and mark measured evidence unavailable.'}
 
 Establish the baseline metric. If a benchmark command is available, compile and run it.
-If not, analyze the code and estimate performance characteristics.
+If not, analyze the code only; do not report estimated performance as measured.
 
 The metric is mean_vs_baseline_factor (this IS the baseline, so it should be 1.0).
 Also report absolute latency if measurable.
@@ -760,6 +768,16 @@ ${JSON.stringify(decisionTree, null, 2).substring(0, 3000)}
 })
 
 return {
+  input_mode: INPUT_MODE,
+  problem_definition: PROBLEM_DEFINITION,
+  problem_path: KERNEL_SPEC_PATH,
+  kernel_path: BASELINE_CODE_PATH,
+  generated_kernel_path: bestSolution?.path || '',
+  initial_candidates: solutionDb.filter(s => s.cycle === 0),
+  initial_generation_result: {
+    verified: solutionDb.some(s => s.eval?.correct),
+    selected_candidate_id: bestSolution?.id || '',
+  },
   best_metric: bestMetric,
   best_solution_code: bestSolution?.code || '',
   cycles_completed: cycleCount,

@@ -80,13 +80,13 @@ export const meta = {
 //
 // Usage:
 //   Workflow({name: 'kernelfoundrydx-kernel-optimization', args: {
-//     task_path: '/path/to/KernelBench/level2/95_Matmul_Add_Swish.py',
+//     problem_path: '/path/to/KernelBench/level2/95_Matmul_Add_Swish.py',
 //     op_description: 'Matmul + Add + Swish + Tanh + GELU + Hardtanh fusion',
 //     target_gpu: 'RTX 5090',
 //     islands: 3,
 //     iterations: 6,
 //     population_size: 4,
-//     bench_command: 'python eval.py --kernel',
+//     benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
 //     hint_library_path: '/path/to/hint_library.json',  // optional, persists across runs
 //     rag_corpus_path: '/path/to/kernelbook_pairs/',     // optional retrieval corpus
 //     exp_dir: '/tmp/kernelfoundrydx_exp',
@@ -96,7 +96,8 @@ export const meta = {
 // =============================================================================
 
 // --- Required Args ---
-const TASK_PATH = args.task_path
+const TASK_PATH = args.problem_path
+const PROBLEM_DEFINITION = args.problem_definition || ''
 
 // --- Optional Args ---
 const OP_DESC = args.op_description || 'PyTorch operator (to Triton kernel)'
@@ -104,16 +105,17 @@ const TARGET_GPU = args.target_gpu || 'RTX 5090'
 const ISLANDS = args.islands || 3
 const ITERATIONS = args.iterations || 6
 const POPULATION_SIZE = args.population_size || 4
-const SEED_COUNT = args.seed_count || 3
+const SEED_CANDIDATES = args.seed_candidates || 3
 const RAG_TOPK = args.rag_topk || 5
 const STAGNATION_WINDOW = args.stagnation_window || 2
 const CHEAT_THRESHOLD = args.cheat_threshold || 0.5  // discard if cheating likelihood > this
-const BENCH_CMD = args.bench_command || ''
+const BENCH_CMD = args.benchmark_command || ''
 const TEST_CMD = args.test_command || ''
 const HINT_LIBRARY_PATH = args.hint_library_path || ''
 const RAG_CORPUS_PATH = args.rag_corpus_path || ''
 const EXP_DIR = args.exp_dir || '/tmp/kernelfoundrydx_exp'
 const RUN_TS = args.run_timestamp_iso || 'unknown'
+const INPUT_MODE = 'generate_then_optimize'
 
 // --- Island roles (role-specialized system prompts; the "multi-experts" axis) ---
 // Each island focuses on a distinct optimization perspective. Cycled if ISLANDS > roles.
@@ -186,7 +188,9 @@ function updateHint(hintId, speedup, correct) {
 // =============================================================================
 phase('Setup')
 
-const setup = await agent(`Read the PyTorch reference task file at: ${TASK_PATH}
+const setup = await agent(`Read the PyTorch reference task file at: ${TASK_PATH || '(not provided)'}
+If problem_definition is provided, use it as the authoritative task description:
+${PROBLEM_DEFINITION || '(not provided)'}
 
 This file defines a reference computation (a "Model" with a forward()) that we must reproduce as a high-performance Triton kernel.
 
@@ -227,7 +231,7 @@ const baseline = await agent(`You are setting up a Triton kernel optimization ru
 # Target GPU: ${TARGET_GPU}
 
 # Step 1: Establish the PyTorch-eager baseline latency.
-${BENCH_CMD ? `Run the reference under eager mode using: ${BENCH_CMD}` : '(no bench command provided — estimate a representative baseline latency in ms from the op chain and input shapes)'}
+${BENCH_CMD ? `Run the reference under eager mode using: ${BENCH_CMD}` : '(no benchmark_command provided; baseline latency is unavailable as measured evidence)'}
 ${TEST_CMD ? `Correctness reference command: ${TEST_CMD}` : ''}
 Experiment dir: ${EXP_DIR}
 
@@ -285,7 +289,7 @@ log(`Baseline: ${baselineLatency}ms | seeded ${hintLibrary.length} hints`)
 phase('Init')
 
 const seeds = await parallel(
-  Array.from({ length: SEED_COUNT }, (_, i) => () =>
+  Array.from({ length: SEED_CANDIDATES }, (_, i) => () =>
     agent(`You are an EXPERT GPU-programming model specializing in PyTorch -> Triton translation. Produce a CORRECT initial Triton kernel for this task. Correctness is the ONLY goal here — not speed.
 
 # Operation: ${OP_DESC} (${opType})
@@ -307,7 +311,7 @@ ${RAG_CORPUS_PATH
 1. Output a COMPLETE runnable module: imports, the @triton.jit kernel(s), the Python wrapper that launches them, and a ModelNew class matching the reference forward() signature.
 2. All compute must be in Triton (tl.* ops); do NOT call torch ops to do the actual math (that would be cheating).
 3. Must be numerically equivalent to the reference within tolerance.
-4. This is seed variant ${i + 1}/${SEED_COUNT}; vary the decomposition slightly from a naive baseline.
+4. This is seed variant ${i + 1}/${SEED_CANDIDATES}; vary the decomposition slightly from a naive baseline.
 
 Return JSON with the code and a short note on the approach.`, {
       label: `seed-${i}`,
@@ -487,9 +491,9 @@ ${v.code.substring(0, 4000)}
 
 # Steps:
 1. Compile-check the Triton kernel (syntax, @triton.jit signature, grid).
-2. ${BENCH_CMD ? `Run with: ${BENCH_CMD}` : 'If you cannot execute, statically estimate runtime from tiling/launch config and op count.'}
-3. ${TEST_CMD ? `Check correctness with: ${TEST_CMD}` : 'Check numerical equivalence vs the reference within tolerance (static reasoning if not runnable).'}
-4. Report: compiles?, runs?, correct?, measured/estimated latency_ms, and speedup = baseline / latency.
+2. ${BENCH_CMD ? `Run with: ${BENCH_CMD}` : 'No benchmark_command provided; do static runtime characterization only and mark latency as unmeasured.'}
+3. ${TEST_CMD ? `Check correctness with: ${TEST_CMD}` : 'No test_command provided; do static equivalence review only and mark correctness as unmeasured.'}
+4. Report: compiles?, runs?, correct?, latency_ms only if measured, measured flag, and speedup only when both baseline and candidate latencies are measured.
 5. Capture lightweight execution metadata: launch config (BLOCK_SIZE, num_warps, num_stages, grid) if visible, and a one-line runtime characterization.
 
 Return JSON.`, {
@@ -721,6 +725,15 @@ Write:
 })
 
 return {
+  input_mode: INPUT_MODE,
+  problem_definition: PROBLEM_DEFINITION,
+  problem_path: TASK_PATH,
+  generated_kernel_path: bestKernel?.path || '',
+  initial_candidates: evolutionTrajectory.filter(e => e.type === 'seed'),
+  initial_generation_result: {
+    verified: bestSpeedup > 0,
+    selected_candidate_id: bestKernel?.id || '',
+  },
   baseline_latency_ms: baselineLatency,
   best_speedup: bestSpeedup,
   best_kernel_code: bestKernel ? bestKernel.code : null,

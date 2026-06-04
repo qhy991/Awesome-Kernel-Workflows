@@ -33,13 +33,13 @@ export const meta = {
 //
 // Usage:
 //   Workflow({name: 'regrapht-kernel-optimization', args: {
-//     source_code_path: '/path/to/source.cu',    // alias: kernel_path
+//     kernel_path: '/path/to/source.cu',    // alias: kernel_path
 //     op_description: 'Sequential stencil kernel to CUDA',
-//     eval_command: 'python eval.py --kernel {kernel_path} --json {result_path}',
+//     benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
 //     trace_corpus_path: '/path/to/llm_optimization_traces.jsonl',
 //     graph_path: '/path/to/regraph.json',
-//     baseline_command: 'python eval.py --baseline --json {result_path}',
-//     budget: 20,
+//     baseline_command: '<user-provided baseline command with {result_path}>',
+//     iterations: 20,
 //     rollouts_per_select: 12,
 //     exploration_weight: 1.4,
 //     max_path_length: 4,
@@ -48,7 +48,7 @@ export const meta = {
 //   }})
 //
 // Evaluator JSON contract:
-//   eval_command should write JSON at {result_path}:
+//   benchmark_command should write JSON at {result_path}:
 //   {
 //     "compiled": true,
 //     "correct": true,
@@ -62,21 +62,30 @@ export const meta = {
 // =============================================================================
 
 // --- Required Args ---
-const SOURCE_CODE_PATH = args.source_code_path || args.kernel_path || ''
+let SOURCE_CODE_PATH = args.kernel_path || ''
+const PROBLEM_DEFINITION = args.problem_definition || ''
+const PROBLEM_PATH = args.problem_path || ''
+const INPUT_MODE = SOURCE_CODE_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const OP_DESC = args.op_description || 'CUDA kernel optimization task'
-const EVAL_CMD = args.eval_command || ''
+const EVAL_CMD = args.benchmark_command || ''
 
 // --- Optional Args ---
 const TRACE_CORPUS_PATH = args.trace_corpus_path || ''
 const GRAPH_PATH = args.graph_path || ''
 const BASELINE_CMD = args.baseline_command || ''
-const BUDGET = args.budget || 20
+const BUDGET = args.iterations || 20
 const ROLLOUTS_PER_SELECT = args.rollouts_per_select || 12
 const EXPLORATION_WEIGHT = args.exploration_weight ?? 1.4
 const MAX_PATH_LENGTH = args.max_path_length || 4
 const TARGET_GPU = args.target_gpu || 'H100'
 const EXP_DIR = args.exp_dir || '/tmp/regrapht_exp'
 const ADAPTATION_SCOPE = 'training_free_inference'
+const LANGUAGE = args.language || 'cuda'
+const SEED_CANDIDATES = args.seed_candidates || 3
+
+if (!SOURCE_CODE_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
+  throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
+}
 
 // --- State ---
 let sourceCode = ''
@@ -96,6 +105,9 @@ let graph = {
 }
 let evaluatedCandidates = []
 let selectedPaths = []
+let generatedKernelPath = ''
+let initialCandidates = []
+let initialGenerationResult = null
 
 function nodeById(id) {
   return graph.nodes.find(node => node.id === id)
@@ -140,21 +152,58 @@ function graphStats() {
 // =============================================================================
 phase('Setup')
 
+if (INPUT_MODE === 'generate_then_optimize') {
+  const generated = await agent(`No kernel_path was provided. Generate and verify an initial CUDA source file before building the ReGraphT reasoning graph.
+
+# Problem Input
+- problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
+- problem_path: ${PROBLEM_PATH || '(not provided)'}
+- op_description: ${OP_DESC}
+- language: ${LANGUAGE}
+- target_gpu: ${TARGET_GPU}
+- seed_candidates: ${SEED_CANDIDATES}
+
+# Evidence Commands
+- benchmark_command: ${EVAL_CMD || '(not provided)'}
+- baseline_command: ${BASELINE_CMD || '(not provided)'}
+
+# Contract
+Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run benchmark_command if available using {kernel_path}/{result_path}. Return the best verified generated kernel path.`, {
+    label: 'generate-initial-kernel',
+    phase: 'Setup',
+    schema: {
+      type: 'object',
+      properties: {
+        generated_kernel_path: { type: 'string' },
+        initial_candidates: { type: 'array', items: { type: 'object' } },
+        initial_generation_result: { type: 'object' },
+      },
+      required: ['generated_kernel_path', 'initial_candidates', 'initial_generation_result'],
+    },
+  })
+  initialCandidates = generated.initial_candidates || []
+  initialGenerationResult = generated.initial_generation_result || { verified: false }
+  generatedKernelPath = generated.generated_kernel_path || ''
+  if (!generatedKernelPath) throw new Error('Generation mode did not produce generated_kernel_path')
+  if (EVAL_CMD && initialGenerationResult.verified === false) throw new Error('No generated seed passed benchmark evidence')
+  SOURCE_CODE_PATH = generatedKernelPath
+}
+
 const setupResult = await agent(`Read the CUDA optimization task and evaluator contract.
 
 # Inputs
-- source_code_path: ${SOURCE_CODE_PATH}
+- kernel_path: ${SOURCE_CODE_PATH}
 - operation: ${OP_DESC}
 - target_gpu: ${TARGET_GPU}
-- eval_command: ${EVAL_CMD || '(missing; create a concrete evaluator plan but do not trust self-judgment)'}
+- benchmark_command: ${EVAL_CMD || '(missing; do not create an evaluator command; measured evidence is unavailable)'}
 - baseline_command: ${BASELINE_CMD || '(optional baseline command not provided)'}
 - exp_dir: ${EXP_DIR}
 
 # Tasks
-1. Read the source code or task spec from source_code_path.
+1. Read the source code or task spec from kernel_path.
 2. Identify the operation, input/output contract, and target kernel entry points.
 3. If baseline_command is present, run it or describe the exact command to run and parse its JSON result.
-4. State the evaluator JSON contract. Evaluation evidence must come from eval_command or a workflow-created harness.
+4. State the required evaluator JSON contract. Evaluation evidence must come from benchmark_command; if it is missing, mark evidence as unavailable.
 5. Identify CUDA optimization dimensions relevant to this task.
 
 Return structured setup data.`, {
@@ -337,7 +386,7 @@ ${(generation.candidate_code || '').substring(0, 12000)}
 \`\`\`
 
 # Evaluation command
-${EVAL_CMD || '(no eval_command provided)'}
+${EVAL_CMD || '(no benchmark_command provided)'}
 
 # Result path convention
 Use ${EXP_DIR}/regrapht_attempt_${attempt}.json as {result_path}.
@@ -345,7 +394,7 @@ Use ${EXP_DIR}/regrapht_attempt_${attempt}.cu as {kernel_path}.
 
 # Required behavior
 1. Materialize the candidate at the kernel path if command execution is available.
-2. Run eval_command with {kernel_path} and {result_path} substitutions if provided.
+2. Run benchmark_command with {kernel_path} and {result_path} substitutions if provided.
 3. Parse evaluator JSON. If no command is provided, mark correct=false and explain missing evidence.
 4. Correctness and speedup must be based on evaluator output only.
 
@@ -486,6 +535,13 @@ Cover:
 })
 
 return {
+  input_mode: INPUT_MODE,
+  problem_definition: PROBLEM_DEFINITION,
+  problem_path: PROBLEM_PATH,
+  kernel_path: SOURCE_CODE_PATH,
+  generated_kernel_path: generatedKernelPath,
+  initial_candidates: initialCandidates,
+  initial_generation_result: initialGenerationResult,
   operation: OP_DESC,
   baseline_metric: baselineMetric,
   best_speedup: bestCandidate?.eval?.speedup || 0,

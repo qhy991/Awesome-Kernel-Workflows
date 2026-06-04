@@ -60,12 +60,12 @@ export const meta = {
 //     kernel_path: '/path/to/kernel.py',
 //     op_description: 'Fused attention forward pass',
 //     harness_path: '/path/to/benchmark.py',
-//     compile_command: 'python -c "import kernel; kernel.test()"',
-//     benchmark_command: 'python benchmark.py',
-//     ncu_command: 'ncu --metrics ...',
+//     compile_command: '<user-provided compile/import command with {kernel_path}/{result_path}>',
+//     benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+//     ncu_command: '<user-provided profiler command with {kernel_path}/{result_path}>',
 //     feature_vector_result_path: '/tmp/kernelband_exp/features.json',
 //     hardware_signature_result_path: '/tmp/kernelband_exp/hardware_signature.json',
-//     gpu_target: 'A100',
+//     target_gpu: 'A100',
 //     iterations: 20,
 //     num_clusters: 3,
 //     recluster_period: 10,
@@ -75,7 +75,10 @@ export const meta = {
 // =============================================================================
 
 // --- Required Args ---
-const KERNEL_PATH = args.kernel_path || ''
+let KERNEL_PATH = args.kernel_path || ''
+const PROBLEM_DEFINITION = args.problem_definition || ''
+const PROBLEM_PATH = args.problem_path || ''
+const INPUT_MODE = KERNEL_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const OP_DESCRIPTION = args.op_description || 'GPU kernel'
 
 // --- Model Routing ---
@@ -93,10 +96,10 @@ const HARNESS_PATH = args.harness_path || ''
 const COMPILE_CMD = args.compile_command || ''
 const BENCHMARK_CMD = args.benchmark_command || ''
 const NCU_CMD = args.ncu_command || ''
-const NCU_BINARY = args.ncu_binary || 'ncu'
+const NCU_BINARY = args.ncu_binary || ''
 const FEATURE_VECTOR_RESULT_PATH = args.feature_vector_result_path || `${args.exp_dir || '/tmp/kernelband_exp'}/features/latest.json`
 const HARDWARE_SIGNATURE_RESULT_PATH = args.hardware_signature_result_path || `${args.exp_dir || '/tmp/kernelband_exp'}/profiles/hardware_signature.json`
-const GPU_TARGET = args.gpu_target || 'A100'
+const GPU_TARGET = args.target_gpu || 'A100'
 const ITERATIONS = args.iterations || 20
 const NUM_CLUSTERS = args.num_clusters || 3
 const RECLUSTER_PERIOD = args.recluster_period || 10
@@ -106,6 +109,16 @@ const EXP_DIR = args.exp_dir || '/tmp/kernelband_exp'
 const EVIDENCE_MODE = (COMPILE_CMD && BENCHMARK_CMD && (NCU_CMD || NCU_BINARY))
   ? 'measured'
   : 'conservative_missing_evidence'
+
+if (!KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
+  throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
+}
+
+const LANGUAGE = args.language || 'triton'
+const SEED_CANDIDATES = args.seed_candidates || 3
+let generatedKernelPath = ''
+let initialCandidates = []
+let initialGenerationResult = null
 
 const STRATEGIES = args.strategies || [
   'tiling',
@@ -125,6 +138,55 @@ let baselineLatency = 0
 let totalReward = 0
 let iterationLog = []
 
+async function resolveInitialKernelFromProblem() {
+  if (INPUT_MODE !== 'generate_then_optimize') return ''
+
+  const generated = await agent(`No kernel_path was provided. Generate and verify an initial kernel before starting KernelBand.
+
+# Problem Input
+- problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
+- problem_path: ${PROBLEM_PATH || '(not provided)'}
+- op_description: ${OP_DESCRIPTION}
+- language: ${LANGUAGE}
+- target_gpu: ${GPU_TARGET}
+- seed_candidates: ${SEED_CANDIDATES}
+
+# Evidence Commands
+- compile_command: ${COMPILE_CMD || '(not provided)'}
+- benchmark_command: ${BENCHMARK_CMD || '(not provided)'}
+- ncu_command: ${NCU_CMD || '(not provided)'}
+
+# Contract
+1. If problem_path is provided, read it first.
+2. Generate ${SEED_CANDIDATES} complete kernel candidates.
+3. Materialize candidates under ${EXP_DIR}/generated/.
+4. Run available commands with {kernel_path} and {result_path} substitutions.
+5. Select the best candidate that compiles and passes correctness or benchmark validation. If no real evaluator is available, select the strongest candidate and mark verified=false.
+6. Return generated_kernel_path plus candidate and evidence metadata.`, {
+    label: 'generate-initial-kernel',
+    phase: 'Setup',
+    model: MODEL.judgment,
+    schema: {
+      type: 'object',
+      properties: {
+        generated_kernel_path: { type: 'string' },
+        initial_candidates: { type: 'array', items: { type: 'object' } },
+        initial_generation_result: { type: 'object' },
+      },
+      required: ['generated_kernel_path', 'initial_candidates', 'initial_generation_result'],
+    },
+  })
+
+  initialCandidates = generated.initial_candidates || []
+  initialGenerationResult = generated.initial_generation_result || { verified: false }
+  generatedKernelPath = generated.generated_kernel_path || ''
+  if (!generatedKernelPath) throw new Error('Generation mode did not produce generated_kernel_path')
+  if (BENCHMARK_CMD && initialGenerationResult.verified === false) {
+    throw new Error('No generated seed passed benchmark/correctness evidence')
+  }
+  return generatedKernelPath
+}
+
 // Initialize bandit statistics: N_{i,s} = 1, μ̂_{i,s} = 0.5 for all (i, s)
 for (let i = 0; i < NUM_CLUSTERS; i++) {
   for (const s of STRATEGIES) {
@@ -138,6 +200,10 @@ for (let i = 0; i < NUM_CLUSTERS; i++) {
 // =============================================================================
 phase('Setup')
 
+if (INPUT_MODE === 'generate_then_optimize') {
+  KERNEL_PATH = await resolveInitialKernelFromProblem()
+}
+
 const setupResult = await agent(`You are setting up a KernelBand optimization session.
 
 # Task
@@ -149,10 +215,10 @@ const setupResult = await agent(`You are setting up a KernelBand optimization se
    - evidence_mode: ${EVIDENCE_MODE}
    If evidence_mode is conservative_missing_evidence, do not claim strict KernelBand execution; mark phi, masks, and rewards as estimates.
 4. Establish baseline performance:
-   ${COMPILE_CMD ? `Compile: ${COMPILE_CMD}` : '(compile the kernel)'}
-   ${BENCHMARK_CMD ? `Benchmark: ${BENCHMARK_CMD}` : '(run the benchmark)'}
-5. Run initial NCU profiling to get hardware signature:
-   ${NCU_CMD || `${NCU_BINARY} --set full --target-processes all <benchmark_binary>`}
+   ${COMPILE_CMD ? `Compile: ${COMPILE_CMD}` : '(no compile_command provided; perform static compileability review only)'}
+   ${BENCHMARK_CMD ? `Benchmark: ${BENCHMARK_CMD}` : '(no benchmark_command provided; do not invent one)'}
+5. Run initial profiling to get hardware signature:
+   ${NCU_CMD ? `Profile: ${NCU_CMD}` : NCU_BINARY ? `Use the user-provided ncu_binary (${NCU_BINARY}) only with the user-provided benchmark/harness contract.` : '(no ncu_command/ncu_binary provided; mark hardware signature as missing evidence)'}
    Extract: DRAM throughput %, L2 throughput %, SM throughput %
 5. Extract behavioral features φ(k₀):
    - Normalized execution time T̄(k₀) (= 1.0 for baseline)
@@ -316,8 +382,8 @@ ${clusters.map(c => {
   return `Cluster ${c.id}: representative kernel ${rep ? rep.id : 'N/A'}`
 }).join('\n')}
 
-# Profiling Command:
-${NCU_CMD || `${NCU_BINARY} --metrics sm__throughput.avg.pct_of_peak_sustained_elapsed,dram__throughput.avg.pct_of_peak_sustained_elapsed,lts__throughput.avg.pct_of_peak_sustained_elapsed`}
+# Profiling Contract:
+${NCU_CMD ? `Run: ${NCU_CMD}` : NCU_BINARY ? `Use the user-provided ncu_binary (${NCU_BINARY}) with the user-provided benchmark/harness command; do not invent a profiler command.` : '(no profiler command provided; set profile evidence fields to missing)'}
 
 # Extract for each cluster centroid:
 - DRAM throughput % (memory bandwidth utilization)
@@ -677,7 +743,13 @@ Analyze:
 })
 
 return {
-  gpu_target: GPU_TARGET,
+  input_mode: INPUT_MODE,
+  problem_definition: PROBLEM_DEFINITION,
+  problem_path: PROBLEM_PATH,
+  generated_kernel_path: generatedKernelPath,
+  initial_candidates: initialCandidates,
+  initial_generation_result: initialGenerationResult,
+  target_gpu: GPU_TARGET,
   operation: OP_DESCRIPTION,
   iterations: ITERATIONS,
   baseline_latency_us: baselineLatency,

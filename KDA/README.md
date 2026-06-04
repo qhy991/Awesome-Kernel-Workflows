@@ -31,7 +31,7 @@ KDA is designed for **benchmark-contest-style** kernel optimization where:
 ┌───────────────────────▼────────────────────────────────┐
 │                     Plan                                 │
 │  Write docs/draft.md (explore approaches)               │
-│  Convert to docs/plan.md (executable steps)             │
+│  Convert to docs/plan.md (executable iterations)             │
 └───────────────────────┬────────────────────────────────┘
                         │
 ┌───────────────────────▼────────────────────────────────┐
@@ -44,8 +44,8 @@ KDA is designed for **benchmark-contest-style** kernel optimization where:
 │                          │                               │
 │  ┌──────────────────────▼───────────────────────────┐   │
 │  │ Validate                                          │   │
-│  │ Run validation_command → correctness check        │   │
-│  │ Run evaluation_command → measure target metric    │   │
+│  │ Run test_command → correctness check        │   │
+│  │ Run benchmark_command → measure target metric    │   │
 │  └──────────────────────┬───────────────────────────┘   │
 │                          │                               │
 │  ┌──────────────────────▼───────────────────────────┐   │
@@ -82,8 +82,8 @@ Workflow({name: 'kda-kernel-workflow', args: {
   correctness_requirements: 'Output must match baseline within 1e-5 relative error',
   performance_target: 'Achieve < 0.5ms on M=4096, N=4096, K=4096',
   allowed_approaches: 'CUDA C++, shared memory tiling, warp-level primitives',
-  validation_command: 'python validate.py --kernel-path KERNEL_PATH',
-  evaluation_command: 'python benchmark.py --kernel-path KERNEL_PATH --output benchmark.csv',
+  test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
+  benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
   promotion_criteria: 'Speedup >= 1.2x over baseline AND passes validation',
   max_candidates: 5,
 }})
@@ -99,8 +99,8 @@ Workflow({name: 'kda-kernel-workflow', args: {
 | `correctness_requirements` | `'Must produce correct output'` | Correctness criteria |
 | `performance_target` | `'Improve over baseline'` | Performance goal |
 | `allowed_approaches` | `'Any approach'` | Constraints on implementation |
-| `validation_command` | (required) | Command to check correctness |
-| `evaluation_command` | same as validation | Command to measure performance |
+| `test_command` | (required) | Command to check correctness |
+| `benchmark_command` | same as validation | Command to measure performance |
 | `promotion_criteria` | `'Passes validation and improves metric'` | When to promote a candidate |
 | `max_candidates` | `5` | Max candidates to try |
 
@@ -149,8 +149,8 @@ Workflow({name: 'kda-kernel-workflow', args: {
   kernel_path: '/path/to/kernel.cu',
   task_name: 'quantized-gemm-q4_0',
   objective: '为 H100 优化 Q4_0 GEMM 内核',
-  validation_command: 'python validate.py --kernel-path KERNEL_PATH',
-  evaluation_command: 'python benchmark.py --kernel-path KERNEL_PATH',
+  test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
+  benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
   promotion_criteria: '加速比 >= 1.2x 且通过验证',
   max_candidates: 5,
 }})

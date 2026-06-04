@@ -38,13 +38,13 @@ It does not train a small model. Instead, it uses the paper's training-free infe
 
 Primary arguments accepted by this workflow:
 
-- `source_code_path`: path to source CUDA/C++ code or task spec
-- `eval_command`: command that writes evaluator JSON using `{kernel_path}` and `{result_path}`
+- `kernel_path`: path to source CUDA/C++ code or task spec
+- `benchmark_command`: command that writes evaluator JSON using `{kernel_path}` and `{result_path}`
 - `op_description`: operation description
 - `trace_corpus_path`: optional JSONL corpus of optimization trajectories
 - `graph_path`: optional persisted CUDA Reasoning Graph
 - `baseline_command`: optional baseline evaluator command
-- `budget`: candidate attempts, default `20`
+- `iterations`: candidate attempts, default `20`
 - `rollouts_per_select`: conceptual MCGS rollouts per selection, default `12`
 - `exploration_weight`: UCT exploration weight, default `1.4`
 - `max_path_length`: max graph path length, default `4`
@@ -73,12 +73,12 @@ Evaluator JSON should contain:
 Workflow({
   name: 'regrapht-kernel-optimization',
   args: {
-    source_code_path: '/path/to/source.cu',
+    kernel_path: '/path/to/source.cu',
     op_description: 'Sequential stencil kernel to CUDA',
-    eval_command: 'python eval.py --kernel {kernel_path} --json {result_path}',
+    benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
     trace_corpus_path: '/path/to/llm_optimization_traces.jsonl',
     graph_path: '/path/to/regraph.json',
-    budget: 20,
+    iterations: 20,
     rollouts_per_select: 12,
     exploration_weight: 1.4,
     max_path_length: 4,

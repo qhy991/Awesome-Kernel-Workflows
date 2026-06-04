@@ -98,7 +98,7 @@ Xe-Forge 实现了面向 Intel XPU（Arc Pro, Ponte Vecchio）的 **多阶段 Co
 
 ## 关键参数
 
-- **max_iterations_per_stage**: 每阶段最大 CoVeR 循环迭代数（默认: 10）
+- **iterations_per_stage**: 每阶段最大 CoVeR 循环迭代数（默认: 10）
 - **improvement_threshold**: 接受候选的最小改进（默认: 2.0%）
 - **correctness_tolerance**: 数值误差阈值（默认: 1e-5 绝对, 1e-3 相对）
 - **enable_vtune**: 启用 VTune 性能分析（默认: false，开销大）

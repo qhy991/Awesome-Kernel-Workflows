@@ -31,10 +31,10 @@ export const meta = {
 //     kernel_path: '/path/to/kernel.cu',
 //     op_description: 'Quantized GEMM Q4_0 weight * FP32 activation',
 //     harness_path: '/path/to/harness.cu',
-//     harness_build_cmd: 'nvcc -O3 -lineinfo ...',
+//     harness_build_cmd: '<user-provided harness build command>',
 //     harness_run_args: '',
 //     kernel_name_regex: 'forward_kernel',
-//     ncu_binary: 'ncu',
+//     ncu_binary: '<user-provided ncu binary path>',
 //     exp_dir: '/path/to/experiment/output',
 //     iterations: 3,
 //     breadth: 3,
@@ -48,7 +48,10 @@ export const meta = {
 //
 // =============================================================================
 
-const KERNEL_PATH = args.kernel_path
+let KERNEL_PATH = args.kernel_path || ''
+const PROBLEM_DEFINITION = args.problem_definition || ''
+const PROBLEM_PATH = args.problem_path || ''
+const INPUT_MODE = KERNEL_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const OP_DESC = args.op_description || 'CUDA kernel'
 const ITERATIONS = args.iterations || 2
 const BREADTH = args.breadth || 3
@@ -59,12 +62,23 @@ const HARNESS_PATH = args.harness_path || ''
 const HARNESS_BUILD_CMD = args.harness_build_cmd || ''
 const HARNESS_RUN_ARGS = args.harness_run_args || ''
 const KERNEL_NAME_REGEX = args.kernel_name_regex || ''
-const NCU_BINARY = args.ncu_binary || 'ncu'
+const NCU_BINARY = args.ncu_binary || ''
 const EXP_DIR = args.exp_dir || '/tmp/accelopt_exp'
 
 // Fallback: non-NCU profiling commands
 const TEST_CMD = args.test_command || ''
 const BENCH_CMD = args.benchmark_command || ''
+
+if (!KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
+  throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
+}
+
+const LANGUAGE = args.language || 'cuda'
+const TARGET_GPU = args.target_gpu || 'unknown GPU'
+const SEED_CANDIDATES = args.seed_candidates || 3
+let generatedKernelPath = ''
+let initialCandidates = []
+let initialGenerationResult = null
 
 // AccelOpt-aligned parameters (v2)
 const TOPK_CANDIDATES = args.topk_candidates || 3
@@ -81,6 +95,53 @@ let bestKernelCode = null
 let baselineLatency = null
 let baselineNcuProfile = ''
 let candidateBeam = []          // [{code, latency, speedup, ncuSummary, planTitle}]
+
+async function resolveInitialKernelFromProblem() {
+  if (INPUT_MODE !== 'generate_then_optimize') return ''
+
+  const generated = await agent(`No kernel_path was provided. Generate and verify an initial CUDA kernel before starting AccelOpt.
+
+# Problem Input
+- problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
+- problem_path: ${PROBLEM_PATH || '(not provided)'}
+- op_description: ${OP_DESC}
+- language: ${LANGUAGE}
+- target_gpu: ${TARGET_GPU}
+- seed_candidates: ${SEED_CANDIDATES}
+
+# Evidence Commands
+- test_command: ${TEST_CMD || '(not provided)'}
+- benchmark_command: ${BENCH_CMD || '(not provided)'}
+
+# Contract
+1. If problem_path is provided, read it first.
+2. Generate ${SEED_CANDIDATES} complete CUDA kernel candidates.
+3. Materialize candidates under ${EXP_DIR}/generated/.
+4. Run available commands with {kernel_path} and {result_path} substitutions.
+5. Select the best candidate that compiles and passes correctness. If no real evaluator is available, select the strongest candidate and mark verified=false.
+6. Return generated_kernel_path plus candidate and evidence metadata.`, {
+    label: 'generate-initial-kernel',
+    phase: 'Setup',
+    schema: {
+      type: 'object',
+      properties: {
+        generated_kernel_path: { type: 'string' },
+        initial_candidates: { type: 'array', items: { type: 'object' } },
+        initial_generation_result: { type: 'object' },
+      },
+      required: ['generated_kernel_path', 'initial_candidates', 'initial_generation_result'],
+    },
+  })
+
+  initialCandidates = generated.initial_candidates || []
+  initialGenerationResult = generated.initial_generation_result || { verified: false }
+  generatedKernelPath = generated.generated_kernel_path || ''
+  if (!generatedKernelPath) throw new Error('Generation mode did not produce generated_kernel_path')
+  if ((TEST_CMD || BENCH_CMD) && initialGenerationResult.verified === false) {
+    throw new Error('No generated seed passed correctness evidence')
+  }
+  return generatedKernelPath
+}
 
 // Helper: sample n items from array without replacement (Fisher-Yates partial)
 function sampleWithoutReplacement(arr, n) {
@@ -131,6 +192,10 @@ function buildBeamSection(candidateBeam) {
 // =============================================================================
 phase('Setup')
 
+if (INPUT_MODE === 'generate_then_optimize') {
+  KERNEL_PATH = await resolveInitialKernelFromProblem()
+}
+
 const setupResult = await agent(`Read the CUDA kernel file at: ${KERNEL_PATH}
 
 Analyze it and return a JSON object with:
@@ -165,15 +230,15 @@ const opType = setupResult.op_type
 log(`Baseline: ${opType}, kernels: ${setupResult.key_functions.join(', ')}`)
 
 // NCU Profile the baseline
-const ncuSetup = await agent(`You are a CUDA profiling expert using Nsight Compute (ncu). Set up and run NCU profiling for the baseline kernel.
+const ncuSetup = await agent(`You are a CUDA profiling expert using Nsight Compute (ncu). Set up and run profiling for the baseline kernel only through the user-provided harness/profiler contract.
 
 # Environment
-- NCU binary: ${NCU_BINARY}
+- NCU binary: ${NCU_BINARY || '(not provided)'}
 - Experiment directory: ${EXP_DIR}
 - Kernel file: ${KERNEL_PATH}
 - Kernel name regex for ncu -k: ${KERNEL_NAME_REGEX || '(auto-detect from kernel file)'}
-- Harness path: ${HARNESS_PATH || '(need to build one)'}
-- Harness build command: ${HARNESS_BUILD_CMD || '(need to determine)'}
+- Harness path: ${HARNESS_PATH || '(not provided)'}
+- Harness build command: ${HARNESS_BUILD_CMD || '(not provided)'}
 - Harness run args: ${HARNESS_RUN_ARGS}
 
 # Kernel Source:
@@ -189,39 +254,12 @@ mkdir -p ${EXP_DIR}/baseline/{harness,reports,analysis}
 \`\`\`
 
 ## Step 2: Build the profiling harness
-If harness_path is provided and exists, use it. Otherwise, determine how to build a standalone harness that launches this kernel with representative inputs. The harness MUST be compiled with \`-lineinfo\` for source-level analysis.
+If harness_path and harness_build_cmd are provided, use them exactly. If either is missing, do not invent a compiler or standalone harness; set ncu_available=false and explain the missing contract.
 
-Build command pattern:
-\`\`\`bash
-nvcc -O3 -lineinfo -arch=sm_XX -o ${EXP_DIR}/baseline/harness/bench <source> -lcudart
-\`\`\`
+## Step 3: Run profiling
+If ncu_binary is provided together with a runnable harness contract, run profiling using that user-provided contract and write reports under ${EXP_DIR}/baseline/reports/. Do not substitute a default compiler, default benchmark binary, or default command line.
 
-## Step 3: Run NCU full profile
-\`\`\`bash
-${NCU_BINARY} --set full \\
-    --section PmSampling --section PmSampling_WarpStates \\
-    -k "regex:${KERNEL_NAME_REGEX || 'KERNEL_NAME'}" \\
-    -c 1 \\
-    -o ${EXP_DIR}/baseline/reports/full_baseline \\
-    ${EXP_DIR}/baseline/harness/bench ${HARNESS_RUN_ARGS}
-\`\`\`
-
-## Step 4: Run NCU source profile
-\`\`\`bash
-${NCU_BINARY} --set source --section SourceCounters \\
-    -k "regex:${KERNEL_NAME_REGEX || 'KERNEL_NAME'}" \\
-    -c 1 \\
-    -o ${EXP_DIR}/baseline/reports/source_baseline \\
-    ${EXP_DIR}/baseline/harness/bench ${HARNESS_RUN_ARGS}
-\`\`\`
-
-## Step 5: Extract details page
-\`\`\`bash
-${NCU_BINARY} --import ${EXP_DIR}/baseline/reports/full_baseline.ncu-rep --page details \\
-    > ${EXP_DIR}/baseline/analysis/details_baseline.txt
-\`\`\`
-
-## Step 6: Extract key metrics
+## Step 4: Extract key metrics
 Read the details page and the report to extract:
 - gpu__time_duration.sum (kernel duration)
 - sm__throughput.avg.pct_of_peak_sustained_elapsed
@@ -235,7 +273,7 @@ Read the details page and the report to extract:
 - L1/L2 hit rates
 - NCU rule suggestions with Est. Speedup percentages
 
-Execute these steps. If ncu is not available or fails, fall back to static code analysis.
+Execute only the steps backed by provided commands/artifacts. If ncu or the harness contract is unavailable, fall back to static code analysis and mark measured fields as missing.
 
 Return a structured profile result.`, {
   label: 'ncu-baseline',
@@ -489,23 +527,8 @@ ${variant.code.substring(0, 4000)}
 - Valid CUDA syntax? (correct use of __global__, __shared__, __device__)
 - PYBIND11_MODULE present?
 
-## Step 3: Build and NCU profile (if environment allows)
-\`\`\`bash
-mkdir -p ${EXP_DIR}/iter_${iter}/${variant.id}
-
-${HARNESS_BUILD_CMD ? HARNESS_BUILD_CMD.replace('KERNEL_PATH', `${EXP_DIR}/iter_${iter}/${variant.id}/kernel.cu`) : '# (no build command configured)'}
-
-# Quick NCU metrics (Recipe 5 — targeted, fast)
-${NCU_BINARY} --metrics \\
-    gpu__time_duration.sum,\\
-    sm__throughput.avg.pct_of_peak_sustained_elapsed,\\
-    dram__bytes_read.sum.pct_of_peak_sustained_elapsed,\\
-    sm__warps_active.avg.pct_of_peak_sustained_active,\\
-    l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum,\\
-    l1tex__t_requests_pipe_lsu_mem_global_op_ld.sum \\
-  -k "regex:${KERNEL_NAME_REGEX || 'forward'}" -c 1 \\
-  ${EXP_DIR}/iter_${iter}/${variant.id}/bench ${HARNESS_RUN_ARGS}
-\`\`\`
+## Step 3: Build and profile (if environment allows)
+Use only the user-provided harness_build_cmd, harness_path/run args, and ncu_binary contract. If any required command is missing, do not invent one; return static correctness/compilability analysis and mark NCU fields as missing evidence.
 
 ## Step 4: Compare with baseline
 Calculate speedup = baseline_latency / variant_latency.
@@ -772,6 +795,12 @@ Write:
 })
 
 return {
+  input_mode: INPUT_MODE,
+  problem_definition: PROBLEM_DEFINITION,
+  problem_path: PROBLEM_PATH,
+  generated_kernel_path: generatedKernelPath,
+  initial_candidates: initialCandidates,
+  initial_generation_result: initialGenerationResult,
   baseline_latency_ms: baselineLatency,
   best_latency_ms: bestLatency,
   overall_speedup: baselineLatency / bestLatency,

@@ -38,13 +38,13 @@
 
 主要参数：
 
-- `source_code_path`：CUDA/C++ 源码或任务 spec 路径
-- `eval_command`：评测命令，需支持 `{kernel_path}` 和 `{result_path}` 占位符
+- `kernel_path`：CUDA/C++ 源码或任务 spec 路径
+- `benchmark_command`：评测命令，需支持 `{kernel_path}` 和 `{result_path}` 占位符
 - `op_description`：算子/任务描述
 - `trace_corpus_path`：可选，LLM 优化轨迹 JSONL
 - `graph_path`：可选，持久化 CUDA Reasoning Graph
 - `baseline_command`：可选，baseline 评测命令
-- `budget`：candidate 尝试次数，默认 `20`
+- `iterations`：candidate 尝试次数，默认 `20`
 - `rollouts_per_select`：每次选择的 MCGS rollout 数，默认 `12`
 - `exploration_weight`：UCT 探索权重，默认 `1.4`
 - `max_path_length`：最大 graph 路径长度，默认 `4`
@@ -73,12 +73,12 @@ Evaluator JSON 建议格式：
 Workflow({
   name: 'regrapht-kernel-optimization',
   args: {
-    source_code_path: '/path/to/source.cu',
+    kernel_path: '/path/to/source.cu',
     op_description: 'Sequential stencil kernel to CUDA',
-    eval_command: 'python eval.py --kernel {kernel_path} --json {result_path}',
+    benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
     trace_corpus_path: '/path/to/llm_optimization_traces.jsonl',
     graph_path: '/path/to/regraph.json',
-    budget: 20,
+    iterations: 20,
     rollouts_per_select: 12,
     exploration_weight: 1.4,
     max_path_length: 4,

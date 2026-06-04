@@ -57,7 +57,7 @@
 | `iterations` | `5` | 进化迭代次数（论文用 30） |
 | `population_size` | `3` | 每个岛屿的种群规模 |
 | `migration_stagnation` | `2` | 触发精英迁移前的非改进迭代数 |
-| `bench_command` | `''` | 编译 + 基准测试命令 |
+| `benchmark_command` | `''` | 编译 + 基准测试命令 |
 | `rtol` / `atol` | `0.01` | 正确性容差 |
 | `retrieval_corpus_path` | `''` | 用于 RAG 初始化的已验证 PyTorch→Triton 对 |
 | `hint_library_path` | `''` | 持久化的提示库 JSON（跨任务复用） |
@@ -78,7 +78,7 @@ Workflow({
     num_islands: 4,
     iterations: 30,
     population_size: 4,
-    bench_command: 'python eval_triton.py --kernel',
+    benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
     retrieval_corpus_path: '/path/to/verified_triton_pairs.jsonl',
     hint_library_path: '/path/to/kernelfoundrydx_hints.json',
     exp_dir: '/tmp/kernelfoundrydx_exp',

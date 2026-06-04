@@ -42,8 +42,8 @@ method:
 topology:
   type: "iterative"
   iterative:
-    max_iterations_arg: "iterations"
-    convergence_condition: "Iteration budget exhausted or feature scores converge"
+    iterations_arg: "iterations"
+    convergence_condition: "Iteration iterations exhausted or feature scores converge"
     state_variables:
       - name: "featureCatalog"
         type: "array"
@@ -74,11 +74,11 @@ phases:
         output_schema:
           type: "object"
           properties:
-            task_spec: { type: "string" }
+            problem_definition: { type: "string" }
             reference_code: { type: "string" }
             operation_type: { type: "string" }
             constraints: { type: "array", items: { type: "string" } }
-          required: ["task_spec", "operation_type", "constraints"]
+          required: ["problem_definition", "operation_type", "constraints"]
 
   - name: "FeatureCatalog"
     detail: "Build a CUDA optimization feature space tailored to the task"
@@ -202,14 +202,14 @@ plan_angles:
 
 args:
   required:
-    - name: "task_spec_path"
+    - name: "problem_path"
       type: "string"
       description: "Path to CUDA generation task specification"
       example: "/path/to/task.md"
-    - name: "eval_command"
+    - name: "benchmark_command"
       type: "string"
       description: "Evaluator command with {kernel_path} and {result_path} substitutions"
-      example: "python eval.py --kernel {kernel_path} --json {result_path}"
+      example: "<user-provided benchmark command with {kernel_path}/{result_path}>"
   optional:
     - name: "reference_code_path"
       type: "string"

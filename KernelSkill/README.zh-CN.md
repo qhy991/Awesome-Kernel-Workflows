@@ -51,10 +51,10 @@ KernelSkill 从 PyTorch 参考实现生成自定义 CUDA 内核，并在多轮�
 - `reference_path`：PyTorch 参考任务路径（必填）
 - `op_description`：操作描述
 - `target_gpu`：目标 GPU（默认 `A100-80GB`）
-- `rounds`：精炼轮数（默认 `15`）
+- `iterations`：精炼轮数（默认 `15`）
 - `seed_candidates`：前置生成的种子内核数（默认 `3`）
 - `skill_library_path`：长期技能库 YAML/JSON 路径，**覆盖**内置库
-- `bench_command`：编译 + benchmark 命令
+- `benchmark_command`：编译 + benchmark 命令
 - `ncu_binary` / `nsys_binary`：Nsight 工具路径
 - `tol`：相对参考的最大误差容差
 - `warmup` / `repeat`：benchmark 迭代次数
@@ -74,9 +74,9 @@ Workflow({
     reference_path: '/path/to/KernelBench/level1/19_ReLU.py',
     op_description: 'ReLU activation over a large tensor',
     target_gpu: 'A100-80GB',
-    rounds: 15,
+    iterations: 15,
     seed_candidates: 3,
-    bench_command: 'python utils/compile_and_run.py --kernel',
+    benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
     tol: 0.01,
     exp_dir: '/tmp/kernelskill_exp',
   },

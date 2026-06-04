@@ -108,7 +108,7 @@ STAGE 11 (VECTORIZATION):
 
 ## Key Parameters
 
-- **max_iterations_per_stage**: Maximum CoVeR loop iterations per stage (default: 10)
+- **iterations_per_stage**: Maximum CoVeR loop iterations per stage (default: 10)
 - **improvement_threshold**: Minimum improvement to accept candidate (default: 2.0%)
 - **correctness_tolerance**: Numerical error threshold (default: 1e-5 absolute, 1e-3 relative)
 - **enable_vtune**: Enable VTune profiling (default: false, expensive)

@@ -13,7 +13,7 @@ also the strongest default member / hardest single-solver baseline for KerSor
 ## How it's best-of-breed
 
 Every "smart" decision is delegated to a **deterministic substrate script** (run
-by agent Bash steps) — the scripts are the fidelity anchor, not the prompts:
+by agent Bash iterations) — the scripts are the fidelity anchor, not the prompts:
 
 | Phase | Substrate (Layer) | Borrowed from |
 |---|---|---|
@@ -34,28 +34,28 @@ KerSor consumes it natively.
 Workflow({ name: 'generalist-kernel-optimization', args: {
   kernel_path: '/path/to/kernel.cu',
   op_description: 'Quantized GEMM Q4_0 weight x FP32 activation',
-  eval_command: 'python eval.py --kernel KERNEL_PATH --out RESULT_JSON',
-  ncu_command: 'ncu --set full ...',           // optional
+  benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+  ncu_command: '<user-provided profiler command with {kernel_path}/{result_path}>',           // optional
   substrate_dir: '/path/to/Awesome-Kernel-Workflows/_substrate',
   exp_dir: '/path/to/experiment/output',
   memory_db: '/path/to/experiment/memory.json', // persistent; defaults to exp_dir/memory.json
   iterations: 3, breadth: 3, topk: 3, target_speedup: 1.5,
   // P0 — optional cost/robustness controls:
-  model_mechanical: 'haiku',   // script-running / parsing steps
+  model_mechanical: 'haiku',   // script-running / parsing iterations
   model_profile: 'sonnet',     // profiling + metric normalization
   model_judgment: 'opus',      // planning / implementation / report
-  est_tokens_per_candidate: 20000,  // budget-scaling estimate
+  est_tokens_per_candidate: 20000,  // iterations-scaling estimate
 }})
 ```
 
 **P0 applied** (see [`../_substrate/IMPROVEMENTS.md`](../_substrate/IMPROVEMENTS.md)):
-token-budget wiring (scales `breadth` to `budget.remaining()`, hard-stops when a
+token-iterations wiring (scales `breadth` to `iterations.remaining()`, hard-stops when a
 round won't fit), **worktree isolation** on parallel candidate implementation
-(no file-edit conflicts), and **model routing** (mechanical steps run on Haiku/Sonnet,
+(no file-edit conflicts), and **model routing** (mechanical iterations run on Haiku/Sonnet,
 only planning/codegen on Opus — most tokens are mechanical, so this is the cheapest
 large saving).
 
-`eval_command` must write JSON: `{compiled, correct, candidate_latency_ms,
+`benchmark_command` must write JSON: `{compiled, correct, candidate_latency_ms,
 eager_latency_ms, compile_latency_ms, speedup, metrics:{dram_pct, sm_pct,
 occupancy, latency_ms}}`. See the file header for the full contract.
 
@@ -63,4 +63,4 @@ occupancy, latency_ms}}`. See the file header for the full contract.
 
 Reference implementation on the `dev/solver-substrate` branch. The deterministic
 substrate scripts are unit-tested; the workflow orchestration is validated for
-syntax. End-to-end runs require a real GPU + `eval_command`.
+syntax. End-to-end runs require a real GPU + `benchmark_command`.

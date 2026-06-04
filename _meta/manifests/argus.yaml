@@ -35,7 +35,7 @@ method:
 topology:
   type: "iterative"
   iterative:
-    max_iterations_arg: "iterations"
+    iterations_arg: "iterations"
     convergence_condition: "No improvement for 3 consecutive iterations"
     state_variables:
       - name: "bestKernelCode"
@@ -189,7 +189,7 @@ args:
       default: "''"
       description: "Natural language specification of the kernel"
       example: "Flash attention GQA, bf16, d=128, Br=256, Bc=64"
-    - name: "hardware_target"
+    - name: "target_gpu"
       type: "string"
       default: "'NVIDIA H100'"
       description: "Target GPU architecture"
@@ -209,7 +209,7 @@ args:
     - name: "inner_steps"
       type: "number"
       default: "3"
-      description: "Max lowering steps per iteration"
+      description: "Max lowering iterations per iteration"
     - name: "exp_dir"
       type: "string"
       default: "'/tmp/argus_exp'"

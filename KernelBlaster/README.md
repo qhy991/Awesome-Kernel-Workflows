@@ -79,10 +79,10 @@ A rollout stops early on severe degradation (`actual_improvement < −20%`) or w
 | `ncu_binary` | `'ncu'` | Nsight Compute binary |
 | `exp_dir` | `'/tmp/kernelblaster_exp'` | NCU reports / experiment outputs |
 | `rl_iterations` | `3` | Number of rollouts (trajectories) |
-| `rollout_steps` | `4` | Max optimization steps per rollout |
+| `rollout_steps` | `4` | Max optimization iterations per rollout |
 | `update_frequency` | `3` | Run a policy-update cycle every N trajectories |
 | `buffer_size` | `100` | Replay-buffer capacity |
-| `gpu_type` | `'L40S'` | Target GPU for optimization hints |
+| `target_gpu` | `'L40S'` | Target GPU for optimization hints |
 | `test_command` / `benchmark_command` | `''` | Fallbacks when NCU is unavailable |
 | `run_timestamp_iso` | `'unknown'` | ISO timestamp for report headers |
 
@@ -97,13 +97,13 @@ Workflow({
     kernel_path: '/path/to/kernelbench-cuda/level1/001_Square_matrix_multiplication/init.cu',
     op_description: 'Square matrix multiplication',
     optimization_db_path: '/path/to/optimization_database.json',
-    harness_build_cmd: 'nvcc -O3 -lineinfo -arch=sm_89 -o bench driver.cpp init.cu',
+    harness_build_cmd: '<user-provided harness build command>',
     kernel_name_regex: 'matmul_kernel',
-    ncu_binary: 'ncu',
+    ncu_binary: '<user-provided ncu binary path>',
     exp_dir: '/tmp/kernelblaster_exp',
     rl_iterations: 3,
     rollout_steps: 4,
-    gpu_type: 'L40S',
+    target_gpu: 'L40S',
   },
 })
 ```

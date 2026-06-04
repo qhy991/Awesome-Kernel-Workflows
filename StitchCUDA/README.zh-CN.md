@@ -57,7 +57,7 @@ StitchCUDA 实现了 **三智能体编排框架**用于 CUDA 内核合成：**�
 
 **输出**: JSON 计划，包含:
 - `strategy`: "memory-bound" | "compute-bound" | "balanced"
-- `steps`: 实现步骤数组
+- `iterations`: 实现步骤数组
 - `threading_config`: `{block_size, grid_size, threads_per_block}`
 - `key_optimizations`: 优化名称数组（如 "coalescing", "shared_memory", "register_blocking"）
 

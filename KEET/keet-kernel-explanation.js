@@ -43,7 +43,7 @@ export const meta = {
 //     ncu_report_path: '/path/to/report.ncu-rep',
 //     op_description: 'Fan2 kernel from gaussian application',
 //     source_paths: ['/path/to/main.cu', '/path/to/utils.cuh'],
-//     ncu_binary: 'ncu',
+//     ncu_binary: '<user-provided ncu binary path>',
 //     exp_dir: '/tmp/keet_exp',
 //     kernel_name_regex: 'kernel_name',
 //     run_metadata: 'Block size: 128, Grid: (256,1,1), Registers: 64',
@@ -61,7 +61,7 @@ const NCU_REPORT_PATH = args.ncu_report_path || ''
 // --- Optional Args ---
 const OP_DESC = args.op_description || 'CUDA kernel'
 const SOURCE_PATHS = args.source_paths || []
-const NCU_BINARY = args.ncu_binary || 'ncu'
+const NCU_BINARY = args.ncu_binary || ''
 const EXP_DIR = args.exp_dir || '/tmp/keet_exp'
 const KERNEL_NAME_REGEX = args.kernel_name_regex || ''
 const RUN_METADATA = args.run_metadata || ''
@@ -147,28 +147,16 @@ Return a catalog of all source files with their contents and metadata.`, {
   () => agent(`You are an NCU profiling expert. Extract performance data from NCU profile(s).
 
 # NCU Report: ${NCU_REPORT_PATH || '(need to generate)'}
-# NCU Binary: ${NCU_BINARY}
+# NCU Binary: ${NCU_BINARY || '(not provided)'}
 # Kernel name regex: ${KERNEL_NAME_REGEX}
 # Experiment directory: ${EXP_DIR}
 # Run metadata: ${RUN_METADATA}
 # Additional profiles to analyze: ${JSON.stringify(ADDITIONAL_PROFILES)}
 
 # Task:
-If an NCU report path is provided, extract metrics from it:
-\`\`\`bash
-mkdir -p ${EXP_DIR}/profiles
-${NCU_BINARY} --import ${NCU_REPORT_PATH} --page details > ${EXP_DIR}/profiles/details.txt
-${NCU_BINARY} --import ${NCU_REPORT_PATH} --page raw > ${EXP_DIR}/profiles/raw_metrics.txt
-\`\`\`
+If an NCU report path is provided and ncu_binary is provided, extract metrics from it using that user-provided binary. If ncu_binary is missing, do not invent an import command; report that binary report extraction is unavailable.
 
-If no report is provided but a harness is available, generate one:
-\`\`\`bash
-${HARNESS_BUILD_CMD ? `${HARNESS_BUILD_CMD}` : '# No build command available'}
-${NCU_BINARY} --set full --section PmSampling --section PmSampling_WarpStates \\
-    -k "regex:${KERNEL_NAME_REGEX || 'kernel'}" -c 1 \\
-    -o ${EXP_DIR}/profiles/full_report \\
-    ${EXP_DIR}/harness/bench ${HARNESS_RUN_ARGS}
-\`\`\`
+If no report is provided, generate one only when harness_build_cmd, harness_run_args/run metadata, and ncu_binary are explicitly provided by the user. Do not create a default harness or choose a default profiler command.
 
 Extract ALL available metrics organized by category:
 - Duration & throughput (gpu__time_duration, sm__throughput, dram throughput)

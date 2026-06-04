@@ -32,9 +32,9 @@ This is not model training. It is an agent-executable FSR loop suitable for Clau
 
 Primary arguments accepted by this workflow:
 
-- `task_spec_path`: CUDA generation task specification
+- `problem_path`: CUDA generation task specification
 - `reference_code_path`: optional reference implementation
-- `eval_command`: evaluator command using `{kernel_path}` and `{result_path}`
+- `benchmark_command`: evaluator command using `{kernel_path}` and `{result_path}`
 - `target_gpu`: target GPU, default `H100`
 - `iterations`: feature-search iterations, default `8`
 - `feature_budget`: maximum features per candidate, default `4`
@@ -65,9 +65,9 @@ Evaluator JSON should contain:
 Workflow({
   name: 'cudallm-fsr-kernel-generation',
   args: {
-    task_spec_path: '/path/to/task.md',
+    problem_path: '/path/to/task.md',
     reference_code_path: '/path/to/reference.py',
-    eval_command: 'python eval.py --kernel {kernel_path} --json {result_path}',
+    benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
     target_gpu: 'H100',
     iterations: 8,
     feature_budget: 4,

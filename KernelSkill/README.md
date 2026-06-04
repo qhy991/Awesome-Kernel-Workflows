@@ -12,7 +12,7 @@ Multi-agent CUDA kernel optimization with a **dual-level memory**, adapted from 
 
 ## What it does
 
-KernelSkill generates a custom CUDA kernel from a PyTorch reference and then refines it over multiple rounds. Its central idea is to **replace the opaque, implicitly-learned heuristics inside the LLM with explicit, externalized "expert optimization skills"** — so the choice of *what* optimization to apply is knowledge-driven and auditable.
+KernelSkill generates a custom CUDA kernel from a PyTorch reference and then refines it over multiple iterations. Its central idea is to **replace the opaque, implicitly-learned heuristics inside the LLM with explicit, externalized "expert optimization skills"** — so the choice of *what* optimization to apply is knowledge-driven and auditable.
 
 This is realized as a dual-level memory:
 
@@ -27,7 +27,7 @@ This is realized as a dual-level memory:
 
 1. **Setup** — read the PyTorch reference, measure the Torch eager baseline.
 2. **Seed** — Generator produces several correctness-first candidate kernels; the Reviewer evaluates them; the best valid one becomes the working kernel.
-3. **Refinement rounds** (paper uses 15) — each round is a **two-branch** control flow:
+3. **Refinement iterations** (paper uses 15) — each round is a **two-branch** control flow:
    - **Repair branch** (kernel invalid): `Diagnoser → Repairer`, conditioned on chained repair memory so the model does not oscillate between the same faulty variants.
    - **Optimize branch** (kernel valid): `Feature Extractor → deterministic Gate (allowed_methods) → Retrieve method knowledge → Planner → Optimizer`, with the Planner conditioned on short-term optimization memory.
 4. **Report** — best kernel, speedup trajectory, skills applied, repair history.
@@ -72,10 +72,10 @@ The selection metric is **speedup = reference (Torch eager) latency / test laten
 | `reference_path` | ✅ | — | Path to the PyTorch reference task (`.py`) |
 | `op_description` | | `'PyTorch operator/model'` | Human-readable description |
 | `target_gpu` | | `'A100-80GB'` | Target GPU for prompts/profiling |
-| `rounds` | | `15` | Number of refinement rounds |
+| `iterations` | | `15` | Number of refinement iterations |
 | `seed_candidates` | | `3` | Correctness-first seed kernels generated up front |
 | `skill_library_path` | | `''` | Path to a long-term skill library YAML/JSON. **Overrides** the embedded library |
-| `bench_command` | | `''` | Compile + benchmark command |
+| `benchmark_command` | | `''` | Compile + benchmark command |
 | `ncu_binary` | | `'ncu'` | Nsight Compute binary |
 | `nsys_binary` | | `'nsys'` | Nsight Systems binary |
 | `tol` | | `0.01` | Max abs error tolerated vs reference |
@@ -96,11 +96,11 @@ Workflow({
     reference_path: '/path/to/KernelBench/level1/19_ReLU.py',
     op_description: 'ReLU activation over a large tensor',
     target_gpu: 'A100-80GB',
-    rounds: 15,
+    iterations: 15,
     seed_candidates: 3,
-    bench_command: 'python utils/compile_and_run.py --kernel',
-    ncu_binary: 'ncu',
-    nsys_binary: 'nsys',
+    benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+    ncu_binary: '<user-provided ncu binary path>',
+    nsys_binary: '<user-provided nsys binary path>',
     tol: 0.01,
     warmup: 25,
     repeat: 100,

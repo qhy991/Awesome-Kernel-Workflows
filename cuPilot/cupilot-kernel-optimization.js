@@ -52,10 +52,10 @@ export const meta = {
 //   Workflow({name: 'cupilot-kernel-optimization', args: {
 //     kernel_spec: 'PyTorch operator code or description',
 //     op_description: 'Standard GEMM (M×N×K, bf16)',
-//     gpu_target: 'A100',
-//     compile_command: 'nvcc -O3 -arch=sm_80 ...',
-//     test_command: 'python test_kernel.py',
-//     ncu_command: 'ncu --metrics ... ./bench',
+//     target_gpu: 'A100',
+//     compile_command: '<user-provided compile command with {kernel_path}/{result_path}>',
+//     test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
+//     ncu_command: '<user-provided profiler command with {kernel_path}/{result_path}>',
 //     roofline_result_path: '/tmp/cupilot_exp/roofline.json',
 //     strategy_corpus_path: '/tmp/cupilot_exp/strategy_corpus.jsonl',
 //     epochs: 3,
@@ -67,11 +67,12 @@ export const meta = {
 // =============================================================================
 
 // --- Required Args ---
-const KERNEL_SPEC = args.kernel_spec || ''
+const PROBLEM_DEFINITION = args.problem_definition || args.kernel_spec || ''
+const PROBLEM_PATH = args.problem_path || ''
 const OP_DESC = args.op_description || 'CUDA kernel'
 
 // --- Optional Args ---
-const GPU_TARGET = args.gpu_target || 'A100'
+const GPU_TARGET = args.target_gpu || 'A100'
 const COMPILE_CMD = args.compile_command || ''
 const TEST_CMD = args.test_command || ''
 const NCU_CMD = args.ncu_command || ''
@@ -83,8 +84,11 @@ const POP_SIZE = args.population_size || 30
 const STRATEGY_POOL_PATH = args.strategy_pool_path || ''
 const EXP_DIR = args.exp_dir || '/tmp/cupilot_exp'
 const KERNEL_PATH = args.kernel_path || ''
+const INPUT_MODE = KERNEL_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const MAX_REVISE_LOOPS = args.max_revise_loops || 3
 const EST_PER_ROUND = args.est_tokens_per_round || 60000
+const LANGUAGE = args.language || 'cuda'
+const SEED_CANDIDATES = args.seed_candidates || 3
 
 // --- Model routing ---
 const MODEL = {
@@ -95,6 +99,14 @@ const MODEL = {
 const EVIDENCE_MODE = (COMPILE_CMD && TEST_CMD && NCU_CMD && STRATEGY_CORPUS_PATH)
   ? 'measured'
   : 'conservative_missing_evidence'
+if (!KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
+  throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
+}
+const generatedKernelPath = KERNEL_PATH ? '' : `${EXP_DIR}/generated/cupilot_initial.cu`
+const initialCandidates = []
+const initialGenerationResult = KERNEL_PATH
+  ? null
+  : { verified: Boolean(TEST_CMD), selected_candidate_id: 'cupilot-initial', evidence_summary: TEST_CMD ? 'verification requested in setup' : 'unverified initial generation' }
 
 // --- State ---
 let population = []      // [{kernel, strategy, fitness, hwUtil}]
@@ -116,7 +128,11 @@ const setupResults = await parallel([
 # Task:
 1. Read the kernel specification:
 ${KERNEL_PATH ? `Read from: ${KERNEL_PATH}` : ''}
-${KERNEL_SPEC ? `\`\`\`python\n${KERNEL_SPEC.substring(0, 3000)}\n\`\`\`` : `Operation: ${OP_DESC}`}
+${PROBLEM_PATH ? `Read problem file: ${PROBLEM_PATH}` : ''}
+${PROBLEM_DEFINITION ? `\`\`\`python\n${PROBLEM_DEFINITION.substring(0, 3000)}\n\`\`\`` : `Operation: ${OP_DESC}`}
+- language: ${LANGUAGE}
+- target_gpu: ${GPU_TARGET}
+- seed_candidates: ${SEED_CANDIDATES}
 
 # Evidence contract:
 - roofline_result_path: ${ROOFLINE_RESULT_PATH}
@@ -124,9 +140,9 @@ ${KERNEL_SPEC ? `\`\`\`python\n${KERNEL_SPEC.substring(0, 3000)}\n\`\`\`` : `Ope
 - evidence_mode: ${EVIDENCE_MODE}
 - If evidence_mode is conservative_missing_evidence, roofline guidance, RAG initialization, and SCE decisions are workflow estimates, not strict cuPilot evidence.
 
-2. Generate a functionally correct initial CUDA kernel (vanilla, unoptimized)
+2. Generate a functionally correct initial ${LANGUAGE} kernel (vanilla, unoptimized)
    - Include proper __global__ function, thread mapping, memory access
-   - Must compile with nvcc and produce correct output
+   - Must satisfy the user-provided compile_command/test_command when those contracts are present
 
 3. Perform Roofline Classification (cuPilot Section 4.3):
    Analyze the kernel's arithmetic intensity (FLOPs / bytes transferred):
@@ -382,7 +398,7 @@ ${(tk.kernel_code || '').substring(0, 4000)}
 
 # Revision Loop (up to ${MAX_REVISE_LOOPS} iterations):
 
-## Step 1: NVCC Compiler Check
+## Step 1: Compiler Check
 ${COMPILE_CMD ? `Run: ${COMPILE_CMD}` : 'Check: valid CUDA syntax, correct use of intrinsics, proper template parameters.'}
 If syntax errors → fix them and retry.
 
@@ -391,7 +407,7 @@ ${TEST_CMD ? `Run: ${TEST_CMD}` : 'Verify numerical correctness against referenc
 If function errors → fix logic bugs and retry.
 
 ## Step 3: Performance Profiling
-${NCU_CMD ? `Run: ${NCU_CMD}` : 'Analyze: estimate throughput, occupancy, memory efficiency.'}
+${NCU_CMD ? `Run the user-provided ncu_command: ${NCU_CMD}` : 'No ncu_command provided; estimate throughput, occupancy, and memory efficiency without claiming measured profiler evidence.'}
 Extract:
 - Speedup vs PyTorch baseline
 - SM Throughput utilization
@@ -520,8 +536,14 @@ Write:
 })
 
 return {
+  input_mode: INPUT_MODE,
+  problem_definition: PROBLEM_DEFINITION,
+  problem_path: PROBLEM_PATH,
+  generated_kernel_path: generatedKernelPath,
+  initial_candidates: initialCandidates,
+  initial_generation_result: initialGenerationResult,
   operation: OP_DESC,
-  gpu_target: GPU_TARGET,
+  target_gpu: GPU_TARGET,
   roofline_class: rooflineClass,
   best_speedup: bestKernel.speedup,
   best_strategy: bestKernel.strategy,

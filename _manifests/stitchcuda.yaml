@@ -34,17 +34,17 @@ methodology:
       role: "Strategic optimization planning"
       responsibilities:
         - "High-level optimization approach (memory-bound, compute-bound, balanced)"
-        - "Decompose into implementation steps"
+        - "Decompose into implementation iterations"
         - "Specify threading/block configuration"
         - "Identify key optimizations"
 
-      output: "JSON plan with strategies, steps, threading config"
+      output: "JSON plan with strategies, iterations, threading config"
 
     - name: "Coder"
       role: "CUDA kernel code generation"
       responsibilities:
         - "Generate complete CUDA kernel following plan"
-        - "Implement all steps from plan"
+        - "Implement all iterations from plan"
         - "Apply key optimizations (coalescing, shared memory, register blocking, etc.)"
         - "PyTorch load_inline compatible format"
 

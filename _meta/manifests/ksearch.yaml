@@ -38,7 +38,7 @@ method:
     design hypotheses, alternatives, and their empirical outcomes. Each tree node carries
     a utility score (combining expected speedup, difficulty, confidence). The system
     deterministically selects the highest-scoring open frontier node, attempts code generation
-    with multiple debug/improve rounds, then either refines the tree (success: attach solution,
+    with multiple debug/improve iterations, then either refines the tree (success: attach solution,
     update ancestor scores, add continuation children) or backtracks (failure: downgrade node,
     propose recovery actions). This avoids getting stuck in local optima and enables
     systematic coverage of the design space.
@@ -62,8 +62,8 @@ topology:
       reaches wm_stagnation_window). On backtrack: downgrade node score/difficulty, add
       recovery action nodes, advance to next frontier node.
   iterative:
-    max_iterations_arg: "max_cycles"
-    convergence_condition: "No open frontier nodes remain, or budget exhausted"
+    iterations_arg: "iterations"
+    convergence_condition: "No open frontier nodes remain, or iterations exhausted"
     state_variables:
       - name: "decisionTree"
         type: "object"
@@ -272,7 +272,7 @@ plan_angles:
 
 args:
   required:
-    - name: "kernel_spec_path"
+    - name: "problem_path"
       type: "string"
       description: "Path to the kernel specification / problem definition file"
       example: "/path/to/mla_decode_spec.yaml"
@@ -292,10 +292,10 @@ args:
       default: "'H100'"
       description: "Target GPU architecture for optimization hints"
       example: "H100"
-    - name: "max_cycles"
+    - name: "iterations"
       type: "number"
       default: "10"
-      description: "Maximum number of search cycles (tree exploration rounds)"
+      description: "Maximum number of search cycles (tree exploration iterations)"
       example: "20"
     - name: "attempts_per_cycle"
       type: "number"
@@ -312,12 +312,12 @@ args:
       default: "4"
       description: "Maximum action difficulty (1-5) to attempt"
       example: "4"
-    - name: "bench_command"
+    - name: "benchmark_command"
       type: "string"
       default: "''"
       description: "Command to build and benchmark the kernel"
-      example: "python eval_kernel.py --kernel"
-    - name: "baseline_code_path"
+      example: "<user-provided benchmark command with {kernel_path}/{result_path}>"
+    - name: "kernel_path"
       type: "string"
       default: "''"
       description: "Path to baseline kernel code for comparison"

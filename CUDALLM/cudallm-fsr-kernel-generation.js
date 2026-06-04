@@ -31,9 +31,9 @@ export const meta = {
 //
 // Usage:
 //   Workflow({name: 'cudallm-fsr-kernel-generation', args: {
-//     task_spec_path: '/path/to/task.md',
+//     problem_path: '/path/to/task.md',
 //     reference_code_path: '/path/to/reference.py',
-//     eval_command: 'python eval.py --kernel {kernel_path} --json {result_path}',
+//     benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
 //     target_gpu: 'H100',
 //     iterations: 8,
 //     feature_budget: 4,
@@ -44,7 +44,7 @@ export const meta = {
 //   }})
 //
 // Evaluator JSON contract:
-//   eval_command should write JSON at {result_path}:
+//   benchmark_command should write JSON at {result_path}:
 //   {
 //     "compiled": true,
 //     "correct": true,
@@ -59,9 +59,10 @@ export const meta = {
 // =============================================================================
 
 // --- Required Args ---
-const TASK_SPEC_PATH = args.task_spec_path || ''
+const PROBLEM_DEFINITION = args.problem_definition || ''
+const TASK_SPEC_PATH = args.problem_path || ''
 const REFERENCE_CODE_PATH = args.reference_code_path || ''
-const EVAL_CMD = args.eval_command || ''
+const EVAL_CMD = args.benchmark_command || ''
 
 // --- Optional Args ---
 const TARGET_GPU = args.target_gpu || 'H100'
@@ -72,6 +73,7 @@ const RTOL = args.rtol ?? 0.01
 const ATOL = args.atol ?? 0.01
 const EXP_DIR = args.exp_dir || '/tmp/cudallm_fsr_exp'
 const ADAPTATION_SCOPE = 'workflow_adaptation'
+const INPUT_MODE = 'generate_then_optimize'
 
 // --- State ---
 let taskSpec = ''
@@ -121,18 +123,20 @@ phase('Setup')
 const setup = await agent(`You are a CUDA kernel generation expert. Read and structure this CUDA-LLM task.
 
 # Inputs
-- task_spec_path: ${TASK_SPEC_PATH}
+- problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
+- problem_path: ${TASK_SPEC_PATH}
 - reference_code_path: ${REFERENCE_CODE_PATH}
 - target_gpu: ${TARGET_GPU}
-- eval_command: ${EVAL_CMD || '(missing; evaluator evidence required before accepting speedup)'}
+- benchmark_command: ${EVAL_CMD || '(missing; evaluator evidence required before accepting speedup)'}
 - tolerances: rtol=${RTOL}, atol=${ATOL}
 
 # Tasks
-1. Read the task specification and reference implementation.
-2. Identify operation type, tensor shapes/dtypes, layout assumptions, and expected output.
-3. Identify hard constraints: pure CUDA/C++ only, no PyTorch fallback in generated kernel, preserve numerical tolerance.
-4. State the evaluator JSON contract and how {kernel_path}/{result_path} are substituted.
-5. List baseline performance if available.
+1. Read problem_path and reference implementation when provided.
+2. Use problem_definition as the authoritative task specification when provided.
+3. Identify operation type, tensor shapes/dtypes, layout assumptions, and expected output.
+4. Identify hard constraints: pure CUDA/C++ only, no PyTorch fallback in generated kernel, preserve numerical tolerance.
+5. State the evaluator JSON contract and how {kernel_path}/{result_path} are substituted.
+6. List baseline performance if available.
 
 Return structured task information.`, {
   label: 'setup-task',
@@ -140,7 +144,7 @@ Return structured task information.`, {
   schema: {
     type: 'object',
     properties: {
-      task_spec: { type: 'string' },
+      problem_definition: { type: 'string' },
       reference_code: { type: 'string' },
       operation_type: { type: 'string' },
       input_contract: { type: 'string' },
@@ -148,11 +152,11 @@ Return structured task information.`, {
       constraints: { type: 'array', items: { type: 'string' } },
       baseline_latency_ms: { type: 'number' },
     },
-    required: ['task_spec', 'operation_type', 'constraints'],
+    required: ['problem_definition', 'operation_type', 'constraints'],
   },
 })
 
-taskSpec = setup.task_spec || ''
+taskSpec = PROBLEM_DEFINITION || setup.problem_definition || ''
 referenceCode = setup.reference_code || ''
 
 // =============================================================================
@@ -231,7 +235,7 @@ rtol=${RTOL}, atol=${ATOL}
 2. Cover boundary/tail cases that stress masking and vectorized loads.
 3. Cover dtype/layout variations if the task allows them.
 4. Include random and adversarial value distributions.
-5. These tests are a plan for eval_command or a workflow-created harness; model self-judgment is not enough.
+5. These tests define what the user-provided benchmark_command should verify; model self-judgment is not enough.
 
 Return test cases.`, {
   label: 'generate-tests',
@@ -318,7 +322,7 @@ ${JSON.stringify(selection, null, 2)}
 2. Do not call PyTorch or reference implementation from generated kernel.
 3. Preserve input/output contract and tolerances.
 4. Implement selected features concretely; if a feature is skipped, explain why.
-5. Keep code benchmarkable by eval_command.
+5. Keep code benchmarkable by benchmark_command.
 
 Return candidate code and implemented features.`, {
       label: `generate-kernel-${iteration}-${sample}`,
@@ -345,7 +349,7 @@ ${(generation.candidate_code || '').substring(0, 16000)}
 \`\`\`
 
 # Eval command
-${EVAL_CMD || '(no eval_command provided)'}
+${EVAL_CMD || '(no benchmark_command provided)'}
 
 # Paths
 - kernel_path: ${EXP_DIR}/cudallm_iter_${iteration}_sample_${sample}.cu
@@ -357,9 +361,9 @@ ${JSON.stringify(tests, null, 2).substring(0, 8000)}
 \`\`\`
 
 # Required behavior
-1. If eval_command is available, materialize the kernel and run it with {kernel_path}/{result_path}.
+1. If benchmark_command is available, materialize the kernel and run it with {kernel_path}/{result_path}.
 2. Parse evaluator JSON.
-3. If eval_command is unavailable, set compiled=false, correct=false, speedup=0 and explain missing evidence.
+3. If benchmark_command is unavailable, set compiled=false, correct=false, speedup=0 and explain missing evidence.
 4. Reward must be based on compile success, functional correctness over diverse tests, and measured latency.
 5. Report suspected reward-hacking signs: hardcoded shapes, skipped computation, PyTorch fallback, or ignored inputs.
 
@@ -490,7 +494,15 @@ Cover:
 })
 
 return {
-  task_spec_path: TASK_SPEC_PATH,
+  input_mode: INPUT_MODE,
+  problem_definition: PROBLEM_DEFINITION,
+  problem_path: TASK_SPEC_PATH,
+  generated_kernel_path: bestCandidate?.path || '',
+  initial_candidates: candidates,
+  initial_generation_result: {
+    verified: candidates.some(c => c.eval?.correct),
+    selected_candidate_id: bestCandidate?.id || '',
+  },
   reference_code_path: REFERENCE_CODE_PATH,
   target_gpu: TARGET_GPU,
   iterations: ITERATIONS,

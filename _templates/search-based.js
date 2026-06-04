@@ -64,6 +64,13 @@ export const meta = {
 // --- Optional Args ---
 {{OPTIONAL_ARGS}}
 
+// Canonical input policy:
+// - If args.kernel_path is provided, optimize that existing kernel.
+// - Else require args.problem_definition or args.problem_path, generate seed_candidates initial kernels,
+//   verify them with test_command or benchmark_command, and optimize the best verified seed.
+// - Do not hardcode evaluator/compiler/profiler commands; consume user-provided command args.
+// - Return input_mode, generated_kernel_path, initial_candidates, and initial_generation_result.
+
 // --- State ---
 {{STATE_VARIABLES}}
 let searchHistory = []

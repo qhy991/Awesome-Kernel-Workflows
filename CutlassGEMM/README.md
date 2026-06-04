@@ -56,7 +56,7 @@ M < 128:  StreamK GemmUniversal, smaller tiles (128x128x32), more stages
 │                                                               │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │ NCU Profile (NEW)                                     │   │
-│  │ Run ncu --metrics on representative M values          │   │
+│  │ User-provided profile cmd over representative M values │   │
 │  │ Collect: SM%, MemBW%, Occupancy%, TensorCore%, L2Hit% │   │
 │  │ Diagnose: memory-bound? occupancy-limited? underoccup?│   │
 │  └────────────────────────┬─────────────────────────────┘   │
@@ -137,7 +137,7 @@ Workflow({name: 'cutlass-gemm-optimization', args: {
   sol_execbench_dir: '/path/to/SOL-ExecBench',
   output_dir: '/tmp/cutlass_gemm_opt',
   iterations: 3,
-  gpu_arch: 'sm_80',
+  target_gpu: 'sm_80',
 }})
 ```
 
@@ -159,7 +159,7 @@ CUTLASS_DIR=/path/to/cutlass uv run sol-execbench \
 | `sol_execbench_dir` | `/home/.../SOL-ExecBench` | SOL-ExecBench installation root |
 | `output_dir` | `/tmp/cutlass_gemm_opt` | Where to write solution artifacts |
 | `iterations` | `2` | Tuning loop iterations (with cost-benefit early stop) |
-| `gpu_arch` | `sm_80` | Target GPU compute capability |
+| `target_gpu` | `sm_80` | Target GPU compute capability |
 | `peak_tflops` | `312` (sm_80) / `989` (sm_90) | Peak fp16 tensor core TFLOPS for MFU calculation |
 | `ncu_binary` | `sudo /usr/local/cuda-12.4/bin/ncu` | NCU binary path (with sudo if needed) |
 | `ncu_profile_m_values` | `[8, 64, 256, 2048]` | Representative M values to profile with NCU |

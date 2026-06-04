@@ -53,12 +53,12 @@ KernelFoundry prevents **mode collapse** and **context degradation** — two fai
 
 ```javascript
 Workflow({name: 'kernelfoundry-kernel-optimization', args: {
-  task_spec: 'class Model(nn.Module):\n  def forward(self, x):\n    return F.softmax(x, dim=-1)',
+  problem_definition: 'class Model(nn.Module):\n  def forward(self, x):\n    return F.softmax(x, dim=-1)',
   op_description: 'Softmax over last dimension',
-  target_language: 'sycl',              // 'sycl', 'cuda', 'triton'
-  target_hardware: 'Intel Arc B580',
-  test_command: 'python test_kernel.py',
-  benchmark_command: 'python bench_kernel.py',
+  language: 'sycl',              // 'sycl', 'cuda', 'triton'
+  target_gpu: 'Intel Arc B580',
+  test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
+  benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
   generations: 40,
   meta_prompt_interval: 10,
   speedup_target: 2.0,
@@ -69,10 +69,10 @@ Workflow({name: 'kernelfoundry-kernel-optimization', args: {
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `task_spec` | `''` | PyTorch operator source code |
+| `problem_definition` | `''` | PyTorch operator source code |
 | `op_description` | `'GPU kernel'` | Operation description |
-| `target_language` | `'cuda'` | Target: sycl, cuda, or triton |
-| `target_hardware` | `'NVIDIA GPU'` | Target GPU platform |
+| `language` | `'cuda'` | Target: sycl, cuda, or triton |
+| `target_gpu` | `'NVIDIA GPU'` | Target GPU platform |
 | `test_command` | `''` | Correctness test command |
 | `benchmark_command` | `''` | Performance benchmark command |
 | `generations` | `30` | Number of evolutionary generations |
@@ -129,10 +129,10 @@ KernelFoundry 通过进化式质量-多样性搜索防止**模式坍缩**和**�
 
 ```javascript
 Workflow({name: 'kernelfoundry-kernel-optimization', args: {
-  task_spec: 'class Model(nn.Module): ...',
+  problem_definition: 'class Model(nn.Module): ...',
   op_description: 'Softmax',
-  target_language: 'sycl',
-  target_hardware: 'Intel Arc B580',
+  language: 'sycl',
+  target_gpu: 'Intel Arc B580',
   generations: 40,
 }})
 ```

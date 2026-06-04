@@ -87,10 +87,10 @@ On KernelBench (250 tasks), CUDA Agent achieves:
 
 ```javascript
 Workflow({name: 'cuda-agent-kernel-optimization', args: {
-  model_path: '/path/to/model.py',
+  kernel_path: '/path/to/model.py',
   op_description: 'Fused SwiGLU + Linear projection',
-  verify_command: 'python verify.py',
-  profile_command: 'python profile.py',
+  test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
+  profile_command: '<user-provided profiling command with {kernel_path}/{result_path}>',
   target_speedup: 1.05,    // 5% faster than torch.compile
   max_turns: 20,
 }})
@@ -100,9 +100,9 @@ Workflow({name: 'cuda-agent-kernel-optimization', args: {
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `model_path` | (required) | Path to PyTorch model.py |
+| `kernel_path` | (required) | Path to PyTorch model.py |
 | `op_description` | `'PyTorch model'` | Operation description |
-| `verify_command` | `''` | Correctness verification command |
+| `test_command` | `''` | Correctness verification command |
 | `profile_command` | `''` | Performance profiling command |
 | `compile_command` | `''` | Kernel compilation command |
 | `target_speedup` | `1.05` | Required speedup over torch.compile |
@@ -152,10 +152,10 @@ CUDA Agent 定义了一个结构化的**技能工作流**（SKILL.md），通过
 
 ```javascript
 Workflow({name: 'cuda-agent-kernel-optimization', args: {
-  model_path: '/path/to/model.py',
+  kernel_path: '/path/to/model.py',
   op_description: '融合 SwiGLU + Linear',
-  verify_command: 'python verify.py',
-  profile_command: 'python profile.py',
+  test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
+  profile_command: '<user-provided profiling command with {kernel_path}/{result_path}>',
   target_speedup: 1.05,
   max_turns: 20,
 }})

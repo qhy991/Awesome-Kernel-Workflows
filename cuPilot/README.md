@@ -89,10 +89,10 @@ cuPilot identifies three mismatches in existing LLM-based kernel evolution frame
 Workflow({name: 'cupilot-kernel-optimization', args: {
   kernel_spec: 'class Model(nn.Module):\n  def forward(self, A, B):\n    return torch.matmul(A, B)',
   op_description: 'Standard GEMM (M×N×K, bf16)',
-  gpu_target: 'A100',
-  compile_command: 'nvcc -O3 -arch=sm_80 -o bench kernel.cu',
-  test_command: 'python test_kernel.py',
-  ncu_command: 'ncu --metrics sm__throughput.avg.pct,dram__throughput.avg.pct ./bench',
+  target_gpu: 'A100',
+  compile_command: '<user-provided compile command with {kernel_path}/{result_path}>',
+  test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
+  ncu_command: '<user-provided profiler command with {kernel_path}/{result_path}>',
   epochs: 3,
   generations_per_epoch: 4,
   population_size: 50,
@@ -105,7 +105,7 @@ Workflow({name: 'cupilot-kernel-optimization', args: {
 |-----------|---------|-------------|
 | `kernel_spec` | `''` | PyTorch operator code or description |
 | `op_description` | `'CUDA kernel'` | Operation description |
-| `gpu_target` | `'A100'` | Target GPU architecture |
+| `target_gpu` | `'A100'` | Target GPU architecture |
 | `compile_command` | `''` | nvcc compilation command |
 | `test_command` | `''` | Correctness test command |
 | `ncu_command` | `''` | NCU profiling command |
@@ -149,7 +149,7 @@ cuPilot 识别了现有 LLM 内核进化框架的三个不匹配问题：
 Workflow({name: 'cupilot-kernel-optimization', args: {
   kernel_spec: 'class Model(nn.Module): ...',
   op_description: 'Standard GEMM',
-  gpu_target: 'A100',
+  target_gpu: 'A100',
   epochs: 3,
   generations_per_epoch: 4,
 }})

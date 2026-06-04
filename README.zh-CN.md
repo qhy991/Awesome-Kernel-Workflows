@@ -192,7 +192,7 @@ Workflow 文件遵循 Claude Code 约定：导出 `meta`（名称、描述、阶
 | [CutlassGEMM](CutlassGEMM/) | `iterative_self_improving` | NCU 引导的 CUTLASS 多配置 dispatch 调优循环 | SOL-ExecBench 正确性/speedup、NCU 指标、MFU | tile configs、dispatch thresholds、per-M performance regimes | 面向 CUTLASS GEMM 调优的工程 workflow adaptation |
 | [ArchAgent](ArchAgent/) | `search_based` | 短-长评估级联的种群进化 | ChampSim IPC/MPKI、相对基线 speedup | policy population、fitness history、diversity records | 面向 CPU cache policy search 的 workflow adaptation，不是 CUDA kernel 执行 |
 | [FACT](FACT/) | `multi_stage_refinement` | 模式发现、实现、组合与消融 | CUTLASS 编译/正确性/性能和消融 speedup | pattern registry、dependency graph、composed candidates | 组合式合成 workflow，方法形状保真但有简化 |
-| [GPU Forecasters](GPUForecasters/) | `tree_exploration` | learned forecaster + abstain 引导的 PUCT tree search | GPU speedup evaluator、forecast/abstain 校准 | forecaster model、search tree、GPU budget ledger | workflow adaptation；严格性依赖真实 surrogate 训练/校准 |
+| [GPU Forecasters](GPUForecasters/) | `tree_exploration` | learned forecaster + abstain 引导的 PUCT tree search | GPU speedup evaluator、forecast/abstain 校准 | forecaster model、search tree、GPU iterations ledger | workflow adaptation；严格性依赖真实 surrogate 训练/校准 |
 | [KernelBlaster](KernelBlaster/) | `iterative_self_improving` | 按硬件性能状态索引的 MAIC-RL rollout | NCU Elapsed Cycles、正确性、reward | optimization database、trajectory、replay buffer | 带持久记忆的 in-context RL adaptation |
 | [KernelFoundryDx](KernelFoundryDx/) | `search_based` | 诊断提示驱动的多岛 Triton 进化 | 编译/正确性/speedup + 反作弊检查 | island populations、elite archives、hint library | 依据论文的 faithful adaptation；无公开 runtime/source repo |
 | [KernelSkill](KernelSkill/) | `iterative_self_improving` | seed/review 后的 repair-or-optimize 精炼循环 | compiler/verifier/profiler、speedup、NCU/nsys 证据 | 长期 skill library、optimize history、repair chain | 决策流程保真；gate 由 prompt/workflow 表达 |
@@ -249,16 +249,39 @@ cp Awesome-Kernel-Workflows/AccelOpt/accelopt-kernel-optimization.js \
 
 进入 kernel 项目目录，启动 Claude Code，按 workflow 名称调用（参数以 workflow 文件内注释为准）。以 AccelOpt 为例：
 
+只提供问题定义：
+
+```javascript
+Workflow({
+  name: 'accelopt-kernel-optimization',
+  args: {
+    problem_definition: 'Implement y = gelu(x) for a contiguous fp32 tensor',
+    language: 'cuda',
+    target_gpu: 'H100',
+    test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
+    benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+    iterations: 5,
+    seed_candidates: 3,
+    exp_dir: '/tmp/kernel_workflow_exp',
+  },
+})
+```
+
+优化已有 kernel：
+
 ```javascript
 Workflow({
   name: 'accelopt-kernel-optimization',
   args: {
     kernel_path: '/path/to/kernel.cu',
     op_description: 'Quantized GEMM Q4_0 weight × FP32 activation',
+    target_gpu: 'H100',
+    test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
+    benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
     harness_path: '/path/to/harness.cu',
-    harness_build_cmd: 'nvcc -O3 -lineinfo -arch=sm_90 ...',
+    harness_build_cmd: '<user-provided harness build command>',
     kernel_name_regex: 'forward_kernel',
-    ncu_binary: 'ncu',
+    ncu_binary: '<user-provided ncu binary path>',
     exp_dir: '/path/to/experiment/output',
     iterations: 3,
     breadth: 3,

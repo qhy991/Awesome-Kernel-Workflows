@@ -42,12 +42,12 @@ export const meta = {
 //
 // Usage:
 //   Workflow({name: 'kernelfoundry-kernel-optimization', args: {
-//     task_spec: 'class Model(nn.Module): ...',
+//     problem_definition: 'class Model(nn.Module): ...',
 //     op_description: 'Fused softmax + dropout',
-//     target_language: 'sycl',                    // 'sycl', 'cuda', 'triton'
-//     target_hardware: 'Intel Arc B580',          // or 'NVIDIA A6000', etc.
-//     test_command: 'python test.py',
-//     benchmark_command: 'python bench.py',
+//     language: 'sycl',                    // 'sycl', 'cuda', 'triton'
+//     target_gpu: 'Intel Arc B580',          // or 'NVIDIA A6000', etc.
+//     test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
+//     benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
 //     descriptor_result_path: '/tmp/kernelfoundry_exp/descriptors/latest.json',
 //     archive_update_result_path: '/tmp/kernelfoundry_exp/archive/updates.jsonl',
 //     generations: 40,
@@ -59,12 +59,13 @@ export const meta = {
 // =============================================================================
 
 // --- Required Args ---
-const TASK_SPEC = args.task_spec || ''
+const TASK_SPEC = args.problem_definition || ''
+const PROBLEM_PATH = args.problem_path || ''
 const OP_DESC = args.op_description || 'GPU kernel'
 
 // --- Optional Args ---
-const TARGET_LANG = args.target_language || 'cuda'
-const TARGET_HW = args.target_hardware || 'NVIDIA GPU'
+const TARGET_LANG = args.language || 'cuda'
+const TARGET_HW = args.target_gpu || 'NVIDIA GPU'
 const TEST_CMD = args.test_command || ''
 const BENCH_CMD = args.benchmark_command || ''
 const DESCRIPTOR_RESULT_PATH = args.descriptor_result_path || `${args.exp_dir || '/tmp/kernelfoundry_exp'}/descriptors/latest.json`
@@ -75,6 +76,7 @@ const SPEEDUP_TARGET = args.speedup_target || 2.0
 const SELECTION_STRATEGY = args.selection_strategy || 'mixed'
 const EXP_DIR = args.exp_dir || '/tmp/kernelfoundry_exp'
 const KERNEL_PATH = args.kernel_path || ''
+const INPUT_MODE = KERNEL_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const EVIDENCE_MODE = (TEST_CMD && BENCH_CMD) ? 'measured' : 'conservative_missing_evidence'
 
 // --- State: MAP-Elites Archive ---
@@ -493,9 +495,18 @@ Write:
 })
 
 return {
+  input_mode: INPUT_MODE,
+  problem_definition: TASK_SPEC,
+  problem_path: PROBLEM_PATH,
+  generated_kernel_path: globalBest.code ? `${EXP_DIR}/best_kernel.${TARGET_LANG === 'cuda' ? 'cu' : TARGET_LANG}` : '',
+  initial_candidates: [],
+  initial_generation_result: {
+    verified: globalBest.speedup > 0,
+    selected_candidate_id: globalBest.id || '',
+  },
   operation: OP_DESC,
-  target_language: TARGET_LANG,
-  target_hardware: TARGET_HW,
+  language: TARGET_LANG,
+  target_gpu: TARGET_HW,
   baseline_time_ms: baselineTime,
   best_speedup: globalBest.speedup,
   best_cell: globalBest.cell,

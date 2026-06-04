@@ -51,11 +51,11 @@ export const meta = {
 //
 // Usage:
 //   Workflow({name: 'cuda-agent-kernel-optimization', args: {
-//     model_path: '/path/to/model.py',
+//     kernel_path: '/path/to/model.py',
 //     op_description: 'Fused SwiGLU + Linear projection',
-//     verify_command: 'python verify.py',
-//     profile_command: 'python profile.py',
-//     compile_command: 'cd kernels && nvcc -O3 -shared ...',
+//     test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
+//     profile_command: '<user-provided profiling command with {kernel_path}/{result_path}>',
+//     compile_command: '<user-provided compile command with {kernel_path}/{result_path}>',
 //     target_speedup: 1.05,
 //     max_turns: 20,
 //     exp_dir: '/tmp/cuda_agent_exp',
@@ -64,17 +64,27 @@ export const meta = {
 // =============================================================================
 
 // --- Required Args ---
-const MODEL_PATH = args.model_path || args.kernel_path || ''
+let MODEL_PATH = args.kernel_path || ''
+const PROBLEM_DEFINITION = args.problem_definition || ''
+const PROBLEM_PATH = args.problem_path || ''
+const INPUT_MODE = MODEL_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const OP_DESC = args.op_description || 'PyTorch model'
 
 // --- Optional Args ---
-const VERIFY_CMD = args.verify_command || ''
+const VERIFY_CMD = args.test_command || ''
 const PROFILE_CMD = args.profile_command || ''
 const COMPILE_CMD = args.compile_command || ''
 const TARGET_SPEEDUP = args.target_speedup || 1.05
 const MAX_TURNS = args.max_turns || 15
 const EXP_DIR = args.exp_dir || '/tmp/cuda_agent_exp'
 const ADAPTATION_SCOPE = 'inference_time_adaptation'
+const LANGUAGE = args.language || 'cuda'
+const TARGET_GPU = args.target_gpu || 'unknown GPU'
+const SEED_CANDIDATES = args.seed_candidates || 3
+
+if (!MODEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
+  throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
+}
 
 // --- State ---
 let modelCode = ''
@@ -85,12 +95,53 @@ let bestBindingCode = ''
 let bestModelNew = ''
 let bestSpeedup = 0
 let currentAttempt = 0
+let generatedKernelPath = ''
+let initialCandidates = []
+let initialGenerationResult = null
 let history = []  // [{turn, action, outcome, speedup, error}]
 
 // =============================================================================
 // Phase 1: Setup — Read model, establish workspace
 // =============================================================================
 phase('Setup')
+
+if (INPUT_MODE === 'generate_then_optimize') {
+  const generated = await agent(`No kernel_path was provided. Generate and verify an initial PyTorch model plus CUDA kernel scaffold before CUDAAgent optimization.
+
+# Problem Input
+- problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
+- problem_path: ${PROBLEM_PATH || '(not provided)'}
+- op_description: ${OP_DESC}
+- language: ${LANGUAGE}
+- target_gpu: ${TARGET_GPU}
+- seed_candidates: ${SEED_CANDIDATES}
+
+# Evidence Commands
+- compile_command: ${COMPILE_CMD || '(not provided)'}
+- test_command: ${VERIFY_CMD || '(not provided)'}
+- profile_command: ${PROFILE_CMD || '(not provided)'}
+
+# Contract
+Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run available commands using {kernel_path}/{result_path}. Return the best verified generated source path.`, {
+    label: 'generate-initial-kernel',
+    phase: 'Setup',
+    schema: {
+      type: 'object',
+      properties: {
+        generated_kernel_path: { type: 'string' },
+        initial_candidates: { type: 'array', items: { type: 'object' } },
+        initial_generation_result: { type: 'object' },
+      },
+      required: ['generated_kernel_path', 'initial_candidates', 'initial_generation_result'],
+    },
+  })
+  initialCandidates = generated.initial_candidates || []
+  initialGenerationResult = generated.initial_generation_result || { verified: false }
+  generatedKernelPath = generated.generated_kernel_path || ''
+  if (!generatedKernelPath) throw new Error('Generation mode did not produce generated_kernel_path')
+  if ((VERIFY_CMD || PROFILE_CMD) && initialGenerationResult.verified === false) throw new Error('No generated seed passed verification evidence')
+  MODEL_PATH = generatedKernelPath
+}
 
 const setupResult = await agent(`You are a CUDA kernel optimization expert. Set up the optimization workspace.
 
@@ -280,16 +331,16 @@ ${implResult.model_new_code.substring(0, 2000)}
 # Validation Steps:
 
 ## Step 1: Compile
-${COMPILE_CMD ? `Run: ${COMPILE_CMD}` : `Compile: nvcc -O3 -shared -Xcompiler -fPIC -o ${EXP_DIR}/kernels/kernel.so ${EXP_DIR}/kernels/kernel.cu`}
+${COMPILE_CMD ? `Run: ${COMPILE_CMD}` : 'No compile_command provided; perform static compileability review only.'}
 Check for compilation errors.
 
 ## Step 2: Correctness Verification
-${VERIFY_CMD ? `Run: ${VERIFY_CMD}` : 'Compare model_new.py output against model.py (reference) on 5 random inputs.'}
+${VERIFY_CMD ? `Run: ${VERIFY_CMD}` : 'No test_command provided; do not invent a correctness test command. Describe the required reference comparison and mark measured correctness as unavailable.'}
 - Use tolerance: atol=1e-3, rtol=1e-3
 - Test with multiple input shapes if applicable
 
 ## Step 3: Performance Measurement
-${PROFILE_CMD ? `Run: ${PROFILE_CMD} --model model_new` : 'Measure execution time of model_new.py.'}
+${PROFILE_CMD ? `Run exactly the user-provided profile_command: ${PROFILE_CMD}` : 'No profile_command provided; do not invent a performance measurement command.'}
 - Warm-up iterations: 10
 - Measurement iterations: 100
 - Report: kernel_time, speedup_vs_eager, speedup_vs_compile
@@ -402,6 +453,12 @@ Write:
 })
 
 return {
+  input_mode: INPUT_MODE,
+  problem_definition: PROBLEM_DEFINITION,
+  problem_path: PROBLEM_PATH,
+  generated_kernel_path: generatedKernelPath,
+  initial_candidates: initialCandidates,
+  initial_generation_result: initialGenerationResult,
   operation: OP_DESC,
   eager_time_ms: eagerTime,
   compile_time_ms: compileTime,

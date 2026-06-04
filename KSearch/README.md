@@ -37,16 +37,16 @@ It keeps a co-evolving **decision tree (world model)** and runs repeated cycles:
 
 Primary arguments accepted by this workflow:
 
-- `kernel_spec_path`: path to problem spec (required)
+- `problem_path`: path to problem spec (required)
 - `op_description`: operation description
 - `language`: `triton | cuda | python`
 - `target_gpu`: GPU target, e.g., `H100`
-- `max_cycles`: max search cycles (default `10`)
-- `attempts_per_cycle`: generate/improve rounds per cycle (default `5`)
+- `iterations`: max search cycles (default `10`)
+- `attempts_per_cycle`: generate/improve iterations per cycle (default `5`)
 - `stagnation_window`: non-improving window to stop a cycle (default `3`)
 - `max_difficulty`: max action difficulty to select first (default `4`)
-- `bench_command`: benchmark command
-- `baseline_code_path`: optional baseline kernel path
+- `benchmark_command`: benchmark command
+- `kernel_path`: optional baseline kernel path
 - `rtol` / `atol`: correctness tolerance
 - `exp_dir`: output directory
 
@@ -60,16 +60,16 @@ For exact behavior, see the source in [`ksearch-kernel-optimization.js`](ksearch
 Workflow({
   name: 'ksearch-kernel-optimization',
   args: {
-    kernel_spec_path: '/path/to/spec.yaml',
+    problem_path: '/path/to/spec.yaml',
     op_description: 'MLA decode attention kernel',
     language: 'triton',
     target_gpu: 'H100',
-    max_cycles: 10,
+    iterations: 10,
     attempts_per_cycle: 5,
     stagnation_window: 3,
     max_difficulty: 4,
-    bench_command: 'python eval.py --kernel',
-    baseline_code_path: '/path/to/baseline.py',
+    benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+    kernel_path: '/path/to/baseline.py',
     rtol: 0.01,
     atol: 0.01,
     exp_dir: '/tmp/ksearch_exp',

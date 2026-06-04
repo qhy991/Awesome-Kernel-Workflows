@@ -31,14 +31,14 @@
 
 主要参数：
 
-- `initial_kernel_path`：初始 CUDA kernel 文件路径
+- `kernel_path`：初始 CUDA kernel 文件路径
 - `compare_kind`：比较模式，例如 `generic`、`rmsnorm`、`silu`、`mergestate`
 - `baseline_module`：包含 baseline 函数的 Python 模块，默认 `sgl_kernel`
 - `baseline_func`：baseline 函数名
 - `generated_export_func`：生成 PyBind 模块中期望导出的函数名
 - `test_command`：正确性测试命令，使用 `{kernel_path}` 和 `{result_path}`
 - `benchmark_command`：性能测试命令，使用 `{kernel_path}` 和 `{result_path}`
-- `max_iterations`：优化轮数，默认 `5`
+- `iterations`：优化轮数，默认 `5`
 - `target_gpu`：目标 GPU，默认 `H100`
 - `exp_dir`：实验输出目录
 
@@ -64,14 +64,14 @@ Evaluator JSON 建议格式：
 Workflow({
   name: 'astra-kernel-optimization',
   args: {
-    initial_kernel_path: '/path/to/rms_v1.cu',
+    kernel_path: '/path/to/rms_v1.cu',
     compare_kind: 'rmsnorm',
     baseline_module: 'sgl_kernel',
     baseline_func: 'fused_add_rmsnorm',
     generated_export_func: 'sgl_fused_add_rmsnorm',
-    test_command: 'python test_kernel.py --kernel {kernel_path} --json {result_path}',
-    benchmark_command: 'python bench_kernel.py --kernel {kernel_path} --json {result_path}',
-    max_iterations: 5,
+    test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
+    benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+    iterations: 5,
     target_gpu: 'H100',
     exp_dir: '/tmp/astra_exp',
   },

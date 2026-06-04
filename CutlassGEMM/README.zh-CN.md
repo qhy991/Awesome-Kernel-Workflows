@@ -45,7 +45,7 @@ Workflow({name: 'cutlass-gemm-optimization', args: {
   sol_execbench_dir: '/path/to/SOL-ExecBench',
   output_dir: '/tmp/cutlass_gemm_opt',
   iterations: 3,
-  gpu_arch: 'sm_80',
+  target_gpu: 'sm_80',
 }})
 ```
 
@@ -67,7 +67,7 @@ CUTLASS_DIR=/path/to/cutlass uv run sol-execbench \
 | `sol_execbench_dir` | (自动检测) | SOL-ExecBench 安装根目录 |
 | `output_dir` | `/tmp/cutlass_gemm_opt` | 输出 solution 文件的目录 |
 | `iterations` | `3` | 调优循环迭代次数 |
-| `gpu_arch` | `sm_80` | 目标 GPU 计算能力 |
+| `target_gpu` | `sm_80` | 目标 GPU 计算能力 |
 
 ## 前置依赖
 

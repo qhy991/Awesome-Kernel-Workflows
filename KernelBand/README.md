@@ -6,7 +6,7 @@ A Multi-Armed Bandit framework that formulates kernel optimization as a structur
 
 ## Overview
 
-KernelBand addresses a fundamental mismatch: code LLMs excel at generating functionally correct kernels, but lack the hardware-specific intuition to navigate toward performance-optimal regions. A naive LLM optimizer performs what amounts to a random walk, wasting budget on transformations that yield negligible or negative speedups.
+KernelBand addresses a fundamental mismatch: code LLMs excel at generating functionally correct kernels, but lack the hardware-specific intuition to navigate toward performance-optimal regions. A naive LLM optimizer performs what amounts to a random walk, wasting iterations on transformations that yield negligible or negative speedups.
 
 ### Key Insight: Bandit Policy > LLM Intuition
 
@@ -89,10 +89,10 @@ Workflow({name: 'kernelband-kernel-optimization', args: {
   kernel_path: '/path/to/kernel.py',
   op_description: 'Fused attention forward (batch=32, seq=2048, heads=32)',
   harness_path: '/path/to/benchmark.py',
-  compile_command: 'python -c "import kernel; kernel.test()"',
-  benchmark_command: 'python benchmark.py --warmup 10 --repeat 100',
-  ncu_command: 'ncu --metrics sm__throughput.avg.pct_of_peak_sustained_elapsed,dram__throughput.avg.pct_of_peak_sustained_elapsed ./bench',
-  gpu_target: 'A100',
+  compile_command: '<user-provided compile/import command with {kernel_path}/{result_path}>',
+  benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+  ncu_command: '<user-provided profiler command with {kernel_path}/{result_path}>',
+  target_gpu: 'A100',
   iterations: 20,
   num_clusters: 3,
   recluster_period: 10,
@@ -112,8 +112,8 @@ Workflow({name: 'kernelband-kernel-optimization', args: {
 | `compile_command` | `''` | Compilation/import command |
 | `benchmark_command` | `''` | Performance measurement command |
 | `ncu_command` | `''` | NCU profiling command for feature extraction |
-| `gpu_target` | `'A100'` | Target GPU architecture |
-| `iterations` | `20` | Total optimization budget T |
+| `target_gpu` | `'A100'` | Target GPU architecture |
+| `iterations` | `20` | Total optimization iterations T |
 | `num_clusters` | `3` | Number of clusters K (paper recommends K=3) |
 | `recluster_period` | `10` | Re-cluster every τ iterations |
 | `strategies` | `[tiling, vectorization, ...]` | Available optimization strategies |
@@ -180,7 +180,7 @@ KernelBand 解决了一个根本性不匹配：代码 LLM 擅长生成功能正�
 Workflow({name: 'kernelband-kernel-optimization', args: {
   kernel_path: '/path/to/kernel.py',
   op_description: 'Fused attention forward',
-  gpu_target: 'A100',
+  target_gpu: 'A100',
   iterations: 20,
   num_clusters: 3,
 }})

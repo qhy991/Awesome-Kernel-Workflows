@@ -103,7 +103,7 @@ Workflow({name: 'accelopt-kernel-optimization', args: {
   // Recommended
   op_description: 'Quantized GEMM Q4_0 weight * FP32 activation',
   harness_path: '/path/to/harness.cu',
-  harness_build_cmd: 'nvcc -O3 -lineinfo -arch=sm_80 -o BENCH_PATH KERNEL_PATH -lcudart',
+  harness_build_cmd: '<user-provided harness build command>',
   harness_run_args: '',
   kernel_name_regex: 'forward_kernel',
   exp_dir: '/path/to/experiment/output',
@@ -121,7 +121,7 @@ Workflow({name: 'accelopt-kernel-optimization', args: {
   topk_learn: 5,                // Total pairs to summarize per iteration
 
   // Optional
-  ncu_binary: 'ncu',
+  ncu_binary: '<user-provided ncu binary path>',
   test_command: '',
   benchmark_command: '',
 }})
@@ -317,7 +317,7 @@ Workflow({name: 'accelopt-kernel-optimization', args: {
   // 推荐
   op_description: '量化 GEMM Q4_0 权重 * FP32 激活',
   harness_path: '/path/to/harness.cu',
-  harness_build_cmd: 'nvcc -O3 -lineinfo -arch=sm_80 -o BENCH_PATH KERNEL_PATH -lcudart',
+  harness_build_cmd: '<user-provided harness build command>',
   harness_run_args: '',
   kernel_name_regex: 'forward_kernel',
   exp_dir: '/path/to/experiment/output',
@@ -335,7 +335,7 @@ Workflow({name: 'accelopt-kernel-optimization', args: {
   topk_learn: 5,                // 每轮总结的对数上限
 
   // 可选
-  ncu_binary: 'ncu',
+  ncu_binary: '<user-provided ncu binary path>',
 }})
 ```
 

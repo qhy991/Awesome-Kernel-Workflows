@@ -93,8 +93,8 @@ Workflow({name: 'tritorx-operator-generation', args: {
   operator_docstring: 'Applies softmax(x, dim) = exp(x_i) / sum(exp(x_j)) over dim',
   target_platform: 'MTIA',
   triton_dialect: 'triton-mtia',
-  test_command: 'python run_opinfo_tests.py --op softmax',
-  lint_command: 'python triton_linter.py --check kernel.py wrapper.py',
+  test_command: '<user-provided OpInfo/equivalent test command>',
+  lint_command: '<user-provided Triton dialect linter command>',
   max_attempts: 3,
   max_llm_calls_per_attempt: 15,
 }})

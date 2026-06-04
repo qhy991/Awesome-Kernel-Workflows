@@ -43,13 +43,13 @@ export const meta = {
 //     kernel_path: '/path/to/init.cu',
 //     driver_path: '/path/to/driver.cpp',          // KernelBench-CUDA build/run/validate harness
 //     op_description: 'Square matrix multiplication',
-//     gpu_type: 'L40S',
+//     target_gpu: 'L40S',
 //     optimization_db_path: '/path/to/optimization_database.json',  // persistent cross-task memory
 //     exp_dir: '/path/to/experiment/output',
-//     ncu_binary: 'ncu',
+//     ncu_binary: '<user-provided ncu binary path>',
 //     kernel_name_regex: 'matmul_kernel',
-//     build_cmd: 'cmake --build build --target bench',
-//     run_cmd: './build/bench',
+//     build_cmd: '<user-provided build command>',
+//     run_cmd: '<user-provided benchmark command>',
 //     rl_iterations: 3,             // number of rollouts (RL iterations)
 //     rollout_steps: 4,             // optimization steps per rollout
 //     breadth: 2,                   // candidate plans per step
@@ -60,15 +60,18 @@ export const meta = {
 // =============================================================================
 
 // --- Required args ---
-const KERNEL_PATH = args.kernel_path
+let KERNEL_PATH = args.kernel_path || ''
+const PROBLEM_DEFINITION = args.problem_definition || ''
+const PROBLEM_PATH = args.problem_path || ''
+const INPUT_MODE = KERNEL_PATH ? 'optimize_existing' : 'generate_then_optimize'
 
 // --- Optional args ---
 const DRIVER_PATH = args.driver_path || ''
 const OP_DESC = args.op_description || 'CUDA kernel'
-const GPU_TYPE = args.gpu_type || 'L40S'
+const GPU_TYPE = args.target_gpu || 'L40S'
 const OPT_DB_PATH = args.optimization_db_path || ''
 const EXP_DIR = args.exp_dir || '/tmp/kernelblaster_exp'
-const NCU_BINARY = args.ncu_binary || 'ncu'
+const NCU_BINARY = args.ncu_binary || ''
 const KERNEL_NAME_REGEX = args.kernel_name_regex || ''
 const BUILD_CMD = args.build_cmd || ''
 const RUN_CMD = args.run_cmd || ''
@@ -81,6 +84,16 @@ const RUN_TS = args.run_timestamp_iso || 'unknown'
 // Fallback (no NCU): custom test + benchmark commands
 const TEST_CMD = args.test_command || ''
 const BENCH_CMD = args.benchmark_command || ''
+
+if (!KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
+  throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
+}
+
+const LANGUAGE = args.language || 'cuda'
+const SEED_CANDIDATES = args.seed_candidates || 3
+let generatedKernelPath = ''
+let initialCandidates = []
+let initialGenerationResult = null
 
 // =============================================================================
 // Persistent State-Keyed Optimization Knowledge Base (MAIC-RL memory)
@@ -249,6 +262,45 @@ function dbSummaryForPrompt(db) {
 // =============================================================================
 phase('Setup')
 
+if (INPUT_MODE === 'generate_then_optimize') {
+  const generated = await agent(`No kernel_path was provided. Generate and verify an initial CUDA kernel before starting KernelBlaster.
+
+# Problem Input
+- problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
+- problem_path: ${PROBLEM_PATH || '(not provided)'}
+- op_description: ${OP_DESC}
+- language: ${LANGUAGE}
+- target_gpu: ${GPU_TYPE}
+- seed_candidates: ${SEED_CANDIDATES}
+
+# Evidence Commands
+- build_cmd: ${BUILD_CMD || '(not provided)'}
+- run_cmd: ${RUN_CMD || '(not provided)'}
+- test_command: ${TEST_CMD || '(not provided)'}
+- benchmark_command: ${BENCH_CMD || '(not provided)'}
+
+# Contract
+Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run available commands using {kernel_path}/{result_path}. Return the best verified generated kernel path.`, {
+    label: 'generate-initial-kernel',
+    phase: 'Setup',
+    schema: {
+      type: 'object',
+      properties: {
+        generated_kernel_path: { type: 'string' },
+        initial_candidates: { type: 'array', items: { type: 'object' } },
+        initial_generation_result: { type: 'object' },
+      },
+      required: ['generated_kernel_path', 'initial_candidates', 'initial_generation_result'],
+    },
+  })
+  initialCandidates = generated.initial_candidates || []
+  initialGenerationResult = generated.initial_generation_result || { verified: false }
+  generatedKernelPath = generated.generated_kernel_path || ''
+  if (!generatedKernelPath) throw new Error('Generation mode did not produce generated_kernel_path')
+  if ((TEST_CMD || BENCH_CMD) && initialGenerationResult.verified === false) throw new Error('No generated seed passed correctness evidence')
+  KERNEL_PATH = generatedKernelPath
+}
+
 const setupResult = await agent(`Read the CUDA kernel at: ${KERNEL_PATH}
 ${DRIVER_PATH ? `The build/run/validate harness (KernelBench-CUDA style driver) is at: ${DRIVER_PATH}` : ''}
 ${OPT_DB_PATH ? `A persistent optimization knowledge base may exist at: ${OPT_DB_PATH} — if it exists and is valid JSON, read it and return its contents in loaded_db (else return null).` : ''}
@@ -299,13 +351,13 @@ log(`Baseline: ${opType}, kernels: ${setupResult.key_functions.join(', ')}`)
 const ncuBaseline = await agent(`You are a CUDA profiling expert using Nsight Compute (ncu). Profile the baseline kernel and report Elapsed Cycles plus Speed-of-Light metrics.
 
 # Environment
-- NCU binary: ${NCU_BINARY}
+- NCU binary: ${NCU_BINARY || '(not provided)'}
 - Experiment directory: ${EXP_DIR}
 - Kernel file: ${KERNEL_PATH}
-- Driver / harness: ${DRIVER_PATH || '(build a standalone harness)'}
+- Driver / harness: ${DRIVER_PATH || '(not provided)'}
 - Kernel name regex for ncu -k: ${KERNEL_NAME_REGEX || '(auto-detect)'}
-- Build command: ${BUILD_CMD || '(determine from driver / CMakeLists)'}
-- Run command: ${RUN_CMD || '(determine from driver)'}
+- Build command: ${BUILD_CMD || '(not provided)'}
+- Run command: ${RUN_CMD || '(not provided)'}
 - GPU type: ${GPU_TYPE}
 
 # Kernel source
@@ -315,12 +367,12 @@ ${baselineKernel.substring(0, 4000)}
 
 # Steps
 1. mkdir -p ${EXP_DIR}/baseline
-2. Build the kernel via the driver/harness (with -lineinfo if possible).
-3. Run NCU and capture **Elapsed Cycles** (the KernelBlaster scalar metric) along with:
+2. Build the kernel only if build_cmd is provided; otherwise perform static compileability review.
+3. If ncu_binary and run_cmd are provided, profile and capture **Elapsed Cycles** (the KernelBlaster scalar metric) along with:
    - Memory Throughput %, Compute (SM) Throughput %, Achieved Occupancy %
    - Top stall reason, L2 hit rate, registers/thread
-   ${NCU_BINARY} --set full -k "regex:${KERNEL_NAME_REGEX || 'KERNEL'}" -c 1 -o ${EXP_DIR}/baseline/full <bench>
-4. If ncu is unavailable, fall back to: ${TEST_CMD || '(static analysis)'} / ${BENCH_CMD || '(static analysis)'} and estimate cycles from latency.
+   Do not invent a profiler command, harness, or benchmark binary.
+4. If profiling is unavailable, fall back to user-provided test_command/benchmark_command if present; otherwise use static analysis and mark cycles as missing evidence.
 
 Return the parsed metrics.`, {
   label: 'ncu-baseline',
@@ -383,7 +435,7 @@ ${ncuBaseline.profile_summary}
 - compute_throughput_limited: SM/compute units saturated / instruction-throughput bound
 - latency_occupancy_limited: neither mem nor compute saturated / low occupancy / sync or latency stalls
 
-Re-profile via ncu if available (${NCU_BINARY}), else reason from the metrics above and the code.
+Re-profile only if ncu_binary and run_cmd were provided; otherwise reason from the metrics above and the code, and mark missing profiler evidence explicitly.
 Return the classification.`, {
       label: `state-${iter}-${step}`,
       phase: 'ProfileState',
@@ -540,8 +592,7 @@ Steps:
 1. Static correctness: race conditions, OOB, missing __syncthreads, wrong reductions.
 2. Compilability: includes present, valid CUDA, matches driver entry.
 3. Build + run the driver to VALIDATE correctness against the reference.
-4. NCU re-profile to get Elapsed Cycles (${NCU_BINARY} ... -k "regex:${KERNEL_NAME_REGEX || 'KERNEL'}").
-   Fallback if no ncu: ${TEST_CMD || '(static)'} / ${BENCH_CMD || '(static)'}.
+4. Re-profile to get Elapsed Cycles only when ncu_binary plus run_cmd are provided; otherwise use test_command/benchmark_command if present and mark NCU cycles as missing evidence.
 5. speedup = baseline_cycles / new_cycles; improvement% = (baseline-new)/baseline*100.
 
 Return the evaluation.`, {
@@ -765,6 +816,12 @@ Write:
 })
 
 return {
+  input_mode: INPUT_MODE,
+  problem_definition: PROBLEM_DEFINITION,
+  problem_path: PROBLEM_PATH,
+  generated_kernel_path: generatedKernelPath,
+  initial_candidates: initialCandidates,
+  initial_generation_result: initialGenerationResult,
   baseline_elapsed_cycles: baselineCycles,
   best_elapsed_cycles: bestCycles,
   overall_speedup: baselineCycles / bestCycles,

@@ -48,7 +48,7 @@ Problem (PyTorch code or description)
           ▼                                │
 ┌───────────────────┐                      │
 │      Refine        │  Error-driven fix    │
-│  (up to N rounds)  │  → re-verify         │
+│  (up to N iterations)  │  → re-verify         │
 └─────────┬─────────┘                      │
           │                                │
           ├────────────────────────────────┘
@@ -92,7 +92,7 @@ Problem (PyTorch code or description)
 Workflow({name: 'kernelagent-triton-synthesis', args: {
   problem_path: '/path/to/KernelBench/level1/19_ReLU.py',
   num_workers: 4,
-  max_rounds: 10,
+  iterations: 10,
   verify: true,
 }})
 ```
@@ -101,7 +101,7 @@ Workflow({name: 'kernelagent-triton-synthesis', args: {
 
 ```javascript
 Workflow({name: 'kernelagent-triton-synthesis', args: {
-  problem_description: 'Implement a fused multiply-add kernel: C = A * B + bias, where A is [M, K], B is [K, N], bias is [N]. Use Triton with 2D tiling.',
+  problem_definition: 'Implement a fused multiply-add kernel: C = A * B + bias, where A is [M, K], B is [K, N], bias is [N]. Use Triton with 2D tiling.',
   num_workers: 4,
   model_name: 'gpt-5',
 }})
@@ -113,7 +113,7 @@ Workflow({name: 'kernelagent-triton-synthesis', args: {
 Workflow({name: 'kernelagent-triton-synthesis', args: {
   problem_path: '/path/to/multi_head_attention.py',
   num_workers: 6,
-  max_rounds: 15,
+  iterations: 15,
   compose: true,
   fuser_extract_model: 'gpt-5',
   fuser_dispatch_model: 'o4-mini',
@@ -124,11 +124,11 @@ Workflow({name: 'kernelagent-triton-synthesis', args: {
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
-| `problem_path` | string | — | Path to Python file with PyTorch problem (**required** if no `problem_description`) |
-| `problem_description` | string | `''` | Direct text description of the kernel to generate |
+| `problem_path` | string | — | Path to Python file with PyTorch problem (**required** if no `problem_definition`) |
+| `problem_definition` | string | `''` | Direct text description of the kernel to generate |
 | `num_workers` | number | `4` | Number of parallel verification workers |
-| `max_rounds` | number | `10` | Maximum refinement rounds per failed candidate |
-| `max_seeds` | number | `4` | Number of diverse kernel seeds per target |
+| `iterations` | number | `10` | Maximum refinement iterations per failed candidate |
+| `seed_candidates` | number | `4` | Number of diverse kernel seeds per target |
 | `model_name` | string | `claude-sonnet-4-20250514` | LLM model for generation and refinement |
 | `verify` | boolean | `true` | Run verification tests |
 | `compose` | boolean | `true` | Compose subgraph kernels (pipeline path) |
@@ -143,7 +143,7 @@ Workflow({name: 'kernelagent-triton-synthesis', args: {
 | **Route** | Static analysis: detect attention/conv/control-flow patterns → choose direct vs pipeline path |
 | **Generate** | N parallel agents each produce a candidate Triton kernel with distinct strategy |
 | **Verify** | Execute each candidate in sandboxed subprocess, check for PASS + exit 0 |
-| **Refine** | Iterative error-driven repair: analyze stderr, apply minimal fixes, re-verify (up to max_rounds) |
+| **Refine** | Iterative error-driven repair: analyze stderr, apply minimal fixes, re-verify (up to iterations) |
 | **Compose** | (Pipeline path) Stitch verified subgraph kernels into single Triton program |
 | **Report** | Summary: outcome, best kernel, verification status, recommendations |
 
@@ -193,7 +193,7 @@ Workflow({name: 'kernelagent-triton-synthesis', args: {
 Workflow({name: 'kernelagent-triton-synthesis', args: {
   problem_path: '/path/to/problem.py',
   num_workers: 4,
-  max_rounds: 10,
+  iterations: 10,
   verify: true,
 }})
 ```
@@ -202,10 +202,10 @@ Workflow({name: 'kernelagent-triton-synthesis', args: {
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `problem_path` | string | — | PyTorch 问题文件路径（与 `problem_description` 二选一必填） |
-| `problem_description` | string | `''` | 直接文本描述要生成的内核 |
+| `problem_path` | string | — | PyTorch 问题文件路径（与 `problem_definition` 二选一必填） |
+| `problem_definition` | string | `''` | 直接文本描述要生成的内核 |
 | `num_workers` | number | `4` | 并行验证 worker 数量 |
-| `max_rounds` | number | `10` | 每个失败候选的最大修复轮数 |
+| `iterations` | number | `10` | 每个失败候选的最大修复轮数 |
 | `model_name` | string | `claude-sonnet-4-20250514` | 用于生成和修复的 LLM 模型 |
 | `verify` | boolean | `true` | 是否运行验证测试 |
 | `compose` | boolean | `true` | 是否组合子图内核（流水线路径） |

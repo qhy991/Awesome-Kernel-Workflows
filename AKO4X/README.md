@@ -2,20 +2,20 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-Multi-round closed-loop GPU kernel optimization with experience accumulation. Implements the [AKO4X](https://tongminglaic.github.io/AKO) methodology — a two-level iteration protocol (rounds × iterations) with structured lesson archival and noise-aware benchmarking.
+Multi-round closed-loop GPU kernel optimization with experience accumulation. Implements the [AKO4X](https://tongminglaic.github.io/AKO) methodology — a two-level iteration protocol (iterations × iterations) with structured lesson archival and noise-aware benchmarking.
 
 ## Overview
 
 AKO4X goes beyond simple "try and benchmark" optimization through:
 
-- **Two-level iteration**: Outer rounds (strategy selection) × inner iterations (variant refinement)
+- **Two-level iteration**: Outer iterations (strategy selection) × inner iterations (variant refinement)
 - **Pre-commit Expected**: Write hypothesis BEFORE benchmarking to catch retrofitted explanations
 - **Smoke test → Full bench**: Don't waste time on full benchmark if quick check fails
 - **Pre-archive gates**: Silent-skip detection + library-delegation check before promoting
 - **Lessons-in-header**: Optimization knowledge colocated in the kernel file as structured 5-section headers
 - **Two-layer WHEN**: Narrow (this kernel) + Broad (general GPU) applicability for each lesson
 - **Dead-ends as priors**: Failed approaches stored with WHY, not as prohibition rules
-- **TRAPS.md**: Cross-variant silent-bug patterns accumulated across rounds
+- **TRAPS.md**: Cross-variant silent-bug patterns accumulated across iterations
 
 ## Architecture
 
@@ -80,13 +80,13 @@ AKO4X goes beyond simple "try and benchmark" optimization through:
 Workflow({name: 'ako4x-kernel-optimizer', args: {
   kernel_path: '/path/to/kernel.py',
   op_description: 'Multi-head Latent Attention paged decode',
-  kernel_language: 'triton',
-  benchmark_command: 'bash scripts/bench.sh',
-  smoke_test_command: 'python test_quick.py',
-  rounds: 5,
+  language: 'triton',
+  benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+  smoke_test_command: '<user-provided quick compile+correctness command>',
+  iterations: 5,
   iters_per_round: 5,
   breadth: 3,
-  samples_per_hypothesis: 2,
+  samples_per_plan: 2,
   target_gpu: 'b200',
   mode: 2,                   // 2 = static harness, 3 = harness co-evolution
 }})
@@ -98,14 +98,14 @@ Workflow({name: 'ako4x-kernel-optimizer', args: {
 |-----------|---------|-------------|
 | `kernel_path` | (required) | Path to target kernel file |
 | `op_description` | `'GPU kernel'` | Operation description |
-| `kernel_language` | `'auto'` | triton / cuda / cute-dsl / tilelang / cpp / pytorch |
+| `language` | `'auto'` | triton / cuda / cute-dsl / tilelang / cpp / pytorch |
 | `benchmark_command` | `''` | Full benchmark command |
 | `smoke_test_command` | `''` | Quick compile + correctness check |
 | `ncu_binary` | `'ncu'` | Path to NCU CLI |
-| `rounds` | `5` | Max optimization rounds |
+| `iterations` | `5` | Max optimization iterations |
 | `iters_per_round` | `5` | Max iterations per round |
 | `breadth` | `3` | Hypotheses per round |
-| `samples_per_hypothesis` | `2` | Variants per hypothesis |
+| `samples_per_plan` | `2` | Variants per hypothesis |
 | `target_gpu` | `'b200'` | Target GPU architecture |
 | `mode` | `2` | 2 = static harness, 3 = harness co-evolution |
 
@@ -136,9 +136,9 @@ Workflow({name: 'ako4x-kernel-optimizer', args: {
 Workflow({name: 'ako4x-kernel-optimizer', args: {
   kernel_path: '/path/to/kernel.py',
   op_description: '多头潜注意力分页解码',
-  kernel_language: 'triton',
-  benchmark_command: 'bash scripts/bench.sh',
-  rounds: 5,
+  language: 'triton',
+  benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+  iterations: 5,
   iters_per_round: 5,
   target_gpu: 'b200',
 }})

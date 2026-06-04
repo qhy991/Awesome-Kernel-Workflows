@@ -30,9 +30,9 @@ export const meta = {
 //
 // Usage:
 //   Workflow({name: 'stark-kernel-optimization', args: {
-//     reference_kernel_path: '/path/to/reference.cu',
+//     kernel_path: '/path/to/reference.cu',
 //     test_harness_path: '/path/to/test.py',
-//     budget: 30,
+//     iterations: 30,
 //     epsilon: 0.35,
 //     n_root: 5,
 //     n_child_max: 3,
@@ -43,19 +43,22 @@ export const meta = {
 //     plan_temperature: 0.8,
 //     code_temperature: 0.1,
 //     debug_temperature: 0.1,
-//     compile_command: 'nvcc -O3 -arch=sm_80 ...',
-//     benchmark_command: 'python test.py',
+//     compile_command: '<user-provided compile command with {kernel_path}/{result_path}>',
+//     benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
 //     exp_dir: '/tmp/stark_exp',
 //   }})
 //
 // =============================================================================
 
 // --- Required Args ---
-const REF_KERNEL_PATH = args.reference_kernel_path
+let REF_KERNEL_PATH = args.kernel_path || ''
+const PROBLEM_DEFINITION = args.problem_definition || ''
+const PROBLEM_PATH = args.problem_path || ''
+const INPUT_MODE = REF_KERNEL_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const TEST_HARNESS_PATH = args.test_harness_path
 
 // --- Optional Args ---
-const BUDGET = args.budget || 30
+const BUDGET = args.iterations || 30
 const EPSILON = args.epsilon !== undefined ? args.epsilon : 0.35
 const N_ROOT = args.n_root || 5
 const N_CHILD_MAX = args.n_child_max || 3
@@ -69,6 +72,13 @@ const DEBUG_TEMP = args.debug_temperature !== undefined ? args.debug_temperature
 const COMPILE_CMD = args.compile_command || ''
 const BENCHMARK_CMD = args.benchmark_command || ''
 const EXP_DIR = args.exp_dir || '/tmp/stark_exp'
+const LANGUAGE = args.language || 'cuda'
+const TARGET_GPU = args.target_gpu || 'unknown GPU'
+const SEED_CANDIDATES = args.seed_candidates || 3
+
+if (!REF_KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
+  throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
+}
 
 // --- State ---
 let tree = []                    // Array of nodes: {id, parent_id, kernel_code, plan, anchors, runtime, correct, compile_ok, logs, children, status}
@@ -79,6 +89,9 @@ let bestKernel = null
 let bestRuntime = null
 let referenceKernelCode = ''
 let referenceDescription = ''
+let generatedKernelPath = ''
+let initialCandidates = []
+let initialGenerationResult = null
 
 // =============================================================================
 // Helper: Node management
@@ -264,6 +277,43 @@ function updateLeaderboard() {
 // =============================================================================
 phase('Setup')
 
+if (INPUT_MODE === 'generate_then_optimize') {
+  const generated = await agent(`No kernel_path was provided. Generate and verify an initial CUDA kernel before constructing the STARK search tree.
+
+# Problem Input
+- problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
+- problem_path: ${PROBLEM_PATH || '(not provided)'}
+- language: ${LANGUAGE}
+- target_gpu: ${TARGET_GPU}
+- seed_candidates: ${SEED_CANDIDATES}
+- test_harness_path: ${TEST_HARNESS_PATH || '(not provided)'}
+
+# Evidence Commands
+- compile_command: ${COMPILE_CMD || '(not provided)'}
+- benchmark_command: ${BENCHMARK_CMD || '(not provided)'}
+
+# Contract
+Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run available commands using {kernel_path}/{result_path}. Return the best verified generated kernel path as the root/reference node.`, {
+    label: 'generate-initial-kernel',
+    phase: 'Setup',
+    schema: {
+      type: 'object',
+      properties: {
+        generated_kernel_path: { type: 'string' },
+        initial_candidates: { type: 'array', items: { type: 'object' } },
+        initial_generation_result: { type: 'object' },
+      },
+      required: ['generated_kernel_path', 'initial_candidates', 'initial_generation_result'],
+    },
+  })
+  initialCandidates = generated.initial_candidates || []
+  initialGenerationResult = generated.initial_generation_result || { verified: false }
+  generatedKernelPath = generated.generated_kernel_path || ''
+  if (!generatedKernelPath) throw new Error('Generation mode did not produce generated_kernel_path')
+  if (BENCHMARK_CMD && initialGenerationResult.verified === false) throw new Error('No generated seed passed benchmark evidence')
+  REF_KERNEL_PATH = generatedKernelPath
+}
+
 const setupResult = await agent(`Read the reference kernel file at: ${REF_KERNEL_PATH}
 
 Analyze it and return:
@@ -309,8 +359,8 @@ ${referenceKernelCode.substring(0, 4000)}
 \`\`\`
 
 # Compile and Run
-${COMPILE_CMD ? `Compile: ${COMPILE_CMD}` : 'Compile with nvcc -O3 -arch=sm_80'}
-${BENCHMARK_CMD ? `Benchmark: ${BENCHMARK_CMD}` : 'Run test harness'}
+${COMPILE_CMD ? `Compile: ${COMPILE_CMD}` : 'No compile_command provided; perform static compileability review only.'}
+${BENCHMARK_CMD ? `Benchmark: ${BENCHMARK_CMD}` : 'No benchmark_command provided; do not invent a test harness.'}
 
 Return JSON with:
 - compile_ok: boolean
@@ -438,11 +488,9 @@ ${planCtx}
 1. Propose ONE specific optimization (e.g., shared memory tiling, vectorized loads, loop unrolling, warp-level primitives, register blocking)
 2. Provide GROUNDED INSTRUCTIONS by inserting span anchors in the kernel code:
    Use markers like:
-   \\\\`
    <<<IMPROVE BEGINS: optimization_name>>>
    // existing code to be modified
    <<<IMPROVE ENDS: optimization_name>>>
-   \\\\`
 3. The anchors must wrap EXACTLY the code spans that need modification
 4. Include a brief rationale for WHY this optimization is chosen
 5. Consider the code agent's demonstrated capabilities (seen in children nodes) — don't propose instructions beyond what has been shown to work
@@ -546,8 +594,8 @@ ${newKernelCode.substring(0, 4000)}
 \`\`\`
 
 # Compile and Run
-${COMPILE_CMD ? `Compile: ${COMPILE_CMD}` : 'Compile with nvcc -O3 -arch=sm_80'}
-${BENCHMARK_CMD ? `Benchmark: ${BENCHMARK_CMD}` : 'Run test harness'}
+${COMPILE_CMD ? `Compile: ${COMPILE_CMD}` : 'No compile_command provided; perform static compileability review only.'}
+${BENCHMARK_CMD ? `Benchmark: ${BENCHMARK_CMD}` : 'No benchmark_command provided; do not invent a test harness.'}
 
 # Reference for comparison
 Baseline runtime: ${bestRuntime !== null ? bestRuntime + 'ms' : 'N/A'}
@@ -695,6 +743,13 @@ Return a JSON object with:
 })
 
 return {
+  input_mode: INPUT_MODE,
+  problem_definition: PROBLEM_DEFINITION,
+  problem_path: PROBLEM_PATH,
+  kernel_path: REF_KERNEL_PATH,
+  generated_kernel_path: generatedKernelPath,
+  initial_candidates: initialCandidates,
+  initial_generation_result: initialGenerationResult,
   outcome: report?.outcome || 'unknown',
   summary: report?.summary || '',
   best_runtime_ms: bestRuntime,

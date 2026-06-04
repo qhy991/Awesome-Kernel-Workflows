@@ -42,8 +42,9 @@ export const meta = {
 //     sol_execbench_dir: '/path/to/SOL-ExecBench',
 //     output_dir: '/path/to/output',
 //     iterations: 2,
-//     gpu_arch: 'sm_80',
-//     ncu_binary: 'sudo /usr/local/cuda-12.4/bin/ncu',
+//     target_gpu: 'sm_80',
+//     ncu_binary: '<user-provided ncu binary path>',
+//     ncu_command: '<user-provided profiling command with {m}/{result_path}>',
 //     ncu_profile_m_values: [8, 64, 256, 2048],
 //     enable_hybrid_fallback: true,
 //     cublas_fallback_threshold: 32,
@@ -59,8 +60,9 @@ const SOL_DIR = args.sol_execbench_dir || '/home/qinhaiyan/Research/SOL-ExecBenc
 // --- Optional Args ---
 const OUTPUT_DIR = args.output_dir || '/tmp/cutlass_gemm_opt'
 const ITERATIONS = args.iterations || 2
-const GPU_ARCH = args.gpu_arch || 'sm_80'
-const NCU_BINARY = args.ncu_binary || 'sudo /usr/local/cuda-12.4/bin/ncu'
+const GPU_ARCH = args.target_gpu || 'sm_80'
+const NCU_BINARY = args.ncu_binary || ''
+const NCU_COMMAND = args.ncu_command || args.profile_command || ''
 const NCU_PROFILE_M_VALUES = args.ncu_profile_m_values || [8, 64, 256, 2048]
 const ENABLE_HYBRID = args.enable_hybrid_fallback !== false
 const CUBLAS_THRESHOLD = args.cublas_fallback_threshold || 32
@@ -354,39 +356,20 @@ if (bestPerWorkload.length > 0) {
 // =============================================================================
 phase('NCU Profile')
 
-const ncuResult = await agent(`Run Nsight Compute profiling on the CUTLASS kernel for representative M values.
+const ncuResult = await agent(`Run profiling on the CUTLASS kernel for representative M values using only the user-provided profiling contract.
 
-# Setup:
-1. Create ${OUTPUT_DIR}/ncu_harness.py — a Python script that:
-   - Takes M as sys.argv[1]
-   - Reads solution from ${OUTPUT_DIR}/solution.json
-   - Writes source files to ${OUTPUT_DIR}/ncu_build/
-   - Builds with torch.utils.cpp_extension.load() with extra flag -lineinfo
-   - CUTLASS_DIR=${CUTLASS_DIR} (set os.environ["CUTLASS_DIR"])
-   - include paths: [build_dir, CUTLASS_DIR/include, CUTLASS_DIR/tools/util/include]
-   - Allocates A[M, ${analyzeResult.fixed_K}], B[${analyzeResult.fixed_N}, ${analyzeResult.fixed_K}] fp16 on GPU
-   - Warmup call, sync, profiled call, sync
+# Profiling Contract
+- ncu_command/profile_command: ${NCU_COMMAND || '(not provided)'}
+- ncu_binary: ${NCU_BINARY || '(not provided)'}
+- Representative M values: ${NCU_PROFILE_M_VALUES.join(', ')}
+- Result directory: ${OUTPUT_DIR}
 
-2. Run NCU for M values: ${NCU_PROFILE_M_VALUES.join(', ')}
-   Command per M:
-   ${NCU_BINARY} --metrics \\
-     gpu__time_duration.sum,\\
-     sm__throughput.avg.pct_of_peak_sustained_elapsed,\\
-     gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed,\\
-     sm__warps_active.avg.pct_of_peak_sustained_active,\\
-     sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_active,\\
-     dram__bytes_read.sum.pct_of_peak_sustained_elapsed,\\
-     lts__t_sector_hit_rate.pct,\\
-     launch__waves_per_multiprocessor,\\
-     launch__registers_per_thread,\\
-     launch__grid_size,\\
-     launch__block_size \\
-   -s 1 -c 1 \\
-   python ${OUTPUT_DIR}/ncu_harness.py M_VALUE
+# Rules
+1. If ncu_command/profile_command is provided, run it exactly, substituting documented placeholders such as {m}, {solution_path}, and {result_path}.
+2. If only ncu_binary is provided, use it only with a user-provided harness/profiling command from the problem contract. Do not create a private Python harness or invent a benchmark executable.
+3. If no profiling command is provided, mark NCU metrics as missing and base the diagnosis only on benchmark results and static structure.
 
-   If -k regex doesn't match, omit it (profile all kernels, pick the CUTLASS one from output).
-
-3. Parse and diagnose:
+# Parse and diagnose:
    - Memory bound: sm_throughput < 50% AND dram > 60%
    - Occupancy limited: warps_active < 30%
    - Grid underoccupied: waves_per_sm < 1.5

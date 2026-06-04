@@ -26,7 +26,7 @@ async function main() {
     `Set up StitchCUDA orchestration environment:
 
 1. Initialize CUDA environment:
-   - CUDA version and compiler (nvcc)
+   - CUDA version and user-provided compiler/toolchain
    - Target GPU architecture (sm_80, sm_89, sm_90, etc.)
    - PyTorch load_inline integration
 2. Configure KernelBench evaluation:
@@ -364,7 +364,7 @@ ${codeResult.kernel_code.substring(0, 2500)}${codeResult.kernel_code.length > 25
 
 Verification process:
 1. Compile check:
-   - Compile with nvcc for ${setupResult.target_architecture}
+   - Use the user-provided compile/build contract for ${setupResult.target_architecture}; if none is provided, perform static compileability review only.
    - Check for syntax errors, warnings
    - Verify resource usage (registers, shared memory)
 2. Correctness check:

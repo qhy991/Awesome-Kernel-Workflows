@@ -31,7 +31,7 @@ workflow:
     When generating and optimizing custom CUDA kernels from a PyTorch reference and
     you want optimization-method selection to be explicit, auditable, and grounded in
     profiling evidence rather than the model's implicit heuristics. Seeds several
-    candidate kernels, then runs a fixed number of refinement rounds; each round either
+    candidate kernels, then runs a fixed number of refinement iterations; each round either
     REPAIRS an invalid kernel (using chained repair memory to avoid cyclic fixes) or
     OPTIMIZES a valid one (extract features -> deterministic gate -> allowed methods ->
     retrieve skill -> plan -> apply). Best for KernelBench-style operator/model tasks.
@@ -57,8 +57,8 @@ method:
 topology:
   type: "iterative"
   iterative:
-    max_iterations_arg: "rounds"
-    convergence_condition: "Fixed round budget (paper uses 15); best valid kernel is returned"
+    iterations_arg: "iterations"
+    convergence_condition: "Fixed round iterations (paper uses 15); best valid kernel is returned"
     state_variables:
       - name: "bestKernelCode"
         type: "string"
@@ -304,10 +304,10 @@ args:
       default: "'A100-80GB'"
       description: "Target GPU architecture for prompts and profiling"
       example: "A100-80GB"
-    - name: "rounds"
+    - name: "iterations"
       type: "number"
       default: "15"
-      description: "Number of refinement rounds (paper uses 15)"
+      description: "Number of refinement iterations (paper uses 15)"
       example: "15"
     - name: "seed_candidates"
       type: "number"
@@ -319,21 +319,21 @@ args:
       default: "''"
       description: "Path to a long-term skill library YAML/JSON. If set, OVERRIDES the embedded skill library (long-term memory). Faithful to memorybank/bottleneck_headroom_kernelstructure.yaml"
       example: "/path/to/skill_library.yaml"
-    - name: "bench_command"
+    - name: "benchmark_command"
       type: "string"
       default: "''"
       description: "Command to compile + benchmark a generated kernel vs the reference"
-      example: "python utils/compile_and_run.py --kernel"
+      example: "<user-provided benchmark command with {kernel_path}/{result_path}>"
     - name: "ncu_binary"
       type: "string"
       default: "'ncu'"
       description: "Path to the Nsight Compute binary (profiler)"
-      example: "ncu"
+      example: "<user-provided ncu binary path>"
     - name: "nsys_binary"
       type: "string"
       default: "'nsys'"
       description: "Path to the Nsight Systems binary (kernel launch counts)"
-      example: "nsys"
+      example: "<user-provided nsys binary path>"
     - name: "tol"
       type: "number"
       default: "0.01"
@@ -384,7 +384,7 @@ return_fields:
     required: true
   - name: "rounds_completed"
     type: "number"
-    description: "Number of refinement rounds executed"
+    description: "Number of refinement iterations executed"
     required: true
   - name: "skills_applied"
     type: "array"
