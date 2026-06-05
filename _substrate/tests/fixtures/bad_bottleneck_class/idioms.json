@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "backend_id": "bad_bottleneck_class",
+  "lang_fence": "cuda",
+  "impl_requirements": "PYBIND11_MODULE entrypoint with a forward() binding.",
+  "unsupported_methods": [],
+  "methods": {
+    "tensor_core_mma": {
+      "idiom": "wmma / mma.sync",
+      "prompt_guidance": "Use tensor-core MMA intrinsics for the inner GEMM."
+    }
+  }
+}

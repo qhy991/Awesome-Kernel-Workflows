@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "backend_id": "bad_idiom_method",
+  "lang_fence": "cuda",
+  "impl_requirements": "PYBIND11_MODULE entrypoint with a forward() binding.",
+  "unsupported_methods": [],
+  "methods": {
+    "not_a_real_method": {
+      "idiom": "made up",
+      "prompt_guidance": "This method name does not exist in method_gate.TABLE."
+    }
+  }
+}
