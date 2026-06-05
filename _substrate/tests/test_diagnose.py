@@ -95,8 +95,44 @@ class TestDiagnoseCli(unittest.TestCase):
 
     def test_cli_high_dram_unmeasured_sm_is_unknown(self):
         r = self._run({"dram_pct": 80, "sm_pct": None})
+        self.assertEqual(r.returncode, 0, r.stderr)
         out = json.loads(r.stdout)
         self.assertEqual(out["bottleneck_class"], "unknown")
+
+
+class TestDiagnosePriorityPin(unittest.TestCase):
+    """Pin the latency_occupancy-wins-first invariant: when both occ < occ_lat
+    AND sm >= sm_comp are simultaneously true, latency_occupancy must be returned
+    because it is checked first in classify()."""
+
+    def test_occ_wins_over_compute_when_both_signals_present(self):
+        # sm_pct=85 satisfies sm >= sm_comp (70), occupancy=0.10 satisfies occ < occ_lat (0.40).
+        # latency_occupancy branch appears first in classify(), so it must win.
+        self.assertEqual(
+            diagnose.classify({"sm_pct": 85, "occupancy": 0.1}),
+            ("latency_occupancy", ["occupancy 0.10 < 0.40 (launch/occupancy limited)"]),
+        )
+
+
+class TestDiagnoseVendorProfile(unittest.TestCase):
+    """Prove that _vendor selects a different threshold profile. The apple profile
+    uses occ_lat=0.30 rather than nvidia's 0.40, so occupancy=0.35 straddles the
+    two profiles and exercises the switch live."""
+
+    def test_nvidia_default_occ_35_is_latency_occupancy(self):
+        # nvidia occ_lat=0.40: 0.35 < 0.40 -> latency_occupancy
+        self.assertEqual(
+            diagnose.classify({"occupancy": 0.35}),
+            ("latency_occupancy", ["occupancy 0.35 < 0.40 (launch/occupancy limited)"]),
+        )
+
+    def test_apple_vendor_occ_35_is_unknown(self):
+        # apple occ_lat=0.30: 0.35 >= 0.30, so latency_occupancy branch does NOT fire.
+        # No sm or dram supplied -> falls through to unknown.
+        self.assertEqual(
+            diagnose.classify({"_vendor": "apple", "occupancy": 0.35}),
+            ("unknown", ["no dominant signal (insufficient measured metrics)"]),
+        )
 
 
 if __name__ == "__main__":
