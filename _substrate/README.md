@@ -13,6 +13,9 @@ not a monolith.
 | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | substrate ↔ generalist solver ↔ KerSor relationship + invocation |
 | [`EXPERIMENT-SOLVER-SET.md`](./EXPERIMENT-SOLVER-SET.md) | topology-deduplicated 5-solver experiment pool |
 | [`IMPROVEMENTS.md`](./IMPROVEMENTS.md) | prioritized pattern improvements (token budget, model routing, worktree isolation, adversarial verify, …) |
+| [`BACKEND-DRIVER-SDK.md`](./BACKEND-DRIVER-SDK.md) | backend driver contract (language × vendor translation layer) |
+| [`backends/REGISTRY.md`](./backends/REGISTRY.md) | backend driver registry index |
+| [`CHANGELOG.md`](./CHANGELOG.md) | substrate change history |
 
 ## Deterministic scripts (stdlib Python; run by agent Bash steps)
 
