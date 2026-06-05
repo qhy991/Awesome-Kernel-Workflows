@@ -36,12 +36,40 @@ HARDCODE_HINT = re.compile(r"\b(M|N|K|seq_len|hidden|batch|dim)\s*=\s*\d{2,}")
 BLOCKING = {"library_fallback", "skipped_compute"}  # hardcoded_shape is a warning only
 
 
-def static_flags(src):
+def load_vendor_patterns(path):
+    """Parse a vendor cheat-pattern file into (fallback, skip) lists of (regex, label).
+
+    Format (spec §5.3.3): two sections [fallback] and [skip]; one regex per line;
+    optional "regex | label". Blank lines and lines starting with '#' are ignored.
+    """
+    fallback, skip = [], []
+    section = None
+    with open(path) as f:
+        for raw in f:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                section = line[1:-1].strip().lower()
+                continue
+            if "|" in line:
+                pat, label = line.split("|", 1)
+                pat, label = pat.strip(), label.strip()
+            else:
+                pat, label = line, line
+            if section == "fallback":
+                fallback.append((pat, label))
+            elif section == "skip":
+                skip.append((pat, label))
+    return fallback, skip
+
+
+def static_flags(src, extra_fallback=(), extra_skip=()):
     flags = []
-    for pat, msg in FALLBACK_PATTERNS:
+    for pat, msg in list(FALLBACK_PATTERNS) + list(extra_fallback):
         if re.search(pat, src):
             flags.append({"type": "library_fallback", "detail": msg})
-    for pat, msg in SKIP_PATTERNS:
+    for pat, msg in list(SKIP_PATTERNS) + list(extra_skip):
         if re.search(pat, src, re.M):
             flags.append({"type": "skipped_compute", "detail": msg})
     if len(HARDCODE_HINT.findall(src)) >= 2:
@@ -68,8 +96,8 @@ def robust_reward(m):
     return 0, "no speedup over baselines"
 
 
-def evaluate(src, m):
-    flags = static_flags(src or "")
+def evaluate(src, m, extra_fallback=(), extra_skip=()):
+    flags = static_flags(src or "", extra_fallback, extra_skip)
     reward, reason = robust_reward(m)
     blocking = [f for f in flags if f["type"] in BLOCKING]
     valid = (reward >= 0) and (not blocking)
@@ -87,11 +115,15 @@ def evaluate(src, m):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--source"); ap.add_argument("--source-text")
+    ap.add_argument("--vendor-patterns-file")
     ap.add_argument("--metrics", required=True)
     a = ap.parse_args()
     src = a.source_text if a.source_text is not None else (open(a.source).read() if a.source else "")
     m = json.loads(sys.stdin.read() if a.metrics == "-" else open(a.metrics).read())
-    res = evaluate(src, m)
+    extra_fallback, extra_skip = ([], [])
+    if a.vendor_patterns_file:
+        extra_fallback, extra_skip = load_vendor_patterns(a.vendor_patterns_file)
+    res = evaluate(src, m, extra_fallback, extra_skip)
     print(json.dumps(res, indent=2, ensure_ascii=False))
     return 0 if res["valid"] else 1
 
