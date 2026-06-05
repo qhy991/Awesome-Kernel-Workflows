@@ -15,7 +15,7 @@ not a monolith.
 | [`IMPROVEMENTS.md`](./IMPROVEMENTS.md) | prioritized pattern improvements (token budget, model routing, worktree isolation, adversarial verify, …) |
 | [`BACKEND-DRIVER-SDK.md`](./BACKEND-DRIVER-SDK.md) | backend driver contract (language × vendor translation layer) |
 | [`backends/REGISTRY.md`](./backends/REGISTRY.md) | backend driver registry index |
-| [`CHANGELOG.md`](./CHANGELOG.md) | substrate change history |
+| [`CHANGELOG.md`](./CHANGELOG.md) | 底座变更日志 |
 
 ## Deterministic scripts (stdlib Python; run by agent Bash steps)
 
