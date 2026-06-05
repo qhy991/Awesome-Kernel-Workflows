@@ -8,7 +8,7 @@ files are JSON (manifest.json/idioms.json) — see BACKEND-DRIVER-SDK.md "Deviat
 Usage:
   validate_backend.py <driver_dir>
 Prints: {"ok": bool, "errors": [str, ...]}
-Exit:   0 ok · 1 L0 errors · 3 bad args / unreadable input
+Exit:   0 ok · 1 L0 errors · 3 validator's own bad-args guard (argparse missing-positional is exit 2)
 """
 import os, sys, json, argparse
 
@@ -36,8 +36,8 @@ def _load_json(path, errors):
     try:
         with open(path, encoding="utf-8") as fh:
             return json.load(fh)
-    except json.JSONDecodeError as exc:
-        errors.append(f"unparseable JSON in {os.path.basename(path)}: {exc}")
+    except (json.JSONDecodeError, OSError) as exc:
+        errors.append(f"unreadable {os.path.basename(path)}: {exc}")
         return None
 
 
@@ -50,7 +50,11 @@ def validate(driver_dir):
     idioms = _load_json(os.path.join(driver_dir, "idioms.json"), errors)
 
     # --- manifest checks ---
-    if isinstance(manifest, dict):
+    if manifest is None:
+        pass  # _load_json already recorded the missing/unreadable error
+    elif not isinstance(manifest, dict):
+        errors.append("manifest.json top-level value is not an object")
+    else:
         # backend_id present and == dir name (the dispatch key)
         backend_id = manifest.get("backend_id")
         if not isinstance(backend_id, str) or not backend_id:
@@ -85,7 +89,11 @@ def validate(driver_dir):
                             f"allowed class (allowed: {sorted(ALLOWED_BCLASSES)})")
 
     # --- idioms checks ---
-    if isinstance(idioms, dict):
+    if idioms is None:
+        pass  # _load_json already recorded the missing/unreadable error
+    elif not isinstance(idioms, dict):
+        errors.append("idioms.json top-level value is not an object")
+    else:
         # every methods key and every unsupported_methods entry is a real method_gate name
         methods = idioms.get("methods")
         if not isinstance(methods, dict):
