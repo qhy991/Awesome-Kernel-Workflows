@@ -57,6 +57,10 @@ def load_vendor_patterns(path):
                 pat, label = pat.strip(), label.strip()
             else:
                 pat, label = line, line
+            try:
+                re.compile(pat)
+            except re.error as exc:
+                raise ValueError(f"{path}: invalid regex {pat!r}: {exc}") from exc
             if section == "fallback":
                 fallback.append((pat, label))
             elif section == "skip":

@@ -128,5 +128,85 @@ class TestVendorPatternsCli(unittest.TestCase):
         )
 
 
+class TestLoadVendorPatterns(unittest.TestCase):
+    """Direct unit tests for anti_cheat.load_vendor_patterns."""
+
+    def _write_temp(self, text):
+        fd, path = tempfile.mkstemp(suffix=".patterns")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(text)
+        except Exception:
+            os.unlink(path)
+            raise
+        return path
+
+    def test_well_formed_file(self):
+        # Uses METAL_PATTERNS which has 3 fallback lines and 3 skip lines.
+        path = self._write_temp(METAL_PATTERNS)
+        try:
+            fallback, skip = anti_cheat.load_vendor_patterns(path)
+        finally:
+            os.unlink(path)
+        self.assertEqual(len(fallback), 3)
+        self.assertEqual(len(skip), 3)
+        # First fallback line has an explicit label via "| label" syntax.
+        pat0, label0 = fallback[0]
+        self.assertEqual(pat0, "MPSMatrixMultiplication")
+        self.assertEqual(label0, "MPS matmul fallback")
+
+    def test_no_pipe_label_uses_pattern_as_label(self):
+        # "MPSNDArray" has no "|" -> label == pattern
+        path = self._write_temp(METAL_PATTERNS)
+        try:
+            fallback, skip = anti_cheat.load_vendor_patterns(path)
+        finally:
+            os.unlink(path)
+        pat1, label1 = fallback[1]
+        self.assertEqual(pat1, "MPSNDArray")
+        self.assertEqual(label1, "MPSNDArray")
+
+    def test_line_before_any_section_is_dropped(self):
+        text = (
+            "orphan_regex\n"
+            "[fallback]\n"
+            r"\btorch\.matmul\b" + " | torch matmul\n"
+        )
+        path = self._write_temp(text)
+        try:
+            fallback, skip = anti_cheat.load_vendor_patterns(path)
+        finally:
+            os.unlink(path)
+        self.assertEqual(len(fallback), 1)
+        self.assertEqual(len(skip), 0)
+
+    def test_unknown_section_lines_dropped(self):
+        text = (
+            "[fallback]\n"
+            r"\btorch\.matmul\b" + "\n"
+            "[unknown]\n"
+            "some_pattern\n"
+        )
+        path = self._write_temp(text)
+        try:
+            fallback, skip = anti_cheat.load_vendor_patterns(path)
+        finally:
+            os.unlink(path)
+        self.assertEqual(len(fallback), 1)
+        self.assertEqual(len(skip), 0)
+
+    def test_invalid_regex_raises_value_error(self):
+        text = (
+            "[fallback]\n"
+            "[unclosed\n"
+        )
+        path = self._write_temp(text)
+        try:
+            with self.assertRaises(ValueError):
+                anti_cheat.load_vendor_patterns(path)
+        finally:
+            os.unlink(path)
+
+
 if __name__ == "__main__":
     unittest.main()
