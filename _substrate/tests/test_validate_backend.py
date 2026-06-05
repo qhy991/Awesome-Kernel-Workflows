@@ -48,5 +48,12 @@ class TestValidateBackendBad(unittest.TestCase):
         self.assert_bad('bad_bottleneck_class', 'register_bound')
 
 
+class TestValidateBackendBadArgs(unittest.TestCase):
+    def test_nonexistent_dir_exits_3(self):
+        code, payload = run_validator('__no_such_dir__')
+        self.assertEqual(code, 3, payload)
+        self.assertEqual(payload.get('ok'), False)
+
+
 if __name__ == '__main__':
     unittest.main()
