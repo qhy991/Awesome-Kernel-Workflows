@@ -14,25 +14,36 @@ import sys, json, argparse
 
 CLASSES = ["memory_bound", "compute_bound", "latency_occupancy", "overhead_bound", "unknown"]
 
+# Per-vendor decision thresholds (spec §5.3.1). Default/absent _vendor -> "nvidia"
+# == today's literals, so every existing NVIDIA case stays byte-identical.
+PROFILES = {
+    "nvidia": dict(occ_lat=0.40, dram_mem=70, sm_mem=50, sm_comp=70, both_low=40),
+    "apple": dict(occ_lat=0.30, dram_mem=65, sm_mem=55, sm_comp=65, both_low=35),
+}
+
 
 def classify(m):
     dram = m.get("dram_pct")
     sm = m.get("sm_pct")
     occ = m.get("occupancy")
+    prof = PROFILES.get(m.get("_vendor", "nvidia"), PROFILES["nvidia"])
     if dram is None and sm is None and occ is None:
         return "unknown", ["no profiler metrics available"]
-    d = dram or 0.0
-    s = sm or 0.0
-    # occupancy-limited dominates when clearly low
-    if occ is not None and occ < 0.4:
-        return "latency_occupancy", [f"occupancy {occ:.2f} < 0.40 (launch/occupancy limited)"]
-    if d >= 70 and s < 50:
-        return "memory_bound", [f"dram {d:.0f}% high, sm {s:.0f}% low"]
-    if s >= 70:
-        return "compute_bound", [f"sm {s:.0f}% high"]
-    if d < 40 and s < 40:
-        return "overhead_bound", [f"both utilizations low (dram {d:.0f}%, sm {s:.0f}%)"]
-    return "unknown", [f"no dominant signal (dram {d:.0f}%, sm {s:.0f}%, occ {occ})"]
+    # latency_occupancy: single positive signal — occupancy measured and clearly low.
+    if occ is not None and occ < prof["occ_lat"]:
+        return "latency_occupancy", [f"occupancy {occ:.2f} < {prof['occ_lat']:.2f} (launch/occupancy limited)"]
+    # compute_bound: single positive signal — sm measured and high.
+    if sm is not None and sm >= prof["sm_comp"]:
+        return "compute_bound", [f"sm {sm:.0f}% high"]
+    # memory_bound / overhead_bound are two-sided: both dram AND sm must be measured.
+    if dram is not None and sm is not None:
+        if dram >= prof["dram_mem"] and sm < prof["sm_mem"]:
+            return "memory_bound", [f"dram {dram:.0f}% high, sm {sm:.0f}% low"]
+        if dram < prof["both_low"] and sm < prof["both_low"]:
+            return "overhead_bound", [f"both utilizations low (dram {dram:.0f}%, sm {sm:.0f}%)"]
+        return "unknown", [f"no dominant signal (dram {dram:.0f}%, sm {sm:.0f}%, occ {occ})"]
+    # A required two-sided discriminator was unmeasured -> cannot conclude.
+    return "unknown", ["no dominant signal (insufficient measured metrics)"]
 
 
 def main():
