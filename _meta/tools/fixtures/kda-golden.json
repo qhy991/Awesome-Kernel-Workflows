@@ -1,0 +1,271 @@
+[
+  {
+    "label": "inspect-workspace",
+    "phase": "Inspect",
+    "prompt": "You are in a task implementation workspace. Inspect the workspace and the target kernel.\n\n# Task Contract\n- Task name: kda-fixture-task\n- Objective: Optimize Q4_0 GEMM kernel for H100\n- Correctness requirements: Output must match baseline within 1e-5 relative error\n- Performance target: Achieve < 0.5ms on M=4096, N=4096, K=4096\n- Allowed approaches: CUDA C++, shared memory tiling, warp-level primitives\n\n# Target kernel: /tmp/kda-fixture/baseline.cu\n\n# External Resources\n- KernelWiki is an external repository, not a bundled KDA skill. If it is available, use it for kernel optimization patterns, GPU architecture details, and performance techniques relevant to this task. Download or fork it from https://github.com/mit-han-lab/KernelWiki/fork.\n\n# Available Skills\n- Use `cuda-kernel-development` skill for hardware-aware CUDA development guidance.\n\n# Instructions\n1. Read the kernel file and any surrounding code (headers, utils, tests).\n2. Identify the current baseline behavior and how it is validated.\n3. Understand the code structure: key functions, data flow, memory patterns.\n4. Look for existing tests, benchmarks, or validation scripts in the workspace.\n5. Check if there are docs/draft.md or docs/plan.md already.\n6. Research relevant optimization techniques for this kernel type using available domain knowledge.\n\nReturn a structured analysis.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "kernel_code": {
+          "type": "string"
+        },
+        "key_functions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "current_approach": {
+          "type": "string"
+        },
+        "baseline_behavior": {
+          "type": "string"
+        },
+        "validation_path": {
+          "type": "string"
+        },
+        "existing_tests": {
+          "type": "string"
+        },
+        "risks_and_unknowns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "kernel_code",
+        "key_functions",
+        "current_approach"
+      ]
+    },
+    "seq": 0
+  },
+  {
+    "label": "write-draft",
+    "phase": "Plan",
+    "prompt": "Write a plan draft to docs/draft.md for this kernel optimization task.\n\n# Task Contract\n- Task name: kda-fixture-task\n- Objective: Optimize Q4_0 GEMM kernel for H100\n- Correctness requirements: Output must match baseline within 1e-5 relative error\n- Performance target: Achieve < 0.5ms on M=4096, N=4096, K=4096\n- Allowed approaches: CUDA C++, shared memory tiling, warp-level primitives\n- Validation command: python /tmp/kda-fixture/test.py {kernel_path} {result_path}\n- Evaluation command: python /tmp/kda-fixture/bench.py {kernel_path} {result_path}\n- Promotion criteria: Speedup >= 1.2x over baseline AND passes validation\n\n# Workspace Inspection Results\n- Key functions: gemm_q4_0\n- Current approach: naive q4_0 GEMM\n- Baseline behavior: passes correctness, ~2.0ms\n- Risks and unknowns: dequantization order\n\n# Current kernel (first 3000 chars):\n```\n__global__ void gemm_q4_0(const half* A, const half* B, half* C, int M, int N, int K) {}\n\n```\n\n# External Resources\n- KernelWiki is an external repository, not a bundled KDA skill. If it is available, use it for architecture-specific optimization knowledge and research references. Download or fork it from https://github.com/mit-han-lab/KernelWiki/fork.\n\n# Available Skills\n- Use `humanize:gen-plan` skill pattern for structured plan generation.\n- Use `ncu-report-skill` if NCU profiling data exists in the workspace (check profile/ directory).\n\n# Draft Requirements (from prompts/basic-flow.md)\nThe draft MUST include:\n1. The current baseline and how it is validated.\n2. The main risks and unknowns.\n3. Candidate implementation directions ranked by expected value and risk.\n4. The first concrete implementation steps.\n5. The exact validation and evaluation commands to run.\n6. The evidence required to promote, revise, or reject a candidate.\n\nWrite the draft to docs/draft.md. Then return the draft content.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "draft_content": {
+          "type": "string"
+        },
+        "candidate_directions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "approach": {
+                "type": "string"
+              },
+              "expected_value": {
+                "type": "string"
+              },
+              "risk": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "approach"
+            ]
+          }
+        }
+      },
+      "required": [
+        "draft_content",
+        "candidate_directions"
+      ]
+    },
+    "seq": 1
+  },
+  {
+    "label": "write-plan",
+    "phase": "Plan",
+    "prompt": "Convert the draft into an executable plan at docs/plan.md.\n\n# Draft Content:\n# Draft\nBaseline q4_0 GEMM at 2.0ms.\n\n\n# Candidate Directions:\n1. Shared-memory tiling: tile A and B into __shared__ (value: 1.5x, risk: bank conflicts)\n2. Warp shuffle reduction: use __shfl_sync for partial sums (value: 1.3x, risk: warp divergence)\n\n# Requirements for docs/plan.md:\n1. Number each candidate explicitly (Candidate 1, 2, ...).\n2. For each candidate, specify: what to change, which functions, what the expected effect is.\n3. Order candidates by expected value / risk ratio (best first).\n4. Each candidate should be implementable independently.\n5. Include the exact validation and evaluation commands.\n6. State what evidence is needed to promote, revise, or reject each candidate.\n\nWrite docs/plan.md and return the plan structure.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "plan_content": {
+          "type": "string"
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "changes": {
+                "type": "string"
+              },
+              "expected_effect": {
+                "type": "string"
+              },
+              "priority": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "changes"
+            ]
+          }
+        }
+      },
+      "required": [
+        "plan_content",
+        "candidates"
+      ]
+    },
+    "seq": 2
+  },
+  {
+    "label": "impl-candidate-1",
+    "phase": "Implement",
+    "prompt": "Implement this optimization candidate as a complete, compilable kernel.\n\n# Task Contract\n- Objective: Optimize Q4_0 GEMM kernel for H100\n- Correctness: Output must match baseline within 1e-5 relative error\n- Allowed approaches: CUDA C++, shared memory tiling, warp-level primitives\n\n# Current Best Implementation:\n```\n__global__ void gemm_q4_0(const half* A, const half* B, half* C, int M, int N, int K) {}\n\n```\n\n# Candidate to Implement\n- ID: candidate-1\n- Title: Shared-memory tiling\n- Changes: introduce __shared__ tiles\n- Expected effect: 1.5x speedup\n\n# External Resources\n- KernelWiki is an external repository, not a bundled KDA skill. If it is available, use it for architecture-specific optimization techniques such as Hopper/Blackwell features and tensor core usage. Download or fork it from https://github.com/mit-han-lab/KernelWiki/fork.\n\n# Available Skills\n- Use `cuda-kernel-development` skill for hardware-aware CUDA patterns (shared memory tiling, warp primitives, occupancy tuning).\n\n# Requirements\n1. Output a COMPLETE file — all includes, definitions, functions.\n2. Keep function signatures unchanged unless the plan explicitly requires changes.\n3. Apply ONLY the changes described in this candidate. Do not combine with other optimizations.\n4. Must be functionally correct: Output must match baseline within 1e-5 relative error\n\nReturn the complete implementation code.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "changes_made": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code"
+      ]
+    },
+    "seq": 3
+  },
+  {
+    "label": "validate-candidate-1",
+    "phase": "Validate",
+    "prompt": "Validate this kernel candidate: run correctness and performance tests.\n\n# Candidate: candidate-1 — Shared-memory tiling\n\n# Validation command: python /tmp/kda-fixture/test.py {kernel_path} {result_path}\n# Evaluation command: python /tmp/kda-fixture/bench.py {kernel_path} {result_path}\n# Kernel file to validate: /tmp/kda-fixture/baseline.cu\n\n# Candidate code (first 3000 chars):\n```\n__global__ void gemm_q4_0(const half* A, const half* B, half* C, int M, int N, int K) { __shared__ half tile[256]; }\n\n```\n\n# Correctness requirements: Output must match baseline within 1e-5 relative error\n# Performance target: Achieve < 0.5ms on M=4096, N=4096, K=4096\n\n# Instructions\n1. First, write the candidate code to the kernel file at /tmp/kda-fixture/baseline.cu.\n2. STATIC ANALYSIS — check for:\n   - Race conditions (shared memory access, __syncthreads placement)\n   - Out-of-bounds (index computations)\n   - Missing synchronization\n   - Correct reductions (warp shuffle logic)\n3. CORRECTNESS VALIDATION — If test_command is provided:\n   - Run it: `python /tmp/kda-fixture/test.py {kernel_path} {result_path}`\n   - Report whether it passes or fails, and any error output.\n   - If not provided, rely on static analysis only.\n4. PERFORMANCE EVALUATION — If benchmark_command is provided:\n   - Run it: `python /tmp/kda-fixture/bench.py {kernel_path} {result_path}`\n   - Extract the measured latency/throughput from the output.\n   - Compare against baseline: not yet measured.\n   - If not provided, give your best estimate based on the optimization applied.\n5. If NCU profiling data is available or can be generated, use the `ncu-report-skill` to analyze bottlenecks.\n\nReturn the validation results with MEASURED values when available, estimates only as fallback.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "is_correct": {
+          "type": "boolean"
+        },
+        "correctness_issues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "validation_ran": {
+          "type": "boolean"
+        },
+        "validation_output": {
+          "type": "string"
+        },
+        "measured_latency_ms": {
+          "type": "number"
+        },
+        "estimated_latency_ms": {
+          "type": "number"
+        },
+        "estimated_speedup": {
+          "type": "number"
+        },
+        "addresses_goal": {
+          "type": "boolean"
+        },
+        "validation_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "is_correct",
+        "estimated_speedup",
+        "validation_ran"
+      ]
+    },
+    "seq": 4
+  },
+  {
+    "label": "impl-candidate-2",
+    "phase": "Implement",
+    "prompt": "Implement this optimization candidate as a complete, compilable kernel.\n\n# Task Contract\n- Objective: Optimize Q4_0 GEMM kernel for H100\n- Correctness: Output must match baseline within 1e-5 relative error\n- Allowed approaches: CUDA C++, shared memory tiling, warp-level primitives\n\n# Current Best Implementation:\n```\n__global__ void gemm_q4_0(const half* A, const half* B, half* C, int M, int N, int K) {}\n\n```\n\n# Candidate to Implement\n- ID: candidate-2\n- Title: Warp shuffle reduction\n- Changes: replace atomicAdd with __shfl_sync\n- Expected effect: 1.3x speedup\n\n# External Resources\n- KernelWiki is an external repository, not a bundled KDA skill. If it is available, use it for architecture-specific optimization techniques such as Hopper/Blackwell features and tensor core usage. Download or fork it from https://github.com/mit-han-lab/KernelWiki/fork.\n\n# Available Skills\n- Use `cuda-kernel-development` skill for hardware-aware CUDA patterns (shared memory tiling, warp primitives, occupancy tuning).\n\n# Requirements\n1. Output a COMPLETE file — all includes, definitions, functions.\n2. Keep function signatures unchanged unless the plan explicitly requires changes.\n3. Apply ONLY the changes described in this candidate. Do not combine with other optimizations.\n4. Must be functionally correct: Output must match baseline within 1e-5 relative error\n\nReturn the complete implementation code.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "changes_made": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code"
+      ]
+    },
+    "seq": 5
+  },
+  {
+    "label": "validate-candidate-2",
+    "phase": "Validate",
+    "prompt": "Validate this kernel candidate: run correctness and performance tests.\n\n# Candidate: candidate-2 — Warp shuffle reduction\n\n# Validation command: python /tmp/kda-fixture/test.py {kernel_path} {result_path}\n# Evaluation command: python /tmp/kda-fixture/bench.py {kernel_path} {result_path}\n# Kernel file to validate: /tmp/kda-fixture/baseline.cu\n\n# Candidate code (first 3000 chars):\n```\n__global__ void gemm_q4_0(const half* A, const half* B, half* C, int M, int N, int K) { /* shfl */ }\n\n```\n\n# Correctness requirements: Output must match baseline within 1e-5 relative error\n# Performance target: Achieve < 0.5ms on M=4096, N=4096, K=4096\n\n# Instructions\n1. First, write the candidate code to the kernel file at /tmp/kda-fixture/baseline.cu.\n2. STATIC ANALYSIS — check for:\n   - Race conditions (shared memory access, __syncthreads placement)\n   - Out-of-bounds (index computations)\n   - Missing synchronization\n   - Correct reductions (warp shuffle logic)\n3. CORRECTNESS VALIDATION — If test_command is provided:\n   - Run it: `python /tmp/kda-fixture/test.py {kernel_path} {result_path}`\n   - Report whether it passes or fails, and any error output.\n   - If not provided, rely on static analysis only.\n4. PERFORMANCE EVALUATION — If benchmark_command is provided:\n   - Run it: `python /tmp/kda-fixture/bench.py {kernel_path} {result_path}`\n   - Extract the measured latency/throughput from the output.\n   - Compare against baseline: not yet measured.\n   - If not provided, give your best estimate based on the optimization applied.\n5. If NCU profiling data is available or can be generated, use the `ncu-report-skill` to analyze bottlenecks.\n\nReturn the validation results with MEASURED values when available, estimates only as fallback.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "is_correct": {
+          "type": "boolean"
+        },
+        "correctness_issues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "validation_ran": {
+          "type": "boolean"
+        },
+        "validation_output": {
+          "type": "string"
+        },
+        "measured_latency_ms": {
+          "type": "number"
+        },
+        "estimated_latency_ms": {
+          "type": "number"
+        },
+        "estimated_speedup": {
+          "type": "number"
+        },
+        "addresses_goal": {
+          "type": "boolean"
+        },
+        "validation_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "is_correct",
+        "estimated_speedup",
+        "validation_ran"
+      ]
+    },
+    "seq": 6
+  },
+  {
+    "label": "final-report",
+    "phase": "Report",
+    "prompt": "Write the final optimization report.\n\n# Task: kda-fixture-task\n# Objective: Optimize Q4_0 GEMM kernel for H100\n# Promotion criteria: Speedup >= 1.2x over baseline AND passes validation\n\n# Candidates tried: 2\n- candidate-1 (parent: baseline): rejected — Failed correctness: mismatch on N=4096\n- candidate-2 (parent: baseline): promoted — Speedup 1.43x, addresses goal\n\n# Final best metrics: {\"latency_ms\":1.4,\"speedup\":1.43,\"addresses_goal\":true,\"validation_ran\":true}\n# Promotion criteria met: true\n\n# Write a report that includes:\n1. What was the baseline and how it was validated.\n2. What candidates were tried, in what order.\n3. For each candidate: what changed, what was measured, why it was promoted or rejected.\n4. Which candidate was promoted and why it meets the promotion criteria.\n5. What remaining blockers or future work exist.\n\nAlso write the candidates list to candidates.jsonl (one JSON object per line).",
+    "seq": 7
+  }
+]
