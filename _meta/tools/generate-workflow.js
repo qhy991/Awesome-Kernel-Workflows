@@ -279,7 +279,13 @@ Use canonical common args:
 
 At least one of kernel_path, problem_definition, or problem_path must be available for optimization/generation workflows.
 Do not emit old aliases such as gpu_target, bench_command, eval_command, rounds, problem_description, task_spec, or task_path.
-Do not emit concrete default commands such as python ..., nvcc ..., bash ..., or ncu --.... Commands must be user-provided through compile_command, test_command, benchmark_command, profile_command, ncu_command, or method-specific tool args. If a command is missing, the workflow must mark measured evidence as unavailable instead of inventing an evaluator/harness.
+Do not emit concrete default commands such as python ..., nvcc ..., bash ..., or ncu --.... Commands must be user-provided through compile_command, test_command, benchmark_command, profile_command, or method-specific tool args. The legacy ncu_command is a deprecated alias for profile_command (scheduled for removal in manifest schema v1.3); emit it only when the source paper or manifest explicitly names it for back-compat, and mark it deprecated in the arg description. If a command is missing, the workflow must mark measured evidence as unavailable instead of inventing an evaluator/harness.
+
+# Backend-axis args (v1.1 contract; see _meta/manifests/schema.yaml \`backend:\` block):
+- backend: backend id (matches a directory under _substrate/backends/). Use the manifest's \`backend.default\` when present; null forces explicit --backend.
+- backend_dir: optional driver-dir path; empty string → legacy inline-prompt path. Required for any driver-shaped emission.
+- profile_command: neutral profile-command template; preferred over the legacy ncu_command alias.
+- driver_shell_prefix: optional prefix for invoking driver .sh entrypoints (rarely set).
 
 Method-specific args:
 - Anything unique to this paper's approach
@@ -289,6 +295,7 @@ For each arg, provide: name (snake_case), type, default (JS expression for optio
 Return required and optional args lists.`, {
     label: 'model-args',
     phase: 'Model',
+    // SCHEMA PINNED — see _meta/tools/test/generator-prompt-schema.test.js
     schema: {
       type: 'object',
       properties: {
