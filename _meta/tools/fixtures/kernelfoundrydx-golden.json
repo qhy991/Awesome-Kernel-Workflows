@@ -1,0 +1,436 @@
+[
+  {
+    "label": "read-task",
+    "phase": "Setup",
+    "prompt": "Read the PyTorch reference task file at: /tmp/kernelfoundrydx-fixture/spec.py\nIf problem_definition is provided, use it as the authoritative task description:\nMatmul + Add + Swish fusion over Tensor[B,N,M] in pure Triton\n\nThis file defines a reference computation (a \"Model\" with a forward()) that we must reproduce as a high-performance Triton kernel.\n\nAnalyze it and return JSON:\n- task_text: the relevant PyTorch source (Model.forward + get_inputs / init_inputs if present)\n- op_type: short operation type label (e.g. \"matmul_fusion\", \"elementwise\", \"reduction\", \"conv\", \"norm\")\n- op_chain: ordered list of the operations performed in forward()\n- input_shapes: the input tensor shapes (from get_inputs / init_inputs if available)\n- fusion_opportunities: list of producer-consumer chains that could be fused into one kernel\n- numerical_notes: anything affecting numerical tolerance (softmax, exp, large reductions, etc.)\n\nReturn ONLY the JSON object.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "task_text": {
+          "type": "string"
+        },
+        "op_type": {
+          "type": "string"
+        },
+        "op_chain": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "input_shapes": {
+          "type": "string"
+        },
+        "fusion_opportunities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "numerical_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_text",
+        "op_type",
+        "op_chain"
+      ]
+    },
+    "seq": 0
+  },
+  {
+    "label": "baseline-and-seed",
+    "phase": "Setup",
+    "prompt": "You are setting up a Triton kernel optimization run for a PyTorch reference task.\n\n# Operation: Matmul+Add+Swish fusion (matmul_fusion)\n# Op chain: matmul -> add -> swish\n# Target GPU: H100\n\n# Step 1: Establish the PyTorch-eager baseline latency.\nRun the reference under eager mode using: python /tmp/kernelfoundrydx-fixture/bench.py {kernel_path} {result_path}\nCorrectness reference command: python /tmp/kernelfoundrydx-fixture/test.py {kernel_path}\nExperiment dir: /tmp/kernelfoundrydx-fixture\n\n# Step 2: Seed the experience/hint library.\nNo persistent hint library path was given — seed from NVIDIA best practices.\n\nSeed 6-10 GENERAL Triton optimization hints, each grouped by the bottleneck class it addresses. Bottleneck classes are exactly: \"correctness\", \"memory_bound\", \"latency_bound\", \"instruction_bound\".\nEach hint entry must have: trigger (when it applies), bottleneck_class (one of the four), context (short descriptor), suggestion (the actionable optimization in one sentence).\n\nReturn JSON.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "baseline_latency_ms": {
+          "type": "number"
+        },
+        "baseline_available": {
+          "type": "boolean"
+        },
+        "initial_hints": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "trigger": {
+                "type": "string"
+              },
+              "bottleneck_class": {
+                "type": "string"
+              },
+              "context": {
+                "type": "string"
+              },
+              "suggestion": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "bottleneck_class",
+              "suggestion"
+            ]
+          }
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "baseline_latency_ms",
+        "initial_hints"
+      ]
+    },
+    "seq": 1
+  },
+  {
+    "label": "seed-0",
+    "phase": "Init",
+    "prompt": "You are an EXPERT GPU-programming model specializing in PyTorch -> Triton translation. Produce a CORRECT initial Triton kernel for this task. Correctness is the ONLY goal here — not speed.\n\n# Operation: Matmul+Add+Swish fusion (matmul_fusion)\n# Op chain: matmul -> add -> swish\n# Input shapes: x[B,N,K] w[K,M] b[M]\n# Target GPU: H100\n\n# PyTorch reference:\n```python\nimport torch\nclass Model(torch.nn.Module):\n    def forward(self, x, w, b):\n        return torch.nn.functional.silu(torch.matmul(x, w) + b)\n\n```\n\n# RAG few-shots (retrieval-augmented initialization):\nNo retrieval corpus path given. Recall idiomatic, VERIFIED Triton patterns for \"matmul_fusion\" from first principles (correct masking, contiguous indexing, proper grid, @triton.jit, tl.load/tl.store).\n\n# Requirements:\n1. Output a COMPLETE runnable module: imports, the @triton.jit kernel(s), the Python wrapper that launches them, and a ModelNew class matching the reference forward() signature.\n2. All compute must be in Triton (tl.* ops); do NOT call torch ops to do the actual math (that would be cheating).\n3. Must be numerically equivalent to the reference within tolerance.\n4. This is seed variant 1/2; vary the decomposition slightly from a naive baseline.\n\nReturn JSON with the code and a short note on the approach.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "approach": {
+          "type": "string"
+        },
+        "retrieved_examples": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "code"
+      ]
+    },
+    "seq": 2
+  },
+  {
+    "label": "seed-1",
+    "phase": "Init",
+    "prompt": "You are an EXPERT GPU-programming model specializing in PyTorch -> Triton translation. Produce a CORRECT initial Triton kernel for this task. Correctness is the ONLY goal here — not speed.\n\n# Operation: Matmul+Add+Swish fusion (matmul_fusion)\n# Op chain: matmul -> add -> swish\n# Input shapes: x[B,N,K] w[K,M] b[M]\n# Target GPU: H100\n\n# PyTorch reference:\n```python\nimport torch\nclass Model(torch.nn.Module):\n    def forward(self, x, w, b):\n        return torch.nn.functional.silu(torch.matmul(x, w) + b)\n\n```\n\n# RAG few-shots (retrieval-augmented initialization):\nNo retrieval corpus path given. Recall idiomatic, VERIFIED Triton patterns for \"matmul_fusion\" from first principles (correct masking, contiguous indexing, proper grid, @triton.jit, tl.load/tl.store).\n\n# Requirements:\n1. Output a COMPLETE runnable module: imports, the @triton.jit kernel(s), the Python wrapper that launches them, and a ModelNew class matching the reference forward() signature.\n2. All compute must be in Triton (tl.* ops); do NOT call torch ops to do the actual math (that would be cheating).\n3. Must be numerically equivalent to the reference within tolerance.\n4. This is seed variant 2/2; vary the decomposition slightly from a naive baseline.\n\nReturn JSON with the code and a short note on the approach.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "approach": {
+          "type": "string"
+        },
+        "retrieved_examples": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "code"
+      ]
+    },
+    "seq": 3
+  },
+  {
+    "label": "validate-seed-0",
+    "phase": "Init",
+    "prompt": "You are an anti-cheating validator for Triton kernels. Determine whether this generated kernel does GENUINE kernel-level work or CHEATS (e.g. calls torch ops to do the math, returns precomputed/reference values, or omits the real computation).\n\n# Reference op chain: matmul -> add -> swish\n\n# Candidate kernel:\n```python\nimport triton\nimport triton.language as tl\n@triton.jit\ndef k0(x_ptr, w_ptr, b_ptr, y_ptr): pass\n\n```\n\n# Checks:\n1. Is there at least one real @triton.jit kernel with tl.load / tl.store and grid indexing?\n2. Is the actual math performed inside Triton (not delegated to torch.matmul / torch.nn.functional / etc.)?\n3. Are all operations in the reference chain actually computed (none silently skipped)?\n4. Does it avoid returning constants / reference outputs directly?\n\nEstimate cheating_likelihood in [0,1] (1 = definitely cheating). Also do a quick static read for obvious correctness/compile risks.\n\nReturn JSON.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "cheating_likelihood": {
+          "type": "number"
+        },
+        "is_genuine_triton": {
+          "type": "boolean"
+        },
+        "missing_ops": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "static_risk_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cheating_likelihood",
+        "is_genuine_triton"
+      ]
+    },
+    "seq": 4
+  },
+  {
+    "label": "validate-seed-1",
+    "phase": "Init",
+    "prompt": "You are an anti-cheating validator for Triton kernels. Determine whether this generated kernel does GENUINE kernel-level work or CHEATS (e.g. calls torch ops to do the math, returns precomputed/reference values, or omits the real computation).\n\n# Reference op chain: matmul -> add -> swish\n\n# Candidate kernel:\n```python\nimport triton\nimport triton.language as tl\n@triton.jit\ndef k1(x_ptr, w_ptr, b_ptr, y_ptr): pass\n\n```\n\n# Checks:\n1. Is there at least one real @triton.jit kernel with tl.load / tl.store and grid indexing?\n2. Is the actual math performed inside Triton (not delegated to torch.matmul / torch.nn.functional / etc.)?\n3. Are all operations in the reference chain actually computed (none silently skipped)?\n4. Does it avoid returning constants / reference outputs directly?\n\nEstimate cheating_likelihood in [0,1] (1 = definitely cheating). Also do a quick static read for obvious correctness/compile risks.\n\nReturn JSON.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "cheating_likelihood": {
+          "type": "number"
+        },
+        "is_genuine_triton": {
+          "type": "boolean"
+        },
+        "missing_ops": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "static_risk_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cheating_likelihood",
+        "is_genuine_triton"
+      ]
+    },
+    "seq": 5
+  },
+  {
+    "label": "mutate-0-isl0",
+    "phase": "Evolve",
+    "prompt": "You are the OPTIMIZER model evolving a Triton kernel. You belong to a role-specialized evolutionary island.\n\n# ISLAND ROLE: operator_fusion\nFuse adjacent elementwise / reduction operations into a single Triton kernel to eliminate intermediate global-memory traffic and kernel-launch overhead. Prefer fusing producer-consumer chains and epilogues into the main compute kernel.\n\n# Operation: Matmul+Add+Swish fusion (matmul_fusion)\n# Target GPU: H100\n# Iteration: 1/1\n\n# Parent kernel (your starting point — produce a MUTATION/improvement of this):\n```python\nimport triton\nimport triton.language as tl\n@triton.jit\ndef k0(x_ptr, w_ptr, b_ptr, y_ptr): pass\n\n```\n\n# Parent has not been diagnosed yet.\n\n# Island evolution history (recent):\n  (no history yet)\n\n# Relevant hints from the shared experience library (apply those that fit your role + the diagnosis):\n1. [memory_bound] Fuse the elementwise epilogue into the matmul kernel.  (used 0x, avg 1.00x)\n2. [correctness] Mask only at the tile boundary, not on every load.  (used 0x, avg 1.00x)\n\n# Your task:\nGenerate ONE new Triton kernel variant that improves on the parent FROM YOUR ISLAND'S PERSPECTIVE (operator_fusion). Stay correct. All math must remain in Triton (no torch-op cheating).\nCite which hint(s) you applied (by their text) so we can track hint usefulness.\n\nReturn JSON with the complete code, the applied hint(s), and a one-line summary of the change.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "applied_hints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "change_summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code"
+      ]
+    },
+    "seq": 6
+  },
+  {
+    "label": "mutate-0-isl1",
+    "phase": "Evolve",
+    "prompt": "You are the OPTIMIZER model evolving a Triton kernel. You belong to a role-specialized evolutionary island.\n\n# ISLAND ROLE: memory_access\nOptimize memory access: coalesced/vectorized tl.load/tl.store, block/tile sizing for L2 reuse, avoiding redundant global reads, masking only at boundaries, contiguous layouts.\n\n# Operation: Matmul+Add+Swish fusion (matmul_fusion)\n# Target GPU: H100\n# Iteration: 1/1\n\n# Parent kernel (your starting point — produce a MUTATION/improvement of this):\n```python\nimport triton\nimport triton.language as tl\n@triton.jit\ndef k1(x_ptr, w_ptr, b_ptr, y_ptr): pass\n\n```\n\n# Parent has not been diagnosed yet.\n\n# Island evolution history (recent):\n  (no history yet)\n\n# Relevant hints from the shared experience library (apply those that fit your role + the diagnosis):\n1. [memory_bound] Fuse the elementwise epilogue into the matmul kernel.  (used 0x, avg 1.00x)\n2. [correctness] Mask only at the tile boundary, not on every load.  (used 0x, avg 1.00x)\n\n# Your task:\nGenerate ONE new Triton kernel variant that improves on the parent FROM YOUR ISLAND'S PERSPECTIVE (memory_access). Stay correct. All math must remain in Triton (no torch-op cheating).\nCite which hint(s) you applied (by their text) so we can track hint usefulness.\n\nReturn JSON with the complete code, the applied hint(s), and a one-line summary of the change.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "applied_hints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "change_summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code"
+      ]
+    },
+    "seq": 7
+  },
+  {
+    "label": "eval-0-isl0",
+    "phase": "Evaluate",
+    "prompt": "You are a Triton kernel evaluator. Compile and run this candidate on real hardware and report LIGHTWEIGHT signals only (no ncu/nsys profiling).\n\n# Target GPU: H100\n# Reference op chain: matmul -> add -> swish\n# PyTorch-eager baseline latency: 1.25ms\n\n# Candidate (island role: operator_fusion):\n```python\nimport triton\nimport triton.language as tl\n@triton.jit\ndef k0_v1(): pass\n\n```\n\n# Steps:\n1. Compile-check the Triton kernel (syntax, @triton.jit signature, grid).\n2. Run with: python /tmp/kernelfoundrydx-fixture/bench.py {kernel_path} {result_path}\n3. Check correctness with: python /tmp/kernelfoundrydx-fixture/test.py {kernel_path}\n4. Report: compiles?, runs?, correct?, latency_ms only if measured, measured flag, and speedup only when both baseline and candidate latencies are measured.\n5. Capture lightweight execution metadata: launch config (BLOCK_SIZE, num_warps, num_stages, grid) if visible, and a one-line runtime characterization.\n\nReturn JSON.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compiles": {
+          "type": "boolean"
+        },
+        "runs": {
+          "type": "boolean"
+        },
+        "is_correct": {
+          "type": "boolean"
+        },
+        "latency_ms": {
+          "type": "number"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "launch_config": {
+          "type": "string"
+        },
+        "runtime_characterization": {
+          "type": "string"
+        },
+        "error_summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "compiles",
+        "is_correct",
+        "speedup"
+      ]
+    },
+    "seq": 8
+  },
+  {
+    "label": "eval-0-isl1",
+    "phase": "Evaluate",
+    "prompt": "You are a Triton kernel evaluator. Compile and run this candidate on real hardware and report LIGHTWEIGHT signals only (no ncu/nsys profiling).\n\n# Target GPU: H100\n# Reference op chain: matmul -> add -> swish\n# PyTorch-eager baseline latency: 1.25ms\n\n# Candidate (island role: memory_access):\n```python\nimport triton\nimport triton.language as tl\n@triton.jit\ndef k1_v1(): pass\n\n```\n\n# Steps:\n1. Compile-check the Triton kernel (syntax, @triton.jit signature, grid).\n2. Run with: python /tmp/kernelfoundrydx-fixture/bench.py {kernel_path} {result_path}\n3. Check correctness with: python /tmp/kernelfoundrydx-fixture/test.py {kernel_path}\n4. Report: compiles?, runs?, correct?, latency_ms only if measured, measured flag, and speedup only when both baseline and candidate latencies are measured.\n5. Capture lightweight execution metadata: launch config (BLOCK_SIZE, num_warps, num_stages, grid) if visible, and a one-line runtime characterization.\n\nReturn JSON.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compiles": {
+          "type": "boolean"
+        },
+        "runs": {
+          "type": "boolean"
+        },
+        "is_correct": {
+          "type": "boolean"
+        },
+        "latency_ms": {
+          "type": "number"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "launch_config": {
+          "type": "string"
+        },
+        "runtime_characterization": {
+          "type": "string"
+        },
+        "error_summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "compiles",
+        "is_correct",
+        "speedup"
+      ]
+    },
+    "seq": 9
+  },
+  {
+    "label": "diagnose-0-isl0",
+    "phase": "Diagnose",
+    "prompt": "You are the RESULT ANALYZER for a diagnosis-driven kernel optimizer. Diagnose this evaluated candidate and produce a reusable optimization hint. Use LIGHTWEIGHT signals only (no profiler).\n\n# Candidate island role: operator_fusion\n# Evaluation signals:\n- compiles: true, runs: true, correct: true\n- latency: 0.95ms, speedup vs eager: 1.31\n- launch config: BLOCK_M=64 BLOCK_N=64 num_warps=4 num_stages=3\n- runtime characterization: L2-hot; epilogue fused\n- error (if any): none\n\n# Candidate code (head):\n```python\nimport triton\nimport triton.language as tl\n@triton.jit\ndef k0_v1(): pass\n\n```\n\n# Diagnosis rules:\n- If the kernel is INCORRECT (compile error / runtime fail / output mismatch): set diagnosis_type=\"failure\", classify failure_mode as one of \"compile_error\" | \"runtime_failure\" | \"output_mismatch\", and produce a targeted CORRECTNESS hint (bottleneck_class=\"correctness\").\n- If the kernel is CORRECT: set diagnosis_type=\"performance\", classify the dominant limiter as one of \"memory_bound\" | \"latency_bound\" | \"instruction_bound\" from the runtime stats + launch config (this is coarse/approximate by design), and produce a PERFORMANCE hint with that bottleneck_class.\n\nThe hint must be GENERAL and reusable (a one-sentence actionable suggestion with a trigger condition), not specific to this exact kernel.\n\nReturn JSON.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "diagnosis_type": {
+          "type": "string"
+        },
+        "failure_mode": {
+          "type": "string"
+        },
+        "limiter": {
+          "type": "string"
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "hint": {
+          "type": "object",
+          "properties": {
+            "trigger": {
+              "type": "string"
+            },
+            "bottleneck_class": {
+              "type": "string"
+            },
+            "suggestion": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "bottleneck_class",
+            "suggestion"
+          ]
+        },
+        "cheating_likelihood": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "diagnosis_type",
+        "hint"
+      ]
+    },
+    "seq": 10
+  },
+  {
+    "label": "diagnose-0-isl1",
+    "phase": "Diagnose",
+    "prompt": "You are the RESULT ANALYZER for a diagnosis-driven kernel optimizer. Diagnose this evaluated candidate and produce a reusable optimization hint. Use LIGHTWEIGHT signals only (no profiler).\n\n# Candidate island role: memory_access\n# Evaluation signals:\n- compiles: true, runs: true, correct: false\n- latency: 0ms, speedup vs eager: 0\n- launch config: BLOCK_M=128 BLOCK_N=64 num_warps=8 num_stages=2\n- runtime characterization: boundary mismatch on M\n- error (if any): output mismatch on last tile\n\n# Candidate code (head):\n```python\nimport triton\nimport triton.language as tl\n@triton.jit\ndef k1_v1(): pass\n\n```\n\n# Diagnosis rules:\n- If the kernel is INCORRECT (compile error / runtime fail / output mismatch): set diagnosis_type=\"failure\", classify failure_mode as one of \"compile_error\" | \"runtime_failure\" | \"output_mismatch\", and produce a targeted CORRECTNESS hint (bottleneck_class=\"correctness\").\n- If the kernel is CORRECT: set diagnosis_type=\"performance\", classify the dominant limiter as one of \"memory_bound\" | \"latency_bound\" | \"instruction_bound\" from the runtime stats + launch config (this is coarse/approximate by design), and produce a PERFORMANCE hint with that bottleneck_class.\n\nThe hint must be GENERAL and reusable (a one-sentence actionable suggestion with a trigger condition), not specific to this exact kernel.\n\nReturn JSON.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "diagnosis_type": {
+          "type": "string"
+        },
+        "failure_mode": {
+          "type": "string"
+        },
+        "limiter": {
+          "type": "string"
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "hint": {
+          "type": "object",
+          "properties": {
+            "trigger": {
+              "type": "string"
+            },
+            "bottleneck_class": {
+              "type": "string"
+            },
+            "suggestion": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "bottleneck_class",
+            "suggestion"
+          ]
+        },
+        "cheating_likelihood": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "diagnosis_type",
+        "hint"
+      ]
+    },
+    "seq": 11
+  },
+  {
+    "label": "final-report",
+    "phase": "Report",
+    "prompt": "Write a concise technical report for this Kernel Foundry (diagnosis-driven, multi-island) optimization run.\n\n# Operation: Matmul+Add+Swish fusion (matmul_fusion)\n# Target GPU: H100\n# Run timestamp: 2026-06-09T00:00:00Z\n# Baseline (PyTorch eager): 1.25ms\n# Best speedup found: 1.31x\n# Islands: operator_fusion (best 1.31x), memory_access (best n/a)\n# Total candidates evaluated: 2\n\n# Evolution trajectory:\n- iter 1 [operator_fusion] correct 1.31x (memory_bound) fuse swish epilogue\n- iter 1 [memory_access] INCORRECT  (output_mismatch) tighten boundary mask\n\n# Experience/hint library (final, sorted by avg speedup):\n1. [memory_bound] Fuse the elementwise epilogue into the matmul kernel. (used 1x, avg 1.31x)\n2. [memory_bound] Use larger BLOCK_K to amortize DRAM loads across the K-loop. (used 1x, avg 1.31x)\n3. [correctness] Mask only at the tile boundary, not on every load. (used 1x, avg 1.00x)\n4. [correctness] When tightening the boundary mask, recheck the upper edge of the M dimension. (used 1x, avg 1.00x)\n\n# Best kernel:\n```python\nimport triton\nimport triton.language as tl\n@triton.jit\ndef k0_v1(): pass\n\n```\n\nWrite:\n1. How the diagnosis-driven loop steered evolution (which limiters were hit, which hints reinforced).\n2. Which island role contributed the best kernel and why.\n3. How the experience library evolved (which hints proved useful vs were down-weighted).\n4. Any anti-cheating discards and what they reveal.\n5. Remaining bottleneck of the best kernel and what to try next.",
+    "seq": 12
+  }
+]

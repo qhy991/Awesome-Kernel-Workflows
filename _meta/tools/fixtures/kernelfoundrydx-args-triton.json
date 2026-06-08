@@ -1,0 +1,19 @@
+{
+  "problem_path": "/tmp/kernelfoundrydx-fixture/spec.py",
+  "problem_definition": "Matmul + Add + Swish fusion over Tensor[B,N,M] in pure Triton",
+  "op_description": "Matmul+Add+Swish fusion",
+  "target_gpu": "H100",
+  "islands": 2,
+  "iterations": 1,
+  "population_size": 2,
+  "seed_candidates": 2,
+  "rag_topk": 3,
+  "stagnation_window": 2,
+  "cheat_threshold": 0.5,
+  "benchmark_command": "python /tmp/kernelfoundrydx-fixture/bench.py {kernel_path} {result_path}",
+  "test_command": "python /tmp/kernelfoundrydx-fixture/test.py {kernel_path}",
+  "exp_dir": "/tmp/kernelfoundrydx-fixture",
+  "run_timestamp_iso": "2026-06-09T00:00:00Z",
+  "backend": "triton",
+  "backend_dir": "_substrate/backends/triton"
+}

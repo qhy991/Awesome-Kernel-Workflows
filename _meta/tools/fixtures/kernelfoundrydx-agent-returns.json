@@ -1,0 +1,99 @@
+{
+  "read-task": {
+    "task_text": "import torch\nclass Model(torch.nn.Module):\n    def forward(self, x, w, b):\n        return torch.nn.functional.silu(torch.matmul(x, w) + b)\n",
+    "op_type": "matmul_fusion",
+    "op_chain": ["matmul", "add", "swish"],
+    "input_shapes": "x[B,N,K] w[K,M] b[M]",
+    "fusion_opportunities": ["matmul+add", "add+swish"],
+    "numerical_notes": "swish is numerically stable"
+  },
+  "baseline-and-seed": {
+    "baseline_latency_ms": 1.25,
+    "baseline_available": true,
+    "initial_hints": [
+      { "trigger": "small reduction tail", "bottleneck_class": "memory_bound", "context": "elementwise epilogue", "suggestion": "Fuse the elementwise epilogue into the matmul kernel." },
+      { "trigger": "compile error on unaligned mask", "bottleneck_class": "correctness", "context": "boundary handling", "suggestion": "Mask only at the tile boundary, not on every load." }
+    ],
+    "notes": "seeded from NVIDIA best practices"
+  },
+  "seed-0": {
+    "code": "import triton\nimport triton.language as tl\n@triton.jit\ndef k0(x_ptr, w_ptr, b_ptr, y_ptr): pass\n",
+    "approach": "straight tiled matmul + fused epilogue",
+    "retrieved_examples": ["matmul_fp16_pair_42"]
+  },
+  "seed-1": {
+    "code": "import triton\nimport triton.language as tl\n@triton.jit\ndef k1(x_ptr, w_ptr, b_ptr, y_ptr): pass\n",
+    "approach": "split-K matmul + post-reduction swish",
+    "retrieved_examples": ["matmul_splitk_pair_17"]
+  },
+  "validate-seed-0": {
+    "cheating_likelihood": 0.1,
+    "is_genuine_triton": true,
+    "missing_ops": [],
+    "static_risk_notes": "looks ok"
+  },
+  "validate-seed-1": {
+    "cheating_likelihood": 0.2,
+    "is_genuine_triton": true,
+    "missing_ops": [],
+    "static_risk_notes": "looks ok"
+  },
+  "mutate-0-isl0": {
+    "code": "import triton\nimport triton.language as tl\n@triton.jit\ndef k0_v1(): pass\n",
+    "applied_hints": ["Fuse the elementwise epilogue into the matmul kernel."],
+    "change_summary": "fuse swish epilogue"
+  },
+  "mutate-0-isl1": {
+    "code": "import triton\nimport triton.language as tl\n@triton.jit\ndef k1_v1(): pass\n",
+    "applied_hints": ["Mask only at the tile boundary, not on every load."],
+    "change_summary": "tighten boundary mask"
+  },
+  "eval-0-isl0": {
+    "compiles": true,
+    "runs": true,
+    "is_correct": true,
+    "latency_ms": 0.95,
+    "speedup": 1.31,
+    "launch_config": "BLOCK_M=64 BLOCK_N=64 num_warps=4 num_stages=3",
+    "runtime_characterization": "L2-hot; epilogue fused",
+    "error_summary": ""
+  },
+  "eval-0-isl1": {
+    "compiles": true,
+    "runs": true,
+    "is_correct": false,
+    "latency_ms": 0,
+    "speedup": 0,
+    "launch_config": "BLOCK_M=128 BLOCK_N=64 num_warps=8 num_stages=2",
+    "runtime_characterization": "boundary mismatch on M",
+    "error_summary": "output mismatch on last tile"
+  },
+  "diagnose-0-isl0": {
+    "diagnosis_type": "performance",
+    "failure_mode": "",
+    "limiter": "memory_bound",
+    "rationale": "epilogue fused but DRAM traffic still dominates",
+    "hint": {
+      "trigger": "DRAM-bound matmul fusion",
+      "bottleneck_class": "memory_bound",
+      "suggestion": "Use larger BLOCK_K to amortize DRAM loads across the K-loop."
+    },
+    "cheating_likelihood": 0.05
+  },
+  "diagnose-0-isl1": {
+    "diagnosis_type": "failure",
+    "failure_mode": "output_mismatch",
+    "limiter": "",
+    "rationale": "boundary mask was off-by-one",
+    "hint": {
+      "trigger": "M-tile boundary mismatch",
+      "bottleneck_class": "correctness",
+      "suggestion": "When tightening the boundary mask, recheck the upper edge of the M dimension."
+    },
+    "cheating_likelihood": 0.05
+  },
+  "final-report": {
+    "outcome": "success",
+    "summary": "Best 1.31x from operator_fusion island; correctness island ran into a boundary mask bug that produced a reusable hint."
+  }
+}
