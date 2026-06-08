@@ -79,7 +79,46 @@ function assertWorkflowSuitability() {
   }
 }
 
-assertWorkflowSuitability()
+function resolveBackendAxis() {
+  const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
+  const l = args.language ? normalizeSuitabilityValue(args.language) : null
+  if (b && l && b !== l) {
+    throw new Error(`Conflicting args: backend="${args.backend}" vs language="${args.language}". Pass only one.`)
+  }
+  if (args.backend && !args.backend_dir) {
+    throw new Error(`args.backend="${args.backend}" requires args.backend_dir; driver dispatch has no implicit-resolve path.`)
+  }
+  return b || l || null
+}
+const RESOLVED_BACKEND = resolveBackendAxis()
+const USE_DRIVER = !!args.backend_dir
+
+if (!USE_DRIVER) {
+  assertWorkflowSuitability()
+}
+
+// Intersectional guards (P5d plan §3 + §9.1) — encoded at scaffolding time,
+// before load-driver, mirroring Astra's sglang-vendor-lock and StitchCUDA's
+// kernelbench-suite guards. AKO4X has two vendor-bound knobs:
+//   1. ncu_binary is part of the NVIDIA CUDA toolkit and only profiles CUDA
+//      kernels. Pairing it with a non-cuda driver path is incoherent.
+//   2. mode=3 (harness co-evolution / retrospective) writes proposals.md that
+//      may propose edits to harness/SKILL scope. Under the driver path the
+//      _substrate/** tree is immutable (no edits permitted), so mode=3 +
+//      USE_DRIVER must be refused; downgrade to mode=2 (static harness).
+if (USE_DRIVER && args.ncu_binary && RESOLVED_BACKEND && RESOLVED_BACKEND !== 'cuda') {
+  throw new Error(
+    `AKO4X args.ncu_binary="${args.ncu_binary}" requires backend_dir to be a CUDA driver; ` +
+    `got backend_dir=${args.backend_dir} (resolved backend=${RESOLVED_BACKEND}).`
+  )
+}
+if (USE_DRIVER && Number(args.mode) === 3) {
+  throw new Error(
+    `AKO4X mode=3 (harness co-evolution) is incompatible with USE_DRIVER; ` +
+    `got backend_dir=${args.backend_dir} (resolved backend=${RESOLVED_BACKEND || 'unspecified'}). ` +
+    `Driver path keeps the _substrate driver tree immutable; use mode=2 (static harness).`
+  )
+}
 
 // =============================================================================
 // AKO4X Multi-Round Closed-Loop Kernel Optimization Workflow
@@ -150,6 +189,34 @@ const SAMPLES_PER_HYPOTHESIS = args.samples_per_plan || 2
 const TARGET_GPU = args.target_gpu || 'b200'
 const MODE = args.mode || 2  // 2 = static harness, 3 = harness co-evolution
 const USE_AKO4X_SKILLS = args.use_ako4x_skills !== false
+
+// --- Backend driver wiring (P5d Stage B; off-by-default; legacy path byte-identical) ---
+const BACKEND_DIR = args.backend_dir || ''
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const SH = args.driver_shell_prefix || ''
+const PY = args.substrate_command_prefix || ''
+const LEGACY_SOURCE_EXT_BY_LANG = {
+  triton: '.py', cuda: '.cu', 'cute-dsl': '.py', tilelang: '.py', cpp: '.cpp', pytorch: '.py',
+}
+const LEGACY_FENCE_BY_LANG = {
+  triton: 'python', cuda: 'cuda', 'cute-dsl': 'python', tilelang: 'python', cpp: 'cpp', pytorch: 'python',
+}
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+
+let DRIVER = null
+let DRIVER_LANG_FENCE = ''
+let DRIVER_IMPL_REQUIREMENTS = ''
+let DRIVER_SOURCE_EXT = ''
+let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
+
+function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
+function driverSh(script, cliArgs) {
+  return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
+}
+function ako4xIterKernelPath(round, iterCount) {
+  const ext = USE_DRIVER ? (DRIVER_SOURCE_EXT || '.py') : '.py'
+  return `${EXP_DIR}/variants/r${round + 1}_iter${iterCount}/kernel${ext}`
+}
 
 if (!KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
   throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
@@ -305,6 +372,26 @@ function formatTraps() {
 // Phase 1: Setup — Read kernel, detect language, create workspace, baseline
 // =============================================================================
 phase('Setup')
+
+if (USE_DRIVER) {
+  DRIVER = await agent(
+    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
+    `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
+    `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
+    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (!DRIVER || DRIVER.present === false) {
+    throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
+  }
+  if (RESOLVED_BACKEND && DRIVER.backend_id && normalizeSuitabilityValue(DRIVER.backend_id) !== RESOLVED_BACKEND) {
+    throw new Error(`backend_dir manifest backend_id="${DRIVER.backend_id}" conflicts with args.backend/language="${RESOLVED_BACKEND}".`)
+  }
+  DRIVER_LANG_FENCE = DRIVER.lang_fence || DRIVER_LANG_FENCE
+  DRIVER_IMPL_REQUIREMENTS = DRIVER.impl_requirements || ''
+  DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT
+  DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID
+  log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
+}
 
 if (INPUT_MODE === 'generate_then_optimize') {
   KERNEL_PATH = await resolveInitialKernelFromProblem({
@@ -741,6 +828,44 @@ Return benchmark results.`, {
       const passed = benchResult.passed_workloads || 'N/N'
 
       log(`[${iterLabel}] Score: ${benchResult.score} | Speedup: ${speedup.toFixed(2)}x | Passed: ${passed}`)
+
+      // --- Per-attempt Layer-A driver envelope (P5d B3; USE_DRIVER only) ---
+      if (USE_DRIVER) {
+        const envIdx = iterCount - 1
+        const kPath = ako4xIterKernelPath(round, iterCount)
+        const buildOut = `${EXP_DIR}/variants/r${round + 1}_iter${iterCount}/build.artifact`
+        const profOut = `${EXP_DIR}/variants/r${round + 1}_iter${iterCount}/prof.native`
+        await agent(
+          `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+          `Return its stdout JSON verbatim.`,
+          { label: `driver-build-${envIdx}`, phase: 'Iterate', schema: JSON_PASSTHROUGH })
+        const runOut = await agent(
+          `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+          `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+          { label: `driver-run-${envIdx}`, phase: 'Iterate', schema: JSON_PASSTHROUGH })
+        await agent(
+          `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+          `Return {ok, native_path}.`,
+          { label: `driver-profile-${envIdx}`, phase: 'Iterate', schema: JSON_PASSTHROUGH })
+        const evidenceOut = await agent(
+          `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+          `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+          { label: `driver-to-evidence-${envIdx}`, phase: 'Iterate', schema: JSON_PASSTHROUGH })
+        const diagOut = await agent(
+          `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+          `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+          { label: `driver-diagnose-${envIdx}`, phase: 'Iterate', schema: JSON_PASSTHROUGH })
+        await agent(
+          `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/variants/r${round + 1}_iter${iterCount}/result.json\`.\n` +
+          `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+          { label: `driver-anti-cheat-${envIdx}`, phase: 'Iterate', schema: JSON_PASSTHROUGH })
+        benchResult.driver_envelope = {
+          latency_ms: Number((runOut && runOut.latency_ms) || 0),
+          metrics: (evidenceOut && evidenceOut.metrics) || {},
+          bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',
+          backend_id: DRIVER_BACKEND_ID,
+        }
+      }
 
       // Log to ITERATIONS.md (AKO4X: every labeled bench leaves a row)
       roundIterations.push({
