@@ -136,6 +136,7 @@ The manifest (`_meta/manifests/schema.yaml`) is the structured description of a 
 | `workflow` | name, description, whenToUse, output filename |
 | `method` | category, core_insight, feedback_signal |
 | `topology` | type (iterative/search/tree/pipeline), state variables, convergence |
+| `backend` | (v1.1) supported backends, default, matrix_eligible, portability tier |
 | `phases` | Ordered list of phases with agents, schemas, parallelism |
 | `plan_angles` | Orthogonal optimization dimensions for planners |
 | `args` | Required and optional workflow parameters |
@@ -228,6 +229,7 @@ Manifest 是对内核优化方法的结构化描述。主要部分：
 | `workflow` | 名称、描述、使用场景、输出文件名 |
 | `method` | 类别、核心创新、反馈信号 |
 | `topology` | 类型、状态变量、收敛条件 |
+| `backend` | (v1.1) 支持的后端、默认后端、矩阵测试资格、可移植性层级 |
 | `phases` | 有序阶段列表及其 agent |
 | `plan_angles` | 正交优化维度 |
 | `args` | 必需和可选参数 |
