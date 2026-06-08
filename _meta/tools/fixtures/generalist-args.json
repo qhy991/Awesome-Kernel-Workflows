@@ -1,0 +1,16 @@
+{
+  "kernel_path": "/tmp/generalist-fixture/kernel.cu",
+  "op_description": "matmul",
+  "language": "cuda",
+  "target_gpu": "A100",
+  "iterations": 2,
+  "breadth": 1,
+  "topk": 1,
+  "target_speedup": 2.0,
+  "benchmark_command": "python /tmp/generalist-fixture/bench.py {kernel_path} {result_path}",
+  "ncu_command": "",
+  "substrate_dir": "_substrate",
+  "substrate_command_prefix": "python3",
+  "exp_dir": "/tmp/generalist-fixture",
+  "memory_db": "/tmp/generalist-fixture/memory.json"
+}
