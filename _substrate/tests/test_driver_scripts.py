@@ -310,3 +310,28 @@ class TestCudaProfile(unittest.TestCase):
     def test_missing_args_exit_3(self):
         code, sout, _ = _run([self.SCRIPT, '--artifact', '/x.so'])
         self.assertEqual(code, 3)
+
+
+class TestTritonL0(unittest.TestCase):
+    VALIDATOR = os.path.join(BACKENDS, 'validate_backend.py')
+
+    def test_triton_dir_passes_l0(self):
+        code, out, err = _run([sys.executable, self.VALIDATOR, TRITON])
+        self.assertEqual(code, 0, msg=f"out={out} err={err}")
+        self.assertEqual(_json_or_raw(out).get('ok'), True, out)
+
+    def test_triton_to_evidence_uses_shared_mapper_source_triton(self):
+        with tempfile.TemporaryDirectory() as td:
+            csv = os.path.join(td, 'n.csv')
+            _write_exec(os.path.join(td, '_e.sh'), FAKE_NCU_CSV)
+            with open(csv, 'w') as fh:
+                subprocess.run([os.path.join(td, '_e.sh')], stdout=fh)
+            code, out, err = _run([sys.executable,
+                                   os.path.join(TRITON, 'to_evidence.py'),
+                                   '--native', csv, '--format', 'ncu-csv'])
+            self.assertEqual(code, 0, msg=f"{out} {err}")
+            p = _json_or_raw(out)
+            self.assertEqual(p['source_backend'], 'triton', p)
+            self.assertEqual(p['metrics']['_vendor'], 'nvidia', p)
+            self.assertAlmostEqual(p['metrics']['occupancy'], 0.51, places=4)
+            self.assertAlmostEqual(p['metrics']['dram_pct'], 62.0, places=3)  # read + write
