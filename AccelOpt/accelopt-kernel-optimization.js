@@ -283,6 +283,41 @@ Previous profile data for reference:
 ${baselineNcuProfile}`
 }
 
+function legacyFinalReportPrompt(OP_DESC, opType, baselineLatency, bestLatency, ITERATIONS, candidateBeam, experienceMemory, baselineNcuProfile, bestKernelCode) {
+  return `Write a concise technical optimization report.
+
+# AccelOpt + NCU Optimization Results
+- Operation: ${OP_DESC} (${opType})
+- Baseline Latency: ${baselineLatency}ms
+- Final Best Latency: ${bestLatency}ms
+- Overall Speedup: ${(baselineLatency / bestLatency).toFixed(2)}x
+- Iterations: ${ITERATIONS}
+- Candidate Beam (final): ${candidateBeam.length} kernels
+- Experience Patterns: ${experienceMemory.length}
+
+# Initial NCU Diagnosis:
+${baselineNcuProfile.substring(0, 1000)}
+
+# Final Candidate Beam:
+${candidateBeam.map((c, i) => `${i + 1}. "${c.planTitle}" — ${c.speedup.toFixed(2)}x (${c.latency.toFixed(3)}ms)`).join('\n')}
+
+# Learned Optimization Knowledge Base:
+${experienceMemory.map((e, i) => `${i + 1}. ${e}`).join('\n\n')}
+
+# Final Kernel:
+\`\`\`cuda
+${bestKernelCode.substring(0, 3000)}
+\`\`\`
+
+Write:
+1. NCU-driven optimization journey (what metrics → what actions → what results)
+2. Which NCU patterns reliably predicted optimization opportunities
+3. Anti-patterns: what NCU data looked promising but the optimization failed
+4. Candidate beam evolution: how the population of solutions evolved
+5. Remaining bottlenecks (what NCU shows for the final kernel)
+6. Recommendations for further optimization with specific NCU metrics to target`
+}
+
 function legacyLearnPrompt(pair) {
   return `You are a CUDA optimization expert with NCU profiling expertise. Analyze this slow-fast kernel pair and extract a GENERAL, REUSABLE optimization insight.
 
@@ -1209,9 +1244,10 @@ Make the rule GENERAL enough to apply to other kernels (not specific to this one
 // =============================================================================
 // Final Report
 // =============================================================================
-const finalReport = await agent(`Write a concise technical optimization report.
+const finalReport = await agent(USE_DRIVER
+  ? `Write a concise technical optimization report.
 
-# AccelOpt + NCU Optimization Results
+# AccelOpt (${BACKEND} backend, profiler=${IDIOMS.profiler_name || 'none'})
 - Operation: ${OP_DESC} (${opType})
 - Baseline Latency: ${baselineLatency}ms
 - Final Best Latency: ${bestLatency}ms
@@ -1219,8 +1255,9 @@ const finalReport = await agent(`Write a concise technical optimization report.
 - Iterations: ${ITERATIONS}
 - Candidate Beam (final): ${candidateBeam.length} kernels
 - Experience Patterns: ${experienceMemory.length}
+- Bottleneck class: ${bottleneckClass}
 
-# Initial NCU Diagnosis:
+# Initial Profile Diagnosis:
 ${baselineNcuProfile.substring(0, 1000)}
 
 # Final Candidate Beam:
@@ -1230,20 +1267,48 @@ ${candidateBeam.map((c, i) => `${i + 1}. "${c.planTitle}" — ${c.speedup.toFixe
 ${experienceMemory.map((e, i) => `${i + 1}. ${e}`).join('\n\n')}
 
 # Final Kernel:
-\`\`\`cuda
+\`\`\`${IDIOMS.lang_fence}
 ${bestKernelCode.substring(0, 3000)}
 \`\`\`
 
 Write:
-1. NCU-driven optimization journey (what metrics → what actions → what results)
-2. Which NCU patterns reliably predicted optimization opportunities
-3. Anti-patterns: what NCU data looked promising but the optimization failed
+1. Profiler-driven optimization journey (what metrics → what actions → what results)
+2. Which profile patterns reliably predicted optimization opportunities
+3. Anti-patterns: what profile data looked promising but the optimization failed
 4. Candidate beam evolution: how the population of solutions evolved
-5. Remaining bottlenecks (what NCU shows for the final kernel)
-6. Recommendations for further optimization with specific NCU metrics to target`, {
+5. Remaining bottlenecks (bottleneck_class=${bottleneckClass} for the final kernel)
+6. Recommendations for further optimization with specific profiler metrics to target`
+  : legacyFinalReportPrompt(OP_DESC, opType, baselineLatency, bestLatency, ITERATIONS, candidateBeam, experienceMemory, baselineNcuProfile, bestKernelCode), {
   label: 'final-report',
   phase: 'Iterate',
 })
+
+let evidenceEnvelope = null
+if (USE_DRIVER) {
+  const insightItems = experienceMemory.slice(0, TOPK_LEARN).map(e => ({
+    kind: 'bottleneck',
+    directive: 'explore',
+    evidence: IDIOMS.profiler_name ? 'ncu' : 'profile_heuristic',
+    confidence: 'inferred',
+    claim: e,
+  }))
+  const built = await agent(
+    `Build a Layer-A evidence envelope for this AccelOpt run, then validate it.\n` +
+    `1. ${substrateInstruction('evidence_schema.py', 'template')} to get the envelope shape.\n` +
+    `2. Fill it: attempt_id="accelopt-${BACKEND}", backend="${BACKEND}", ` +
+    `compiled=true, correct=true, speedup=${(baselineLatency / bestLatency)}, ` +
+    `metrics=${JSON.stringify(ncuSetup._metrics || {})}, ` +
+    `bottleneck_class="${bottleneckClass}", ` +
+    `insights=${JSON.stringify(insightItems)}.\n` +
+    `Each insight item already has {kind, directive, evidence, confidence, claim} as required by ` +
+    `evidence_schema.py _validate_item.\n` +
+    `3. Write it to ${EXP_DIR}/evidence.json.\n` +
+    `4. ${substrateInstruction('evidence_schema.py', `validate ${EXP_DIR}/evidence.json`)}\n` +
+    `Return {valid, normalized} (the validator stdout JSON verbatim).`,
+    { label: 'assemble-evidence', phase: 'Iterate', schema: JSON_PASSTHROUGH })
+  evidenceEnvelope = built.valid ? (built.normalized || null) : null
+  if (!built.valid) log(`WARN: Layer-A envelope failed evidence_schema validation`)
+}
 
 return {
   input_mode: INPUT_MODE,
@@ -1266,4 +1331,10 @@ return {
   best_kernel_code: bestKernelCode,
   ncu_baseline_profile: baselineNcuProfile,
   report: finalReport,
+  ...(USE_DRIVER ? {
+    backend: BACKEND,
+    baseline_profile: baselineNcuProfile,
+    bottleneck_class: bottleneckClass,
+    evidence: evidenceEnvelope,
+  } : {}),
 }
