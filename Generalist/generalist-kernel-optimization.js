@@ -71,7 +71,23 @@ function assertWorkflowSuitability() {
   }
 }
 
-assertWorkflowSuitability()
+function resolveBackendAxis() {
+  const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
+  const l = args.language ? normalizeSuitabilityValue(args.language) : null
+  if (b && l && b !== l) {
+    throw new Error(`Conflicting args: backend="${args.backend}" vs language="${args.language}". Pass only one.`)
+  }
+  if (args.backend && !args.backend_dir) {
+    throw new Error(`args.backend="${args.backend}" requires args.backend_dir; driver dispatch has no implicit-resolve path.`)
+  }
+  return b || l || null
+}
+const RESOLVED_BACKEND = resolveBackendAxis()
+const USE_DRIVER = !!args.backend_dir
+
+if (!USE_DRIVER) {
+  assertWorkflowSuitability()
+}
 
 // =============================================================================
 // Generalist Kernel Optimization — KerSor Solver SDK reference solver
@@ -114,8 +130,6 @@ const INPUT_MODE = KERNEL_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const OP = args.op_description || 'kernel optimization'
 const EVAL_CMD = args.benchmark_command
 const NCU_CMD = args.ncu_command || ''
-const SUBSTRATE = args.substrate_dir || '_substrate'
-const SUBSTRATE_COMMAND_PREFIX = args.substrate_command_prefix || ''
 const EXP_DIR = args.exp_dir || '.'
 const MEMORY_DB = args.memory_db || `${EXP_DIR}/memory.json`
 const ITERATIONS = args.iterations || 3
@@ -127,6 +141,33 @@ const TARGET_GPU = args.target_gpu || 'unknown GPU'
 const SEED_CANDIDATES = args.seed_candidates || 3
 const STAGNATION_EPS = 0.02   // < 2% improvement counts as no progress (Xe-Forge/KSearch)
 const STAGNATION_LIMIT = 2    // consecutive stagnant rounds -> stop
+
+// --- Backend driver wiring (P5e Stage B; off-by-default; legacy path byte-identical) ---
+const BACKEND_DIR = args.backend_dir || ''
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const SH = args.driver_shell_prefix || ''
+const PY = args.substrate_command_prefix || ''
+const LEGACY_LANG_TOKEN = LANGUAGE
+const LEGACY_FENCE_TOKEN = LANGUAGE
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+
+function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
+function driverSh(script, cliArgs) {
+  return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
+}
+
+let DRIVER = null
+let DRIVER_LANG_FENCE = LEGACY_FENCE_TOKEN
+let DRIVER_IMPL_REQUIREMENTS = ''
+let DRIVER_SOURCE_EXT = ''
+let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
+
+function langToken(legacy) {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : legacy
+}
+function fenceToken() {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : LEGACY_FENCE_TOKEN
+}
 
 if (!KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
   throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
@@ -141,10 +182,10 @@ const MODEL = {
 
 function substrateInstruction(script, cliArgs) {
   const scriptPath = `${SUBSTRATE}/${script}`
-  if (!SUBSTRATE_COMMAND_PREFIX) {
+  if (!PY) {
     return `No substrate_command_prefix provided for ${scriptPath} ${cliArgs}; do not invent an interpreter.`
   }
-  return `Run exactly: \`${SUBSTRATE_COMMAND_PREFIX} ${scriptPath} ${cliArgs}\`.`
+  return `Run exactly: \`${PY} ${scriptPath} ${cliArgs}\`.`
 }
 // P0 — token-budget wiring: rough per-unit output-token estimates for scaling + stopping.
 const EST_PER_CANDIDATE = args.est_tokens_per_candidate || 20000
@@ -166,7 +207,6 @@ const METRICS_SCHEMA = {
   },
   required: ['compiled', 'correct', 'speedup', 'metrics'],
 }
-const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
 const ANTICHEAT_SCHEMA = {
   type: 'object',
   properties: {
@@ -180,6 +220,26 @@ const ANTICHEAT_SCHEMA = {
 phase('Setup')
 log(`Generalist solver | beam | breadth=${BREADTH} topk=${TOPK} iters=${ITERATIONS} target=${TARGET}x | models ${MODEL.mechanical}/${MODEL.profile}/${MODEL.judgment} | budget ${(typeof budget !== 'undefined' && budget.total) ? Math.round(budget.total / 1000) + 'k' : 'unbounded'}`)
 
+if (USE_DRIVER) {
+  DRIVER = await agent(
+    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
+    `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
+    `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
+    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (!DRIVER || DRIVER.present === false) {
+    throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
+  }
+  if (RESOLVED_BACKEND && DRIVER.backend_id && normalizeSuitabilityValue(DRIVER.backend_id) !== RESOLVED_BACKEND) {
+    throw new Error(`backend_dir manifest backend_id="${DRIVER.backend_id}" conflicts with args.backend/language="${RESOLVED_BACKEND}".`)
+  }
+  DRIVER_LANG_FENCE = DRIVER.lang_fence || DRIVER_LANG_FENCE
+  DRIVER_IMPL_REQUIREMENTS = DRIVER.impl_requirements || ''
+  DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT
+  DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID
+  log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
+}
+
 if (INPUT_MODE === 'generate_then_optimize') {
   const generated = await agent(`No kernel_path was provided. Generate and verify an initial kernel before seeding the Generalist candidate beam.
 
@@ -187,7 +247,7 @@ if (INPUT_MODE === 'generate_then_optimize') {
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
 - problem_path: ${PROBLEM_PATH || '(not provided)'}
 - op_description: ${OP}
-- language: ${LANGUAGE}
+- language: ${langToken(LANGUAGE)}
 - target_gpu: ${TARGET_GPU}
 - seed_candidates: ${SEED_CANDIDATES}
 
@@ -226,6 +286,37 @@ let dryRounds = 0                 // P1.5 — consecutive rounds with no new 'me
 const DRY_LIMIT = 2               // P1.5 — loop-until-dry stop threshold
 const allAttempts = []
 const verifiedInsights = []       // P1.4 — verified typed insights for the Layer A envelope
+
+// --- Baseline driver envelope (Layer-A, USE_DRIVER only) ---
+if (USE_DRIVER) {
+  const kPath = KERNEL_PATH || `${EXP_DIR}/baseline.kernel`
+  const buildOut = `${EXP_DIR}/baseline.artifact`
+  const profOut = `${EXP_DIR}/baseline.prof.native`
+  await agent(
+    `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+    `Return its stdout JSON verbatim.`,
+    { label: 'driver-build-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  const runOut = await agent(
+    `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+    `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+    { label: 'driver-run-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agent(
+    `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+    `Return {ok, native_path}.`,
+    { label: 'driver-profile-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  const evidenceOut = await agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+    `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+    { label: 'driver-to-evidence-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+    `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+    { label: 'driver-diagnose-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/baseline.result.json\`.\n` +
+    `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+    { label: 'driver-anti-cheat-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+}
 
 for (let iter = 1; iter <= ITERATIONS; iter++) {
   const best = candidateBeam[0]
@@ -316,6 +407,40 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
     return { plan: p, metrics: m, anticheat: ac, code_path: `${runDir}/kernel`,
              recorded_speedup: ac.valid ? ac.recorded_speedup : 0 }
   })()))).filter(Boolean)
+
+  // --- Per-iteration driver envelope (Layer-A, USE_DRIVER only) ---
+  if (USE_DRIVER) {
+    for (let ci = 0; ci < evaluated.length; ci++) {
+      const suffix = `${iter}-${ci + 1}`
+      const kPath = evaluated[ci].code_path
+      const buildOut = `${EXP_DIR}/run-${iter}/cand-${ci + 1}.artifact`
+      const profOut = `${EXP_DIR}/run-${iter}/cand-${ci + 1}.prof.native`
+      await agent(
+        `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+        `Return its stdout JSON verbatim.`,
+        { label: `driver-build-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      const runOut = await agent(
+        `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+        `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+        { label: `driver-run-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      await agent(
+        `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+        `Return {ok, native_path}.`,
+        { label: `driver-profile-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      const evidenceOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+        `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+        { label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+        `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+        { label: `driver-diagnose-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/run-${iter}/cand-${ci + 1}.result.json\`.\n` +
+        `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+        { label: `driver-anti-cheat-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    }
+  }
 
   // ---- Learn: update persistent memory (Layer D) per measured outcome ----
   phase('Learn')
