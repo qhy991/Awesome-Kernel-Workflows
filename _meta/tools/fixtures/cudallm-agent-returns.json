@@ -1,0 +1,145 @@
+{
+  "setup-task": {
+    "problem_definition": "Compute row-wise softmax over Tensor[B,N] in CUDA",
+    "reference_code": "import torch\\ndef ref(x): return torch.softmax(x, dim=-1)\\n",
+    "operation_type": "softmax",
+    "input_contract": "x: float32[B,N] contiguous",
+    "output_contract": "y: float32[B,N] contiguous",
+    "constraints": ["pure CUDA, no PyTorch fallback", "preserve tolerance"],
+    "baseline_latency_ms": 0.42
+  },
+  "feature-catalog": {
+    "features": [
+      {"id": "tile", "name": "tiling", "family": "tiling", "description": "block/grid tiling"},
+      {"id": "smem", "name": "shared_memory", "family": "memory", "description": "shared mem staging"},
+      {"id": "vec", "name": "vectorized_load", "family": "memory", "description": "float4 loads"}
+    ],
+    "baseline_feature_ids": ["tile"],
+    "unsafe_feature_ids": [],
+    "notes": ["start conservative"]
+  },
+  "generate-tests": {
+    "test_cases": [
+      {"name": "small", "shape": [4, 16], "dtype": "float32"},
+      {"name": "medium", "shape": [64, 1024], "dtype": "float32"}
+    ],
+    "tolerance_policy": "rtol=0.01 atol=0.01",
+    "harness_notes": "compare against torch.softmax"
+  },
+  "select-features-0-0": {
+    "selected_feature_ids": ["tile"],
+    "rationale": "start with tiling baseline",
+    "expected_risks": []
+  },
+  "generate-kernel-0-0": {
+    "candidate_code": "__global__ void softmax_kernel(const float* x, float* y, int N) {}\\n",
+    "implemented_feature_ids": ["tile"],
+    "skipped_feature_ids": [],
+    "implementation_notes": "baseline"
+  },
+  "evaluate-0-0": {
+    "compiled": true,
+    "correct": true,
+    "speedup": 1.10,
+    "latency_ms": 0.38,
+    "baseline_latency_ms": 0.42,
+    "passed_tests": 2,
+    "total_tests": 2,
+    "error_message": "",
+    "reward_hacking_flags": []
+  },
+  "reinforce-0-0": {
+    "updated_scores": [
+      {"id": "tile", "name": "tiling", "attempts": 1, "compiled": 1, "correct": 1, "reward": 0.10, "best_speedup": 1.10, "failures": []}
+    ],
+    "reinforcement_notes": ["tile credit applied"]
+  },
+  "select-features-0-1": {
+    "selected_feature_ids": ["tile", "smem"],
+    "rationale": "add shared memory",
+    "expected_risks": ["bank conflicts"]
+  },
+  "generate-kernel-0-1": {
+    "candidate_code": "__global__ void softmax_kernel(const float* x, float* y, int N) { __shared__ float s[256]; }\\n",
+    "implemented_feature_ids": ["tile", "smem"],
+    "skipped_feature_ids": [],
+    "implementation_notes": "with smem"
+  },
+  "evaluate-0-1": {
+    "compiled": true,
+    "correct": false,
+    "speedup": 0.0,
+    "latency_ms": 0.0,
+    "baseline_latency_ms": 0.42,
+    "passed_tests": 1,
+    "total_tests": 2,
+    "error_message": "mismatch on medium",
+    "reward_hacking_flags": []
+  },
+  "reinforce-0-1": {
+    "updated_scores": [
+      {"id": "smem", "name": "shared_memory", "attempts": 1, "compiled": 1, "correct": 0, "reward": -0.05, "best_speedup": 0, "failures": ["mismatch"]}
+    ],
+    "reinforcement_notes": ["smem penalty"]
+  },
+  "select-features-1-0": {
+    "selected_feature_ids": ["tile", "vec"],
+    "rationale": "swap smem for vectorized load",
+    "expected_risks": []
+  },
+  "generate-kernel-1-0": {
+    "candidate_code": "__global__ void softmax_kernel(const float4* x, float4* y, int N) {}\\n",
+    "implemented_feature_ids": ["tile", "vec"],
+    "skipped_feature_ids": [],
+    "implementation_notes": "vectorized"
+  },
+  "evaluate-1-0": {
+    "compiled": true,
+    "correct": true,
+    "speedup": 1.45,
+    "latency_ms": 0.29,
+    "baseline_latency_ms": 0.42,
+    "passed_tests": 2,
+    "total_tests": 2,
+    "error_message": "",
+    "reward_hacking_flags": []
+  },
+  "reinforce-1-0": {
+    "updated_scores": [
+      {"id": "vec", "name": "vectorized_load", "attempts": 1, "compiled": 1, "correct": 1, "reward": 0.45, "best_speedup": 1.45, "failures": []}
+    ],
+    "reinforcement_notes": ["vec strong credit"]
+  },
+  "select-features-1-1": {
+    "selected_feature_ids": ["tile", "vec", "smem"],
+    "rationale": "combine successes",
+    "expected_risks": ["smem bank conflicts"]
+  },
+  "generate-kernel-1-1": {
+    "candidate_code": "__global__ void softmax_kernel(const float4* x, float4* y, int N) { __shared__ float s[256]; }\\n",
+    "implemented_feature_ids": ["tile", "vec", "smem"],
+    "skipped_feature_ids": [],
+    "implementation_notes": "vec + smem"
+  },
+  "evaluate-1-1": {
+    "compiled": true,
+    "correct": true,
+    "speedup": 1.62,
+    "latency_ms": 0.26,
+    "baseline_latency_ms": 0.42,
+    "passed_tests": 2,
+    "total_tests": 2,
+    "error_message": "",
+    "reward_hacking_flags": []
+  },
+  "reinforce-1-1": {
+    "updated_scores": [
+      {"id": "smem", "name": "shared_memory", "attempts": 2, "compiled": 2, "correct": 1, "reward": 0.10, "best_speedup": 1.62, "failures": ["mismatch"]}
+    ],
+    "reinforcement_notes": ["smem partial recovery"]
+  },
+  "final-report": {
+    "report_md": "Best candidate iter_1_sample_1 with vec+tile+smem, speedup 1.62x.",
+    "best_features": ["tile", "vec", "smem"]
+  }
+}

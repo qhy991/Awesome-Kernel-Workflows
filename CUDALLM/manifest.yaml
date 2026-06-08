@@ -4,6 +4,15 @@
 # Source: arXiv:2506.09092 "CUDA-LLM: LLMs Can Write Efficient CUDA Kernels"
 # =============================================================================
 
+schema_version: "1.1"
+
+backend:
+  portability: clean
+  matrix_eligible: true
+  method_supported_backends: any
+  supported: [cuda, triton]
+  default: cuda
+
 source:
   paper_title: "CUDA-LLM: LLMs Can Write Efficient CUDA Kernels"
   paper_url: "https://arxiv.org/abs/2506.09092"

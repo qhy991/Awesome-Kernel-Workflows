@@ -71,7 +71,23 @@ function assertWorkflowSuitability() {
   }
 }
 
-assertWorkflowSuitability()
+function resolveBackendAxis() {
+  const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
+  const l = args.language ? normalizeSuitabilityValue(args.language) : null
+  if (b && l && b !== l) {
+    throw new Error(`Conflicting args: backend="${args.backend}" vs language="${args.language}". Pass only one.`)
+  }
+  if (args.backend && !args.backend_dir) {
+    throw new Error(`args.backend="${args.backend}" requires args.backend_dir; driver dispatch has no implicit-resolve path.`)
+  }
+  return b || l || null
+}
+const RESOLVED_BACKEND = resolveBackendAxis()
+const USE_DRIVER = !!args.backend_dir
+
+if (!USE_DRIVER) {
+  assertWorkflowSuitability()
+}
 
 // =============================================================================
 // CUDA-LLM — Feature Search and Reinforcement (FSR) Workflow
@@ -134,6 +150,58 @@ const EXP_DIR = args.exp_dir || '/tmp/cudallm_fsr_exp'
 const ADAPTATION_SCOPE = 'workflow_adaptation'
 const INPUT_MODE = 'generate_then_optimize'
 
+// --- Backend driver wiring (P5c Stage B; off-by-default; legacy path byte-identical) ---
+const BACKEND_DIR = args.backend_dir || ''
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const SH = args.driver_shell_prefix || ''
+const PY = args.substrate_command_prefix || ''
+const LEGACY_SETUP_LANG_TOKEN = 'CUDA'
+const LEGACY_CATALOG_LANG_TOKEN = 'CUDA'
+const LEGACY_TESTS_LANG_TOKEN = 'CUDA-LLM'
+const LEGACY_SELECT_LANG_TOKEN = 'CUDA'
+const LEGACY_GENERATE_LANG_TOKEN = 'CUDA'
+const LEGACY_EVAL_LANG_TOKEN = 'CUDA'
+const LEGACY_REINFORCE_LANG_TOKEN = 'CUDA'
+const LEGACY_REPORT_LANG_TOKEN = 'CUDA-LLM FSR'
+const LEGACY_SOURCE_EXT = '.cu'
+const LEGACY_RESULT_EXT = '.json'
+const LEGACY_PURE_LANG_PHRASE = 'pure CUDA/C++ only'
+const LEGACY_FENCE_TOKEN = 'cuda'
+// L3 deferred (R2): triton driver has no `feature_catalog` idiom today; the
+// driver path falls back to LEGACY_TRITON_FEATURE_FALLBACK below. Tightening
+// is filed as a P5e/P5f L3 follow-up per P5c plan §5.2 B2 + §8 R2.
+const LEGACY_TRITON_FEATURE_FALLBACK = 'Explore the standard Triton optimization idioms appropriate to this driver (block tiling, vectorized loads, masking, reductions, autotune configs).'
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+
+function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
+function driverSh(script, cliArgs) {
+  return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
+}
+
+let DRIVER = null
+let DRIVER_LANG_FENCE = 'cuda'
+let DRIVER_IMPL_REQUIREMENTS = ''
+let DRIVER_SOURCE_EXT = LEGACY_SOURCE_EXT
+let DRIVER_FEATURE_CATALOG = ''
+let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
+
+function langToken(legacy) {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : legacy
+}
+function pureLangPhrase() {
+  return USE_DRIVER ? `pure ${DRIVER_LANG_FENCE} only` : LEGACY_PURE_LANG_PHRASE
+}
+function fenceToken() {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : LEGACY_FENCE_TOKEN
+}
+function cudallmCandidatePath(iter, sample) {
+  const ext = USE_DRIVER ? DRIVER_SOURCE_EXT : LEGACY_SOURCE_EXT
+  return `${EXP_DIR}/cudallm_iter_${iter}_sample_${sample}${ext}`
+}
+function cudallmResultPath(iter, sample) {
+  return `${EXP_DIR}/cudallm_iter_${iter}_sample_${sample}${LEGACY_RESULT_EXT}`
+}
+
 // --- State ---
 let taskSpec = ''
 let referenceCode = ''
@@ -179,7 +247,28 @@ function isBetterCandidate(candidate, incumbent) {
 // =============================================================================
 phase('Setup')
 
-const setup = await agent(`You are a CUDA kernel generation expert. Read and structure this CUDA-LLM task.
+if (USE_DRIVER) {
+  DRIVER = await agent(
+    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
+    `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
+    `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods, feature_catalog}.`,
+    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (!DRIVER || DRIVER.present === false) {
+    throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
+  }
+  if (RESOLVED_BACKEND && DRIVER.backend_id && normalizeSuitabilityValue(DRIVER.backend_id) !== RESOLVED_BACKEND) {
+    throw new Error(`backend_dir manifest backend_id="${DRIVER.backend_id}" conflicts with args.backend/language="${RESOLVED_BACKEND}".`)
+  }
+  DRIVER_LANG_FENCE = DRIVER.lang_fence || DRIVER_LANG_FENCE
+  DRIVER_IMPL_REQUIREMENTS = DRIVER.impl_requirements || ''
+  DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT
+  DRIVER_FEATURE_CATALOG = DRIVER.feature_catalog || ''
+  DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID
+  log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
+}
+
+const setup = await agent(`You are a ${langToken(LEGACY_SETUP_LANG_TOKEN)} kernel generation expert. Read and structure this CUDA-LLM task.
 
 # Inputs
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
@@ -193,7 +282,7 @@ const setup = await agent(`You are a CUDA kernel generation expert. Read and str
 1. Read problem_path and reference implementation when provided.
 2. Use problem_definition as the authoritative task specification when provided.
 3. Identify operation type, tensor shapes/dtypes, layout assumptions, and expected output.
-4. Identify hard constraints: pure CUDA/C++ only, no PyTorch fallback in generated kernel, preserve numerical tolerance.
+4. Identify hard constraints: ${pureLangPhrase()}, no PyTorch fallback in generated kernel, preserve numerical tolerance.
 5. State the evaluator JSON contract and how {kernel_path}/{result_path} are substituted.
 6. List baseline performance if available.
 
@@ -223,7 +312,17 @@ referenceCode = setup.reference_code || ''
 // =============================================================================
 phase('FeatureCatalog')
 
-const catalog = await agent(`Build a CUDA optimization feature catalog for Feature Search and Reinforcement.
+const LEGACY_FEATURE_CATALOG = `# Required feature families
+- tiling and block/grid decomposition
+- shared memory staging
+- vectorized/global memory access
+- warp-level primitives
+- loop unrolling and instruction scheduling
+- occupancy/register pressure tuning
+- fast math or CUDA intrinsics, only when tolerance allows
+- boundary handling / tail masking`
+
+const catalog = await agent(`Build a ${langToken(LEGACY_CATALOG_LANG_TOKEN)} optimization feature catalog for Feature Search and Reinforcement.
 
 # Task
 ${taskSpec.substring(0, 5000)}
@@ -236,15 +335,7 @@ ${referenceCode.substring(0, 5000)}
 # Target GPU
 ${TARGET_GPU}
 
-# Required feature families
-- tiling and block/grid decomposition
-- shared memory staging
-- vectorized/global memory access
-- warp-level primitives
-- loop unrolling and instruction scheduling
-- occupancy/register pressure tuning
-- fast math or CUDA intrinsics, only when tolerance allows
-- boundary handling / tail masking
+${USE_DRIVER ? (DRIVER_FEATURE_CATALOG || LEGACY_TRITON_FEATURE_FALLBACK) : LEGACY_FEATURE_CATALOG}
 
 # Tasks
 1. Produce feature entries with id, name, family, description, prerequisites, incompatibilities, and risk.
@@ -321,7 +412,7 @@ for (let iteration = 0; iteration < ITERATIONS; iteration++) {
 
     phase('SelectFeatures')
 
-    const selection = await agent(`Select a CUDA feature combination for the next candidate.
+    const selection = await agent(`Select a ${langToken(LEGACY_SELECT_LANG_TOKEN)} feature combination for the next candidate.
 
 # Feature catalog
 \`\`\`json
@@ -361,7 +452,7 @@ Return selected feature ids and rationale.`, {
 
     phase('GenerateKernel')
 
-    const generation = await agent(`Generate a CUDA kernel using the selected CUDA-LLM FSR features.
+    const generation = await agent(`Generate a ${langToken(LEGACY_GENERATE_LANG_TOKEN)} kernel using the selected CUDA-LLM FSR features.
 
 # Task specification
 ${taskSpec.substring(0, 8000)}
@@ -377,11 +468,11 @@ ${JSON.stringify(selection, null, 2)}
 \`\`\`
 
 # Hard constraints
-1. Return complete CUDA/C++ source, not a patch.
+1. Return complete ${USE_DRIVER ? `${DRIVER_LANG_FENCE} source` : 'CUDA/C++ source'}, not a patch.
 2. Do not call PyTorch or reference implementation from generated kernel.
 3. Preserve input/output contract and tolerances.
 4. Implement selected features concretely; if a feature is skipped, explain why.
-5. Keep code benchmarkable by benchmark_command.
+5. Keep code benchmarkable by benchmark_command.${USE_DRIVER && DRIVER_IMPL_REQUIREMENTS ? `\n6. ${DRIVER_IMPL_REQUIREMENTS}` : ''}
 
 Return candidate code and implemented features.`, {
       label: `generate-kernel-${iteration}-${sample}`,
@@ -400,10 +491,10 @@ Return candidate code and implemented features.`, {
 
     phase('Evaluate')
 
-    const evaluation = await agent(`Evaluate this CUDA candidate with compile, correctness, and latency evidence.
+    const evaluation = await agent(`Evaluate this ${langToken(LEGACY_EVAL_LANG_TOKEN)} candidate with compile, correctness, and latency evidence.
 
 # Candidate code
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${(generation.candidate_code || '').substring(0, 16000)}
 \`\`\`
 
@@ -411,8 +502,8 @@ ${(generation.candidate_code || '').substring(0, 16000)}
 ${EVAL_CMD || '(no benchmark_command provided)'}
 
 # Paths
-- kernel_path: ${EXP_DIR}/cudallm_iter_${iteration}_sample_${sample}.cu
-- result_path: ${EXP_DIR}/cudallm_iter_${iteration}_sample_${sample}.json
+- kernel_path: ${cudallmCandidatePath(iteration, sample)}
+- result_path: ${cudallmResultPath(iteration, sample)}
 
 # Tests
 \`\`\`json
@@ -453,6 +544,47 @@ Return evaluator result.`, {
       code: generation.candidate_code || '',
       eval: evaluation,
     }
+
+    if (USE_DRIVER) {
+      const kPath = cudallmCandidatePath(iteration, sample)
+      const rPath = cudallmResultPath(iteration, sample)
+      const buildOut = `${EXP_DIR}/cudallm_iter_${iteration}_sample_${sample}.artifact`
+      const profOut = `${EXP_DIR}/cudallm_iter_${iteration}_sample_${sample}.prof.native`
+      await agent(
+        `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+        `Return its stdout JSON verbatim.`,
+        { label: `driver-build-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      const runOut = await agent(
+        `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath} --result ${rPath}`)}\n` +
+        `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+        { label: `driver-run-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      await agent(
+        `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+        `Return {ok, native_path}.`,
+        { label: `driver-profile-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      const evidenceOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+        `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+        { label: `driver-to-evidence-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      const diagOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+        `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+        { label: `driver-diagnose-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      const antiCheatOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${rPath}\`.\n` +
+        `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+        { label: `driver-anti-cheat-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      candidate.driver_envelope = {
+        anti_cheat: antiCheatOut || {},
+        metrics: (evidenceOut && evidenceOut.metrics) || {},
+        vendor: (DRIVER && DRIVER.hw_vendor) || '',
+        coverage: (evidenceOut && evidenceOut.coverage) || [],
+        bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',
+        latency_ms: Number((runOut && runOut.latency_ms) || 0),
+        backend_id: DRIVER_BACKEND_ID,
+      }
+    }
+
     candidates.push(candidate)
 
     if (isBetterCandidate(candidate, bestCandidate)) {
@@ -461,7 +593,7 @@ Return evaluator result.`, {
 
     phase('Reinforce')
 
-    const reinforce = await agent(`Update CUDA feature scores from this measured candidate.
+    const reinforce = await agent(`Update ${langToken(LEGACY_REINFORCE_LANG_TOKEN)} feature scores from this measured candidate.
 
 # Candidate
 \`\`\`json
@@ -543,7 +675,7 @@ ${JSON.stringify(candidates.map(c => ({
 \`\`\`
 
 Cover:
-1. Which CUDA features were reinforced by measured evidence.
+1. Which ${langToken(LEGACY_REINFORCE_LANG_TOKEN)} features were reinforced by measured evidence.
 2. Which feature combinations failed and why.
 3. Whether the best kernel is trustworthy under diverse tests.
 4. Which feature sets should be tried next.
