@@ -15,8 +15,8 @@
       "prompt_guidance": "Lay out program_id-to-offset so the last (contiguous) axis varies fastest; use tl.make_block_ptr for clean coalesced tiles."
     },
     "shared_memory_tiling": {
-      "idiom": "tl.dot over BLOCK_M x BLOCK_K x BLOCK_N tiles",
-      "prompt_guidance": "Pick BLOCK_M/BLOCK_N/BLOCK_K so each program reuses an operand tile across the K loop; Triton stages it through shared memory for you."
+      "idiom": "BLOCK_M/BLOCK_N/BLOCK_K tl.load tiles staged through shared memory by the compiler",
+      "prompt_guidance": "Pick BLOCK_M/BLOCK_N/BLOCK_K so each program reuses an operand tile across the K loop; tile-shape choice is the lever that lets Triton stage data through shared memory for you."
     },
     "async_copy_pipeline": {
       "idiom": "num_stages software pipelining of the K loop",
@@ -35,8 +35,8 @@
       "prompt_guidance": "Mark shapes/strides tl.constexpr so the compiler folds bounds math and unrolls the inner loop."
     },
     "fast_math_intrinsics": {
-      "idiom": "tl math ops with reduced-precision accumulation flags",
-      "prompt_guidance": "Use Triton's math ops and allow_tf32 / lower-precision accumulation where tolerance permits to cut transcendental cost."
+      "idiom": "tl.math fast-path transcendentals (exp2 / libdevice)",
+      "prompt_guidance": "Use tl.math.exp2 and fast libdevice paths for transcendentals (exp/log/sin/rsqrt) instead of exact ops. Where accuracy allows, additionally set allow_tf32=True and accumulate in fp16/bf16 to cut multiply cost."
     },
     "register_tiling": {
       "idiom": "larger BLOCK_M x BLOCK_N register accumulator",
@@ -63,7 +63,7 @@
       "prompt_guidance": "Apply the activation / bias / scaling on the accumulator before tl.store so no second kernel is launched."
     },
     "launch_overhead_reduction": {
-      "idiom": "fewer programs per launch / persistent-style grid",
+      "idiom": "fewer, coarser programs per launch",
       "prompt_guidance": "Coarsen the grid so each program does more work, cutting the number of launches and their overhead."
     },
     "library_fallback_hybrid": {
