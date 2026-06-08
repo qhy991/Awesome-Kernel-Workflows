@@ -1,0 +1,48 @@
+{
+  "setup": {
+    "operator_code": "import torch\nclass Model(torch.nn.Module):\n  def forward(self, x):\n    return torch.relu(x)\n",
+    "evaluator_command": "python eval.py --kernel {kernel_path} --result {result_path}",
+    "baseline_time_ms": 0.5,
+    "hardware_info": "NVIDIA A100",
+    "initial_skill_memory": [],
+    "reference_path": "/tmp/adaexplore-fixture/reference.py"
+  },
+  "propose-1": {
+    "kernel_code": "import triton\nimport triton.language as tl\n@triton.jit\ndef relu_kernel(x_ptr, y_ptr, n, BLOCK: tl.constexpr):\n  pid = tl.program_id(0)\n  offs = pid * BLOCK + tl.arange(0, BLOCK)\n  m = offs < n\n  x = tl.load(x_ptr + offs, mask=m)\n  tl.store(y_ptr + offs, tl.where(x > 0, x, 0.0), mask=m)\n",
+    "strategy": "1D tiling with BLOCK=1024",
+    "novelty_vs_pool": "n/a (first candidate)"
+  },
+  "eval-1": {
+    "compiled": true,
+    "correct": true,
+    "speedup": 1.20,
+    "kernel_time_ms": 0.40,
+    "baseline_time_ms": 0.48,
+    "error_message": "",
+    "error_type": "",
+    "result_path": "/tmp/adaexplore-fixture/eval/step_1_result.json"
+  },
+  "revise-2": {
+    "suggestions": [
+      "Increase BLOCK from 1024 to 2048 to improve vectorization.",
+      "Mark x_ptr as restrict to allow compiler aliasing optimization."
+    ]
+  },
+  "tune-2": {
+    "kernel_code": "import triton\nimport triton.language as tl\n@triton.jit\ndef relu_kernel(x_ptr, y_ptr, n, BLOCK: tl.constexpr):\n  pid = tl.program_id(0)\n  offs = pid * BLOCK + tl.arange(0, BLOCK)\n  m = offs < n\n  x = tl.load(x_ptr + offs, mask=m)\n  tl.store(y_ptr + offs, tl.where(x > 0, x, 0.0), mask=m)\n# BLOCK bumped to 2048 by tuner\n",
+    "changes_applied": [
+      "Bumped BLOCK to 2048"
+    ]
+  },
+  "eval-2": {
+    "compiled": true,
+    "correct": true,
+    "speedup": 1.35,
+    "kernel_time_ms": 0.36,
+    "baseline_time_ms": 0.48,
+    "error_message": "",
+    "error_type": "",
+    "result_path": "/tmp/adaexplore-fixture/eval/step_2_result.json"
+  },
+  "final-report": "AdaExplore fixture report: 2 iterations, best speedup 1.35x via small-step tuner edit (BLOCK 1024 -> 2048). No failures."
+}
