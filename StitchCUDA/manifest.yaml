@@ -1,0 +1,265 @@
+# =============================================================================
+# StitchCUDA Manifest — Three-agent orchestration with adaptive replanning
+# =============================================================================
+# Source: arXiv:2603.02637 "StitchCUDA: ..."
+# =============================================================================
+
+schema_version: "1.1"
+
+backend:
+  portability: clean
+  matrix_eligible: true
+  method_supported_backends: any
+  supported: [cuda, triton]
+  default: cuda
+
+source:
+  paper_title: "StitchCUDA: Three-agent CUDA kernel synthesis with adaptive replanning"
+  paper_url: "https://arxiv.org/abs/2603.02637"
+  paper_venue: "arXiv 2026"
+  repo_url: ""
+  commit_or_tag: ""
+  license: ""
+  notes: >
+    StitchCUDA proposes a Planner/Coder/Verifier orchestration with adaptive
+    replanning triggered by consecutive compile/correctness failures or
+    performance stagnation. The orchestration topology is backend-agnostic;
+    only the KernelBench harness wiring is CUDA-specific (intersectional
+    guard fires when kernelbench_config.benchmark_suite is set on a
+    non-CUDA driver).
+
+workflow:
+  name: "stitchcuda-kernel-optimization"
+  description: "Three-agent orchestration for CUDA kernel synthesis with adaptive replanning"
+  when_to_use: >
+    Use for generating optimized kernels via Planner-Coder-Verifier
+    orchestration with adaptive replanning when consecutive failures or
+    performance stagnation are detected.
+  output_filename: "stitchcuda-kernel-optimization.js"
+  directory: "StitchCUDA/"
+
+method:
+  category: "iterative_self_improving"
+  core_insight: >
+    Three specialized agents (Planner, Coder, Verifier) orchestrated with
+    adaptive replanning produce higher-quality kernels than monolithic
+    iterative prompting. Failure-triggered replanning escapes local optima.
+  feedback_signal:
+    type: "throughput_delta"
+    description: "Verifier-measured GFLOPS / speedup over baseline"
+    tool: "custom_bench"
+    higher_is_better: true
+
+topology:
+  type: "iterative"
+  iterative:
+    iterations_arg: "max_attempts"
+    convergence_condition: "Speedup target reached or max_attempts exhausted"
+    state_variables:
+      - name: "currentPlan"
+        type: "object"
+        initial_value: "null"
+        description: "Latest plan from the Planner agent"
+      - name: "currentCode"
+        type: "object"
+        initial_value: "null"
+        description: "Latest kernel code from the Coder agent"
+      - name: "bestKernel"
+        type: "object"
+        initial_value: "null"
+        description: "Best verified kernel observed so far"
+      - name: "bestPerformance"
+        type: "number"
+        initial_value: "0"
+        description: "Best measured GFLOPS"
+      - name: "consecutiveCompileFailures"
+        type: "number"
+        initial_value: "0"
+        description: "Counter for replan trigger"
+      - name: "consecutiveCorrectnessFailures"
+        type: "number"
+        initial_value: "0"
+        description: "Counter for replan trigger"
+      - name: "performanceHistory"
+        type: "array"
+        initial_value: "[]"
+        description: "Per-attempt GFLOPS for stagnation detection"
+
+phases:
+  - name: "Setup"
+    detail: "Initialize StitchCUDA environment and orchestrator"
+    position: "preamble"
+    agents:
+      - label: "Setup StitchCUDA"
+        description: "Configure target architecture, KernelBench harness, replan heuristics"
+        parallelism: "single"
+        input_variables: ["args.language", "args.problem_type"]
+        output_schema:
+          type: "object"
+          properties:
+            cuda_version: { type: "string" }
+            target_architecture: { type: "string" }
+            kernel_spec: { type: "object" }
+            kernelbench_config: { type: "object" }
+            replan_heuristics: { type: "object" }
+            max_attempts: { type: "integer" }
+          required: ["cuda_version", "target_architecture", "kernel_spec"]
+
+  - name: "Replan"
+    detail: "Adaptive replanning when consecutive failures or stagnation cross threshold"
+    position: "loop_body"
+    agents:
+      - label: "Replan"
+        description: "Diagnose failure mode and propose alternative approach"
+        parallelism: "single"
+        input_variables: ["consecutiveCompileFailures", "consecutiveCorrectnessFailures", "performanceHistory"]
+        output_schema:
+          type: "object"
+          properties:
+            diagnosis: { type: "string" }
+            alternative_approach: { type: "string" }
+            new_plan_summary: { type: "string" }
+          required: ["diagnosis", "alternative_approach", "new_plan_summary"]
+
+  - name: "Plan"
+    detail: "Planner agent generates optimization plan"
+    position: "loop_body"
+    agents:
+      - label: "Plan attempt {attempt}"
+        description: "Generate high-level optimization plan"
+        parallelism: "single"
+        input_variables: ["kernelSpec", "setupResult.target_architecture"]
+        output_schema:
+          type: "object"
+          properties:
+            plan_summary: { type: "string" }
+            key_strategies: { type: "array", items: { type: "string" } }
+            implementation_steps: { type: "array" }
+          required: ["attempt", "plan_summary", "key_strategies", "implementation_steps"]
+
+  - name: "Code"
+    detail: "Coder agent generates kernel implementation"
+    position: "loop_body"
+    agents:
+      - label: "Code attempt {attempt}"
+        description: "Generate complete kernel source from plan"
+        parallelism: "single"
+        input_variables: ["currentPlan"]
+        output_schema:
+          type: "object"
+          properties:
+            kernel_code: { type: "string" }
+            kernel_name: { type: "string" }
+          required: ["attempt", "kernel_code", "kernel_name"]
+
+  - name: "Verify"
+    detail: "Verifier agent checks compile/correctness/performance"
+    position: "loop_body"
+    agents:
+      - label: "Verify attempt {attempt}"
+        description: "Compile, correctness-test, and benchmark the candidate"
+        parallelism: "single"
+        input_variables: ["codeResult.kernel_code", "setupResult.target_architecture", "kernelSpec.baseline_gflops"]
+        output_schema:
+          type: "object"
+          properties:
+            compilation_success: { type: "boolean" }
+            correctness_passed: { type: "boolean" }
+            performance_gflops: { type: "number" }
+            verification_passed: { type: "boolean" }
+          required: ["attempt", "compilation_success", "correctness_passed", "verification_passed"]
+
+  - name: "Report"
+    detail: "Generate synthesis report"
+    position: "epilogue"
+    agents:
+      - label: "Generate report"
+        description: "Summarize orchestration, replanning events, performance progression"
+        parallelism: "single"
+        input_variables: ["bestKernel", "performanceHistory"]
+        output_schema:
+          type: "object"
+          properties:
+            summary: { type: "string" }
+            best_gflops: { type: "number" }
+          required: ["summary", "best_gflops"]
+
+plan_angles:
+  - name: "memory_hierarchy"
+    description: "Search shared memory tiling, coalescing, vectorized loads."
+    trigger: "Memory bandwidth dominates"
+  - name: "compute_throughput"
+    description: "Search instruction scheduling, warp primitives, intrinsics."
+    trigger: "Compute-bound kernel"
+  - name: "adaptive_replan"
+    description: "When current strategy plateaus, replanner proposes alternative algorithm."
+    trigger: "Consecutive failures or performance stagnation"
+
+args:
+  required:
+    - name: "problem_type"
+      type: "string"
+      description: "Problem-type string for suitability check (e.g. 'cuda-kernel-generation')"
+      example: "cuda-kernel-generation"
+  optional:
+    - name: "language"
+      type: "string"
+      default: "''"
+      description: "Language/backend axis hint; aliases supported via normalize."
+      example: "cuda"
+    - name: "backend"
+      type: "string"
+      default: "''"
+      description: "Driver-axis backend identifier; requires backend_dir when set."
+      example: "cuda"
+    - name: "backend_dir"
+      type: "string"
+      default: "''"
+      description: "Path to a backend driver under _substrate/backends/. Enables driver path."
+      example: "_substrate/backends/cuda"
+    - name: "workspace"
+      type: "string"
+      default: "'/tmp/stitchcuda'"
+      description: "Directory for per-attempt generated kernels."
+      example: "/tmp/stitchcuda"
+    - name: "kernelbench_config"
+      type: "object"
+      default: "{}"
+      description: "KernelBench-specific harness config; intersectional-guarded against non-CUDA drivers."
+      example: "{benchmark_suite: 'level1'}"
+
+correctness:
+  criteria:
+    - "Compilation succeeds"
+    - "Correctness check passes"
+    - "Performance is measured by Verifier"
+  check_type: "runtime_comparison"
+  reference_output: "PyTorch reference / KernelBench baseline"
+
+return_fields:
+  - name: "best_gflops"
+    type: "number"
+    description: "Best measured GFLOPS"
+    required: true
+  - name: "speedup"
+    type: "number"
+    description: "Best speedup over baseline"
+    required: true
+  - name: "best_attempt"
+    type: "number"
+    description: "Attempt number of best kernel"
+    required: true
+  - name: "final_kernel"
+    type: "string"
+    description: "Best kernel source code"
+    required: true
+  - name: "performance_trajectory"
+    type: "array"
+    description: "Per-attempt GFLOPS history"
+    required: true
+
+template:
+  base: "iterative-loop"
+  customizations:
+    - "adaptive_replanning"
+    - "early_termination"

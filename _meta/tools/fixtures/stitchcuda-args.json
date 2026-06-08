@@ -1,0 +1,5 @@
+{
+  "language": "cuda",
+  "problem_type": "cuda-kernel-generation",
+  "workspace": "/tmp/stitchcuda-fixture"
+}

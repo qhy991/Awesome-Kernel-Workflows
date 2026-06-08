@@ -1,0 +1,7 @@
+{
+  "language": "triton",
+  "problem_type": "kernel-generation",
+  "workspace": "/tmp/stitchcuda-fixture",
+  "backend_dir": "_substrate/backends/triton",
+  "backend": "triton"
+}

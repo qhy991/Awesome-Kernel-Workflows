@@ -1,0 +1,15 @@
+{
+  "kernel_path": "/tmp/kda-fixture/baseline.cu",
+  "task_name": "kda-fixture-task",
+  "objective": "Optimize Q4_0 GEMM kernel for H100",
+  "correctness_requirements": "Output must match baseline within 1e-5 relative error",
+  "performance_target": "Achieve < 0.5ms on M=4096, N=4096, K=4096",
+  "allowed_approaches": "CUDA C++, shared memory tiling, warp-level primitives",
+  "test_command": "python /tmp/kda-fixture/test.py {kernel_path} {result_path}",
+  "benchmark_command": "python /tmp/kda-fixture/bench.py {kernel_path} {result_path}",
+  "promotion_criteria": "Speedup >= 1.2x over baseline AND passes validation",
+  "max_candidates": 2,
+  "language": "cuda",
+  "target_gpu": "H100",
+  "seed_candidates": 3
+}
