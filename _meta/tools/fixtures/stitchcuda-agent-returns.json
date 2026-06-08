@@ -1,0 +1,115 @@
+{
+  "Setup StitchCUDA": {
+    "cuda_version": "12.3",
+    "target_architecture": "sm_90",
+    "pytorch_available": true,
+    "kernel_spec": {
+      "operation": "gemm",
+      "shapes": "[M=4096,N=4096,K=4096]",
+      "dtypes": ["float16"],
+      "baseline_gflops": 100.0
+    },
+    "kernelbench_config": {
+      "metrics": ["correctness", "performance"]
+    },
+    "replan_heuristics": {
+      "compile_failure_threshold": 1,
+      "correctness_failure_threshold": 1,
+      "stagnation_iterations": 3
+    },
+    "max_attempts": 2
+  },
+  "Plan attempt 1": {
+    "attempt": 1,
+    "plan_summary": "tile + shared memory baseline",
+    "optimization_approach": "balanced",
+    "key_strategies": ["tile-128x128", "shared-memory-staging"],
+    "implementation_steps": [
+      {"step": 1, "description": "load tiles to shared memory"},
+      {"step": 2, "description": "accumulate fragments"}
+    ],
+    "threading_config": {
+      "block_size": "128x128",
+      "grid_size": "32x32",
+      "threads_per_block": 256
+    },
+    "memory_strategy": "shared memory tiling",
+    "expected_bottleneck": "memory"
+  },
+  "Code attempt 1": {
+    "attempt": 1,
+    "kernel_code": "__global__ void gemm_kernel(const half* A, const half* B, float* C, int M, int N, int K) {}\n",
+    "host_code": "void launch_gemm(...) {}\n",
+    "kernel_name": "gemm_kernel",
+    "implementation_notes": "baseline tile"
+  },
+  "Verify attempt 1": {
+    "attempt": 1,
+    "compilation_success": false,
+    "compilation_errors": ["undeclared identifier 'mma_m16n16k16'"],
+    "resource_usage": {"registers_per_thread": 0, "shared_memory_bytes": 0},
+    "correctness_passed": false,
+    "correctness_errors": [],
+    "max_error": 0.0,
+    "performance_gflops": 0.0,
+    "execution_time_ms": 0.0,
+    "speedup_vs_baseline": 0.0,
+    "kernelbench_score": null,
+    "verification_passed": false,
+    "failure_reason": "compilation"
+  },
+  "Replan": {
+    "diagnosis": "compilation failure on mma intrinsic; missing arch flag",
+    "alternative_approach": "fall back to non-mma WMMA path with explicit fragments",
+    "key_changes": ["drop mma_m16n16k16", "use wmma fragments"],
+    "new_plan_summary": "WMMA-fragment GEMM"
+  },
+  "Plan attempt 2": {
+    "attempt": 2,
+    "plan_summary": "WMMA fragment GEMM",
+    "optimization_approach": "compute-bound",
+    "key_strategies": ["wmma-fragments", "double-buffering"],
+    "implementation_steps": [
+      {"step": 1, "description": "stage A,B into shared memory"},
+      {"step": 2, "description": "wmma::load + wmma::mma_sync"}
+    ],
+    "threading_config": {
+      "block_size": "128x128",
+      "grid_size": "32x32",
+      "threads_per_block": 128
+    },
+    "memory_strategy": "shared memory + double buffering",
+    "expected_bottleneck": "compute"
+  },
+  "Code attempt 2": {
+    "attempt": 2,
+    "kernel_code": "__global__ void gemm_wmma(const half* A, const half* B, float* C, int M, int N, int K) { /* wmma */ }\n",
+    "host_code": "void launch_gemm_wmma(...) {}\n",
+    "kernel_name": "gemm_wmma",
+    "implementation_notes": "wmma fragments + double buffer"
+  },
+  "Verify attempt 2": {
+    "attempt": 2,
+    "compilation_success": true,
+    "compilation_errors": [],
+    "resource_usage": {"registers_per_thread": 64, "shared_memory_bytes": 32768},
+    "correctness_passed": true,
+    "correctness_errors": [],
+    "max_error": 0.0001,
+    "performance_gflops": 320.0,
+    "execution_time_ms": 0.42,
+    "speedup_vs_baseline": 3.2,
+    "kernelbench_score": 0.95,
+    "verification_passed": true,
+    "failure_reason": null
+  },
+  "Generate report": {
+    "summary": "Best: WMMA-fragment GEMM at 320 GFLOPS (3.2x baseline)",
+    "total_attempts": 1,
+    "successful_attempts": 1,
+    "best_gflops": 320.0,
+    "speedup": 3.2,
+    "best_attempt": 2,
+    "report_path": "/tmp/stitchcuda-fixture/report.md"
+  }
+}
