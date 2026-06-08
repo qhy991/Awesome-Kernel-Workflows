@@ -304,7 +304,7 @@ if (USE_DRIVER) {
 }
 
 // Read problem from file or use description directly
-const setupResult = await agent(`You are a Triton kernel synthesis expert. Analyze the problem and produce a structured description.
+const setupResult = await agent(`You are a ${langToken(LEGACY_ROUTE_LANG_TOKEN)} kernel synthesis expert. Analyze the problem and produce a structured description.
 
 # Problem Source
 ${PROBLEM_PATH ? `File: ${PROBLEM_PATH} — read and extract the problem description from the Python code.` : ''}
@@ -312,7 +312,7 @@ ${PROBLEM_DESC ? `Description: ${PROBLEM_DESC}` : ''}
 
 # Instructions
 1. If a file path is given, read the file and extract the PyTorch module/problem definition
-2. Produce a clear, detailed problem description suitable for Triton kernel generation
+2. Produce a clear, detailed problem description suitable for ${langToken(LEGACY_ROUTE_LANG_TOKEN)} kernel generation
 3. Identify: input tensors (shapes, dtypes), operations, expected output shape/dtype
 4. Note any special requirements (numerical precision, edge cases, memory layout)
 
@@ -342,7 +342,7 @@ problemDescription = setupResult.problem_definition
 log(`Problem parsed: ${setupResult.operations.length} ops detected`)
 
 // Generate test harness
-const testResult = await agent(`You are a Triton kernel test engineer. Generate a Python test harness for the following problem.
+const testResult = await agent(`You are a ${langToken(LEGACY_HARNESS_LANG_TOKEN)} kernel test engineer. Generate a Python test harness for the following problem.
 
 # Problem Description
 ${problemDescription}
@@ -502,7 +502,7 @@ for (const target of synthesisTargets) {
   for (let seedIdx = 0; seedIdx < MAX_SEEDS; seedIdx++) {
     const temperature = TEMPERATURE_BASE + (seedIdx * 0.1)
     seedPromises.push(() =>
-      agent(`You are an expert Triton kernel developer. Generate a complete, working Triton kernel.
+      agent(`You are an expert ${langToken(LEGACY_SYNTH_LANG_TOKEN)} kernel developer. Generate a complete, working ${langToken(LEGACY_SYNTH_LANG_TOKEN)} kernel.
 
 # Problem
 ${target.description}
@@ -587,7 +587,7 @@ phase('Verify')
 
 if (VERIFY && validCandidates.length > 0) {
   const verifyPromises = validCandidates.map(candidate => () =>
-    agent(`You are a kernel verification engineer. Execute the test harness against this Triton kernel.
+    agent(`You are a kernel verification engineer. Execute the test harness against this ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel.
 
 # Kernel Code
 \`\`\`python
@@ -600,9 +600,11 @@ ${testCode.substring(0, 3000)}
 \`\`\`
 
 # Instructions
-1. Write the kernel code to a file named kernel.py
-2. Write the test harness to a file named test_kernel.py
-3. Execute the generated/user-provided test harness command for this workspace; do not assume a fixed interpreter or filename.
+1. Write the kernel code to a file named ${kernelFilename()}
+2. Write the test harness to a file named ${testFilename()}
+3. ${USE_DRIVER
+  ? driverSh('run.sh', `--kernel ${kernelFilename()} --test ${testFilename()}`)
+  : 'Execute the generated/user-provided test harness command for this workspace; do not assume a fixed interpreter or filename.'}
 4. Capture stdout, stderr, and exit code
 5. If exit code is 0 and output contains "PASS", the kernel is verified
 6. If exit code is non-zero or output contains "FAIL", report the error
@@ -698,7 +700,7 @@ while (failedCandidates.length > 0 && currentRound < MAX_ROUNDS && verifiedKerne
   log(`Refinement round ${currentRound}/${MAX_ROUNDS} — ${failedCandidates.length} candidates to fix`)
 
   const refinePromises = failedCandidates.map(candidate => () =>
-    agent(`You are a Triton kernel debugging expert. Fix this failing kernel.
+    agent(`You are a ${langToken(LEGACY_REFINE_LANG_TOKEN)} kernel debugging expert. Fix this failing kernel.
 
 # Problem Description
 ${problemDescription}
@@ -793,7 +795,7 @@ Return a JSON object with:
   const toReVerify = failedCandidates.filter(c => c.status === 'pending')
   if (toReVerify.length > 0 && VERIFY) {
     const reVerifyPromises = toReVerify.map(candidate => () =>
-      agent(`Verify this refined Triton kernel against the test harness.
+      agent(`Verify this refined ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel against the test harness.
 
 # Kernel Code
 \`\`\`python
@@ -876,7 +878,7 @@ if (currentRound > 0) {
 phase('Compose')
 
 if (routingDecision.path === 'pipeline' && subgraphs.length > 1 && COMPOSE && verifiedKernels.length > 0) {
-  const composeResult = await agent(`You are a Triton kernel composition expert. Stitch these verified subgraph kernels into a single, cohesive Triton program.
+  const composeResult = await agent(`You are a ${langToken(LEGACY_COMPOSE_LANG_TOKEN)} kernel composition expert. Stitch these verified subgraph kernels into a single, cohesive ${langToken(LEGACY_COMPOSE_LANG_TOKEN)} program.
 
 # Problem Description
 ${problemDescription}
@@ -925,7 +927,7 @@ Return a JSON object with:
 
   // Verify composed kernel
   if (VERIFY) {
-    const composeVerify = await agent(`Verify this composed Triton kernel against the original problem.
+    const composeVerify = await agent(`Verify this composed ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel against the original problem.
 
 # Composed Kernel
 \`\`\`python
