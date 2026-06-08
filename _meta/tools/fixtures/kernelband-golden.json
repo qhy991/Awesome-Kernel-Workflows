@@ -1,0 +1,242 @@
+[
+  {
+    "label": "setup",
+    "phase": "Setup",
+    "prompt": "You are setting up a KernelBand optimization session.\n\n# Task\n1. Read the kernel file: /tmp/kernelband-fixture/kernel.py\n2. Create experiment directory: mkdir -p /tmp/kernelband-fixture/{candidates,profiles,logs}\n3. Record profiling evidence artifacts:\n   - feature_vector_result_path: /tmp/kernelband-fixture/features/latest.json\n   - hardware_signature_result_path: /tmp/kernelband-fixture/profiles/hardware_signature.json\n   - evidence_mode: conservative_missing_evidence\n   If evidence_mode is conservative_missing_evidence, do not claim strict KernelBand execution; mark phi, masks, and rewards as estimates.\n4. Establish baseline performance:\n   (no compile_command provided; perform static compileability review only)\n   Benchmark: python /tmp/kernelband-fixture/bench.py {kernel_path} {result_path}\n5. Run initial profiling to get hardware signature:\n   (no ncu_command/ncu_binary provided; mark hardware signature as missing evidence)\n   Extract: DRAM throughput %, L2 throughput %, SM throughput %\n5. Extract behavioral features φ(k₀):\n   - Normalized execution time T̄(k₀) (= 1.0 for baseline)\n   - Registers per thread (n_reg)\n   - Shared memory per block (n_smem)\n   - Block dimension (d_block)\n   - Occupancy (η_occ)\n\n# Target Hardware: A100\n# Operation: matmul\n# Strategies available: tiling, vectorization, fusion, pipeline, reordering, access_layout\n\nReturn the baseline metrics and hardware signature.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "kernel_code": {
+          "type": "string"
+        },
+        "baseline_latency_us": {
+          "type": "number"
+        },
+        "hardware_signature": {
+          "type": "object",
+          "properties": {
+            "dram_throughput_pct": {
+              "type": "number"
+            },
+            "l2_throughput_pct": {
+              "type": "number"
+            },
+            "sm_throughput_pct": {
+              "type": "number"
+            },
+            "dominant_bottleneck": {
+              "type": "string"
+            }
+          }
+        },
+        "behavioral_features": {
+          "type": "object",
+          "properties": {
+            "normalized_time": {
+              "type": "number"
+            },
+            "registers_per_thread": {
+              "type": "number"
+            },
+            "shared_mem_bytes": {
+              "type": "number"
+            },
+            "block_dimension": {
+              "type": "number"
+            },
+            "occupancy": {
+              "type": "number"
+            }
+          }
+        },
+        "platform_info": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "baseline_latency_us"
+      ]
+    },
+    "seq": 0
+  },
+  {
+    "label": "generate-t1-tiling",
+    "phase": "Generate",
+    "prompt": "You are the KernelBand Code Generator. Apply a specific optimization strategy to the given kernel.\n\n# Selected Action: (Cluster 0, Strategy: tiling)\n# Target Hardware: A100\n# Operation: matmul\n\n# Source Kernel (ID 0, current speedup: 1.00x):\n```\n@triton.jit\ndef matmul_kernel(): pass\n\n```\n\n# Strategy: tiling\nApply the \"tiling\" optimization strategy. Specific guidance:\n\nTILING: Restructure computation into tiles that fit in shared memory/registers.\n- Choose tile sizes that match hardware cache/register constraints\n- Ensure tiles cover the full computation without overlap or gaps\n- Consider multi-level tiling (thread block → warp → thread)\n\n\n\n\n\n\n# Constraints:\n- Preserve functional correctness (same outputs for same inputs)\n- Target the non-saturated resource (this strategy was selected because the target resource is below 75% utilization)\n- Generate a complete, compilable kernel\n\n# Bandit Context:\n- Iteration: 1/2\n- This (cluster, strategy) pair has been tried 1 times\n- Average reward so far: 0.500\n\nReturn the optimized kernel code.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "optimized_kernel": {
+          "type": "string"
+        },
+        "changes_description": {
+          "type": "string"
+        },
+        "expected_improvement": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "optimized_kernel"
+      ]
+    },
+    "seq": 1
+  },
+  {
+    "label": "eval-t1",
+    "phase": "Evaluate",
+    "prompt": "You are the KernelBand Evaluation module. Verify correctness and measure performance.\n\n# Generated Kernel:\n```\n@triton.jit\ndef matmul_kernel_v1(): pass\n\n```\n\n# Evaluation Steps (Two-stage verification from Section 4.1):\n1. **Call Accuracy**: Compile and run — check for runtime errors\n   (compile the generated kernel)\n2. **Execution Accuracy**: Verify numerical equivalence via torch.allclose\n   Compare outputs against reference (CPU ATen) across 10+ input shapes\n3. **Performance Measurement**: Benchmark across dominant input shapes\n   python /tmp/kernelband-fixture/bench.py {kernel_path} {result_path}\n   Report latency in microseconds\n4. **Feature Extraction**: Extract behavioral features φ(k'):\n   - Normalized time: T̄(k') = latency(k') / 1000 (baseline latency)\n   - Registers per thread, shared memory, block dim, occupancy\n   \n\n# Baseline latency: 1000 μs\n# Previous best: N/A\n\nReturn evaluation results.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compiled": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "boolean"
+        },
+        "latency_us": {
+          "type": "number"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "behavioral_features": {
+          "type": "object",
+          "properties": {
+            "normalized_time": {
+              "type": "number"
+            },
+            "registers_per_thread": {
+              "type": "number"
+            },
+            "shared_mem_bytes": {
+              "type": "number"
+            },
+            "block_dimension": {
+              "type": "number"
+            },
+            "occupancy": {
+              "type": "number"
+            }
+          }
+        },
+        "hw_signature": {
+          "type": "object",
+          "properties": {
+            "dram_throughput_pct": {
+              "type": "number"
+            },
+            "l2_throughput_pct": {
+              "type": "number"
+            },
+            "sm_throughput_pct": {
+              "type": "number"
+            }
+          }
+        },
+        "error_details": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "compiled",
+        "correct"
+      ]
+    },
+    "seq": 2
+  },
+  {
+    "label": "generate-t2-vectorization",
+    "phase": "Generate",
+    "prompt": "You are the KernelBand Code Generator. Apply a specific optimization strategy to the given kernel.\n\n# Selected Action: (Cluster 0, Strategy: vectorization)\n# Target Hardware: A100\n# Operation: matmul\n\n# Source Kernel (ID 1, current speedup: 1.25x):\n```\n@triton.jit\ndef matmul_kernel_v1(): pass\n\n```\n\n# Strategy: vectorization\nApply the \"vectorization\" optimization strategy. Specific guidance:\n\n\nVECTORIZATION: Increase memory throughput via wider loads/stores.\n- Use vector types (float4, int4) for coalesced memory access\n- Ensure alignment constraints are met\n- Batch independent computations into vector operations\n\n\n\n\n\n# Constraints:\n- Preserve functional correctness (same outputs for same inputs)\n- Target the non-saturated resource (this strategy was selected because the target resource is below 75% utilization)\n- Generate a complete, compilable kernel\n\n# Bandit Context:\n- Iteration: 2/2\n- This (cluster, strategy) pair has been tried 1 times\n- Average reward so far: 0.500\n\nReturn the optimized kernel code.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "optimized_kernel": {
+          "type": "string"
+        },
+        "changes_description": {
+          "type": "string"
+        },
+        "expected_improvement": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "optimized_kernel"
+      ]
+    },
+    "seq": 3
+  },
+  {
+    "label": "eval-t2",
+    "phase": "Evaluate",
+    "prompt": "You are the KernelBand Evaluation module. Verify correctness and measure performance.\n\n# Generated Kernel:\n```\n@triton.jit\ndef matmul_kernel_v2(): pass\n\n```\n\n# Evaluation Steps (Two-stage verification from Section 4.1):\n1. **Call Accuracy**: Compile and run — check for runtime errors\n   (compile the generated kernel)\n2. **Execution Accuracy**: Verify numerical equivalence via torch.allclose\n   Compare outputs against reference (CPU ATen) across 10+ input shapes\n3. **Performance Measurement**: Benchmark across dominant input shapes\n   python /tmp/kernelband-fixture/bench.py {kernel_path} {result_path}\n   Report latency in microseconds\n4. **Feature Extraction**: Extract behavioral features φ(k'):\n   - Normalized time: T̄(k') = latency(k') / 1000 (baseline latency)\n   - Registers per thread, shared memory, block dim, occupancy\n   \n\n# Baseline latency: 1000 μs\n# Previous best: 800.0 μs (1.25x)\n\nReturn evaluation results.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compiled": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "boolean"
+        },
+        "latency_us": {
+          "type": "number"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "behavioral_features": {
+          "type": "object",
+          "properties": {
+            "normalized_time": {
+              "type": "number"
+            },
+            "registers_per_thread": {
+              "type": "number"
+            },
+            "shared_mem_bytes": {
+              "type": "number"
+            },
+            "block_dimension": {
+              "type": "number"
+            },
+            "occupancy": {
+              "type": "number"
+            }
+          }
+        },
+        "hw_signature": {
+          "type": "object",
+          "properties": {
+            "dram_throughput_pct": {
+              "type": "number"
+            },
+            "l2_throughput_pct": {
+              "type": "number"
+            },
+            "sm_throughput_pct": {
+              "type": "number"
+            }
+          }
+        },
+        "error_details": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "compiled",
+        "correct"
+      ]
+    },
+    "seq": 4
+  },
+  {
+    "label": "report",
+    "phase": "Report",
+    "prompt": "Write a KernelBand optimization report.\n\n# KernelBand Results\n- Target: A100\n- Operation: matmul\n- Iterations: 2\n- Clusters: 3 (re-cluster period: 10)\n- Evidence mode: conservative_missing_evidence\n- Feature vector artifact: /tmp/kernelband-fixture/features/latest.json\n- Hardware signature artifact: /tmp/kernelband-fixture/profiles/hardware_signature.json\n\n# Performance\n- Baseline: 1000 μs\n- Best: 700.0 μs\n- Best Speedup: 1.43x\n- Cumulative Reward: 0.325\n- Candidate Pool Size: 3\n\n# Strategy Statistics:\n- tiling: 1 attempts, 1 successes, avg_reward=0.200\n- vectorization: 1 attempts, 1 successes, avg_reward=0.125\n- fusion: 0 attempts, 0 successes, avg_reward=0.000\n- pipeline: 0 attempts, 0 successes, avg_reward=0.000\n- reordering: 0 attempts, 0 successes, avg_reward=0.000\n- access_layout: 0 attempts, 0 successes, avg_reward=0.000\n\n# Bandit State (final μ̂ and N):\n  0_tiling: μ̂=0.350, N=2, mask=1\n  0_vectorization: μ̂=0.313, N=2, mask=1\n  0_fusion: μ̂=0.500, N=1, mask=1\n  0_pipeline: μ̂=0.500, N=1, mask=1\n  0_reordering: μ̂=0.500, N=1, mask=1\n  0_access_layout: μ̂=0.500, N=1, mask=1\n  1_tiling: μ̂=0.500, N=1, mask=1\n  1_vectorization: μ̂=0.500, N=1, mask=1\n  1_fusion: μ̂=0.500, N=1, mask=1\n  1_pipeline: μ̂=0.500, N=1, mask=1\n  1_reordering: μ̂=0.500, N=1, mask=1\n  1_access_layout: μ̂=0.500, N=1, mask=1\n  2_tiling: μ̂=0.500, N=1, mask=1\n  2_vectorization: μ̂=0.500, N=1, mask=1\n  2_fusion: μ̂=0.500, N=1, mask=1\n  2_pipeline: μ̂=0.500, N=1, mask=1\n  2_reordering: μ̂=0.500, N=1, mask=1\n  2_access_layout: μ̂=0.500, N=1, mask=1\n\n# Iteration Log (last 10):\n  t=1: tiling@C0 → 1.25x (r=0.2000)\n  t=2: vectorization@C0 → 1.43x (r=0.1250)\n\nAnalyze:\n1. Which strategies were most/least effective? Why (relate to hardware bottleneck)?\n2. Did the bandit converge to exploiting the best strategy or keep exploring?\n3. Was hardware-aware pruning effective? How many invalid strategies were avoided?\n4. Clustering effectiveness: did kernels in the same cluster respond similarly?\n5. Recommendations for further optimization (more iterations, different K, etc.)",
+    "seq": 5
+  }
+]
