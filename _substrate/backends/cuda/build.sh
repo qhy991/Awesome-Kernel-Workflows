@@ -6,7 +6,19 @@
 set -u
 
 emit() { printf '%s\n' "$1"; }   # one-line JSON on stdout
-die3() { emit "{\"ok\":false,\"compiled\":false,\"artifact\":null,\"error\":\"$1\"}"; exit 3; }
+
+# JSON-escape helper: returns a JSON string literal (with surrounding quotes).
+json_escape() {
+  python3 - "$1" <<'PY'
+import json, sys
+print(json.dumps(sys.argv[1]))
+PY
+}
+
+die3() {
+  local _msg; _msg="$(json_escape "$1")"
+  emit "{\"ok\":false,\"compiled\":false,\"artifact\":null,\"error\":$_msg}"; exit 3
+}
 
 SOURCE="" OUT="" ARCH="sm_80" BUILD_CMD="" EXTRA=""
 while [ $# -gt 0 ]; do
@@ -24,14 +36,6 @@ done
 [ -n "$OUT" ]    || die3 "missing --out"
 [ -f "$SOURCE" ] || die3 "source not found: $SOURCE"
 
-# JSON-escape helper for the stderr tail (escape backslash, quote, strip control chars).
-json_escape() {
-  python3 - "$1" <<'PY'
-import json, sys
-print(json.dumps(sys.argv[1]))
-PY
-}
-
 # Resolve the build command. Default: nvcc -shared -Xcompiler -fPIC -lineinfo -arch=... -o OUT SOURCE
 if [ -n "$BUILD_CMD" ]; then
   # template tokens: {source} {out} {arch} {extra}
@@ -41,21 +45,29 @@ if [ -n "$BUILD_CMD" ]; then
   CMD="${CMD//\{extra\}/$EXTRA}"
   # -lineinfo must be present for ncu attribution; inject if the template omitted it.
   case "$CMD" in *-lineinfo*) : ;; *) CMD="$CMD -lineinfo" ;; esac
+
+  # If a template was given, verify its leading tool exists.
+  TOOL="${CMD%% *}"
+  command -v "$TOOL" >/dev/null 2>&1 || die3 "build tool not found: $TOOL"
+
+  # Wall-time the compile (ms). Use python3 for portable millisecond timing.
+  START="$(python3 -c 'import time;print(int(time.time()*1000))')"
+  STDERR_FILE="$(mktemp)"
+  # shellcheck disable=SC2086
+  bash -c "$CMD" 2>"$STDERR_FILE"
+  RC=$?
 else
   command -v nvcc >/dev/null 2>&1 || die3 "nvcc not found on PATH"
-  CMD="nvcc -shared -Xcompiler -fPIC -lineinfo -arch=$ARCH $EXTRA -o $OUT $SOURCE"
+
+  # Wall-time the compile (ms). Use python3 for portable millisecond timing.
+  START="$(python3 -c 'import time;print(int(time.time()*1000))')"
+  STDERR_FILE="$(mktemp)"
+  # $EXTRA is intentionally unquoted: it may expand to multiple flags.
+  # shellcheck disable=SC2086
+  nvcc -shared -Xcompiler -fPIC -lineinfo -arch="$ARCH" $EXTRA -o "$OUT" "$SOURCE" 2>"$STDERR_FILE"
+  RC=$?
 fi
 
-# If a template was given, still verify its leading tool exists.
-TOOL="${CMD%% *}"
-command -v "$TOOL" >/dev/null 2>&1 || die3 "build tool not found: $TOOL"
-
-# Wall-time the compile (ms). Use python3 for portable millisecond timing.
-START="$(python3 -c 'import time;print(int(time.time()*1000))')"
-STDERR_FILE="$(mktemp)"
-# shellcheck disable=SC2086
-eval $CMD 2>"$STDERR_FILE"
-RC=$?
 END="$(python3 -c 'import time;print(int(time.time()*1000))')"
 BUILD_MS=$(( END - START ))
 
@@ -66,7 +78,8 @@ cat "$STDERR_FILE" 1>&2
 rm -f "$STDERR_FILE"
 
 if [ "$RC" -eq 0 ] && [ -f "$OUT" ]; then
-  emit "{\"ok\":true,\"compiled\":true,\"artifact\":\"$OUT\",\"build_latency_ms\":$BUILD_MS,\"stderr_tail\":\"\"}"
+  ESC_OUT="$(json_escape "$OUT")"
+  emit "{\"ok\":true,\"compiled\":true,\"artifact\":$ESC_OUT,\"build_latency_ms\":$BUILD_MS,\"stderr_tail\":\"\"}"
   exit 0
 else
   emit "{\"ok\":false,\"compiled\":false,\"artifact\":null,\"build_latency_ms\":$BUILD_MS,\"stderr_tail\":$ESC_TAIL}"
