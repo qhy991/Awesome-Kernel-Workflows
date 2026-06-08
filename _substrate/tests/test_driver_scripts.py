@@ -335,3 +335,86 @@ class TestTritonL0(unittest.TestCase):
             self.assertEqual(p['metrics']['_vendor'], 'nvidia', p)
             self.assertAlmostEqual(p['metrics']['occupancy'], 0.51, places=4)
             self.assertAlmostEqual(p['metrics']['dram_pct'], 62.0, places=3)  # read + write
+
+
+class TestTritonScripts(unittest.TestCase):
+    BUILD = os.path.join(TRITON, 'build.sh')
+    RUN = os.path.join(TRITON, 'run.sh')
+    PROFILE = os.path.join(TRITON, 'profile.sh')
+
+    def test_all_three_exist_executable_syntax(self):
+        for s in (self.BUILD, self.RUN, self.PROFILE):
+            self.assertTrue(os.path.isfile(s), f"{s} missing")
+            self.assertTrue(os.access(s, os.X_OK), f"{s} not executable")
+            code, _, err = _run(['bash', '-n', s])
+            self.assertEqual(code, 0, msg=f"{s}: {err}")
+
+    def test_build_missing_args_exit_3(self):
+        code, sout, _ = _run([self.BUILD, '--source', '/k.py'])  # no --out
+        self.assertEqual(code, 3)
+        self.assertEqual(_json_or_raw(sout).get('ok'), False)
+
+    def test_build_envelope_keys_present_on_triton_absent(self):
+        # triton is absent on macOS → build.sh's warmup must still print the envelope.
+        with tempfile.TemporaryDirectory() as td:
+            src = os.path.join(td, 'kernel.py'); out = os.path.join(td, 'art.json')
+            with open(src, 'w') as fh:
+                fh.write("# triton kernel\n")
+            code, sout, serr = _run([self.BUILD, '--source', src, '--out', out])
+            p = _json_or_raw(sout)
+            self.assertIn('ok', p); self.assertIn('compiled', p)
+            self.assertIn('build_latency_ms', p); self.assertIn('stderr_tail', p)
+            # triton absent ⇒ not compiled, op-error exit 2
+            self.assertEqual(p['compiled'], False, p)
+            self.assertEqual(code, 2, msg=f"out={sout} err={serr}")
+
+    def test_run_missing_artifact_full_key_set_exit_3(self):
+        with tempfile.TemporaryDirectory() as td:
+            prob = os.path.join(td, 'p.json')
+            with open(prob, 'w') as fh:
+                json.dump({"op": "add"}, fh)
+            out = os.path.join(td, 'r.json')
+            code, sout, _ = _run([self.RUN, '--artifact', '/nope.json',
+                                  '--problem', prob, '--out', out])
+            self.assertEqual(code, 3)
+            p = _json_or_raw(sout)
+            for k in ('compiled', 'correct', 'candidate_latency_ms', 'eager_latency_ms',
+                      'compile_latency_ms', 'claimed_speedup'):
+                self.assertIn(k, p, f"missing {k}: {p}")
+            self.assertEqual(p['correct'], False)
+            self.assertLessEqual(p['claimed_speedup'], 1.0)
+
+    def test_profile_ok_with_fake_ncu_pointer(self):
+        with tempfile.TemporaryDirectory() as td:
+            _write_exec(os.path.join(td, 'ncu'), FAKE_NCU_CSV)
+            art = os.path.join(td, 'art.json')
+            with open(art, 'w') as fh:
+                fh.write("{}")
+            prob = os.path.join(td, 'p.json')
+            with open(prob, 'w') as fh:
+                json.dump({"op": "add"}, fh)
+            out = os.path.join(td, 'n.csv')
+            code, sout, serr = _run([self.PROFILE, '--artifact', art, '--problem', prob,
+                                     '--out', out, '--kernel-name', 'add_kernel'],
+                                    env=_path_env(td))
+            self.assertEqual(code, 0, msg=f"out={sout} err={serr}")
+            p = _json_or_raw(sout)
+            self.assertEqual(p.get('ok'), True, p)
+            self.assertEqual(p.get('native_profile'), out, p)
+            self.assertEqual(p.get('format'), 'ncu-csv', p)
+            self.assertTrue(os.path.isfile(out))
+
+    def test_profile_ncu_absent_exit_4(self):
+        with tempfile.TemporaryDirectory() as td:
+            art = os.path.join(td, 'a.json')
+            with open(art, 'w') as fh:
+                fh.write("{}")
+            prob = os.path.join(td, 'p.json')
+            with open(prob, 'w') as fh:
+                json.dump({"op": "add"}, fh)
+            out = os.path.join(td, 'n.csv')
+            env = dict(os.environ)
+            env['PATH'] = os.path.dirname(sys.executable) + os.pathsep + '/usr/bin' + os.pathsep + '/bin'
+            code, sout, _ = _run([self.PROFILE, '--artifact', art, '--problem', prob,
+                                  '--out', out], env=env)
+            self.assertEqual(code, 4)
