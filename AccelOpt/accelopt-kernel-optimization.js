@@ -292,6 +292,29 @@ function sampleWithoutReplacement(arr, n) {
 }
 
 // Helper: construct experience section for planner prompt (AccelOpt sampling logic)
+function legacyExecutePrompt(bestKernelCode, plan, sampleIdx, SAMPLES_PER_PLAN) {
+  return `You are an expert CUDA kernel developer. Implement this NCU-informed optimization plan as a complete, compilable kernel.
+
+# Original Kernel:
+\`\`\`cuda
+${bestKernelCode.substring(0, 4000)}
+\`\`\`
+
+# Optimization Plan: "${plan.title}"
+NCU Evidence: ${plan.ncu_evidence}
+Plan: ${plan.plan}
+
+# Requirements:
+1. Output a COMPLETE .cu file: all #includes, struct definitions, __global__ kernel(s), forward() wrapper, PYBIND11_MODULE
+2. Must be FUNCTIONALLY CORRECT (same output as baseline within FP tolerance)
+3. Apply the plan faithfully — the plan is based on real NCU data, so the optimization targets a real bottleneck
+4. Keep the forward() function signature unchanged
+5. MUST compile with -lineinfo (don't use features that break debug info)
+6. This is variant ${sampleIdx + 1}/${SAMPLES_PER_PLAN}
+
+Return the complete CUDA code.`
+}
+
 function buildExperienceSection(experienceMemory, lastIterNewPatterns, maxInPrompt) {
   if (experienceMemory.length === 0) return ''
 
@@ -313,9 +336,9 @@ function buildExperienceSection(experienceMemory, lastIterNewPatterns, maxInProm
 }
 
 // Helper: format candidate beam info for planner prompt
-function buildBeamSection(candidateBeam) {
+function buildBeamSection(candidateBeam, fence) {
   if (candidateBeam.length <= 1) return ''
-  return `\n\n# Candidate Beam (top-${candidateBeam.length} kernels from previous iterations)\n${candidateBeam.map((c, i) => `## Candidate ${i + 1}: "${c.planTitle}" — ${c.speedup.toFixed(2)}x, ${c.latency.toFixed(3)}ms\nNCU: ${c.ncuSummary || 'N/A'}\n\`\`\`cuda\n${c.code.substring(0, 1500)}\n\`\`\``).join('\n\n')}`
+  return `\n\n# Candidate Beam (top-${candidateBeam.length} kernels from previous iterations)\n${candidateBeam.map((c, i) => `## Candidate ${i + 1}: "${c.planTitle}" — ${c.speedup.toFixed(2)}x, ${c.latency.toFixed(3)}ms\nNCU: ${c.ncuSummary || 'N/A'}\n\`\`\`${fence}\n${c.code.substring(0, 1500)}\n\`\`\``).join('\n\n')}`
 }
 
 // =============================================================================
@@ -589,7 +612,7 @@ for (let iter = 0; iter < ITERATIONS; iter++) {
   const experienceSection = buildExperienceSection(experienceMemory, lastIterNewPatterns, MAX_EXPERIENCE_IN_PROMPT)
 
   // Candidate beam context for planner
-  const beamSection = buildBeamSection(candidateBeam)
+  const beamSection = buildBeamSection(candidateBeam, IDIOMS.lang_fence)
 
   const planAngles = IDIOMS.plan_angles
 
@@ -674,26 +697,27 @@ ${IDIOMS.read_metric_guide}
     validPlans,
     (plan) => parallel(
       Array.from({length: SAMPLES_PER_PLAN}, (_, sampleIdx) => () =>
-        agent(`You are an expert CUDA kernel developer. Implement this NCU-informed optimization plan as a complete, compilable kernel.
+        agent(USE_DRIVER
+          ? `You are an expert ${BACKEND} kernel developer. Implement this profiler-informed optimization plan as a complete, compilable kernel.
 
 # Original Kernel:
-\`\`\`cuda
+\`\`\`${IDIOMS.lang_fence}
 ${bestKernelCode.substring(0, 4000)}
 \`\`\`
 
 # Optimization Plan: "${plan.title}"
-NCU Evidence: ${plan.ncu_evidence}
+Profiler Evidence: ${planEvidence(plan)}
 Plan: ${plan.plan}
 
 # Requirements:
-1. Output a COMPLETE .cu file: all #includes, struct definitions, __global__ kernel(s), forward() wrapper, PYBIND11_MODULE
+1. ${IDIOMS.impl_requirements}
 2. Must be FUNCTIONALLY CORRECT (same output as baseline within FP tolerance)
-3. Apply the plan faithfully — the plan is based on real NCU data, so the optimization targets a real bottleneck
-4. Keep the forward() function signature unchanged
-5. MUST compile with -lineinfo (don't use features that break debug info)
-6. This is variant ${sampleIdx + 1}/${SAMPLES_PER_PLAN}
+3. Apply the plan faithfully — the plan is based on real profiler data, so the optimization targets a real bottleneck
+4. Keep the entrypoint signature unchanged
+5. This is variant ${sampleIdx + 1}/${SAMPLES_PER_PLAN}
 
-Return the complete CUDA code.`, {
+Return the complete ${BACKEND} code.`
+          : legacyExecutePrompt(bestKernelCode, plan, sampleIdx, SAMPLES_PER_PLAN), {
           label: `impl-${iter}-${plan.title.substring(0, 15)}-v${sampleIdx}`,
           phase: 'Execute',
           schema: {
