@@ -126,5 +126,51 @@ class TestEvidenceNvidiaMalformed(unittest.TestCase):
             os.unlink(path)
 
 
+CUDA_WRAPPER = os.path.join(SUB, 'backends', 'cuda', 'to_evidence.py')
+TRITON_WRAPPER = os.path.join(SUB, 'backends', 'triton', 'to_evidence.py')
+
+
+class TestVendorCollapseWrappers(unittest.TestCase):
+    """cuda/to_evidence.py and triton/to_evidence.py on the SAME csv -> identical
+    metrics, differing ONLY in source_backend (spec 5.1 vendor-collapse)."""
+
+    def _run_path_invoked(self, script):
+        # NO --source-backend flag: the wrapper supplies its own id. This also proves
+        # the path-invoked (no package context) import idiom works.
+        proc = subprocess.run(
+            [sys.executable, script, '--native', _csv('full4.csv')],
+            capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0,
+                         msg=f"stderr={proc.stderr}\nstdout={proc.stdout}")
+        return json.loads(proc.stdout)
+
+    def test_cuda_wrapper_stamps_cuda(self):
+        self.assertEqual(self._run_path_invoked(CUDA_WRAPPER)['source_backend'], 'cuda')
+
+    def test_triton_wrapper_stamps_triton(self):
+        self.assertEqual(self._run_path_invoked(TRITON_WRAPPER)['source_backend'], 'triton')
+
+    def test_metrics_identical_except_source_backend(self):
+        cuda = self._run_path_invoked(CUDA_WRAPPER)
+        triton = self._run_path_invoked(TRITON_WRAPPER)
+        # metrics + coverage byte-identical (both lower to PTX, same ncu mapping)
+        self.assertEqual(cuda['metrics'], triton['metrics'])
+        self.assertEqual(cuda['coverage'], triton['coverage'])
+        # ONLY source_backend differs
+        self.assertNotEqual(cuda['source_backend'], triton['source_backend'])
+        cuda_norm = dict(cuda); triton_norm = dict(triton)
+        cuda_norm.pop('source_backend'); triton_norm.pop('source_backend')
+        self.assertEqual(cuda_norm, triton_norm)
+
+    def test_explicit_flag_overrides_wrapper_default(self):
+        # --source-backend, if passed, wins over the wrapper's baked-in id
+        proc = subprocess.run(
+            [sys.executable, CUDA_WRAPPER, '--native', _csv('full4.csv'),
+             '--source-backend', 'triton'],
+            capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)['source_backend'], 'triton')
+
+
 if __name__ == '__main__':
     unittest.main()
