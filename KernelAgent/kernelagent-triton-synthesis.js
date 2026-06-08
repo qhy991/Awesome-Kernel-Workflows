@@ -70,7 +70,23 @@ function assertWorkflowSuitability() {
   }
 }
 
-assertWorkflowSuitability()
+function resolveBackendAxis() {
+  const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
+  const l = args.language ? normalizeSuitabilityValue(args.language) : null
+  if (b && l && b !== l) {
+    throw new Error(`Conflicting args: backend="${args.backend}" vs language="${args.language}". Pass only one.`)
+  }
+  if (args.backend && !args.backend_dir) {
+    throw new Error(`args.backend="${args.backend}" requires args.backend_dir; driver dispatch has no implicit-resolve path.`)
+  }
+  return b || l || null
+}
+const RESOLVED_BACKEND = resolveBackendAxis()
+const USE_DRIVER = !!args.backend_dir
+
+if (!USE_DRIVER) {
+  assertWorkflowSuitability()
+}
 
 // =============================================================================
 // KernelAgent — Multi-Agent Triton Kernel Synthesis Workflow
@@ -127,6 +143,44 @@ const MODEL = {
   judgment: args.model_judgment || 'opus',       // generating or editing Triton kernel code, refinement/debug, composition, report
 }
 const EST_PER_ROUND = args.est_tokens_per_round || 60000
+
+// --- Backend driver wiring (P5b Stage B; off-by-default; legacy path byte-identical) ---
+const BACKEND_DIR = args.backend_dir || ''
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const SH = args.driver_shell_prefix || ''
+const PY = args.substrate_command_prefix || ''
+const LEGACY_ROUTE_LANG_TOKEN = 'Triton'
+const LEGACY_HARNESS_LANG_TOKEN = 'Triton'
+const LEGACY_SYNTH_LANG_TOKEN = 'Triton'
+const LEGACY_AGGREGATE_LANG_TOKEN = 'Triton'
+const LEGACY_VERIFY_LANG_TOKEN = 'Triton'
+const LEGACY_REFINE_LANG_TOKEN = 'Triton'
+const LEGACY_COMPOSE_LANG_TOKEN = 'Triton'
+const LEGACY_KERNEL_FILENAME = 'kernel.py'
+const LEGACY_TEST_FILENAME = 'test_kernel.py'
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+
+function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
+function driverSh(script, cliArgs) {
+  return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
+}
+
+let DRIVER = null
+let DRIVER_LANG_FENCE = 'triton'
+let DRIVER_IMPL_REQUIREMENTS = ''
+let DRIVER_SOURCE_EXT = '.py'
+let DRIVER_AUX_EXT = '.py'
+let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
+
+function langToken(legacy) {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : legacy
+}
+function kernelFilename() {
+  return USE_DRIVER ? `kernel${DRIVER_SOURCE_EXT}` : (args.kernel_filename || LEGACY_KERNEL_FILENAME)
+}
+function testFilename() {
+  return USE_DRIVER ? `test_kernel${DRIVER_AUX_EXT}` : (args.test_filename || LEGACY_TEST_FILENAME)
+}
 
 // --- State ---
 let routingDecision = null        // { path: 'direct' | 'pipeline', reason: string }
@@ -227,6 +281,27 @@ function shouldUsePipeline(analysis) {
 // Phase 1: Setup — Parse problem, generate test, initialize workspace
 // =============================================================================
 phase('Setup')
+
+if (USE_DRIVER) {
+  DRIVER = await agent(
+    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
+    `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
+    `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
+    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (!DRIVER || DRIVER.present === false) {
+    throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
+  }
+  if (RESOLVED_BACKEND && DRIVER.backend_id && normalizeSuitabilityValue(DRIVER.backend_id) !== RESOLVED_BACKEND) {
+    throw new Error(`backend_dir manifest backend_id="${DRIVER.backend_id}" conflicts with args.backend/language="${RESOLVED_BACKEND}".`)
+  }
+  DRIVER_LANG_FENCE = DRIVER.lang_fence || DRIVER_LANG_FENCE
+  DRIVER_IMPL_REQUIREMENTS = DRIVER.impl_requirements || ''
+  DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT
+  DRIVER_AUX_EXT = DRIVER.aux_ext || DRIVER.source_ext || DRIVER_AUX_EXT
+  DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID
+  log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
+}
 
 // Read problem from file or use description directly
 const setupResult = await agent(`You are a Triton kernel synthesis expert. Analyze the problem and produce a structured description.
