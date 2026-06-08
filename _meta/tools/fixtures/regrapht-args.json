@@ -1,0 +1,11 @@
+{
+  "kernel_path": "/tmp/regrapht-fixture/source.cu",
+  "op_description": "stencil",
+  "language": "cuda",
+  "target_gpu": "H100",
+  "iterations": 2,
+  "rollouts_per_select": 4,
+  "max_path_length": 4,
+  "benchmark_command": "python /tmp/regrapht-fixture/bench.py {kernel_path} {result_path}",
+  "exp_dir": "/tmp/regrapht-fixture"
+}
