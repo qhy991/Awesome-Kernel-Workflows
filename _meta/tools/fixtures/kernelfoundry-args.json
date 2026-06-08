@@ -1,0 +1,13 @@
+{
+  "problem_definition": "class Model(nn.Module):\n    def forward(self, x):\n        return torch.softmax(x, dim=-1)",
+  "op_description": "softmax",
+  "language": "cuda",
+  "target_gpu": "NVIDIA H100",
+  "test_command": "python /tmp/kernelfoundry-fixture/test.py {kernel_path} {result_path}",
+  "benchmark_command": "python /tmp/kernelfoundry-fixture/bench.py {kernel_path} {result_path}",
+  "generations": 2,
+  "meta_prompt_interval": 99,
+  "speedup_target": 2.0,
+  "selection_strategy": "mixed",
+  "exp_dir": "/tmp/kernelfoundry-fixture"
+}

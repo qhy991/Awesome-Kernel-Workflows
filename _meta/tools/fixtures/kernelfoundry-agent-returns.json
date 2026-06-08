@@ -1,0 +1,51 @@
+{
+  "setup": {
+    "operator_code": "def softmax(x): ...",
+    "operator_type": "softmax",
+    "input_shapes": "[B,N]",
+    "baseline_time_ms": 0.42,
+    "hardware_info": "NVIDIA H100 SXM",
+    "feasible_cells": ["1,1,1", "2,2,2"]
+  },
+  "vary-0": {
+    "kernel_code": "// kernel v0\n__global__ void k() {}\n",
+    "strategy_description": "coalesced loads + shared tile",
+    "memory_pattern": "coalesced",
+    "algorithm_type": "fused",
+    "parallelism_level": "workgroup_barriers",
+    "is_templated": false,
+    "template_params": []
+  },
+  "eval-0": {
+    "compiled": true,
+    "correct": true,
+    "speedup": 1.35,
+    "kernel_time_ms": 0.31,
+    "d_mem": 1,
+    "d_algo": 1,
+    "d_sync": 1,
+    "error_message": "",
+    "performance_notes": "memory-bound; tile size 64 helps"
+  },
+  "vary-1": {
+    "kernel_code": "// kernel v1\n__global__ void k2() {}\n",
+    "strategy_description": "shared memory tiling + warp shuffle reduction",
+    "memory_pattern": "shared_tile",
+    "algorithm_type": "online_softmax",
+    "parallelism_level": "subgroup_primitives",
+    "is_templated": true,
+    "template_params": ["tile_size", "num_warps"]
+  },
+  "eval-1": {
+    "compiled": true,
+    "correct": true,
+    "speedup": 1.72,
+    "kernel_time_ms": 0.24,
+    "d_mem": 2,
+    "d_algo": 2,
+    "d_sync": 2,
+    "error_message": "",
+    "performance_notes": "reduction tail amortized"
+  },
+  "final-report": "KernelFoundry MAP-Elites run completed. Best 1.72x at cell [2,2,2]. Archive coverage 2/64."
+}
