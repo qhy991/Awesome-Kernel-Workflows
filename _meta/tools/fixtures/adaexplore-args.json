@@ -1,0 +1,21 @@
+{
+  "problem_definition": "class Model(nn.Module):\n  def forward(self, x):\n    return torch.relu(x)\n",
+  "op_description": "elementwise_relu",
+  "benchmark_command": "python eval.py --kernel {kernel_path} --result {result_path}",
+  "baseline_command": "",
+  "skill_memory_path": "/tmp/adaexplore-fixture/memory.txt",
+  "mode": "explore",
+  "memory_update": false,
+  "iterations": 2,
+  "small_step_limit": 2,
+  "p_large": 0.2,
+  "exploration_weight": 0.3,
+  "expand_exploration_ratio": 1.0,
+  "reward_alpha": 0.0,
+  "diversity_pool_size": 5,
+  "pool_size_extra_max": 0,
+  "correctness_atol": 0.05,
+  "correctness_rtol": 0.05,
+  "exp_dir": "/tmp/adaexplore-fixture",
+  "language": "triton"
+}
