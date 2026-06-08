@@ -26,6 +26,10 @@ MEANINGFUL_CLASSES = {"memory_bound", "compute_bound", "latency_occupancy", "ove
 ALLOWED_BCLASSES = MEANINGFUL_CLASSES | {"unknown"}
 # All real method_gate method names (sourced live so this can never drift from the table).
 KNOWN_METHODS = {m for methods in method_gate.TABLE.values() for m in methods}
+# A driver dir must not contain a copy of any _substrate/*.py script. Updating this set
+# requires a substrate-scope change (spec §3.1).
+SUBSTRATE_SCRIPTS = {'evidence_schema.py', 'anti_cheat.py', 'diagnose.py',
+                     'method_gate.py', 'memory_store.py', 'verify_insight.py'}
 
 
 def _load_json(path, errors):
@@ -62,6 +66,27 @@ def validate(driver_dir):
         elif backend_id != dir_name:
             errors.append(
                 f"manifest.backend_id '{backend_id}' != directory name '{dir_name}'")
+
+        # invoke fields must equal the fixed filenames (spec §4.2 footnote)
+        for role, fixed in [('compiler', 'build.sh'), ('runner', 'run.sh')]:
+            block = manifest.get(role)
+            if isinstance(block, dict):
+                inv = block.get('invoke')
+                if inv is not None and inv != fixed:
+                    errors.append(
+                        f"manifest.{role}.invoke '{inv}' must equal '{fixed}'")
+        prof = manifest.get('profiler')
+        if isinstance(prof, dict):
+            inv = prof.get('invoke')
+            if inv is not None and inv != 'profile.sh':
+                errors.append(
+                    f"manifest.profiler.invoke '{inv}' must equal 'profile.sh'")
+            te = prof.get('to_evidence')
+            if te is not None and te != 'to_evidence.py':
+                errors.append(
+                    f"manifest.profiler.to_evidence '{te}' must equal 'to_evidence.py'")
+        if 'threshold_profile' not in manifest:
+            errors.append("manifest.threshold_profile missing (required §4.4)")
 
         caps = manifest.get("capabilities")
         if not isinstance(caps, dict):
@@ -112,6 +137,14 @@ def validate(driver_dir):
                     errors.append(
                         f"idioms.unsupported_methods references unknown method_gate "
                         f"method '{name}'")
+
+    # A driver dir must not contain a copy of any _substrate/*.py script.
+    if os.path.isdir(driver_dir):
+        for fname in os.listdir(driver_dir):
+            if fname in SUBSTRATE_SCRIPTS:
+                errors.append(
+                    f"driver dir must not contain a copy of _substrate/{fname} "
+                    f"(driver is data; never imports/shadows substrate)")
 
     return {"ok": len(errors) == 0, "errors": errors}
 
