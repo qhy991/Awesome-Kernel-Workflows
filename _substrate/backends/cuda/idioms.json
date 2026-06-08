@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "backend_id": "cuda",
+  "lang_fence": "cuda",
+  "impl_requirements": "Emit a single .cu translation unit exposing a PYBIND11_MODULE with a forward() binding that launches the kernel; no host-side framework calls beyond the binding.",
+  "unsupported_methods": [],
+  "read_metric_guide": "High dram_pct with low sm_pct => memory_bound. High sm_pct with low dram_pct => compute_bound. Low occupancy with neither saturated => latency_occupancy. Many short kernels / launch-dominated wall time => overhead_bound.",
+  "methods": {
+    "vectorized_load_store": {
+      "idiom": "float4 / int4 vectorized global loads and stores",
+      "prompt_guidance": "Widen memory transactions to 128-bit by casting to float4/int4 so each thread moves 16 bytes per access."
+    },
+    "memory_coalescing": {
+      "idiom": "coalesced 128-bit global loads",
+      "prompt_guidance": "Reorder the thread-to-element mapping so consecutive threads in a warp read consecutive addresses."
+    },
+    "shared_memory_tiling": {
+      "idiom": "__shared__ tiling with __syncthreads()",
+      "prompt_guidance": "Stage reused operands into a __shared__ tile per block, sync, then compute from shared memory to cut redundant global traffic."
+    },
+    "async_copy_pipeline": {
+      "idiom": "cp.async double-buffered global->shared pipeline",
+      "prompt_guidance": "Use cp.async (or __pipeline_memcpy_async) to overlap the next tile's global->shared copy with current-tile compute."
+    },
+    "l2_cache_reuse": {
+      "idiom": "L2-residency-friendly tiling / __ldg read-only path",
+      "prompt_guidance": "Block the iteration so hot operands stay L2-resident and route read-only data through __ldg / const __restrict__."
+    },
+    "tensor_core_mma": {
+      "idiom": "wmma / mma.sync",
+      "prompt_guidance": "Use tensor-core MMA intrinsics (wmma::mma_sync or mma.sync.aligned) for the inner GEMM with fp16/bf16 operands."
+    },
+    "instruction_reduction": {
+      "idiom": "strength reduction and loop unrolling (#pragma unroll)",
+      "prompt_guidance": "Hoist invariants, replace divides/mods with shifts where legal, and #pragma unroll the inner loop to cut issued instructions."
+    },
+    "fast_math_intrinsics": {
+      "idiom": "__expf / __fdividef fast-math intrinsics",
+      "prompt_guidance": "Where precision tolerance allows, replace transcendental calls with __-prefixed device intrinsics (e.g. __expf, __fdividef)."
+    },
+    "register_tiling": {
+      "idiom": "per-thread register accumulator tiles",
+      "prompt_guidance": "Accumulate an MxN micro-tile in registers per thread to raise arithmetic intensity and reuse loaded operands."
+    },
+    "occupancy_increase": {
+      "idiom": "__launch_bounds__ / lower per-thread register pressure",
+      "prompt_guidance": "Annotate the kernel with __launch_bounds__ and shrink live state to fit more resident warps per SM."
+    },
+    "block_size_tuning": {
+      "idiom": "sweep blockDim (128/256/512) for the SM",
+      "prompt_guidance": "Try block sizes that are multiples of the warp size (128/256/512) to balance occupancy against per-thread resources."
+    },
+    "register_pressure_reduction": {
+      "idiom": "scope-narrowing / recompute to spill less",
+      "prompt_guidance": "Shorten variable lifetimes and prefer recompute over caching to drop register count below the spill threshold."
+    },
+    "launch_config_tuning": {
+      "idiom": "grid/block geometry and dynamic shared-mem sizing",
+      "prompt_guidance": "Tune gridDim/blockDim and dynamic __shared__ bytes so the launch geometry matches the SM count and tile shape."
+    },
+    "kernel_fusion": {
+      "idiom": "fuse the elementwise epilogue into the main kernel",
+      "prompt_guidance": "Avoid a second launch by computing the elementwise epilogue inside the producing kernel before the store."
+    },
+    "launch_overhead_reduction": {
+      "idiom": "persistent-kernel / CUDA-graph capture",
+      "prompt_guidance": "Collapse many tiny launches into a persistent kernel or a captured CUDA graph to amortize launch cost."
+    },
+    "library_fallback_hybrid": {
+      "idiom": "delegate the hot GEMM to cuBLAS",
+      "prompt_guidance": "When a vendor library kernel dominates, call cuBLAS/cuDNN for the heavy op and keep custom code only for the glue."
+    },
+    "cpu_gpu_overlap": {
+      "idiom": "multi-stream H2D/compute/D2H overlap",
+      "prompt_guidance": "Split the work across CUDA streams so host<->device copies overlap kernel execution."
+    }
+  }
+}
