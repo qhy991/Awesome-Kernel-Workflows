@@ -418,3 +418,35 @@ class TestTritonScripts(unittest.TestCase):
             code, sout, _ = _run([self.PROFILE, '--artifact', art, '--problem', prob,
                                   '--out', out], env=env)
             self.assertEqual(code, 4)
+
+    def test_run_no_cuda_or_triton_deferred_envelope(self):
+        # Passes a REAL (existing) artifact dir so the bash preflight clears, then enters
+        # the Python block. On this CPU-only box the Python block should return a deferred
+        # error envelope: ok:false, exit 2, all six anti_cheat keys present.
+        with tempfile.TemporaryDirectory() as td:
+            # Use a real directory as the artifact so '-e "$ARTIFACT"' preflight passes.
+            art = os.path.join(td, 'artifact_dir')
+            os.makedirs(art)
+            prob = os.path.join(td, 'problem.json')
+            with open(prob, 'w') as fh:
+                json.dump({"op": "add", "shape": [128, 128]}, fh)
+            out = os.path.join(td, 'result.json')
+            env = dict(os.environ)
+            env['PATH'] = (os.path.dirname(sys.executable)
+                           + os.pathsep + '/usr/bin' + os.pathsep + '/bin')
+            code, sout, _serr = _run([self.RUN, '--artifact', art,
+                                      '--problem', prob, '--out', out], env=env)
+            # Python block reached: GPU/triton absent → deferred error envelope, exit 2.
+            self.assertNotEqual(code, 0, msg=f"expected non-zero exit, got 0; out={sout}")
+            self.assertEqual(code, 2, msg=f"expected exit 2 (deferred op-error), got {code}; out={sout}")
+            p = _json_or_raw(sout)
+            self.assertIsInstance(p, dict, msg=f"stdout is not JSON: {sout!r}")
+            self.assertEqual(p.get('ok'), False, msg=f"expected ok:false; {p}")
+            # All six anti_cheat keys must be present regardless of execution path.
+            for k in ('compiled', 'correct', 'candidate_latency_ms',
+                      'eager_latency_ms', 'compile_latency_ms', 'claimed_speedup'):
+                self.assertIn(k, p, msg=f"missing anti_cheat key '{k}': {p}")
+            # On this CPU-only box torch is importable but CUDA is unavailable,
+            # so the script reaches the cuda-check branch with compiled=True.
+            self.assertEqual(p.get('compiled'), True,
+                             msg=f"expected compiled:true on no-CUDA path; {p}")
