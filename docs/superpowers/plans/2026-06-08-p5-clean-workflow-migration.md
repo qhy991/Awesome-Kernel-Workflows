@@ -73,32 +73,23 @@ to land the missing P1–P4 deliverable first.
 ## 4. Dependency graph
 
 ```
-                    P5a (schema + generator + template + validate-backend.js)
-                     │   schema is contract; everything depends on it
-        ┌────────────┼────────────┬──────────────┐
-        │            │            │              │
-        ▼            ▼            ▼              ▼
-       P5b          P5b          (waits)        (waits)
-   AdaExplore + KernelAgent          │              │
-        │                            │              │
-        └─────────────► P5c ◄────────┘              │
-                  (KDA, CUDALLM, Astra,             │
-                   StitchCUDA, STARK)               │
-                        │                           │
-                        └──────► P5d ◄──────────────┘
-                          (KSearch, ReGraphT, KernelFoundry,
-                           KernelFoundryDx, KernelSkill,
-                           AKO4X, KernelBand)
-                                  │
-                                  ▼
-                                 P5e
-                       (Generalist + matrix-smoke CI;
-                        needs ≥1 matrix_eligible workflow
-                        retrofitted — guaranteed by P5b)
-                                  │
-                                  ▼
-                                 P5f
-                          (§9.4 docs pass)
+   P5a (schema + generator + template + validate-backend)
+    │
+    ├─► P5b (AdaExplore + KernelAgent)
+    │       │
+    │       └─► P5c (KDA, CUDALLM, Astra, StitchCUDA, STARK)
+    │               │
+    │               └─► P5d (KSearch, ReGraphT, KernelFoundry,
+    │                        KernelFoundryDx, KernelSkill, AKO4X,
+    │                        KernelBand)
+    │                        │
+    │                        ▼
+    └─────────────────► P5e (Generalist + matrix-smoke CI;
+                              needs ≥1 matrix_eligible workflow —
+                              guaranteed by P5b)
+                              │
+                              ▼
+                             P5f (§9.4 docs pass)
 ```
 
 **Edges in plain English:**
@@ -411,32 +402,22 @@ hardcoded literal; legacy path unchanged.
 
 ### P5e — Generalist retrofit + matrix-smoke-test CI
 
-**Scope:** Two work strands sharing one sub-plan because they depend on
-each other:
-1. **Generalist retrofit** — Generalist is the substrate reference (§9.1
-   Phase 2: "Generalist last"); retrofitting it earlier would remove the
-   stable reference earlier workflows are sanity-checked against.
-   Apply the same checklist.
-2. **Matrix smoke test + CI tiers** (§9.3) — wire up the CI tiers
-   guarded by P5a's validator + the deferred-GPU checklist:
-   - **Substrate diff-guard** — runs every PR; asserts the 6 universal
-     scripts byte-identical to baseline except the three §5.3 hunks.
-     Each PR must keep the diff green or explicitly update the golden
-     with a recorded rationale.
-   - **Driver conformance (L0–L3)** — runs every PR for each driver
-     under `_substrate/backends/`. L0 deterministic via P5a validator;
-     L1/L2/L3 use synthetic fixtures under
-     `_substrate/backends/_fixtures/` (per spec §9.3 + §4.9).
-   - **Matrix smoke test** — runs nightly. For each `matrix_eligible:true`
-     workflow × matrix driver (cuda, triton), capture prompts via the P4
-     harness with **mock harness fixtures** (canned `build.sh`/`run.sh`/
-     `profile.sh` JSON injected — no GPU). Assert structurally: guard
-     passes, right driver dispatched, Layer-A envelope conforms via
-     `evidence_schema.py validate`. **Negative cells:** assert exact
-     error substring/code (`matrix_eligible:false` throws the
-     intrinsic-reason; vendor_locked throws for illegal backends).
-     Structural-only assertion is sufficient — performance comparability
-     is a deferred GPU-tier concern.
+**Scope:** Two strands sharing one sub-plan because they depend on each other:
+1. **Generalist retrofit** — substrate reference (§9.1 Phase 2:
+   "Generalist last"); apply the same checklist.
+2. **Matrix smoke + CI tiers** (§9.3):
+   - **Substrate diff-guard** (every PR) — universal scripts byte-identical
+     to baseline except the three §5.3 hunks.
+   - **Driver conformance L0–L3** (every PR) — L0 deterministic via P5a
+     validator; L1/L2/L3 use synthetic fixtures under
+     `_substrate/backends/_fixtures/`.
+   - **Matrix smoke** (nightly) — for each `matrix_eligible:true` workflow
+     × matrix driver (cuda, triton), capture prompts via P4 harness with
+     mock harness fixtures (canned `build.sh`/`run.sh`/`profile.sh` JSON,
+     no GPU). Assert structurally: guard passes, right driver dispatched,
+     Layer-A envelope conforms. Negative cells assert exact error
+     substring/code. Structural-only is sufficient; performance
+     comparability is a deferred GPU concern (§10).
 
 **Spec sections driving it:** §9.1 Phase 2 ("Generalist last"); §9.3
 (entire — substrate diff-guard, driver conformance, matrix smoke,
