@@ -1,0 +1,59 @@
+{
+  "inspect-workspace": {
+    "kernel_code": "__global__ void gemm_q4_0(const half* A, const half* B, half* C, int M, int N, int K) {}\n",
+    "key_functions": ["gemm_q4_0"],
+    "current_approach": "naive q4_0 GEMM",
+    "baseline_behavior": "passes correctness, ~2.0ms",
+    "validation_path": "tests/test_gemm_q4_0.py",
+    "existing_tests": "tests/test_gemm_q4_0.py",
+    "risks_and_unknowns": ["dequantization order"]
+  },
+  "write-draft": {
+    "draft_content": "# Draft\nBaseline q4_0 GEMM at 2.0ms.\n",
+    "candidate_directions": [
+      {"title": "Shared-memory tiling", "approach": "tile A and B into __shared__", "expected_value": "1.5x", "risk": "bank conflicts"},
+      {"title": "Warp shuffle reduction", "approach": "use __shfl_sync for partial sums", "expected_value": "1.3x", "risk": "warp divergence"}
+    ]
+  },
+  "write-plan": {
+    "plan_content": "# Plan\n1. Tile then reduce.\n",
+    "candidates": [
+      {"id": "c1", "title": "Shared-memory tiling", "changes": "introduce __shared__ tiles", "expected_effect": "1.5x speedup", "priority": 1},
+      {"id": "c2", "title": "Warp shuffle reduction", "changes": "replace atomicAdd with __shfl_sync", "expected_effect": "1.3x speedup", "priority": 2}
+    ]
+  },
+  "impl-candidate-1": {
+    "code": "__global__ void gemm_q4_0(const half* A, const half* B, half* C, int M, int N, int K) { __shared__ half tile[256]; }\n",
+    "changes_made": "added shared-memory tiling"
+  },
+  "validate-candidate-1": {
+    "is_correct": false,
+    "correctness_issues": ["mismatch on N=4096"],
+    "validation_ran": true,
+    "validation_output": "FAIL: tolerance exceeded",
+    "measured_latency_ms": 0,
+    "estimated_latency_ms": 0,
+    "estimated_speedup": 0,
+    "addresses_goal": false,
+    "validation_notes": "tile size mismatched"
+  },
+  "impl-candidate-2": {
+    "code": "__global__ void gemm_q4_0(const half* A, const half* B, half* C, int M, int N, int K) { /* shfl */ }\n",
+    "changes_made": "warp shuffle reduction"
+  },
+  "validate-candidate-2": {
+    "is_correct": true,
+    "correctness_issues": [],
+    "validation_ran": true,
+    "validation_output": "PASS",
+    "measured_latency_ms": 1.4,
+    "estimated_latency_ms": 1.4,
+    "estimated_speedup": 1.43,
+    "addresses_goal": true,
+    "validation_notes": "warp shuffle replaced atomic"
+  },
+  "final-report": {
+    "report_md": "Best candidate c2 with 1.43x speedup.",
+    "candidates_jsonl": ""
+  }
+}

@@ -83,7 +83,23 @@ function assertWorkflowSuitability() {
   }
 }
 
-assertWorkflowSuitability()
+function resolveBackendAxis() {
+  const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
+  const l = args.language ? normalizeSuitabilityValue(args.language) : null
+  if (b && l && b !== l) {
+    throw new Error(`Conflicting args: backend="${args.backend}" vs language="${args.language}". Pass only one.`)
+  }
+  if (args.backend && !args.backend_dir) {
+    throw new Error(`args.backend="${args.backend}" requires args.backend_dir; driver dispatch has no implicit-resolve path.`)
+  }
+  return b || l || null
+}
+const RESOLVED_BACKEND = resolveBackendAxis()
+const USE_DRIVER = !!args.backend_dir
+
+if (!USE_DRIVER) {
+  assertWorkflowSuitability()
+}
 
 // =============================================================================
 // KDA Kernel Workflow
@@ -133,6 +149,52 @@ const MAX_CANDIDATES = args.max_candidates || 5
 const LANGUAGE = args.language || 'cuda'
 const TARGET_GPU = args.target_gpu || 'unknown GPU'
 const SEED_CANDIDATES = args.seed_candidates || 3
+const EXP_DIR = args.exp_dir || '/tmp/kda_exp'
+const KDA_INPUT_MODE_OPTIMIZE = 'optimize_existing'
+
+// --- Backend driver wiring (P5c Stage B; off-by-default; legacy path byte-identical) ---
+const BACKEND_DIR = args.backend_dir || ''
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const SH = args.driver_shell_prefix || ''
+const PY = args.substrate_command_prefix || ''
+const LEGACY_INSPECT_LANG_TOKEN = 'CUDA'
+const LEGACY_DRAFT_LANG_TOKEN = 'CUDA'
+const LEGACY_PLAN_LANG_TOKEN = 'CUDA'
+const LEGACY_IMPL_LANG_TOKEN = 'CUDA'
+const LEGACY_VALIDATE_LANG_TOKEN = 'CUDA'
+const LEGACY_SOURCE_EXT = '.cu'
+const LEGACY_GENERATED_KERNEL_FILENAME = 'kernel.cu'
+const LEGACY_FENCE_TOKEN = 'cuda'
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+
+function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
+function driverSh(script, cliArgs) {
+  return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
+}
+
+let DRIVER = null
+let DRIVER_LANG_FENCE = 'cuda'
+let DRIVER_IMPL_REQUIREMENTS = ''
+let DRIVER_SOURCE_EXT = LEGACY_SOURCE_EXT
+let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
+
+function langToken(legacy) {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : legacy
+}
+function fenceToken() {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : LEGACY_FENCE_TOKEN
+}
+// Hybrid kernel-path helper combining AccelOpt and KernelAgent modes:
+//   - AccelOpt-style: caller passes args.kernel_path → use it verbatim
+//   - KernelAgent-style: workspace-local generated file under EXP_DIR with
+//     driver-aware source extension
+// Used both for the user-supplied optimize_existing path and the
+// generate_then_optimize path (where KERNEL_PATH is reassigned post-generation).
+function kdaKernelPath(userKernelPath) {
+  if (userKernelPath) return userKernelPath
+  const ext = USE_DRIVER ? DRIVER_SOURCE_EXT : LEGACY_SOURCE_EXT
+  return `${EXP_DIR}/generated/kernel${ext}`
+}
 
 if (!KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
   throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
@@ -173,6 +235,26 @@ function recordCandidate(id, parentId, status, code, metrics, reason) {
 // =============================================================================
 phase('Inspect')
 
+if (USE_DRIVER) {
+  DRIVER = await agent(
+    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
+    `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
+    `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
+    { label: 'load-driver', phase: 'Inspect', schema: JSON_PASSTHROUGH })
+  if (!DRIVER || DRIVER.present === false) {
+    throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
+  }
+  if (RESOLVED_BACKEND && DRIVER.backend_id && normalizeSuitabilityValue(DRIVER.backend_id) !== RESOLVED_BACKEND) {
+    throw new Error(`backend_dir manifest backend_id="${DRIVER.backend_id}" conflicts with args.backend/language="${RESOLVED_BACKEND}".`)
+  }
+  DRIVER_LANG_FENCE = DRIVER.lang_fence || DRIVER_LANG_FENCE
+  DRIVER_IMPL_REQUIREMENTS = DRIVER.impl_requirements || ''
+  DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT
+  DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID
+  log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
+}
+
 if (INPUT_MODE === 'generate_then_optimize') {
   const generated = await agent(`No kernel_path was provided. Generate and verify an initial kernel before KDA inspects and optimizes the workspace.
 
@@ -190,7 +272,9 @@ if (INPUT_MODE === 'generate_then_optimize') {
 - benchmark_command: ${EVAL_CMD || '(not provided)'}
 
 # Contract
-Generate ${SEED_CANDIDATES} complete candidates under ./generated or the task workspace. Run available commands using {kernel_path}/{result_path}. Return the best verified generated kernel path.`, {
+${USE_DRIVER
+  ? `Generate ${SEED_CANDIDATES} complete ${DRIVER_LANG_FENCE} candidates and write the best one to ${kdaKernelPath('')}. Run available commands using {kernel_path}/{result_path}. Return the best verified generated kernel path.`
+  : `Generate ${SEED_CANDIDATES} complete candidates under ./generated or the task workspace. Run available commands using {kernel_path}/{result_path}. Return the best verified generated kernel path.`}`, {
     label: 'generate-initial-kernel',
     phase: 'Inspect',
     schema: {
@@ -226,7 +310,9 @@ const inspection = await agent(`You are in a task implementation workspace. Insp
 - KernelWiki is an external repository, not a bundled KDA skill. If it is available, use it for kernel optimization patterns, GPU architecture details, and performance techniques relevant to this task. Download or fork it from https://github.com/mit-han-lab/KernelWiki/fork.
 
 # Available Skills
-- Use \`cuda-kernel-development\` skill for hardware-aware CUDA development guidance.
+${USE_DRIVER
+  ? `- ${DRIVER_IMPL_REQUIREMENTS || `Use driver-supplied ${DRIVER_LANG_FENCE} guidance for hardware-aware kernel development.`}`
+  : `- Use \`cuda-kernel-development\` skill for hardware-aware CUDA development guidance.`}
 
 # Instructions
 1. Read the kernel file and any surrounding code (headers, utils, tests).
@@ -296,7 +382,9 @@ ${baselineCode.substring(0, 3000)}
 
 # Available Skills
 - Use \`humanize:gen-plan\` skill pattern for structured plan generation.
-- Use \`ncu-report-skill\` if NCU profiling data exists in the workspace (check profile/ directory).
+${USE_DRIVER
+  ? `- Consult driver-supplied profiling guidance for ${DRIVER_LANG_FENCE} performance evidence.`
+  : `- Use \`ncu-report-skill\` if NCU profiling data exists in the workspace (check profile/ directory).`}
 
 # Draft Requirements (from prompts/basic-flow.md)
 The draft MUST include:
@@ -422,7 +510,9 @@ ${currentBestCode.substring(0, 4000)}
 - KernelWiki is an external repository, not a bundled KDA skill. If it is available, use it for architecture-specific optimization techniques such as Hopper/Blackwell features and tensor core usage. Download or fork it from https://github.com/mit-han-lab/KernelWiki/fork.
 
 # Available Skills
-- Use \`cuda-kernel-development\` skill for hardware-aware CUDA patterns (shared memory tiling, warp primitives, occupancy tuning).
+${USE_DRIVER
+  ? `- ${DRIVER_IMPL_REQUIREMENTS || `Use driver-supplied ${DRIVER_LANG_FENCE} guidance for hardware-aware kernel patterns.`}`
+  : `- Use \`cuda-kernel-development\` skill for hardware-aware CUDA patterns (shared memory tiling, warp primitives, occupancy tuning).`}
 
 # Requirements
 1. Output a COMPLETE file — all includes, definitions, functions.
@@ -467,10 +557,15 @@ ${candidateCode.substring(0, 3000)}
 # Instructions
 1. First, write the candidate code to the kernel file at ${KERNEL_PATH}.
 2. STATIC ANALYSIS — check for:
-   - Race conditions (shared memory access, __syncthreads placement)
+${USE_DRIVER
+  ? `   - Race conditions (shared/scratch memory access, synchronization placement)
+   - Out-of-bounds (index/mask computations)
+   - Missing synchronization
+   - Correct reductions (per ${DRIVER_LANG_FENCE} idioms)`
+  : `   - Race conditions (shared memory access, __syncthreads placement)
    - Out-of-bounds (index computations)
    - Missing synchronization
-   - Correct reductions (warp shuffle logic)
+   - Correct reductions (warp shuffle logic)`}
 3. CORRECTNESS VALIDATION — If test_command is provided:
    - Run it: \`${VALIDATION_CMD || 'N/A'}\`
    - Report whether it passes or fails, and any error output.
@@ -480,7 +575,9 @@ ${candidateCode.substring(0, 3000)}
    - Extract the measured latency/throughput from the output.
    - Compare against baseline: ${currentBestMetrics.latency_ms ? currentBestMetrics.latency_ms + 'ms' : 'not yet measured'}.
    - If not provided, give your best estimate based on the optimization applied.
-5. If NCU profiling data is available or can be generated, use the \`ncu-report-skill\` to analyze bottlenecks.
+${USE_DRIVER
+  ? `5. If driver profiling evidence is available, consult the driver-supplied bottleneck guidance for ${DRIVER_LANG_FENCE}.`
+  : `5. If NCU profiling data is available or can be generated, use the \`ncu-report-skill\` to analyze bottlenecks.`}
 
 Return the validation results with MEASURED values when available, estimates only as fallback.`, {
     label: `validate-${candidateId}`,
@@ -501,6 +598,42 @@ Return the validation results with MEASURED values when available, estimates onl
       required: ['is_correct', 'estimated_speedup', 'validation_ran'],
     },
   })
+
+  if (USE_DRIVER) {
+    const kPath = kdaKernelPath(KERNEL_PATH)
+    const buildOut = `${EXP_DIR}/${candidateId}.artifact`
+    const profOut = `${EXP_DIR}/${candidateId}.prof.native`
+    await agent(
+      `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+      `Return its stdout JSON verbatim.`,
+      { label: `driver-build-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+    const runOut = await agent(
+      `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+      `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+      { label: `driver-run-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+    await agent(
+      `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+      `Return {ok, native_path}.`,
+      { label: `driver-profile-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+    const evidenceOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+      { label: `driver-to-evidence-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+    const diagOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+      `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+      { label: `driver-diagnose-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+    await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/${candidateId}.result.json\`.\n` +
+      `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+      { label: `driver-anti-cheat-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+    validation.driver_envelope = {
+      latency_ms: Number((runOut && runOut.latency_ms) || 0),
+      metrics: (evidenceOut && evidenceOut.metrics) || {},
+      bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',
+      backend_id: DRIVER_BACKEND_ID,
+    }
+  }
 
   // ---- Phase 5: Decide ----
   phase('Decide')

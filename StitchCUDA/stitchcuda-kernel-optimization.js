@@ -69,7 +69,82 @@ function assertWorkflowSuitability() {
   }
 }
 
-assertWorkflowSuitability()
+function resolveBackendAxis() {
+  const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
+  const l = args.language ? normalizeSuitabilityValue(args.language) : null
+  if (b && l && b !== l) {
+    throw new Error(`Conflicting args: backend="${args.backend}" vs language="${args.language}". Pass only one.`)
+  }
+  if (args.backend && !args.backend_dir) {
+    throw new Error(`args.backend="${args.backend}" requires args.backend_dir; driver dispatch has no implicit-resolve path.`)
+  }
+  return b || l || null
+}
+const RESOLVED_BACKEND = resolveBackendAxis()
+const USE_DRIVER = !!args.backend_dir
+
+if (!USE_DRIVER) {
+  assertWorkflowSuitability()
+}
+
+// --- Backend driver wiring (P5c Stage B; off-by-default; legacy path byte-identical) ---
+const BACKEND_DIR = args.backend_dir || ''
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const SH = args.driver_shell_prefix || ''
+const PY = args.substrate_command_prefix || ''
+const WORKSPACE = args.workspace || '/tmp/stitchcuda'
+const LEGACY_SETUP_LANG_TOKEN = 'CUDA'
+const LEGACY_REPLAN_LANG_TOKEN = 'CUDA'
+const LEGACY_PLAN_LANG_TOKEN = 'CUDA'
+const LEGACY_CODE_LANG_TOKEN = 'CUDA'
+const LEGACY_VERIFY_LANG_TOKEN = 'CUDA'
+const LEGACY_SOURCE_EXT = '.cu'
+const LEGACY_FENCE_TOKEN = 'cuda'
+const LEGACY_CODE_FORMAT_HINT = `Use PyTorch load_inline compatible format:
+   - __global__ kernel function
+   - Template parameters if needed
+   - Extern "C" wrapper if needed`
+const LEGACY_VERIFY_TOOL_HINT = 'Profile with nsys/ncu if available'
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+
+// Intersectional guard (P5c plan §3 + §9.1): KernelBench harness is
+// CUDA-only as a benchmark suite; refuse driver path when the user
+// explicitly pins a benchmark_suite combined with a non-CUDA driver.
+if (USE_DRIVER && args.kernelbench_config && args.kernelbench_config.benchmark_suite && RESOLVED_BACKEND && RESOLVED_BACKEND !== 'cuda') {
+  throw new Error(
+    `StitchCUDA kernelbench_config.benchmark_suite="${args.kernelbench_config.benchmark_suite}" requires backend_dir to be a CUDA driver; ` +
+    `got backend_dir=${args.backend_dir} (resolved backend=${RESOLVED_BACKEND}).`
+  )
+}
+
+function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
+function driverSh(script, cliArgs) {
+  return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
+}
+
+let DRIVER = null
+let DRIVER_LANG_FENCE = LEGACY_FENCE_TOKEN
+let DRIVER_IMPL_REQUIREMENTS = ''
+let DRIVER_SOURCE_EXT = LEGACY_SOURCE_EXT
+let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
+
+function langToken(legacy) {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : legacy
+}
+function fenceToken() {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : LEGACY_FENCE_TOKEN
+}
+function attemptKernelPath(attempt) {
+  const ext = USE_DRIVER ? DRIVER_SOURCE_EXT : LEGACY_SOURCE_EXT
+  return `${WORKSPACE}/attempt_${attempt}/kernel${ext}`
+}
+function codeFormatHint() {
+  if (!USE_DRIVER) return LEGACY_CODE_FORMAT_HINT
+  return DRIVER_IMPL_REQUIREMENTS || `Follow the ${DRIVER_LANG_FENCE} driver source-format conventions and provide a host launcher.`
+}
+function verifyToolHint() {
+  return USE_DRIVER ? `Profile via the driver profile.sh envelope` : LEGACY_VERIFY_TOOL_HINT
+}
 
 // StitchCUDA: Three-agent orchestration for CUDA kernel synthesis
 // Based on arXiv:2603.02637
@@ -81,11 +156,32 @@ async function main() {
   // ============================================================================
   phase('Setup');
 
+  if (USE_DRIVER) {
+    DRIVER = await agent(
+      `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+      `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
+      `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
+      `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
+      { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH }
+    );
+    if (!DRIVER || DRIVER.present === false) {
+      throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`);
+    }
+    if (RESOLVED_BACKEND && DRIVER.backend_id && normalizeSuitabilityValue(DRIVER.backend_id) !== RESOLVED_BACKEND) {
+      throw new Error(`backend_dir manifest backend_id="${DRIVER.backend_id}" conflicts with args.backend/language="${RESOLVED_BACKEND}".`);
+    }
+    DRIVER_LANG_FENCE = DRIVER.lang_fence || DRIVER_LANG_FENCE;
+    DRIVER_IMPL_REQUIREMENTS = DRIVER.impl_requirements || '';
+    DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT;
+    DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID;
+    log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`);
+  }
+
   const setupResult = await agent(
     `Set up StitchCUDA orchestration environment:
 
-1. Initialize CUDA environment:
-   - CUDA version and user-provided compiler/toolchain
+1. Initialize ${langToken(LEGACY_SETUP_LANG_TOKEN)} environment:
+   - ${langToken(LEGACY_SETUP_LANG_TOKEN)} version and user-provided compiler/toolchain
    - Target GPU architecture (sm_80, sm_89, sm_90, etc.)
    - PyTorch load_inline integration
 2. Configure KernelBench evaluation:
@@ -355,17 +451,14 @@ Return JSON:
     log('Coder: Generating CUDA kernel...');
 
     const codeResult = await agent(
-      `Generate CUDA kernel implementation (Attempt ${attempt + 1}):
+      `Generate ${langToken(LEGACY_CODE_LANG_TOKEN)} kernel implementation (Attempt ${attempt + 1}):
 
 Plan to implement:
 ${JSON.stringify(currentPlan, null, 2)}
 
 Code generation:
-1. Implement complete CUDA kernel following the plan
-2. Use PyTorch load_inline compatible format:
-   - __global__ kernel function
-   - Template parameters if needed
-   - Extern "C" wrapper if needed
+1. Implement complete ${langToken(LEGACY_CODE_LANG_TOKEN)} kernel following the plan
+2. ${codeFormatHint()}
 3. Implement all steps from the plan:
 ${currentPlan.implementation_steps.map((s, idx) => `   ${idx + 1}. ${s.description}`).join('\n')}
 4. Apply key optimizations:
@@ -375,7 +468,7 @@ ${currentPlan.key_strategies.map((s, idx) => `   - ${s}`).join('\n')}
 Return JSON:
 {
   "attempt": ${attempt + 1},
-  "kernel_code": "complete CUDA kernel code",
+  "kernel_code": "complete ${langToken(LEGACY_CODE_LANG_TOKEN)} kernel code",
   "host_code": "host launch code",
   "kernel_name": "kernel function name",
   "implementation_notes": "notes on implementation choices"
@@ -407,6 +500,50 @@ Return JSON:
     log(`Generated kernel: ${codeResult.kernel_name}`);
 
     // ==========================================================================
+    // Layer-A driver envelope (USE_DRIVER only): build -> run -> profile ->
+    // to_evidence -> diagnose -> anti_cheat. Maps onto Verify schema below.
+    // ==========================================================================
+    let driverEnvelope = null;
+    if (USE_DRIVER) {
+      const kPath = attemptKernelPath(attempt);
+      const buildOut = `${WORKSPACE}/attempt_${attempt}/artifact`;
+      const profOut = `${WORKSPACE}/attempt_${attempt}/profile.native`;
+      await agent(
+        `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+        `Return its stdout JSON verbatim.`,
+        { label: `driver-build-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH });
+      const runOut = await agent(
+        `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+        `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+        { label: `driver-run-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH });
+      await agent(
+        `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+        `Return {ok, native_path}.`,
+        { label: `driver-profile-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH });
+      const evidenceOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+        `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+        { label: `driver-to-evidence-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH });
+      const diagOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+        `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+        { label: `driver-diagnose-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH });
+      const antiCheatOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath}\`.\n` +
+        `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+        { label: `driver-anti-cheat-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH });
+      driverEnvelope = {
+        anti_cheat: antiCheatOut || {},
+        metrics: (evidenceOut && evidenceOut.metrics) || {},
+        vendor: (DRIVER && DRIVER.hw_vendor) || '',
+        coverage: (evidenceOut && evidenceOut.coverage) || [],
+        bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',
+        latency_ms: Number((runOut && runOut.latency_ms) || 0),
+        backend_id: DRIVER_BACKEND_ID,
+      };
+    }
+
+    // ==========================================================================
     // Phase 4: Verify (Verifier Agent)
     // ==========================================================================
     phase('Verify');
@@ -414,10 +551,10 @@ Return JSON:
     log('Verifier: Checking correctness and performance...');
 
     const verifyResult = await agent(
-      `Verify CUDA kernel (Attempt ${attempt + 1}):
+      `Verify ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel (Attempt ${attempt + 1}):
 
 Kernel to verify:
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${codeResult.kernel_code.substring(0, 2500)}${codeResult.kernel_code.length > 2500 ? '\n... (truncated)' : ''}
 \`\`\`
 
@@ -434,7 +571,7 @@ Verification process:
 3. Performance check:
    - Benchmark on ${setupResult.target_architecture}
    - Measure execution time, GFLOPS
-   - Profile with nsys/ncu if available
+   - ${verifyToolHint()}
    - Compare with baseline: ${kernelSpec.baseline_gflops || 'N/A'} GFLOPS
 4. KernelBench evaluation (if configured):
    - Run full benchmark suite
