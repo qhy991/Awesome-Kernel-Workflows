@@ -1,0 +1,214 @@
+[
+  {
+    "label": "setup",
+    "phase": "Setup",
+    "prompt": "You are a GPU kernel optimization expert setting up the KernelFoundry evolutionary search.\n\n# Task:\n\n```python\nclass Model(nn.Module):\n    def forward(self, x):\n        return torch.softmax(x, dim=-1)\n```\n\n# Operation: softmax\n# Target language: cuda (SYCL/CUDA/Triton)\n# Target hardware: NVIDIA H100\n# Evidence contract:\n- descriptor_result_path: /tmp/kernelfoundry-fixture/descriptors/latest.json\n- archive_update_result_path: /tmp/kernelfoundry-fixture/archive/updates.jsonl\n- evidence_mode: measured\n- If evidence_mode is conservative_missing_evidence, behavioral descriptors and MAP-Elites insertion decisions are not strict paper evidence.\n\n# Setup Tasks:\n1. Parse the operator specification (inputs, outputs, shapes, dtypes)\n2. Establish PyTorch baseline performance: python /tmp/kernelfoundry-fixture/bench.py {kernel_path} {result_path}\n3. Identify the optimization feature space for this operator:\n   - What memory access patterns are possible? (d_mem: 0-3)\n   - What algorithmic reformulations exist? (d_algo: 0-3)\n   - What parallelism levels apply? (d_sync: 0-3)\n4. Initialize experiment: mkdir -p /tmp/kernelfoundry-fixture/{kernels,archive,prompts}\n\nReturn operator analysis and baseline.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "operator_code": {
+          "type": "string"
+        },
+        "operator_type": {
+          "type": "string"
+        },
+        "input_shapes": {
+          "type": "string"
+        },
+        "baseline_time_ms": {
+          "type": "number"
+        },
+        "hardware_info": {
+          "type": "string"
+        },
+        "feasible_cells": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "operator_code",
+        "baseline_time_ms"
+      ]
+    },
+    "seq": 0
+  },
+  {
+    "label": "vary-0",
+    "phase": "Vary",
+    "prompt": "You are a GPU kernel generator for the KernelFoundry evolutionary framework.\nGenerate a CUDA kernel that implements the given operator.\n\n# Operator to Implement:\n```python\ndef softmax(x): ...\n```\n\n# Operation: softmax\n# Target: cuda on NVIDIA H100\n# Baseline: 0.42ms | Speedup target: 2x\n\n# === EVOLVED OPTIMIZATION GUIDANCE (meta-prompt) ===\n\n## Optimization Philosophy:\nPrioritize memory bandwidth utilization before compute optimization. Minimize global memory accesses through data reuse.\n\n## Optimization Strategies:\nMemory: coalesced loads, shared/local memory tiling, vectorized access (vec4/vec8). Compute: loop unrolling, fused operations, register blocking. Parallelism: work-group barriers for shared memory, sub-group shuffles for reductions.\n\n## Common Pitfalls:\nAvoid bank conflicts in shared memory. Do not assume specific work-group sizes. Guard against out-of-bounds access for non-power-of-2 dimensions.\n\n## Analysis Guidance:\nBefore writing code: identify the memory access pattern, determine arithmetic intensity, choose tiling strategy based on data reuse distance.\n\n# === END EVOLVED GUIDANCE ===\n\n\n\n\n# Generation Requirements:\n1. Produce a COMPLETE, COMPILABLE cuda kernel\n2. Include all necessary headers/imports\n3. If mutating a parent: make MEANINGFUL structural changes, not just parameter tweaks\n4. Try to explore a DIFFERENT optimization strategy than the parent (different memory pattern, algorithm, or parallelism level)\n5. You may optionally produce a TEMPLATED kernel with configurable parameters (tile_size, work_group_size, unroll_factor) alongside a dispatch function\n\nReturn the kernel code and its optimization strategy description.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "kernel_code": {
+          "type": "string"
+        },
+        "strategy_description": {
+          "type": "string"
+        },
+        "memory_pattern": {
+          "type": "string"
+        },
+        "algorithm_type": {
+          "type": "string"
+        },
+        "parallelism_level": {
+          "type": "string"
+        },
+        "is_templated": {
+          "type": "boolean"
+        },
+        "template_params": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "kernel_code",
+        "strategy_description"
+      ]
+    },
+    "seq": 1
+  },
+  {
+    "label": "eval-0",
+    "phase": "Evaluate",
+    "prompt": "You are a kernel evaluator for KernelFoundry. Evaluate this cuda kernel.\n\n# Kernel Code:\n```cuda\n// kernel v0\n__global__ void k() {}\n\n```\n\n# Reference Operator:\n```python\ndef softmax(x): ...\n```\n\n# Evaluation Steps:\n1. **Compile**: Can this cuda kernel compile? Check syntax, headers, type correctness.\n   Run: python /tmp/kernelfoundry-fixture/test.py {kernel_path} {result_path}\n2. **Correctness**: Does it produce numerically equivalent output?\n   Tolerance: relative precision ν < 0.01 in 99% of outputs.\n3. **Performance**: Measure execution time.\n   Run: python /tmp/kernelfoundry-fixture/bench.py {kernel_path} {result_path}\n   speedup = 0.42ms / kernel_time_ms\n\n4. **Behavioral Classification** (assign coordinates 0-3 for each dimension):\n   - d_mem (Memory Access Pattern):\n     0: Scalar, strided, or uncoalesced access\n     1: Coalesced/vectorized (vec4, aligned loads)\n     2: Shared/local memory with explicit tiling\n     3: Multi-level hierarchy (SLM + register blocking + prefetch)\n   - d_algo (Algorithmic Structure):\n     0: Direct PyTorch translation\n     1: Fused operations (single-pass over data)\n     2: Reformulated algorithm (online norm, flash pattern)\n     3: Novel/asymptotically improved algorithm\n   - d_sync (Parallelism Coordination):\n     0: No synchronization (embarrassingly parallel)\n     1: Work-group barriers (group::barrier)\n     2: Sub-group primitives (shuffles, reductions, broadcast)\n     3: Global coordination (atomics, multi-pass with sync)\n\n   Use STATIC PATTERN MATCHING on the code (not runtime behavior).\n\nReturn evaluation results.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compiled": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "boolean"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "kernel_time_ms": {
+          "type": "number"
+        },
+        "d_mem": {
+          "type": "number"
+        },
+        "d_algo": {
+          "type": "number"
+        },
+        "d_sync": {
+          "type": "number"
+        },
+        "error_message": {
+          "type": "string"
+        },
+        "performance_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "compiled",
+        "correct",
+        "speedup",
+        "d_mem",
+        "d_algo",
+        "d_sync"
+      ]
+    },
+    "seq": 2
+  },
+  {
+    "label": "vary-1",
+    "phase": "Vary",
+    "prompt": "You are a GPU kernel generator for the KernelFoundry evolutionary framework.\nGenerate a CUDA kernel that implements the given operator.\n\n# Operator to Implement:\n```python\ndef softmax(x): ...\n```\n\n# Operation: softmax\n# Target: cuda on NVIDIA H100\n# Baseline: 0.42ms | Speedup target: 2x\n\n# === EVOLVED OPTIMIZATION GUIDANCE (meta-prompt) ===\n\n## Optimization Philosophy:\nPrioritize memory bandwidth utilization before compute optimization. Minimize global memory accesses through data reuse.\n\n## Optimization Strategies:\nMemory: coalesced loads, shared/local memory tiling, vectorized access (vec4/vec8). Compute: loop unrolling, fused operations, register blocking. Parallelism: work-group barriers for shared memory, sub-group shuffles for reductions.\n\n## Common Pitfalls:\nAvoid bank conflicts in shared memory. Do not assume specific work-group sizes. Guard against out-of-bounds access for non-power-of-2 dimensions.\n\n## Analysis Guidance:\nBefore writing code: identify the memory access pattern, determine arithmetic intensity, choose tiling strategy based on data reuse distance.\n\n# === END EVOLVED GUIDANCE ===\n\n# Parent Kernel (from cell [1,1,1], fitness=0.84, speedup=1.35x):\n```cuda\n// kernel v0\n__global__ void k() {}\n\n```\n\n\n\n# Generation Requirements:\n1. Produce a COMPLETE, COMPILABLE cuda kernel\n2. Include all necessary headers/imports\n3. If mutating a parent: make MEANINGFUL structural changes, not just parameter tweaks\n4. Try to explore a DIFFERENT optimization strategy than the parent (different memory pattern, algorithm, or parallelism level)\n5. You may optionally produce a TEMPLATED kernel with configurable parameters (tile_size, work_group_size, unroll_factor) alongside a dispatch function\n\nReturn the kernel code and its optimization strategy description.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "kernel_code": {
+          "type": "string"
+        },
+        "strategy_description": {
+          "type": "string"
+        },
+        "memory_pattern": {
+          "type": "string"
+        },
+        "algorithm_type": {
+          "type": "string"
+        },
+        "parallelism_level": {
+          "type": "string"
+        },
+        "is_templated": {
+          "type": "boolean"
+        },
+        "template_params": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "kernel_code",
+        "strategy_description"
+      ]
+    },
+    "seq": 3
+  },
+  {
+    "label": "eval-1",
+    "phase": "Evaluate",
+    "prompt": "You are a kernel evaluator for KernelFoundry. Evaluate this cuda kernel.\n\n# Kernel Code:\n```cuda\n// kernel v1\n__global__ void k2() {}\n\n```\n\n# Reference Operator:\n```python\ndef softmax(x): ...\n```\n\n# Evaluation Steps:\n1. **Compile**: Can this cuda kernel compile? Check syntax, headers, type correctness.\n   Run: python /tmp/kernelfoundry-fixture/test.py {kernel_path} {result_path}\n2. **Correctness**: Does it produce numerically equivalent output?\n   Tolerance: relative precision ν < 0.01 in 99% of outputs.\n3. **Performance**: Measure execution time.\n   Run: python /tmp/kernelfoundry-fixture/bench.py {kernel_path} {result_path}\n   speedup = 0.42ms / kernel_time_ms\n\n4. **Behavioral Classification** (assign coordinates 0-3 for each dimension):\n   - d_mem (Memory Access Pattern):\n     0: Scalar, strided, or uncoalesced access\n     1: Coalesced/vectorized (vec4, aligned loads)\n     2: Shared/local memory with explicit tiling\n     3: Multi-level hierarchy (SLM + register blocking + prefetch)\n   - d_algo (Algorithmic Structure):\n     0: Direct PyTorch translation\n     1: Fused operations (single-pass over data)\n     2: Reformulated algorithm (online norm, flash pattern)\n     3: Novel/asymptotically improved algorithm\n   - d_sync (Parallelism Coordination):\n     0: No synchronization (embarrassingly parallel)\n     1: Work-group barriers (group::barrier)\n     2: Sub-group primitives (shuffles, reductions, broadcast)\n     3: Global coordination (atomics, multi-pass with sync)\n\n   Use STATIC PATTERN MATCHING on the code (not runtime behavior).\n\nReturn evaluation results.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compiled": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "boolean"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "kernel_time_ms": {
+          "type": "number"
+        },
+        "d_mem": {
+          "type": "number"
+        },
+        "d_algo": {
+          "type": "number"
+        },
+        "d_sync": {
+          "type": "number"
+        },
+        "error_message": {
+          "type": "string"
+        },
+        "performance_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "compiled",
+        "correct",
+        "speedup",
+        "d_mem",
+        "d_algo",
+        "d_sync"
+      ]
+    },
+    "seq": 4
+  },
+  {
+    "label": "final-report",
+    "phase": "Evaluate",
+    "prompt": "Write a concise technical report on KernelFoundry MAP-Elites optimization.\n\n# Results\n- Operation: softmax\n- Target: cuda on NVIDIA H100\n- Baseline: 0.42ms\n- Best speedup: 1.72x (cell [2,2,2])\n- Generations: 2\n- Archive coverage: 2/64 cells\n- Total improvements: 0\n- Total discoveries: 2\n- Evidence mode: measured\n- Descriptor artifact: /tmp/kernelfoundry-fixture/descriptors/latest.json\n- Archive update artifact: /tmp/kernelfoundry-fixture/archive/updates.jsonl\n\n# Archive (top cells):\n[2,2,2] 1.72x — shared memory tiling + warp shuffle reduction\n[1,1,1] 1.35x — coalesced loads + shared tile\n\n# Best Kernel:\n```cuda\n// kernel v1\n__global__ void k2() {}\n\n```\n\n# Final Meta-Prompt State:\noptimization_philosophy: Prioritize memory bandwidth utilization before compute optimization. Minimize global memory accesses through data reuse.\noptimization_strategies: Memory: coalesced loads, shared/local memory tiling, vectorized access (vec4/vec8). Compute: loop unrolling, fused operations, register blocking. Parallelism: work-group barriers for shared memory, sub-group shuffles for reductions.\ncommon_pitfalls: Avoid bank conflicts in shared memory. Do not assume specific work-group sizes. Guard against out-of-bounds access for non-power-of-2 dimensions.\nanalysis_guidance: Before writing code: identify the memory access pattern, determine arithmetic intensity, choose tiling strategy based on data reuse distance.\n\nWrite:\n1. Quality-diversity analysis: how well did the archive cover the behavioral space?\n2. Meta-prompt evolution: how did the guidance change and what impact did it have?\n3. Most effective optimization strategies discovered\n4. Hardware awareness: evidence of hardware-specific optimizations",
+    "seq": 5
+  }
+]
