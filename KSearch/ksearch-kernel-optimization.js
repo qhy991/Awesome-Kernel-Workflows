@@ -224,7 +224,7 @@ ${BASELINE_CODE_PATH ? `Also read the baseline kernel at: ${BASELINE_CODE_PATH}`
 7. **key_challenges**: What makes this kernel hard to optimize?
 8. **design_dimensions**: Orthogonal axes of the design space (e.g., tiling strategy, memory hierarchy usage, parallelism decomposition, algorithmic variant)
 
-Target language: ${LANGUAGE}
+Target language: ${langToken(LANGUAGE)}
 Target GPU: ${TARGET_GPU}
 Operation: ${OP_DESC}
 
@@ -257,7 +257,7 @@ const baselineEval = await agent(`You are a kernel evaluation expert. Evaluate t
 ${specText.substring(0, 2000)}
 
 # Baseline Code:
-\`\`\`${LANGUAGE}
+\`\`\`${langToken(LANGUAGE)}
 ${(setupResult.baseline_code || '').substring(0, 3000)}
 \`\`\`
 
@@ -302,7 +302,7 @@ const initResult = await agent(`You are a kernel optimization architect. Build a
 ${specText.substring(0, 3000)}
 
 # Operation: ${OP_DESC} (${opType})
-# Language: ${LANGUAGE}
+# Language: ${langToken(LANGUAGE)}
 # Target GPU: ${TARGET_GPU}
 # Baseline performance: metric=${baselineMetric}, latency=${baselineEval.baseline_latency_ms || 'N/A'}ms
 # Bottleneck: ${baselineEval.bottleneck_analysis || 'unknown'}
@@ -507,11 +507,11 @@ Return selection result.`, {
 
     if (isFirstAttempt) {
       // Attempt 1: generate from action (with or without base code)
-      genResult = await agent(`You are an expert ${LANGUAGE} kernel developer. Generate a high-performance kernel implementing a SPECIFIC optimization action.
+      genResult = await agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. Generate a high-performance kernel implementing a SPECIFIC optimization action.
 
 # Operation: ${OP_DESC} (${opType})
 # Target: ${TARGET_GPU}
-# Language: ${LANGUAGE}
+# Language: ${langToken(LANGUAGE)}
 
 # Kernel Specification:
 ${specText.substring(0, 2000)}
@@ -520,7 +520,7 @@ ${specText.substring(0, 2000)}
 ${selection.action_description || ''}
 
 ${parentCode ? `# Base code (from parent node — start from this and apply the action):
-\`\`\`${LANGUAGE}
+\`\`\`${langToken(LANGUAGE)}
 ${parentCode.substring(0, 4000)}
 \`\`\`` : '# No base code available — implement from specification directly.'}
 
@@ -529,7 +529,7 @@ ${JSON.stringify(selection.context_for_generation || {}).substring(0, 1500)}
 ${wmSection}
 
 # Requirements:
-1. Output COMPLETE, COMPILABLE ${LANGUAGE} code
+1. Output COMPLETE, COMPILABLE ${langToken(LANGUAGE)} code
 2. Implement ONLY the specified action — keep everything else close to base
 3. Must be functionally correct (outputs within rtol=${RTOL}, atol=${ATOL})
 4. Target ${TARGET_GPU} architecture
@@ -551,11 +551,11 @@ Return the complete kernel code.`, {
     } else if (!hasPassedInCycle) {
       // Attempts 2+, NO passing solution yet: DEBUG prompt
       // Uses currentRawCode (last attempt's code) as the buggy code to fix
-      genResult = await agent(`You are an expert ${LANGUAGE} kernel developer. The previous attempt has bugs or fails correctness. Debug and fix it.
+      genResult = await agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. The previous attempt has bugs or fails correctness. Debug and fix it.
 
 # Operation: ${OP_DESC} (${opType})
 # Target: ${TARGET_GPU}
-# Language: ${LANGUAGE}
+# Language: ${langToken(LANGUAGE)}
 
 # Kernel Specification:
 ${specText.substring(0, 1500)}
@@ -564,12 +564,12 @@ ${specText.substring(0, 1500)}
 ${selection.action_description || ''}
 
 ${parentCode ? `# Base code (known-good reference, from ${baseForDebugLabel}):
-\`\`\`${LANGUAGE}
+\`\`\`${langToken(LANGUAGE)}
 ${baseForDebug.substring(0, 3000)}
 \`\`\`` : ''}
 
 # Buggy code (last attempt — FIX THIS):
-\`\`\`${LANGUAGE}
+\`\`\`${langToken(LANGUAGE)}
 ${(currentRawCode || '').substring(0, 4000)}
 \`\`\`
 
@@ -596,22 +596,22 @@ Return the fixed kernel code.`, {
     } else {
       // Attempts 2+, HAVE a passing solution: IMPROVE prompt
       // Focus on performance, not correctness
-      genResult = await agent(`You are an expert ${LANGUAGE} kernel developer. You have a working solution — improve its performance.
+      genResult = await agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. You have a working solution — improve its performance.
 
 # Operation: ${OP_DESC} (${opType})
 # Target: ${TARGET_GPU}
-# Language: ${LANGUAGE}
+# Language: ${langToken(LANGUAGE)}
 
 # Kernel Specification:
 ${specText.substring(0, 1500)}
 
 ${parentCode ? `# Base code (reference, from ${baseForDebugLabel}):
-\`\`\`${LANGUAGE}
+\`\`\`${langToken(LANGUAGE)}
 ${baseForDebug.substring(0, 3000)}
 \`\`\`` : ''}
 
 # Current working code (improve this):
-\`\`\`${LANGUAGE}
+\`\`\`${langToken(LANGUAGE)}
 ${(currentRawCode || cycleBestCode || '').substring(0, 4000)}
 \`\`\`
 
@@ -650,10 +650,10 @@ Return improved kernel code.`, {
     // =========================================================================
     phase('Evaluate')
 
-    const evalResult = await agent(`You are a kernel evaluation expert. Evaluate this ${LANGUAGE} kernel for correctness and performance.
+    const evalResult = await agent(`You are a kernel evaluation expert. Evaluate this ${langToken(LANGUAGE)} kernel for correctness and performance.
 
 # Kernel Code:
-\`\`\`${LANGUAGE}
+\`\`\`${langToken(LANGUAGE)}
 ${genResult.code.substring(0, 4000)}
 \`\`\`
 
@@ -663,7 +663,7 @@ ${specText.substring(0, 1500)}
 # Evaluation Steps:
 
 ## 1. Compilation Check
-- Is the code syntactically valid ${LANGUAGE}?
+- Is the code syntactically valid ${langToken(LANGUAGE)}?
 - All imports/includes present?
 
 ## 2. Correctness Check
@@ -865,7 +865,7 @@ const finalReport = await agent(`Write a concise technical report on this K-Sear
 
 # K-Search Optimization Results
 - Operation: ${OP_DESC} (${opType})
-- Language: ${LANGUAGE}, Target: ${TARGET_GPU}
+- Language: ${langToken(LANGUAGE)}, Target: ${TARGET_GPU}
 - Baseline metric: ${baselineMetric}
 - Best metric achieved: ${bestMetric}
 - Overall speedup: ${bestMetric ? (bestMetric / baselineMetric).toFixed(2) : 'N/A'}x
@@ -874,7 +874,7 @@ const finalReport = await agent(`Write a concise technical report on this K-Sear
 - Valid solutions: ${solutionDb.filter(s => s.eval?.is_valid).length}
 
 # Best Solution (node: ${bestSolution?.node_id || 'none'}):
-\`\`\`${LANGUAGE}
+\`\`\`${langToken(LANGUAGE)}
 ${(bestSolution?.code || '').substring(0, 3000)}
 \`\`\`
 
