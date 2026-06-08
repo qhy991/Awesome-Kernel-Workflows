@@ -1,0 +1,12 @@
+{
+  "problem_definition": "Implement softmax over the last dim of a Tensor[B,N] in pure Triton",
+  "seed_candidates": 2,
+  "iterations": 2,
+  "verify": true,
+  "compose": false,
+  "exp_dir": "/tmp/kernelagent-fixture",
+  "model_mechanical": "haiku",
+  "model_profile": "sonnet",
+  "model_judgment": "opus",
+  "temperature_base": 0.8
+}

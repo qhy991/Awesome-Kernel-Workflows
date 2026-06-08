@@ -1,0 +1,423 @@
+[
+  {
+    "label": "setup-problem",
+    "phase": "Setup",
+    "prompt": "You are a Triton kernel synthesis expert. Analyze the problem and produce a structured description.\n\n# Problem Source\n\nDescription: Implement softmax over the last dim of a Tensor[B,N] in pure Triton\n\n# Instructions\n1. If a file path is given, read the file and extract the PyTorch module/problem definition\n2. Produce a clear, detailed problem description suitable for Triton kernel generation\n3. Identify: input tensors (shapes, dtypes), operations, expected output shape/dtype\n4. Note any special requirements (numerical precision, edge cases, memory layout)\n\nReturn a JSON object with:\n- problem_definition: detailed text description\n- input_tensors: list of {name, shape, dtype} for each input\n- operations: list of operation names in order\n- output_spec: {shape, dtype} of the output\n- complexity_signals: any signals that suggest this needs multi-subgraph decomposition",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "problem_definition": {
+          "type": "string"
+        },
+        "input_tensors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "shape": {
+                "type": "string"
+              },
+              "dtype": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "output_spec": {
+          "type": "object",
+          "properties": {
+            "shape": {
+              "type": "string"
+            },
+            "dtype": {
+              "type": "string"
+            }
+          }
+        },
+        "complexity_signals": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "problem_definition",
+        "operations"
+      ]
+    },
+    "seq": 0
+  },
+  {
+    "label": "setup-test",
+    "phase": "Setup",
+    "prompt": "You are a Triton kernel test engineer. Generate a Python test harness for the following problem.\n\n# Problem Description\nCompute row-wise softmax over Tensor[B,N]\n\n# Input Tensors\n[\n  {\n    \"name\": \"x\",\n    \"shape\": \"[B,N]\",\n    \"dtype\": \"float32\"\n  }\n]\n\n# Operations\n[\n  \"softmax\"\n]\n\n# Requirements\nThe test harness must:\n1. Import the kernel function: `from kernel import kernel_function`\n2. Create realistic test inputs with appropriate shapes and dtypes\n3. Run the kernel function and compare output against a PyTorch reference\n4. Print \"PASS\" if output matches within tolerance, \"FAIL\" otherwise\n5. Exit with code 0 on success, 1 on failure\n6. Use torch.allclose with rtol=1e-3, atol=1e-3 for float comparison\n7. Test with at least 2 different input sizes if applicable\n\nReturn ONLY the Python test code (no markdown, no explanation).",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "test_code": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "test_code"
+      ]
+    },
+    "seq": 1
+  },
+  {
+    "label": "route-analysis",
+    "phase": "Route",
+    "prompt": "Analyze this problem to determine the optimal synthesis path.\n\n# Problem Description\nCompute row-wise softmax over Tensor[B,N]\n\n# Operations\n[\"softmax\"]\n\n# Complexity Signals\n[]\n\n# Routing Rules\n- DIRECT path: Simple, single-kernel problems (element-wise ops, reductions, simple matmul)\n  - Fewer than 4 sequential ops\n  - No attention patterns, no conv_transpose2d, no group_norm chains\n  - No control flow in forward pass\n\n- PIPELINE path: Complex multi-op problems requiring decomposition\n  - Attention-like patterns (softmax over QK, multihead attention, einsum with bmm)\n  - conv_transpose2d present\n  - group_norm with conv or long chains (>=4 steps)\n  - Explicit control flow in forward\n  - Multiple distinct computational stages\n\nReturn a JSON object with:\n- path: 'direct' or 'pipeline'\n- reason: explanation of the routing decision\n- subgraph_count: estimated number of subgraphs (1 for direct)\n- estimated_difficulty: 'easy', 'medium', 'hard'",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "enum": [
+            "direct",
+            "pipeline"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "subgraph_count": {
+          "type": "number"
+        },
+        "estimated_difficulty": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "reason"
+      ]
+    },
+    "seq": 2
+  },
+  {
+    "label": "gen-main-seed0",
+    "phase": "Generate",
+    "prompt": "You are an expert Triton kernel developer. Generate a complete, working Triton kernel.\n\n# Problem\nCompute row-wise softmax over Tensor[B,N]\n\n# Test Harness (the kernel MUST pass this test)\n```python\nimport torch\nfrom kernel import kernel_function\nx = torch.randn(8, 16, device='cuda')\ny = kernel_function(x)\nref = torch.softmax(x, dim=-1)\nassert torch.allclose(y, ref, rtol=1e-3, atol=1e-3)\nprint('PASS')\n\n```\n\n# Triton Guidelines\n1. Use @triton.jit decorator for kernel functions\n2. Use tl.program_id() for block indexing\n3. Use tl.load/tl.store for memory access with proper masking\n4. Use tl.arange() for offset computation\n5. Ensure all operations are within Triton's supported set\n6. The kernel_function() wrapper must handle tensor allocation and kernel launch\n7. DO NOT use torch.nn, torch.nn.functional, or PyTorch activation helpers\n8. Use tl.constexpr for compile-time constants where appropriate\n9. Handle edge cases: non-divisible sizes, boundary conditions\n\n# Seed Variant 1/2\nGenerate a unique implementation approach. Temperature: 0.8\nStart with the most straightforward implementation.\n\n\n\n\n# Output\nReturn a JSON object with:\n- kernel_code: complete Python file with @triton.jit kernel and kernel_function wrapper\n- approach: brief description of the implementation strategy\n- potential_issues: any concerns about correctness or performance",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "kernel_code": {
+          "type": "string"
+        },
+        "approach": {
+          "type": "string"
+        },
+        "potential_issues": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kernel_code",
+        "approach"
+      ]
+    },
+    "seq": 3
+  },
+  {
+    "label": "gen-main-seed1",
+    "phase": "Generate",
+    "prompt": "You are an expert Triton kernel developer. Generate a complete, working Triton kernel.\n\n# Problem\nCompute row-wise softmax over Tensor[B,N]\n\n# Test Harness (the kernel MUST pass this test)\n```python\nimport torch\nfrom kernel import kernel_function\nx = torch.randn(8, 16, device='cuda')\ny = kernel_function(x)\nref = torch.softmax(x, dim=-1)\nassert torch.allclose(y, ref, rtol=1e-3, atol=1e-3)\nprint('PASS')\n\n```\n\n# Triton Guidelines\n1. Use @triton.jit decorator for kernel functions\n2. Use tl.program_id() for block indexing\n3. Use tl.load/tl.store for memory access with proper masking\n4. Use tl.arange() for offset computation\n5. Ensure all operations are within Triton's supported set\n6. The kernel_function() wrapper must handle tensor allocation and kernel launch\n7. DO NOT use torch.nn, torch.nn.functional, or PyTorch activation helpers\n8. Use tl.constexpr for compile-time constants where appropriate\n9. Handle edge cases: non-divisible sizes, boundary conditions\n\n# Seed Variant 2/2\nGenerate a unique implementation approach. Temperature: 0.9\n\nTry a different tiling strategy or block size.\n\n\n\n# Output\nReturn a JSON object with:\n- kernel_code: complete Python file with @triton.jit kernel and kernel_function wrapper\n- approach: brief description of the implementation strategy\n- potential_issues: any concerns about correctness or performance",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "kernel_code": {
+          "type": "string"
+        },
+        "approach": {
+          "type": "string"
+        },
+        "potential_issues": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kernel_code",
+        "approach"
+      ]
+    },
+    "seq": 4
+  },
+  {
+    "label": "verify-candidate_0",
+    "phase": "Verify",
+    "prompt": "You are a kernel verification engineer. Execute the test harness against this Triton kernel.\n\n# Kernel Code\n```python\nimport triton\nimport triton.language as tl\n@triton.jit\ndef softmax_kernel(x_ptr, y_ptr, N, BLOCK: tl.constexpr):\n  pid = tl.program_id(0)\n  offs = pid * N + tl.arange(0, BLOCK)\n  m = tl.arange(0, BLOCK) < N\n  x = tl.load(x_ptr + offs, mask=m, other=-float('inf'))\n  x_max = tl.max(x, axis=0)\n  num = tl.exp(x - x_max)\n  den = tl.sum(num, axis=0)\n  tl.store(y_ptr + offs, num / den, mask=m)\n\n```\n\n# Test Harness\n```python\nimport torch\nfrom kernel import kernel_function\nx = torch.randn(8, 16, device='cuda')\ny = kernel_function(x)\nref = torch.softmax(x, dim=-1)\nassert torch.allclose(y, ref, rtol=1e-3, atol=1e-3)\nprint('PASS')\n\n```\n\n# Instructions\n1. Write the kernel code to a file named kernel.py\n2. Write the test harness to a file named test_kernel.py\n3. Execute the generated/user-provided test harness command for this workspace; do not assume a fixed interpreter or filename.\n4. Capture stdout, stderr, and exit code\n5. If exit code is 0 and output contains \"PASS\", the kernel is verified\n6. If exit code is non-zero or output contains \"FAIL\", report the error\n\n# Verification Rules\n- The kernel MUST use @triton.jit (no torch.nn fallbacks allowed)\n- The test must complete within 30 seconds (timeout = kill)\n- Any import of torch.nn or torch.nn.functional is a hard failure\n\nReturn a JSON object with:\n- passed: boolean\n- exit_code: number\n- stdout: captured standard output\n- stderr: captured standard error\n- error_summary: brief description of failure reason (null if passed)\n- verification_result: 'pass' | 'fail' | 'timeout' | 'error'",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "passed": {
+          "type": "boolean"
+        },
+        "exit_code": {
+          "type": "number"
+        },
+        "stdout": {
+          "type": "string"
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "error_summary": {
+          "type": "string"
+        },
+        "verification_result": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "fail",
+            "timeout",
+            "error"
+          ]
+        }
+      },
+      "required": [
+        "passed",
+        "verification_result"
+      ]
+    },
+    "seq": 5
+  },
+  {
+    "label": "verify-candidate_1",
+    "phase": "Verify",
+    "prompt": "You are a kernel verification engineer. Execute the test harness against this Triton kernel.\n\n# Kernel Code\n```python\nimport triton\nimport triton.language as tl\n@triton.jit\ndef softmax_kernel(x_ptr, y_ptr, N, BLOCK: tl.constexpr):\n  pid = tl.program_id(0)\n  base = pid * N\n  offs = base + tl.arange(0, BLOCK)\n  m = tl.arange(0, BLOCK) < N\n  x = tl.load(x_ptr + offs, mask=m, other=-1e30)\n  x_max = tl.max(x, axis=0)\n  num = tl.exp(x - x_max)\n  den = tl.sum(num, axis=0)\n  tl.store(y_ptr + offs, num / den, mask=m)\n\n```\n\n# Test Harness\n```python\nimport torch\nfrom kernel import kernel_function\nx = torch.randn(8, 16, device='cuda')\ny = kernel_function(x)\nref = torch.softmax(x, dim=-1)\nassert torch.allclose(y, ref, rtol=1e-3, atol=1e-3)\nprint('PASS')\n\n```\n\n# Instructions\n1. Write the kernel code to a file named kernel.py\n2. Write the test harness to a file named test_kernel.py\n3. Execute the generated/user-provided test harness command for this workspace; do not assume a fixed interpreter or filename.\n4. Capture stdout, stderr, and exit code\n5. If exit code is 0 and output contains \"PASS\", the kernel is verified\n6. If exit code is non-zero or output contains \"FAIL\", report the error\n\n# Verification Rules\n- The kernel MUST use @triton.jit (no torch.nn fallbacks allowed)\n- The test must complete within 30 seconds (timeout = kill)\n- Any import of torch.nn or torch.nn.functional is a hard failure\n\nReturn a JSON object with:\n- passed: boolean\n- exit_code: number\n- stdout: captured standard output\n- stderr: captured standard error\n- error_summary: brief description of failure reason (null if passed)\n- verification_result: 'pass' | 'fail' | 'timeout' | 'error'",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "passed": {
+          "type": "boolean"
+        },
+        "exit_code": {
+          "type": "number"
+        },
+        "stdout": {
+          "type": "string"
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "error_summary": {
+          "type": "string"
+        },
+        "verification_result": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "fail",
+            "timeout",
+            "error"
+          ]
+        }
+      },
+      "required": [
+        "passed",
+        "verification_result"
+      ]
+    },
+    "seq": 6
+  },
+  {
+    "label": "refine-candidate_0-r1",
+    "phase": "Refine",
+    "prompt": "You are a Triton kernel debugging expert. Fix this failing kernel.\n\n# Problem Description\nCompute row-wise softmax over Tensor[B,N]\n\n# Current Kernel Code\n```python\nimport triton\nimport triton.language as tl\n@triton.jit\ndef softmax_kernel(x_ptr, y_ptr, N, BLOCK: tl.constexpr):\n  pid = tl.program_id(0)\n  offs = pid * N + tl.arange(0, BLOCK)\n  m = tl.arange(0, BLOCK) < N\n  x = tl.load(x_ptr + offs, mask=m, other=-float('inf'))\n  x_max = tl.max(x, axis=0)\n  num = tl.exp(x - x_max)\n  den = tl.sum(num, axis=0)\n  tl.store(y_ptr + offs, num / den, mask=m)\n\n```\n\n# Test Output (stdout)\n```\n\n```\n\n# Error Output (stderr)\n```\nTypeError: tl.max() got unexpected keyword argument axis at line 7\n```\n\n# Error Summary\ntl.max axis kwarg unsupported in this Triton version\n\n# Previous Refinement Attempts\nNone\n\n# Debugging Guidelines\n1. Analyze the error message carefully — it often points to the exact issue\n2. Common fixes:\n   - Shape mismatch: check tl.load mask dimensions\n   - Index out of bounds: verify offset calculations and masking\n   - Compilation error: check Triton API usage (tl.constexpr, tl.load signature)\n   - Wrong output: verify reduction logic, accumulation, synchronization\n   - torch.nn fallback: remove any PyTorch nn/functional usage, rewrite in pure Triton\n3. Make MINIMAL changes — don't rewrite from scratch unless necessary\n4. Preserve the overall approach, fix only the bug\n\nReturn a JSON object with:\n- kernel_code: the fixed complete kernel code\n- changes_made: list of specific changes made\n- confidence: 'high' | 'medium' | 'low' that this fix is correct\n- fix_explanation: brief explanation of what was wrong and how it was fixed",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "kernel_code": {
+          "type": "string"
+        },
+        "changes_made": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "confidence": {
+          "type": "string",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "fix_explanation": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kernel_code",
+        "fix_explanation"
+      ]
+    },
+    "seq": 7
+  },
+  {
+    "label": "refine-candidate_1-r1",
+    "phase": "Refine",
+    "prompt": "You are a Triton kernel debugging expert. Fix this failing kernel.\n\n# Problem Description\nCompute row-wise softmax over Tensor[B,N]\n\n# Current Kernel Code\n```python\nimport triton\nimport triton.language as tl\n@triton.jit\ndef softmax_kernel(x_ptr, y_ptr, N, BLOCK: tl.constexpr):\n  pid = tl.program_id(0)\n  base = pid * N\n  offs = base + tl.arange(0, BLOCK)\n  m = tl.arange(0, BLOCK) < N\n  x = tl.load(x_ptr + offs, mask=m, other=-1e30)\n  x_max = tl.max(x, axis=0)\n  num = tl.exp(x - x_max)\n  den = tl.sum(num, axis=0)\n  tl.store(y_ptr + offs, num / den, mask=m)\n\n```\n\n# Test Output (stdout)\n```\n\n```\n\n# Error Output (stderr)\n```\nRuntimeError: triton.compilation_error at line 6: mask shape mismatch\n```\n\n# Error Summary\ncompilation error: mask shape vs offsets\n\n# Previous Refinement Attempts\nNone\n\n# Debugging Guidelines\n1. Analyze the error message carefully — it often points to the exact issue\n2. Common fixes:\n   - Shape mismatch: check tl.load mask dimensions\n   - Index out of bounds: verify offset calculations and masking\n   - Compilation error: check Triton API usage (tl.constexpr, tl.load signature)\n   - Wrong output: verify reduction logic, accumulation, synchronization\n   - torch.nn fallback: remove any PyTorch nn/functional usage, rewrite in pure Triton\n3. Make MINIMAL changes — don't rewrite from scratch unless necessary\n4. Preserve the overall approach, fix only the bug\n\nReturn a JSON object with:\n- kernel_code: the fixed complete kernel code\n- changes_made: list of specific changes made\n- confidence: 'high' | 'medium' | 'low' that this fix is correct\n- fix_explanation: brief explanation of what was wrong and how it was fixed",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "kernel_code": {
+          "type": "string"
+        },
+        "changes_made": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "confidence": {
+          "type": "string",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "fix_explanation": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kernel_code",
+        "fix_explanation"
+      ]
+    },
+    "seq": 8
+  },
+  {
+    "label": "reverify-candidate_0-r1",
+    "phase": "Refine",
+    "prompt": "Verify this refined Triton kernel against the test harness.\n\n# Kernel Code\n```python\nimport triton\nimport triton.language as tl\n@triton.jit\ndef softmax_kernel(x_ptr, y_ptr, N, BLOCK: tl.constexpr):\n  pid = tl.program_id(0)\n  offs = pid * N + tl.arange(0, BLOCK)\n  m = tl.arange(0, BLOCK) < N\n  x = tl.load(x_ptr + offs, mask=m, other=-float('inf'))\n  x_max = tl.max(x, 0)\n  num = tl.exp(x - x_max)\n  den = tl.sum(num, 0)\n  tl.store(y_ptr + offs, num / den, mask=m)\n\n```\n\n# Test Harness\n```python\nimport torch\nfrom kernel import kernel_function\nx = torch.randn(8, 16, device='cuda')\ny = kernel_function(x)\nref = torch.softmax(x, dim=-1)\nassert torch.allclose(y, ref, rtol=1e-3, atol=1e-3)\nprint('PASS')\n\n```\n\nExecute the test and report results. Return JSON with:\n- passed: boolean\n- exit_code: number\n- stdout: string\n- stderr: string\n- error_summary: string or null\n- verification_result: 'pass' | 'fail' | 'timeout' | 'error'",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "passed": {
+          "type": "boolean"
+        },
+        "exit_code": {
+          "type": "number"
+        },
+        "stdout": {
+          "type": "string"
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "error_summary": {
+          "type": "string"
+        },
+        "verification_result": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "fail",
+            "timeout",
+            "error"
+          ]
+        }
+      },
+      "required": [
+        "passed",
+        "verification_result"
+      ]
+    },
+    "seq": 9
+  },
+  {
+    "label": "reverify-candidate_1-r1",
+    "phase": "Refine",
+    "prompt": "Verify this refined Triton kernel against the test harness.\n\n# Kernel Code\n```python\nimport triton\nimport triton.language as tl\n@triton.jit\ndef softmax_kernel(x_ptr, y_ptr, N, BLOCK: tl.constexpr):\n  pid = tl.program_id(0)\n  offs = pid * N + tl.arange(0, BLOCK)\n  m = tl.arange(0, BLOCK) < N\n  x = tl.load(x_ptr + offs, mask=m, other=-1e30)\n  x_max = tl.max(x, 0)\n  num = tl.exp(x - x_max)\n  den = tl.sum(num, 0)\n  tl.store(y_ptr + offs, num / den, mask=m)\n\n```\n\n# Test Harness\n```python\nimport torch\nfrom kernel import kernel_function\nx = torch.randn(8, 16, device='cuda')\ny = kernel_function(x)\nref = torch.softmax(x, dim=-1)\nassert torch.allclose(y, ref, rtol=1e-3, atol=1e-3)\nprint('PASS')\n\n```\n\nExecute the test and report results. Return JSON with:\n- passed: boolean\n- exit_code: number\n- stdout: string\n- stderr: string\n- error_summary: string or null\n- verification_result: 'pass' | 'fail' | 'timeout' | 'error'",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "passed": {
+          "type": "boolean"
+        },
+        "exit_code": {
+          "type": "number"
+        },
+        "stdout": {
+          "type": "string"
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "error_summary": {
+          "type": "string"
+        },
+        "verification_result": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "fail",
+            "timeout",
+            "error"
+          ]
+        }
+      },
+      "required": [
+        "passed",
+        "verification_result"
+      ]
+    },
+    "seq": 10
+  },
+  {
+    "label": "report-summary",
+    "phase": "Report",
+    "prompt": "Generate a comprehensive synthesis report for this KernelAgent session.\n\n# Problem\nCompute row-wise softmax over Tensor[B,N]\n\n# Routing Decision\nPath: direct\nReason: simple single-stage reduction; no attention or conv_transpose\nEstimated Difficulty: easy\n\n# Generation Summary\n- Total candidates generated: 2\n- Policy-rejected: 0\n- Verification passed: 1\n- Verification failed: 1\n- Refinement rounds: 1\n- Refinement attempts: 2\n\n# Best Kernel Approach\nundefined\n\n# Composition\nSingle-kernel solution (no composition needed)\n\n# Report Format\nProvide:\n1. Executive summary (1-2 sentences)\n2. Synthesis outcome: success/partial/failed\n3. Best kernel details: approach, key implementation choices\n4. Verification status with any caveats\n5. Performance considerations (if inferable from code structure)\n6. Recommendations for further optimization\n7. Full path to session artifacts\n\nReturn a JSON object with:\n- outcome: 'success' | 'partial' | 'failed'\n- summary: string\n- best_kernel_approach: string\n- verification_status: string\n- recommendations: array of strings\n- artifacts_path: string",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "success",
+            "partial",
+            "failed"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "best_kernel_approach": {
+          "type": "string"
+        },
+        "verification_status": {
+          "type": "string"
+        },
+        "recommendations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "artifacts_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "outcome",
+        "summary"
+      ]
+    },
+    "seq": 11
+  }
+]
