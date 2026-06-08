@@ -1,0 +1,14 @@
+{
+  "kernel_path": "/tmp/kernelband-fixture/kernel.py",
+  "op_description": "matmul",
+  "language": "triton",
+  "target_gpu": "A100",
+  "iterations": 2,
+  "num_clusters": 3,
+  "recluster_period": 10,
+  "ucb_exploration": 2.0,
+  "saturation_threshold": 0.75,
+  "strategies": ["tiling", "vectorization", "fusion", "pipeline", "reordering", "access_layout"],
+  "exp_dir": "/tmp/kernelband-fixture",
+  "benchmark_command": "python /tmp/kernelband-fixture/bench.py {kernel_path} {result_path}"
+}
