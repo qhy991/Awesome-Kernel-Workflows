@@ -70,7 +70,23 @@ function assertWorkflowSuitability() {
   }
 }
 
-assertWorkflowSuitability()
+function resolveBackendAxis() {
+  const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
+  const l = args.language ? normalizeSuitabilityValue(args.language) : null
+  if (b && l && b !== l) {
+    throw new Error(`Conflicting args: backend="${args.backend}" vs language="${args.language}". Pass only one.`)
+  }
+  if (args.backend && !args.backend_dir) {
+    throw new Error(`args.backend="${args.backend}" requires args.backend_dir; driver dispatch has no implicit-resolve path.`)
+  }
+  return b || l || null
+}
+const RESOLVED_BACKEND = resolveBackendAxis()
+const USE_DRIVER = !!args.backend_dir
+
+if (!USE_DRIVER) {
+  assertWorkflowSuitability()
+}
 
 // =============================================================================
 // KernelAgent — Multi-Agent Triton Kernel Synthesis Workflow
@@ -127,6 +143,44 @@ const MODEL = {
   judgment: args.model_judgment || 'opus',       // generating or editing Triton kernel code, refinement/debug, composition, report
 }
 const EST_PER_ROUND = args.est_tokens_per_round || 60000
+
+// --- Backend driver wiring (P5b Stage B; off-by-default; legacy path byte-identical) ---
+const BACKEND_DIR = args.backend_dir || ''
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const SH = args.driver_shell_prefix || ''
+const PY = args.substrate_command_prefix || ''
+const LEGACY_ROUTE_LANG_TOKEN = 'Triton'
+const LEGACY_HARNESS_LANG_TOKEN = 'Triton'
+const LEGACY_SYNTH_LANG_TOKEN = 'Triton'
+const LEGACY_AGGREGATE_LANG_TOKEN = 'Triton'
+const LEGACY_VERIFY_LANG_TOKEN = 'Triton'
+const LEGACY_REFINE_LANG_TOKEN = 'Triton'
+const LEGACY_COMPOSE_LANG_TOKEN = 'Triton'
+const LEGACY_KERNEL_FILENAME = 'kernel.py'
+const LEGACY_TEST_FILENAME = 'test_kernel.py'
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+
+function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
+function driverSh(script, cliArgs) {
+  return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
+}
+
+let DRIVER = null
+let DRIVER_LANG_FENCE = 'triton'
+let DRIVER_IMPL_REQUIREMENTS = ''
+let DRIVER_SOURCE_EXT = '.py'
+let DRIVER_AUX_EXT = '.py'
+let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
+
+function langToken(legacy) {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : legacy
+}
+function kernelFilename() {
+  return USE_DRIVER ? `kernel${DRIVER_SOURCE_EXT}` : (args.kernel_filename || LEGACY_KERNEL_FILENAME)
+}
+function testFilename() {
+  return USE_DRIVER ? `test_kernel${DRIVER_AUX_EXT}` : (args.test_filename || LEGACY_TEST_FILENAME)
+}
 
 // --- State ---
 let routingDecision = null        // { path: 'direct' | 'pipeline', reason: string }
@@ -228,8 +282,29 @@ function shouldUsePipeline(analysis) {
 // =============================================================================
 phase('Setup')
 
+if (USE_DRIVER) {
+  DRIVER = await agent(
+    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
+    `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
+    `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
+    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (!DRIVER || DRIVER.present === false) {
+    throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
+  }
+  if (RESOLVED_BACKEND && DRIVER.backend_id && normalizeSuitabilityValue(DRIVER.backend_id) !== RESOLVED_BACKEND) {
+    throw new Error(`backend_dir manifest backend_id="${DRIVER.backend_id}" conflicts with args.backend/language="${RESOLVED_BACKEND}".`)
+  }
+  DRIVER_LANG_FENCE = DRIVER.lang_fence || DRIVER_LANG_FENCE
+  DRIVER_IMPL_REQUIREMENTS = DRIVER.impl_requirements || ''
+  DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT
+  DRIVER_AUX_EXT = DRIVER.aux_ext || DRIVER.source_ext || DRIVER_AUX_EXT
+  DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID
+  log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
+}
+
 // Read problem from file or use description directly
-const setupResult = await agent(`You are a Triton kernel synthesis expert. Analyze the problem and produce a structured description.
+const setupResult = await agent(`You are a ${langToken(LEGACY_ROUTE_LANG_TOKEN)} kernel synthesis expert. Analyze the problem and produce a structured description.
 
 # Problem Source
 ${PROBLEM_PATH ? `File: ${PROBLEM_PATH} — read and extract the problem description from the Python code.` : ''}
@@ -237,7 +312,7 @@ ${PROBLEM_DESC ? `Description: ${PROBLEM_DESC}` : ''}
 
 # Instructions
 1. If a file path is given, read the file and extract the PyTorch module/problem definition
-2. Produce a clear, detailed problem description suitable for Triton kernel generation
+2. Produce a clear, detailed problem description suitable for ${langToken(LEGACY_ROUTE_LANG_TOKEN)} kernel generation
 3. Identify: input tensors (shapes, dtypes), operations, expected output shape/dtype
 4. Note any special requirements (numerical precision, edge cases, memory layout)
 
@@ -267,7 +342,7 @@ problemDescription = setupResult.problem_definition
 log(`Problem parsed: ${setupResult.operations.length} ops detected`)
 
 // Generate test harness
-const testResult = await agent(`You are a Triton kernel test engineer. Generate a Python test harness for the following problem.
+const testResult = await agent(`You are a ${langToken(LEGACY_HARNESS_LANG_TOKEN)} kernel test engineer. Generate a Python test harness for the following problem.
 
 # Problem Description
 ${problemDescription}
@@ -427,7 +502,7 @@ for (const target of synthesisTargets) {
   for (let seedIdx = 0; seedIdx < MAX_SEEDS; seedIdx++) {
     const temperature = TEMPERATURE_BASE + (seedIdx * 0.1)
     seedPromises.push(() =>
-      agent(`You are an expert Triton kernel developer. Generate a complete, working Triton kernel.
+      agent(`You are an expert ${langToken(LEGACY_SYNTH_LANG_TOKEN)} kernel developer. Generate a complete, working ${langToken(LEGACY_SYNTH_LANG_TOKEN)} kernel.
 
 # Problem
 ${target.description}
@@ -437,8 +512,10 @@ ${target.description}
 ${testCode.substring(0, 3000)}
 \`\`\`
 
-# Triton Guidelines
-1. Use @triton.jit decorator for kernel functions
+# ${USE_DRIVER ? `${DRIVER_LANG_FENCE} Guidelines` : 'Triton Guidelines'}
+${USE_DRIVER
+  ? (DRIVER_IMPL_REQUIREMENTS || `1. Follow the ${DRIVER_LANG_FENCE} kernel idiom for this backend.\n2. Provide a callable host wrapper.\n3. DO NOT use torch.nn, torch.nn.functional, or PyTorch activation helpers.`)
+  : `1. Use @triton.jit decorator for kernel functions
 2. Use tl.program_id() for block indexing
 3. Use tl.load/tl.store for memory access with proper masking
 4. Use tl.arange() for offset computation
@@ -446,18 +523,18 @@ ${testCode.substring(0, 3000)}
 6. The kernel_function() wrapper must handle tensor allocation and kernel launch
 7. DO NOT use torch.nn, torch.nn.functional, or PyTorch activation helpers
 8. Use tl.constexpr for compile-time constants where appropriate
-9. Handle edge cases: non-divisible sizes, boundary conditions
+9. Handle edge cases: non-divisible sizes, boundary conditions`}
 
 # Seed Variant ${seedIdx + 1}/${MAX_SEEDS}
 Generate a unique implementation approach. Temperature: ${temperature.toFixed(1)}
 ${seedIdx === 0 ? 'Start with the most straightforward implementation.' : ''}
 ${seedIdx === 1 ? 'Try a different tiling strategy or block size.' : ''}
-${seedIdx === 2 ? 'Consider using vectorized loads (tl.load with mask) or different memory layout.' : ''}
+${seedIdx === 2 ? (USE_DRIVER ? 'Consider using vectorized memory access or a different memory layout.' : 'Consider using vectorized loads (tl.load with mask) or different memory layout.') : ''}
 ${seedIdx >= 3 ? 'Explore an alternative algorithmic approach.' : ''}
 
 # Output
 Return a JSON object with:
-- kernel_code: complete Python file with @triton.jit kernel and kernel_function wrapper
+- kernel_code: ${USE_DRIVER ? `complete source file with ${DRIVER_LANG_FENCE} kernel(s) and a callable wrapper` : 'complete Python file with @triton.jit kernel and kernel_function wrapper'}
 - approach: brief description of the implementation strategy
 - potential_issues: any concerns about correctness or performance`, {
         label: `gen-${target.id}-seed${seedIdx}`,
@@ -512,7 +589,7 @@ phase('Verify')
 
 if (VERIFY && validCandidates.length > 0) {
   const verifyPromises = validCandidates.map(candidate => () =>
-    agent(`You are a kernel verification engineer. Execute the test harness against this Triton kernel.
+    agent(`You are a kernel verification engineer. Execute the test harness against this ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel.
 
 # Kernel Code
 \`\`\`python
@@ -525,15 +602,17 @@ ${testCode.substring(0, 3000)}
 \`\`\`
 
 # Instructions
-1. Write the kernel code to a file named kernel.py
-2. Write the test harness to a file named test_kernel.py
-3. Execute the generated/user-provided test harness command for this workspace; do not assume a fixed interpreter or filename.
+1. Write the kernel code to a file named ${kernelFilename()}
+2. Write the test harness to a file named ${testFilename()}
+3. ${USE_DRIVER
+  ? driverSh('run.sh', `--kernel ${kernelFilename()} --test ${testFilename()}`)
+  : 'Execute the generated/user-provided test harness command for this workspace; do not assume a fixed interpreter or filename.'}
 4. Capture stdout, stderr, and exit code
 5. If exit code is 0 and output contains "PASS", the kernel is verified
 6. If exit code is non-zero or output contains "FAIL", report the error
 
 # Verification Rules
-- The kernel MUST use @triton.jit (no torch.nn fallbacks allowed)
+- ${USE_DRIVER ? `The kernel MUST follow the ${DRIVER_LANG_FENCE} backend idiom (no torch.nn fallbacks allowed)` : 'The kernel MUST use @triton.jit (no torch.nn fallbacks allowed)'}
 - The test must complete within 30 seconds (timeout = kill)
 - Any import of torch.nn or torch.nn.functional is a hard failure
 
@@ -591,6 +670,50 @@ Return a JSON object with:
     }
   }
 
+  if (USE_DRIVER) {
+    for (let i = 0; i < validCandidates.length; i++) {
+      const candidate = validCandidates[i]
+      const kPath = `${EXP_DIR}/candidates/${candidate.id}/${kernelFilename()}`
+      const tPath = `${EXP_DIR}/candidates/${candidate.id}/${testFilename()}`
+      const buildOut = `${EXP_DIR}/candidates/${candidate.id}/artifact`
+      const profOut = `${EXP_DIR}/candidates/${candidate.id}/prof.native`
+      const resultPath = `${EXP_DIR}/candidates/${candidate.id}/result.json`
+      await agent(
+        `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+        `Return its stdout JSON verbatim.`,
+        { label: `driver-build-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
+      const runOut = await agent(
+        `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath} --test ${tPath} --result ${resultPath}`)}\n` +
+        `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+        { label: `driver-run-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
+      await agent(
+        `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+        `Return {ok, native_path}.`,
+        { label: `driver-profile-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
+      const evidenceOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+        `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+        { label: `driver-to-evidence-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
+      const diagOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+        `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+        { label: `driver-diagnose-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
+      const antiCheatOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${resultPath}\`.\n` +
+        `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+        { label: `driver-anti-cheat-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
+      candidate.driver_envelope = {
+        anti_cheat: antiCheatOut || {},
+        metrics: (evidenceOut && evidenceOut.metrics) || {},
+        vendor: (DRIVER && DRIVER.hw_vendor) || '',
+        coverage: (evidenceOut && evidenceOut.coverage) || [],
+        bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',
+        latency_ms: Number((runOut && runOut.latency_ms) || 0),
+        backend_id: DRIVER_BACKEND_ID,
+      }
+    }
+  }
+
   const passedCount = validCandidates.filter(c => c.status === 'verified').length
   log(`Verification: ${passedCount}/${validCandidates.length} passed`)
 } else {
@@ -623,7 +746,7 @@ while (failedCandidates.length > 0 && currentRound < MAX_ROUNDS && verifiedKerne
   log(`Refinement round ${currentRound}/${MAX_ROUNDS} — ${failedCandidates.length} candidates to fix`)
 
   const refinePromises = failedCandidates.map(candidate => () =>
-    agent(`You are a Triton kernel debugging expert. Fix this failing kernel.
+    agent(`You are a ${langToken(LEGACY_REFINE_LANG_TOKEN)} kernel debugging expert. Fix this failing kernel.
 
 # Problem Description
 ${problemDescription}
@@ -654,11 +777,17 @@ ${refinementHistory.filter(h => h.candidate_id === candidate.id).map(h =>
 # Debugging Guidelines
 1. Analyze the error message carefully — it often points to the exact issue
 2. Common fixes:
-   - Shape mismatch: check tl.load mask dimensions
+${USE_DRIVER
+  ? `   - Shape mismatch: check load/store mask dimensions
+   - Index out of bounds: verify offset calculations and masking
+   - Compilation error: check ${DRIVER_LANG_FENCE} API usage
+   - Wrong output: verify reduction logic, accumulation, synchronization
+   - torch.nn fallback: remove any PyTorch nn/functional usage, rewrite in pure ${DRIVER_LANG_FENCE}`
+  : `   - Shape mismatch: check tl.load mask dimensions
    - Index out of bounds: verify offset calculations and masking
    - Compilation error: check Triton API usage (tl.constexpr, tl.load signature)
    - Wrong output: verify reduction logic, accumulation, synchronization
-   - torch.nn fallback: remove any PyTorch nn/functional usage, rewrite in pure Triton
+   - torch.nn fallback: remove any PyTorch nn/functional usage, rewrite in pure Triton`}
 3. Make MINIMAL changes — don't rewrite from scratch unless necessary
 4. Preserve the overall approach, fix only the bug
 
@@ -718,7 +847,7 @@ Return a JSON object with:
   const toReVerify = failedCandidates.filter(c => c.status === 'pending')
   if (toReVerify.length > 0 && VERIFY) {
     const reVerifyPromises = toReVerify.map(candidate => () =>
-      agent(`Verify this refined Triton kernel against the test harness.
+      agent(`Verify this refined ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel against the test harness.
 
 # Kernel Code
 \`\`\`python
@@ -730,7 +859,7 @@ ${candidate.code.substring(0, 4000)}
 ${testCode.substring(0, 3000)}
 \`\`\`
 
-Execute the test and report results. Return JSON with:
+${USE_DRIVER ? driverSh('run.sh', `--kernel ${kernelFilename()} --test ${testFilename()}`) + '\n' : ''}Execute the test and report results. Return JSON with:
 - passed: boolean
 - exit_code: number
 - stdout: string
@@ -801,7 +930,7 @@ if (currentRound > 0) {
 phase('Compose')
 
 if (routingDecision.path === 'pipeline' && subgraphs.length > 1 && COMPOSE && verifiedKernels.length > 0) {
-  const composeResult = await agent(`You are a Triton kernel composition expert. Stitch these verified subgraph kernels into a single, cohesive Triton program.
+  const composeResult = await agent(`You are a ${langToken(LEGACY_COMPOSE_LANG_TOKEN)} kernel composition expert. Stitch these verified subgraph kernels into a single, cohesive ${langToken(LEGACY_COMPOSE_LANG_TOKEN)} program.
 
 # Problem Description
 ${problemDescription}
@@ -850,7 +979,7 @@ Return a JSON object with:
 
   // Verify composed kernel
   if (VERIFY) {
-    const composeVerify = await agent(`Verify this composed Triton kernel against the original problem.
+    const composeVerify = await agent(`Verify this composed ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel against the original problem.
 
 # Composed Kernel
 \`\`\`python
@@ -862,7 +991,7 @@ ${composedKernel.substring(0, 5000)}
 ${testCode.substring(0, 3000)}
 \`\`\`
 
-Execute the test and report results. Return JSON with:
+${USE_DRIVER ? driverSh('run.sh', `--kernel ${kernelFilename()} --test ${testFilename()}`) + '\n' : ''}Execute the test and report results. Return JSON with:
 - passed: boolean
 - exit_code: number
 - stdout: string
