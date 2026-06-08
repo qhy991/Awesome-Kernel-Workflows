@@ -96,7 +96,7 @@ discipline**, formalized into a versioned, per-backend, conformance-tested direc
 `generate-workflow.js` and `validate-workflow.js` exist in **both** `_tools/` and
 `_meta/tools/`; the four templates exist in **both** `_templates/` and `_meta/templates/`.
 `SOLVER-SDK.md:117` names `_meta/tools/validate-workflow.js` as the conformance checker, so
-**`_meta/` is canonical.** All new tooling (`validate-backend.js`, `_schema/`) and all edits
+**`_meta/` is canonical.** All new tooling (`validate_backend.py`, `_schema/`) and all edits
 to the generator/validator/templates/manifest-schema land in the `_meta/` tree. The plan
 **must not deepen** the `_tools/`↔`_meta/tools/` divergence; deduping the two trees is
 out of scope here but flagged.
@@ -195,7 +195,7 @@ _substrate/
     └── metal/  { … to_evidence.py is a SEPARATE file … }
 ```
 
-`validate-backend.js` (new, in `_meta/tools/`) validates each driver against `_schema/`.
+`validate_backend.py` (in `_substrate/backends/`) validates each driver against the contract.
 
 ### 4.2 Role and IO of each file
 
@@ -216,7 +216,7 @@ _substrate/
 
 `manifest.compiler.invoke`/`runner.invoke`/`profiler.invoke` are **informational** (they
 document the entrypoint filename); the workflow body uses the fixed filenames
-`build.sh`/`run.sh`/`profile.sh`/`to_evidence.py` directly. `validate-backend.js` asserts the
+`build.sh`/`run.sh`/`profile.sh`/`to_evidence.py` directly. `validate_backend.py` asserts the
 declared `invoke` values equal those fixed names (no divergence allowed).
 
 ### 4.3 Universal envelope rule (every executable)
@@ -262,7 +262,7 @@ status: stable                                     # REQUIRED. enum: stable | ex
 
 > **Enum note:** `diagnose.py`'s `CLASSES` is a **5-class enum including `unknown`**.
 > `capabilities.bottleneck_classes` lists only the **4 meaningful** classes; `unknown` is
-> always implicitly allowed. `validate-backend.js`'s subset check targets "the 4 ∪ {unknown}".
+> always implicitly allowed. `validate_backend.py`'s subset check targets "the 4 ∪ {unknown}".
 
 ### 4.5 Per-file CLI contracts
 
@@ -391,7 +391,7 @@ Three rules, all inside `to_evidence.py`, all enforced by the L2 fixture (§4.9)
    `occupancy ← simdgroup_occupancy/100`). These are **bets**, not equivalences (§5.2/§10).
 3. **Optional flagged proxy** for a missing key; never required for correctness.
 
-### 4.9 Conformance levels (L0–L3), checked by `validate-backend.js`
+### 4.9 Conformance levels (L0--L3), checked by `validate_backend.py`
 
 Mirrors solver L0–L3 in `SOLVER-SDK.md`, applied to the *driver*, validated against `_schema/`.
 
@@ -857,7 +857,7 @@ to the legacy CUDA prompt path (gate the swap on `backend_dir ? driver-call : le
 ### 9.1 Rollout phases
 
 - **Phase 0 — substrate becomes backend-parameterized (no workflow changes).** Add
-  `_substrate/backends/_schema/` + `validate-backend.js` (in `_meta/tools/`). **Golden-lock
+  `_substrate/backends/_schema/` + `validate_backend.py` (in `_substrate/backends/`). **Golden-lock
   first:** freeze today's `diagnose.py`/`method_gate.py`/`anti_cheat.py` CUDA outputs, then
   land the three §5.3 edits (vendor profile, full measured-operand null-handling, anti-cheat `--vendor-patterns-file`)
   and prove the default-`nvidia`/no-file paths reproduce them byte-for-byte. Exit: CUDA
@@ -898,8 +898,8 @@ to the legacy CUDA prompt path (gate the swap on `backend_dir ? driver-call : le
   `native_backend` + `portability_class`; instruct the model to emit the §6 driver-dispatch
   pattern + the §6.4 guard instead of naming `nvcc`/`ncu`. These are **prompt instructions**,
   not substitutions.
-- **Validator:** the **deterministic** backend checks live in the new `validate-backend.js`
-  (schema-validated: manifest/idioms conform, no driver edits a universal script, `backend_id
+- **Validator:** the **deterministic** backend checks live in `validate_backend.py`
+  (in `_substrate/backends/`; schema-validated: manifest/idioms conform, no driver edits a universal script, `backend_id
   == dir`). Any backend checks added to the LLM-driven `validate-workflow.js` are **prompt
   checklist items** (like its existing suitability checks), explicitly *not* hard gates.
 - **Templates:** update the `{{…}}`/`[BLOCK]` guidance text + the input-policy comment
@@ -1032,7 +1032,7 @@ one plan — review blocker #9).
 
 | Plan | Scope | Depends on | Touches a workflow? |
 |---|---|---|---|
-| **P1** | Driver contract scaffolding: `_substrate/backends/_schema/{manifest,idioms}.schema.json`, `validate-backend.js` (`_meta/tools/`), `REGISTRY.md`, `BACKEND-DRIVER-SDK.md` | — | no |
+| **P1** | Driver contract scaffolding: `_substrate/backends/_schema/{manifest,idioms}.schema.json`, `validate_backend.py` (`_substrate/backends/`), `REGISTRY.md`, `BACKEND-DRIVER-SDK.md` | — | no |
 | **P2** | The scoped substrate edits + golden tests: `diagnose.py` (vendor profile + **full** measured-operand null rule — both `memory_bound` *and* `overhead_bound`), `anti_cheat.py` `--vendor-patterns-file` covering **both** `[fallback]` and `[skip]` lists | — | no |
 | **P3** | Reference drivers `cuda/` + `triton/` (6 files each; shared nvidia `to_evidence`; Triton kernel-name auto-discovery) | P1, P2 | no |
 | **P4** | AccelOpt pilot (§8) + the `--print-prompts` harness + beam-fixture capture + Layer-A assembly step | P1, P2, P3 | AccelOpt only |
@@ -1041,3 +1041,48 @@ one plan — review blocker #9).
 
 P1 and P2 are independent and can run in parallel. No plan is written until P1/P2's
 contract-affecting decisions in §10 ("Resolved") are honored.
+
+---
+
+## Appendix B -- P5 outcomes (post-implementation record)
+
+P5 (clean-workflow migration) was executed in six sub-phases (P5a--P5f). This
+appendix records which open questions and spec assumptions P5 resolved.
+
+### Decisions confirmed by implementation
+
+1. **Validator is Python, not Node.** Spec §4.1/§4.9/§9.2 originally named
+   `_meta/tools/validate-backend.js`. The implemented validator is
+   `_substrate/backends/validate_backend.py` using stdlib `json` + live
+   `method_gate.TABLE` import. No JSON-Schema files were shipped; the Python
+   validator + `BACKEND-DRIVER-SDK.md` ARE the contract. All spec references
+   have been corrected (P5f).
+
+2. **Driver files are JSON, not YAML.** `manifest.json` / `idioms.json`
+   (not `.yaml`). Rationale: Python has no stdlib YAML parser; adding `pyyaml`
+   or a Node dependency was rejected. Field names are unchanged from the spec.
+
+3. **`artifact_ext` may be empty string.** Triton's JIT model produces no
+   persistent artifact file; `artifact_ext: ""` is valid and `build.sh` emits
+   `artifact: null` on JIT-only paths.
+
+4. **`to_evidence.py` vendor collapse.** CUDA and Triton share one nvidia
+   `to_evidence` mapping via `from ..cuda.to_evidence import main` (Triton's
+   `to_evidence.py` is a thin re-export). Confirmed correct for the three
+   canonical classifier counters; `backend_native` source-attribution fields
+   diverge as predicted in §5.1.
+
+5. **Matrix-smoke is structural only.** The `matrix-smoke.test.js` CI tier
+   asserts guard-pass, correct driver dispatch, and Layer-A envelope structure
+   using canned agent returns -- no GPU required. Per §9.3 policy decision.
+
+### Open questions P5 did NOT resolve (still deferred)
+
+- Apple/AMD measured threshold calibration numbers (§5.3.1 estimates only).
+- `ncu_command` alias deprecation timeline (retained as v1.1 alias; removal
+  planned for v1.3 per schema.yaml changelog).
+- Metal two-source build IO contract revision (§10 risk; P6-scoped).
+- Vendor-aware reward schedule for `anti_cheat.py` (§10 medium risk).
+- Triton kernel-name auto-discovery for `ncu -k` profiling (implemented as
+  `TRITON_CACHE_DIR` glob in `profile.sh`; correctness on real hardware is
+  deferred to GPU CI tier).
