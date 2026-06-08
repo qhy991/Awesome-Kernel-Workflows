@@ -8,12 +8,21 @@
 # exit 0 ok · 2 op-error (json printed) · 3 bad args / missing input.
 set -u
 
+# JSON-escape helper: returns a JSON string literal (with surrounding quotes).
+json_escape() {
+  python3 - "$1" <<'PY'
+import json, sys
+print(json.dumps(sys.argv[1]))
+PY
+}
+
 # Clean error envelope with the full contract key set (claimed_speedup floored at 1.0).
 err_envelope() {
   local msg="$1" rc="$2"
+  local _msg; _msg="$(json_escape "$msg")"
   printf '{"ok":false,"compiled":false,"correct":false,"candidate_latency_ms":null,'
   printf '"eager_latency_ms":null,"compile_latency_ms":null,"claimed_speedup":1.0,'
-  printf '"error":"%s"}\n' "$msg"
+  printf '"error":%s}\n' "$_msg"
   exit "$rc"
 }
 

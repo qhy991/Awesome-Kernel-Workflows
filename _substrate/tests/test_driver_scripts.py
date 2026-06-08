@@ -149,17 +149,20 @@ class TestCudaBuild(unittest.TestCase):
                 exit 0
             '''))
             src = os.path.join(td, 'k.cu'); out = os.path.join(td, 'k.so')
-            open(src, 'w').write("//\n")
+            with open(src, 'w') as fh:
+                fh.write("//\n")
             code, sout, serr = _run([self.SCRIPT, '--source', src, '--out', out],
                                     env=_path_env(td))
             self.assertEqual(code, 0, msg=f"{sout} {serr}")
-            self.assertIn('-lineinfo', open(rec).read())
+            with open(rec) as fh:
+                self.assertIn('-lineinfo', fh.read())
 
     def test_build_compile_failure_exit_2(self):
         with tempfile.TemporaryDirectory() as td:
             _write_exec(os.path.join(td, 'nvcc'), FAKE_NVCC_FAIL)
             src = os.path.join(td, 'kernel.cu'); out = os.path.join(td, 'kernel.so')
-            open(src, 'w').write("//\n")
+            with open(src, 'w') as fh:
+                fh.write("//\n")
             code, sout, serr = _run([self.SCRIPT, '--source', src, '--out', out],
                                     env=_path_env(td))
             self.assertEqual(code, 2, msg=f"out={sout} err={serr}")
@@ -172,12 +175,12 @@ class TestCudaBuild(unittest.TestCase):
     def test_build_missing_nvcc_exit_3(self):
         with tempfile.TemporaryDirectory() as td:
             src = os.path.join(td, 'kernel.cu'); out = os.path.join(td, 'kernel.so')
-            open(src, 'w').write("//\n")
-            # nvcc is genuinely absent on this macOS host, so the inherited env already exercises
-            # the script's own "nvcc not found" guard (exit 3). Do NOT wipe PATH — that would break
-            # the `#!/usr/bin/env bash` shebang itself (exit 127). On a GPU box where nvcc exists,
-            # point PATH at a stub dir that has bash+coreutils but omits nvcc.
+            with open(src, 'w') as fh:
+                fh.write("//\n")
+            # Use a curated PATH that has python3 + coreutils/bash but excludes the CUDA
+            # bin dir — so the script's "nvcc not found" guard fires on both macOS and GPU boxes.
             env = dict(os.environ)
+            env['PATH'] = os.path.dirname(sys.executable) + os.pathsep + '/usr/bin' + os.pathsep + '/bin'
             code, sout, serr = _run([self.SCRIPT, '--source', src, '--out', out], env=env)
             self.assertEqual(code, 3, msg=f"out={sout} err={serr}")
             self.assertEqual(_json_or_raw(sout).get('ok'), False)
@@ -238,7 +241,8 @@ class TestCudaProfile(unittest.TestCase):
 
     def _problem(self, td):
         p = os.path.join(td, 'problem.json')
-        json.dump({"op": "add"}, open(p, 'w'))
+        with open(p, 'w') as fh:
+            json.dump({"op": "add"}, fh)
         return p
 
     def test_exists_executable_and_syntax(self):
@@ -250,7 +254,9 @@ class TestCudaProfile(unittest.TestCase):
     def test_profile_ok_with_fake_ncu_writes_csv_and_pointer(self):
         with tempfile.TemporaryDirectory() as td:
             _write_exec(os.path.join(td, 'ncu'), FAKE_NCU_CSV)
-            art = os.path.join(td, 'k.so'); open(art, 'w').write("")
+            art = os.path.join(td, 'k.so')
+            with open(art, 'w') as fh:
+                fh.write("")
             prob = self._problem(td); out = os.path.join(td, 'native.csv')
             code, sout, serr = _run([self.SCRIPT, '--artifact', art,
                                      '--problem', prob, '--out', out], env=_path_env(td))
@@ -261,7 +267,8 @@ class TestCudaProfile(unittest.TestCase):
             self.assertEqual(p.get('native_profile'), out, p)
             self.assertEqual(p.get('format'), 'ncu-csv', p)
             self.assertTrue(os.path.isfile(out), "csv not written")
-            self.assertIn('sm__warps_active', open(out).read())
+            with open(out) as fh:
+                self.assertIn('sm__warps_active', fh.read())
 
     def test_profile_requests_the_four_counters(self):
         with tempfile.TemporaryDirectory() as td:
@@ -271,11 +278,14 @@ class TestCudaProfile(unittest.TestCase):
                 echo "$@" > "{rec}"
                 echo '"ID","Metric Name","Metric Value"' ; exit 0
             '''))
-            art = os.path.join(td, 'k.so'); open(art, 'w').write("")
+            art = os.path.join(td, 'k.so')
+            with open(art, 'w') as fh:
+                fh.write("")
             prob = self._problem(td); out = os.path.join(td, 'n.csv')
             _run([self.SCRIPT, '--artifact', art, '--problem', prob, '--out', out],
                  env=_path_env(td))
-            argv = open(rec).read()
+            with open(rec) as fh:
+                argv = fh.read()
             for c in ('gpu__time_duration.sum',
                       'sm__throughput.avg.pct_of_peak_sustained_elapsed',
                       'dram__bytes_read.sum.pct_of_peak_sustained_elapsed',
@@ -284,9 +294,14 @@ class TestCudaProfile(unittest.TestCase):
 
     def test_profiler_absent_exit_4(self):
         with tempfile.TemporaryDirectory() as td:
-            art = os.path.join(td, 'k.so'); open(art, 'w').write("")
+            art = os.path.join(td, 'k.so')
+            with open(art, 'w') as fh:
+                fh.write("")
             prob = self._problem(td); out = os.path.join(td, 'n.csv')
-            env = dict(os.environ)   # ncu genuinely absent on macOS; keep PATH so the shebang resolves (wiping it => exit 127, not the exit-4 guard)
+            # Use a curated PATH that has python3 + coreutils/bash but excludes the CUDA
+            # bin dir — so the script's "ncu not available" guard fires on both macOS and GPU boxes.
+            env = dict(os.environ)
+            env['PATH'] = os.path.dirname(sys.executable) + os.pathsep + '/usr/bin' + os.pathsep + '/bin'
             code, sout, serr = _run([self.SCRIPT, '--artifact', art,
                                      '--problem', prob, '--out', out], env=env)
             self.assertEqual(code, 4, msg=f"out={sout} err={serr}")

@@ -5,8 +5,23 @@
 set -u
 
 emit() { printf '%s\n' "$1"; }
-die3() { emit "{\"ok\":false,\"profiler\":\"ncu\",\"native_profile\":null,\"error\":\"$1\"}"; exit 3; }
-die4() { emit "{\"ok\":false,\"profiler\":\"ncu\",\"native_profile\":null,\"error\":\"$1\"}"; exit 4; }
+
+# JSON-escape helper: returns a JSON string literal (with surrounding quotes).
+json_escape() {
+  python3 - "$1" <<'PY'
+import json, sys
+print(json.dumps(sys.argv[1]))
+PY
+}
+
+die3() {
+  local _msg; _msg="$(json_escape "$1")"
+  emit "{\"ok\":false,\"profiler\":\"ncu\",\"native_profile\":null,\"error\":$_msg}"; exit 3
+}
+die4() {
+  local _msg; _msg="$(json_escape "$1")"
+  emit "{\"ok\":false,\"profiler\":\"ncu\",\"native_profile\":null,\"error\":$_msg}"; exit 4
+}
 
 ARTIFACT="" PROBLEM="" OUT=""
 while [ $# -gt 0 ]; do
@@ -29,21 +44,20 @@ command -v ncu >/dev/null 2>&1 || die4 "ncu profiler not available"
 # The four counters to_evidence/_evidence_nvidia.py parses (AccelOpt set).
 METRICS="gpu__time_duration.sum,sm__throughput.avg.pct_of_peak_sustained_elapsed,dram__bytes_read.sum.pct_of_peak_sustained_elapsed,dram__bytes_write.sum.pct_of_peak_sustained_elapsed,sm__warps_active.avg.pct_of_peak_sustained_active"
 
-# A python launcher loads the .so and runs the kernel once; ncu profiles that process.
-# On a real box this is the actual launcher; here ncu is faked so the launcher is moot.
-LAUNCHER="python3 -c import sys"
+STDERR_FILE="$(mktemp)"
 
 # ncu --csv prints CSV to stdout; capture it into --out.
 ncu --csv --page raw --metrics "$METRICS" --target-processes all \
-    python3 -c "pass" >"$OUT" 2>/tmp/ncu_profile.stderr
+    python3 -c "pass" >"$OUT" 2>"$STDERR_FILE"
 RC=$?
-[ -s /tmp/ncu_profile.stderr ] && cat /tmp/ncu_profile.stderr 1>&2
-rm -f /tmp/ncu_profile.stderr
+[ -s "$STDERR_FILE" ] && cat "$STDERR_FILE" 1>&2
+rm -f "$STDERR_FILE"
 
 if [ "$RC" -ne 0 ]; then
   emit "{\"ok\":false,\"profiler\":\"ncu\",\"native_profile\":null,\"error\":\"ncu failed (exit $RC); no profile produced\"}"
   exit 4   # spec §4.5 profile.sh codes are 0/4/3 only; a failed ncu run maps to 4 (profile unavailable)
 fi
 
-emit "{\"ok\":true,\"profiler\":\"ncu\",\"native_profile\":\"$OUT\",\"format\":\"ncu-csv\"}"
+ESC_OUT="$(json_escape "$OUT")"
+emit "{\"ok\":true,\"profiler\":\"ncu\",\"native_profile\":$ESC_OUT,\"format\":\"ncu-csv\"}"
 exit 0
