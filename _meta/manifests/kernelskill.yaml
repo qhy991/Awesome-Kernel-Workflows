@@ -54,6 +54,26 @@ method:
     tool: "ncu"
     higher_is_better: true
 
+# ---------------------------------------------------------------------------
+# BACKEND POSTURE — Which (language x vendor) drivers this workflow can run
+# ---------------------------------------------------------------------------
+# KernelSkill is CUDA-only by design: the long-term skill library and the
+# deterministic gate are framed in CUDA vocabulary (ncu metrics, __syncthreads,
+# warp/shared-memory primitives, cuBLASLt, tensor cores). The matrix is a
+# degenerate 1xN row — cuda is the sole language cell. Driver dispatch
+# (USE_DRIVER) plumbs the cuda backend driver only; args.backend=triton/sycl
+# is a hard error (§6.4 guard + supported= gate).
+backend:
+  portability: vendor_locked
+  matrix_eligible: partial
+  method_supported_backends: cuda
+  supported: ["cuda"]
+  default: "cuda"
+  intrinsic_to: ""
+  requires_capability:
+    metrics: ["latency_ms", "dram_throughput_pct", "sm_throughput_pct", "achieved_occupancy_pct"]
+    problem_types: ["kernel-optimization", "kernel-generation"]
+
 topology:
   type: "iterative"
   iterative:
@@ -359,6 +379,37 @@ args:
       default: "'unknown'"
       description: "ISO timestamp for report metadata (runtime has no Date access)"
       example: "2026-06-02T15:00:00+08:00"
+    # --- v1.1 backend-axis args (P5d Stage B) ---
+    - name: "backend"
+      type: "string"
+      default: "null"
+      description: "Backend id (matches _substrate/backends/<id>); null -> use language. Must equal 'cuda' for KernelSkill (§6.4 + supported= gate)."
+      example: "cuda"
+    - name: "language"
+      type: "string"
+      default: "'cuda'"
+      description: "Target language. KernelSkill is CUDA-only; non-cuda values are rejected by the suitability guard."
+      example: "cuda"
+    - name: "backend_dir"
+      type: "string"
+      default: "''"
+      description: "Path to the driver dir; empty -> legacy inline-prompt path (back-compat, byte-identical)."
+      example: "_substrate/backends/cuda"
+    - name: "substrate_dir"
+      type: "string"
+      default: "'_substrate'"
+      description: "Path to the substrate root (diagnose.py + anti_cheat.py)"
+      example: "_substrate"
+    - name: "driver_shell_prefix"
+      type: "string"
+      default: "''"
+      description: "Optional shell prefix for driver scripts (e.g. 'bash', 'env VAR=1')"
+      example: "bash"
+    - name: "substrate_command_prefix"
+      type: "string"
+      default: "''"
+      description: "Optional command prefix for substrate Python tools (e.g. 'python3')"
+      example: "python3"
 
 correctness:
   criteria:

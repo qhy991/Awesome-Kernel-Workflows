@@ -1,0 +1,622 @@
+[
+  {
+    "label": "read-reference",
+    "phase": "Setup",
+    "prompt": "Read the PyTorch reference task at: /tmp/kernelskill-fixture/19_ReLU.py\nIf problem_definition is provided, use it as the authoritative task:\nclass Model(nn.Module):\n    def forward(self, x):\n        return torch.relu(x)\n\nThis is a KernelBench-style task: a PyTorch `Model` (forward pass) plus `get_inputs()` / `get_init_inputs()`. Analyze it and return:\n- reference_code: the full source\n- op_type: operation type (e.g., \"relu\", \"matmul\", \"conv2d\", \"layernorm\", \"fused_mlp\")\n- forward_summary: what the forward pass computes, in 1-2 sentences\n- input_shapes: the tensor shapes from get_inputs()\n- dtype: the dominant dtype (e.g., float32)\n- num_ops: rough count of distinct operators in forward (1 = pointwise, >1 = fusion opportunity)\n- has_matmul: whether the forward contains a matmul/linear (tensor-core opportunity)\n\nReturn ONLY the JSON object.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "reference_code": {
+          "type": "string"
+        },
+        "op_type": {
+          "type": "string"
+        },
+        "forward_summary": {
+          "type": "string"
+        },
+        "input_shapes": {
+          "type": "string"
+        },
+        "dtype": {
+          "type": "string"
+        },
+        "num_ops": {
+          "type": "number"
+        },
+        "has_matmul": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "reference_code",
+        "op_type",
+        "forward_summary"
+      ]
+    },
+    "seq": 0
+  },
+  {
+    "label": "eager-baseline",
+    "phase": "Setup",
+    "prompt": "You are a GPU benchmarking expert. Establish the Torch Eager baseline latency for this PyTorch reference, which is the denominator for speedup (speedup = baseline_latency / kernel_latency).\n\n# Reference task: /tmp/kernelskill-fixture/19_ReLU.py\n# Operation: ReLU activation (relu)\n# Target GPU: A100-80GB\n# Inputs: [1024,1024]\n\n# Instructions\n1. Create /tmp/kernelskill-fixture/baseline/.\n2. Run the reference benchmark using the user-provided command: python /tmp/kernelskill-fixture/bench.py {kernel_path} {result_path}\n3. Report the mean forward latency in milliseconds only when measured.\n\nIf the GPU/torch environment or benchmark_command is unavailable, return baseline_available=false and mark baseline_latency_ms as unmeasured.\n\nReturn the baseline result.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "baseline_latency_ms": {
+          "type": "number"
+        },
+        "baseline_available": {
+          "type": "boolean"
+        },
+        "harness_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "baseline_latency_ms"
+      ]
+    },
+    "seq": 1
+  },
+  {
+    "label": "seed-0",
+    "phase": "Seed",
+    "prompt": "You are the KernelSkill Generator. Translate this PyTorch reference into an EQUIVALENT implementation backed by custom CUDA kernel(s). Your ONLY goal here is CORRECTNESS — it must compile and match the reference within tolerance (rtol=0.01, atol=0.01). Do not over-optimize; produce a clean, materialized baseline.\n\n# PyTorch Reference:\n```python\nclass Model(nn.Module):\n    def forward(self, x):\n        return torch.relu(x)\n\n```\n\n# Operation: ReLU activation (relu)\n# Target GPU: A100-80GB\n# Inputs: [1024,1024]\n\n# Requirements\n1. Materialize as many operator-level custom CUDA kernels as is natural (this gives later optimization more surface to work with).\n2. Use torch.utils.cpp_extension (load_inline) or an equivalent so the module is drop-in for the reference.\n3. Keep the public forward() signature identical to the reference Model.\n4. Functionally correct first; performance comes later.\n5. This is seed candidate 1/2 — vary the decomposition/strategy from a naive baseline so the seeds are diverse.\n\nReturn the complete kernel source.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "strategy": {
+          "type": "string"
+        },
+        "kernels_materialized": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "code"
+      ]
+    },
+    "seq": 2
+  },
+  {
+    "label": "seed-1",
+    "phase": "Seed",
+    "prompt": "You are the KernelSkill Generator. Translate this PyTorch reference into an EQUIVALENT implementation backed by custom CUDA kernel(s). Your ONLY goal here is CORRECTNESS — it must compile and match the reference within tolerance (rtol=0.01, atol=0.01). Do not over-optimize; produce a clean, materialized baseline.\n\n# PyTorch Reference:\n```python\nclass Model(nn.Module):\n    def forward(self, x):\n        return torch.relu(x)\n\n```\n\n# Operation: ReLU activation (relu)\n# Target GPU: A100-80GB\n# Inputs: [1024,1024]\n\n# Requirements\n1. Materialize as many operator-level custom CUDA kernels as is natural (this gives later optimization more surface to work with).\n2. Use torch.utils.cpp_extension (load_inline) or an equivalent so the module is drop-in for the reference.\n3. Keep the public forward() signature identical to the reference Model.\n4. Functionally correct first; performance comes later.\n5. This is seed candidate 2/2 — vary the decomposition/strategy from a naive baseline so the seeds are diverse.\n\nReturn the complete kernel source.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "strategy": {
+          "type": "string"
+        },
+        "kernels_materialized": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "code"
+      ]
+    },
+    "seq": 3
+  },
+  {
+    "label": "seed-eval-0",
+    "phase": "Seed",
+    "prompt": "You are the KernelSkill Reviewer (Compiler + Verifier + Profiler). Evaluate this SEED kernel against the PyTorch reference.\n\n# Reference task: /tmp/kernelskill-fixture/19_ReLU.py\n# Torch Eager baseline latency: 0.42ms\n# Tolerance: rtol=0.01, atol=0.01\n\n# Seed kernel (candidate 1):\n```cuda\n// seed kernel 0\n__global__ void relu_k(float* x, int n) {}\n\n```\n\n# Steps\n1. Compiler: does it build? (check includes, pybind/load_inline, CUDA syntax)\n2. Verifier: would its output match the reference within tolerance? (check shapes, indexing, reduction logic, race conditions)\n3. Profiler: if it builds and is correct and benchmark_command is provided, measure latency (ms) and compute speedup = 0.42 / latency.\n   Benchmark with: python /tmp/kernelskill-fixture/bench.py {kernel_path} {result_path}\n\nIf the environment cannot run code or benchmark_command is missing, do a rigorous static evaluation and mark latency/speedup as unmeasured.\n\nReturn the evaluation.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "is_compilable": {
+          "type": "boolean"
+        },
+        "is_correct": {
+          "type": "boolean"
+        },
+        "latency_ms": {
+          "type": "number"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "is_compilable",
+        "is_correct"
+      ]
+    },
+    "seq": 4
+  },
+  {
+    "label": "seed-eval-1",
+    "phase": "Seed",
+    "prompt": "You are the KernelSkill Reviewer (Compiler + Verifier + Profiler). Evaluate this SEED kernel against the PyTorch reference.\n\n# Reference task: /tmp/kernelskill-fixture/19_ReLU.py\n# Torch Eager baseline latency: 0.42ms\n# Tolerance: rtol=0.01, atol=0.01\n\n# Seed kernel (candidate 2):\n```cuda\n// seed kernel 1\n__global__ void relu_v4(float4* x, int n) {}\n\n```\n\n# Steps\n1. Compiler: does it build? (check includes, pybind/load_inline, CUDA syntax)\n2. Verifier: would its output match the reference within tolerance? (check shapes, indexing, reduction logic, race conditions)\n3. Profiler: if it builds and is correct and benchmark_command is provided, measure latency (ms) and compute speedup = 0.42 / latency.\n   Benchmark with: python /tmp/kernelskill-fixture/bench.py {kernel_path} {result_path}\n\nIf the environment cannot run code or benchmark_command is missing, do a rigorous static evaluation and mark latency/speedup as unmeasured.\n\nReturn the evaluation.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "is_compilable": {
+          "type": "boolean"
+        },
+        "is_correct": {
+          "type": "boolean"
+        },
+        "latency_ms": {
+          "type": "number"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "is_compilable",
+        "is_correct"
+      ]
+    },
+    "seq": 5
+  },
+  {
+    "label": "review-0",
+    "phase": "Evaluate",
+    "prompt": "You are the KernelSkill Reviewer for round 1. Produce execution feedback for the CURRENT kernel using Compiler + Verifier + Profiler (ncu + nsys).\n\n# Reference task: /tmp/kernelskill-fixture/19_ReLU.py\n# Torch Eager baseline: 0.42ms\n# Tolerance: rtol=0.01, atol=0.01\n# Target GPU: A100-80GB\n\n# Current kernel:\n```cuda\n// seed kernel 1\n__global__ void relu_v4(float4* x, int n) {}\n\n```\n\n# Steps\n1. Compiler: build the kernel; capture status + first errors/warnings.\n2. Verifier: compare output to the PyTorch reference within tolerance; report pass/fail + a short error excerpt if failing.\n3. Profiler (only if compiles+correct): collect profiler signals into /tmp/kernelskill-fixture/round_0/ only through user-provided profiler binaries/commands:\n   - ncu_binary: ncu for dram/l2/l1/sm throughput %, achieved occupancy %, registers/thread, kernel duration, long/short scoreboard stall ratios, branch divergent/uniform counts.\n   - nsys_binary: nsys for kernel_launch_count.\n   If profiler binaries/commands are missing, do not invent them; mark profiler metrics as missing evidence.\n   Then measure latency only through benchmark_command and compute speedup = 0.42 / latency when both values are measured.\n   You may use: python /tmp/kernelskill-fixture/bench.py {kernel_path} {result_path}\n\nIf the environment cannot run tools or commands are missing, do a rigorous static evaluation: decide is_compilable / is_correct where possible, set unmeasured metric fields to 0, and mark missing evidence in the notes.\n\nReturn the structured review. Always include the normalized ncu_metrics object (keys: dram_throughput_pct, l2_throughput_pct, l1_throughput_pct, sm_throughput_pct, achieved_occupancy_pct, registers_per_thread, kernel_duration_ns, stall_long_scoreboard_ratio, stall_short_scoreboard_ratio, branch_divergent_cnt, branch_uniform_cnt, kernel_launch_count).",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "is_compilable": {
+          "type": "boolean"
+        },
+        "is_correct": {
+          "type": "boolean"
+        },
+        "latency_ms": {
+          "type": "number"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "error_excerpt": {
+          "type": "string"
+        },
+        "ncu_metrics": {
+          "type": "object",
+          "properties": {
+            "dram_throughput_pct": {
+              "type": "number"
+            },
+            "l2_throughput_pct": {
+              "type": "number"
+            },
+            "l1_throughput_pct": {
+              "type": "number"
+            },
+            "sm_throughput_pct": {
+              "type": "number"
+            },
+            "achieved_occupancy_pct": {
+              "type": "number"
+            },
+            "registers_per_thread": {
+              "type": "number"
+            },
+            "kernel_duration_ns": {
+              "type": "number"
+            },
+            "stall_long_scoreboard_ratio": {
+              "type": "number"
+            },
+            "stall_short_scoreboard_ratio": {
+              "type": "number"
+            },
+            "branch_divergent_cnt": {
+              "type": "number"
+            },
+            "branch_uniform_cnt": {
+              "type": "number"
+            },
+            "kernel_launch_count": {
+              "type": "number"
+            }
+          }
+        },
+        "profile_summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "is_compilable",
+        "is_correct"
+      ]
+    },
+    "seq": 6
+  },
+  {
+    "label": "features-0",
+    "phase": "Optimize",
+    "prompt": "You are the KernelSkill Feature Extractor. Derive the deterministic code-structure features the gate needs. Use a hybrid approach: rule-based pattern matching over the source for stable lexical/syntactic signatures, and structural inference for features that syntax alone cannot capture.\n\n# Kernel source:\n```cuda\n// seed kernel 1\n__global__ void relu_v4(float4* x, int n) {}\n\n```\n\n# Feature schema (provide every field):\nhas_reuse, streaming_no_reuse, has_vector_load_store, is_aligned_vector_access, has_tail_handling_overhead, tc_eligible, is_pointwise, uses_transcendentals, is_naive_gemm, has_k_loop, is_gemm_kloop, is_stencil_conv, has_shared_memory_tile, uses_vector_types, has_bounds_check, kernel_structure_id, has_multiple_kernels_in_forward\n\nDefinitions:\n- has_reuse: exploitable data reuse exists (shared tile / register blocking / repeated reads of same data).\n- streaming_no_reuse: pure load->compute->store, each element read once.\n- has_vector_load_store: uses or can trivially use float4/half2 vectorized access.\n- is_aligned_vector_access: vector accesses are 16B-aligned.\n- has_tail_handling_overhead: branchy remainder / masked-lane handling is significant.\n- tc_eligible: matmul-shaped compute with TC-compatible dtype (half/bf16) and tileable shapes.\n- is_pointwise / uses_transcendentals / is_naive_gemm / has_k_loop / is_gemm_kloop / is_stencil_conv / has_shared_memory_tile / uses_vector_types / has_bounds_check: as named.\n- kernel_structure_id: 0=elementwise/streaming(S0), 1=reuse-friendly tiling(S1), 2=irregular gather/scatter(S2), 3=reduction/scan(S3), 4=multi-kernel graph(S4).\n- has_multiple_kernels_in_forward: forward launches >1 distinct kernel.\n\nReturn ONLY the features object (booleans + the two ints).",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "has_reuse": {
+          "type": "boolean"
+        },
+        "streaming_no_reuse": {
+          "type": "boolean"
+        },
+        "has_vector_load_store": {
+          "type": "boolean"
+        },
+        "is_aligned_vector_access": {
+          "type": "boolean"
+        },
+        "has_tail_handling_overhead": {
+          "type": "boolean"
+        },
+        "tc_eligible": {
+          "type": "boolean"
+        },
+        "is_pointwise": {
+          "type": "boolean"
+        },
+        "uses_transcendentals": {
+          "type": "boolean"
+        },
+        "is_naive_gemm": {
+          "type": "boolean"
+        },
+        "has_k_loop": {
+          "type": "boolean"
+        },
+        "is_gemm_kloop": {
+          "type": "boolean"
+        },
+        "is_stencil_conv": {
+          "type": "boolean"
+        },
+        "has_shared_memory_tile": {
+          "type": "boolean"
+        },
+        "uses_vector_types": {
+          "type": "boolean"
+        },
+        "has_bounds_check": {
+          "type": "boolean"
+        },
+        "kernel_structure_id": {
+          "type": "number"
+        },
+        "has_multiple_kernels_in_forward": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kernel_structure_id",
+        "has_reuse",
+        "streaming_no_reuse"
+      ]
+    },
+    "seq": 7
+  },
+  {
+    "label": "gate-0",
+    "phase": "Optimize",
+    "prompt": "You are the KernelSkill deterministic GATE (machine_check layer). You DETERMINISTICALLY evaluate the decision policy. You do NOT use judgment about which optimization is \"best\" — you only apply the rules to compute normalized fields, derived fields, the headroom tier, the matched bottleneck case, and the resulting allowed_methods set.\n\n# Decision policy (long-term memory, machine_check layer):\n{\n  \"field_mapping_keys\": [\n    \"dram_throughput_pct\",\n    \"l2_throughput_pct\",\n    \"l1_throughput_pct\",\n    \"sm_throughput_pct\",\n    \"achieved_occupancy_pct\",\n    \"registers_per_thread\",\n    \"kernel_duration_ns\",\n    \"stall_long_scoreboard_ratio\",\n    \"stall_short_scoreboard_ratio\",\n    \"branch_divergent_cnt\",\n    \"branch_uniform_cnt\"\n  ],\n  \"derived_fields\": {\n    \"branch_divergence_pct\": \"100 * branch_divergent_cnt / max(1, (branch_divergent_cnt + branch_uniform_cnt))\",\n    \"memory_dependency_stall_ratio\": \"stall_long_scoreboard_ratio + stall_short_scoreboard_ratio\",\n    \"primary_limiter_util_pct\": \"max(dram_throughput_pct, l2_throughput_pct, sm_throughput_pct)\",\n    \"reuse_possible\": \"has_reuse OR is_naive_gemm OR is_gemm_kloop OR is_stencil_conv\",\n    \"bytes_structurally_unavoidable\": \"(kernel_structure_id == 0) AND streaming_no_reuse AND has_vector_load_store\",\n    \"needs_alignment_or_tail_fix\": \"(NOT is_aligned_vector_access) OR has_tail_handling_overhead\"\n  },\n  \"headroom_tiers\": {\n    \"Tier-H\": \"primary_limiter_util_pct < 60  (high headroom)\",\n    \"Tier-M\": \"60 <= primary_limiter_util_pct <= 80  (medium headroom)\",\n    \"Tier-L\": \"primary_limiter_util_pct > 80 AND bytes_structurally_unavoidable  (low headroom)\"\n  },\n  \"bottleneck_priority_rules\": [\n    \"BandwidthDominatesLatency: if dram_throughput_pct>=80 OR l2_throughput_pct>=80 -> force bottleneck=memory_bandwidth (do NOT classify as memory_latency even if memory-dependency stalls exist)\"\n  ],\n  \"decision_table\": [\n    {\n      \"case_id\": \"MEM_BW_SATURATED\",\n      \"when\": \"dram_throughput_pct>=80 OR l2_throughput_pct>=80\",\n      \"allowed_methods\": [\n        \"vectorized_memory_access\",\n        \"memory_coalescing\",\n        \"reduce_bytes_via_reuse\",\n        \"data_layout_transformation\"\n      ]\n    },\n    {\n      \"case_id\": \"MEM_LATENCY_BOUND\",\n      \"when\": \"memory_dependency_stall_ratio>=0.30 AND primary_limiter_util_pct<60\",\n      \"allowed_methods\": [\n        \"shared_memory_tiling\",\n        \"register_blocking\",\n        \"software_pipelining\",\n        \"increase_ilp_async_copy\"\n      ]\n    },\n    {\n      \"case_id\": \"COMPUTE_BOUND\",\n      \"when\": \"sm_throughput_pct>=70 AND memory_not_dominant\",\n      \"allowed_methods\": [\n        \"tensor_core_utilization\",\n        \"instruction_mix_optimization\",\n        \"fast_math_intrinsics\",\n        \"warp_level_reduction\"\n      ]\n    },\n    {\n      \"case_id\": \"LOW_OCCUPANCY\",\n      \"when\": \"achieved_occupancy_pct<40 AND primary_limiter_util_pct<60\",\n      \"allowed_methods\": [\n        \"block_size_tuning\",\n        \"register_pressure_reduction\",\n        \"occupancy_tuning\",\n        \"thread_coarsening\"\n      ]\n    },\n    {\n      \"case_id\": \"DIVERGENT\",\n      \"when\": \"branch_divergence_pct>=5\",\n      \"allowed_methods\": [\n        \"branch_reduction\",\n        \"thread_work_remapping\",\n        \"predication\"\n      ]\n    },\n    {\n      \"case_id\": \"GEMM_REWRITE\",\n      \"when\": \"tc_eligible AND (is_naive_gemm OR is_gemm_kloop OR has_k_loop)\",\n      \"allowed_methods\": [\n        \"tensor_core_utilization\",\n        \"shared_memory_tiling\",\n        \"register_blocking\"\n      ]\n    },\n    {\n      \"case_id\": \"NEEDS_ALIGN_OR_TAIL_FIX\",\n      \"when\": \"needs_alignment_or_tail_fix\",\n      \"allowed_methods\": [\n        \"fix_vector_alignment\",\n        \"improve_tail_handling\",\n        \"vectorized_memory_access\"\n      ]\n    },\n    {\n      \"case_id\": \"NO_MATCH\",\n      \"when\": \"no deterministic case matched\",\n      \"allowed_methods\": []\n    }\n  ]\n}\n\n# Normalized NCU metrics (from Profiler):\n{\n  \"dram_throughput_pct\": 85,\n  \"l2_throughput_pct\": 60,\n  \"l1_throughput_pct\": 30,\n  \"sm_throughput_pct\": 25,\n  \"achieved_occupancy_pct\": 70,\n  \"registers_per_thread\": 32,\n  \"kernel_duration_ns\": 350000,\n  \"stall_long_scoreboard_ratio\": 0.2,\n  \"stall_short_scoreboard_ratio\": 0.1,\n  \"branch_divergent_cnt\": 0,\n  \"branch_uniform_cnt\": 1,\n  \"kernel_launch_count\": 1\n}\n\n# Code features (from Feature Extractor):\n{\n  \"has_reuse\": false,\n  \"streaming_no_reuse\": true,\n  \"has_vector_load_store\": true,\n  \"is_aligned_vector_access\": true,\n  \"has_tail_handling_overhead\": false,\n  \"tc_eligible\": false,\n  \"is_pointwise\": true,\n  \"uses_transcendentals\": false,\n  \"is_naive_gemm\": false,\n  \"has_k_loop\": false,\n  \"is_gemm_kloop\": false,\n  \"is_stencil_conv\": false,\n  \"has_shared_memory_tile\": false,\n  \"uses_vector_types\": true,\n  \"has_bounds_check\": true,\n  \"kernel_structure_id\": 0,\n  \"has_multiple_kernels_in_forward\": false\n}\n\n# Procedure (apply in order, deterministically):\n1. Compute derived_fields from the metrics + features.\n2. Apply bottleneck_priority_rules (hard overrides).\n3. Determine the headroom tier.\n4. Find the FIRST decision_table case whose 'when' predicate is satisfied by the evidence.\n5. Emit that case's allowed_methods VERBATIM as the hard-constraint set. If no case matches, use case_id NO_MATCH with an empty allowed_methods (the planner may then self-generate, justified by evidence).\n6. Apply mechanism gates: if a reuse-based method (shared_memory_tiling, register_blocking, reduce_bytes_via_reuse) is in allowed_methods but reuse_possible is false, REMOVE it.\n\nReturn the gate decision. allowed_methods MUST be a subset of the matched case's list (after mechanism gating).",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "tier": {
+          "type": "string"
+        },
+        "bottleneck_id": {
+          "type": "string"
+        },
+        "matched_case_id": {
+          "type": "string"
+        },
+        "allowed_methods": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "key_metrics": {
+          "type": "string"
+        },
+        "derived_values": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "matched_case_id",
+        "allowed_methods"
+      ]
+    },
+    "seq": 8
+  },
+  {
+    "label": "plan-0",
+    "phase": "Optimize",
+    "prompt": "You are the KernelSkill Planner. The deterministic gate has ALREADY decided which optimization methods are FEASIBLE. You MUST select your method from allowed_methods (HARD CONSTRAINT). Then produce a concrete, stepwise optimization plan. Use the short-term optimization memory to avoid repeating an unproductive method and to build coupled multi-step improvements.\n\n# Gate result:\n- tier: Tier-H\n- bottleneck_id: memory_bandwidth_bound\n- matched_case: M1_streaming_no_reuse_high_dram\n- allowed_methods (HARD CONSTRAINT): vectorized_load_store, improve_tail_handling\n- key metrics: dram_throughput_pct=85, streaming_no_reuse=true\n\n# Method knowledge (rationale + implementation cues) for the allowed methods:\n{\n  \"improve_tail_handling\": \"Remove branchy remainder overhead. Implementation: process the bulk vectorized, handle the residual with a single masked epilogue.\"\n}\n\n# Short-term OPTIMIZATION memory (methods tried this task + measured outcomes):\n(no prior optimization attempts this task)\n\n# Current performance: 1.20x vs Torch Eager\n# Profiler summary: memory-bound; DRAM throughput high\n\n# Current kernel:\n```cuda\n// seed kernel 1\n__global__ void relu_v4(float4* x, int n) {}\n\n```\n\nRules:\n- method_name MUST be exactly one of allowed_methods (unless allowed_methods is empty, in which case justify a self-generated method from the profiling evidence).\n- If a method was already tried with no gain (see memory), pick a DIFFERENT allowed method or justify why a refined re-application will help.\n- The plan must be complete enough that following it step-by-step fully implements the method.\n\nReturn: method_name, rationale (citing the metric evidence), and plan (numbered, concrete edits).",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "method_name": {
+          "type": "string"
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "plan": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "method_name",
+        "plan"
+      ]
+    },
+    "seq": 9
+  },
+  {
+    "label": "optimize-0",
+    "phase": "Optimize",
+    "prompt": "You are the KernelSkill Optimizer. Apply the optimization plan to the current kernel and output a COMPLETE, compilable kernel that is still correct vs the PyTorch reference within tolerance (rtol=0.01, atol=0.01).\n\n# Selected method: vectorized_load_store\n# Rationale: DRAM throughput 85% — coalesced vec4 already partial; ensure 16B alignment.\n# Plan:\n1. Cast pointer to float4. 2. Process 4 elements per thread. 3. Tail handles residual.\n\n# Method implementation cues:\n(self-generated method — follow the plan)\n\n# Current kernel:\n```cuda\n// seed kernel 1\n__global__ void relu_v4(float4* x, int n) {}\n\n```\n\nRequirements:\n1. Apply the plan faithfully — it is grounded in real profiling evidence.\n2. Keep the forward() signature identical to the reference.\n3. Output the COMPLETE kernel source (all includes, kernels, bindings).\n4. Do not regress correctness.\n\nReturn the optimized kernel.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "implementation_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code"
+      ]
+    },
+    "seq": 10
+  },
+  {
+    "label": "review-1",
+    "phase": "Evaluate",
+    "prompt": "You are the KernelSkill Reviewer for round 2. Produce execution feedback for the CURRENT kernel using Compiler + Verifier + Profiler (ncu + nsys).\n\n# Reference task: /tmp/kernelskill-fixture/19_ReLU.py\n# Torch Eager baseline: 0.42ms\n# Tolerance: rtol=0.01, atol=0.01\n# Target GPU: A100-80GB\n\n# Current kernel:\n```cuda\n// optimized kernel round 0\n__global__ void relu_v4(float4* x, int n) {}\n\n```\n\n# Steps\n1. Compiler: build the kernel; capture status + first errors/warnings.\n2. Verifier: compare output to the PyTorch reference within tolerance; report pass/fail + a short error excerpt if failing.\n3. Profiler (only if compiles+correct): collect profiler signals into /tmp/kernelskill-fixture/round_1/ only through user-provided profiler binaries/commands:\n   - ncu_binary: ncu for dram/l2/l1/sm throughput %, achieved occupancy %, registers/thread, kernel duration, long/short scoreboard stall ratios, branch divergent/uniform counts.\n   - nsys_binary: nsys for kernel_launch_count.\n   If profiler binaries/commands are missing, do not invent them; mark profiler metrics as missing evidence.\n   Then measure latency only through benchmark_command and compute speedup = 0.42 / latency when both values are measured.\n   You may use: python /tmp/kernelskill-fixture/bench.py {kernel_path} {result_path}\n\nIf the environment cannot run tools or commands are missing, do a rigorous static evaluation: decide is_compilable / is_correct where possible, set unmeasured metric fields to 0, and mark missing evidence in the notes.\n\nReturn the structured review. Always include the normalized ncu_metrics object (keys: dram_throughput_pct, l2_throughput_pct, l1_throughput_pct, sm_throughput_pct, achieved_occupancy_pct, registers_per_thread, kernel_duration_ns, stall_long_scoreboard_ratio, stall_short_scoreboard_ratio, branch_divergent_cnt, branch_uniform_cnt, kernel_launch_count).",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "is_compilable": {
+          "type": "boolean"
+        },
+        "is_correct": {
+          "type": "boolean"
+        },
+        "latency_ms": {
+          "type": "number"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "error_excerpt": {
+          "type": "string"
+        },
+        "ncu_metrics": {
+          "type": "object",
+          "properties": {
+            "dram_throughput_pct": {
+              "type": "number"
+            },
+            "l2_throughput_pct": {
+              "type": "number"
+            },
+            "l1_throughput_pct": {
+              "type": "number"
+            },
+            "sm_throughput_pct": {
+              "type": "number"
+            },
+            "achieved_occupancy_pct": {
+              "type": "number"
+            },
+            "registers_per_thread": {
+              "type": "number"
+            },
+            "kernel_duration_ns": {
+              "type": "number"
+            },
+            "stall_long_scoreboard_ratio": {
+              "type": "number"
+            },
+            "stall_short_scoreboard_ratio": {
+              "type": "number"
+            },
+            "branch_divergent_cnt": {
+              "type": "number"
+            },
+            "branch_uniform_cnt": {
+              "type": "number"
+            },
+            "kernel_launch_count": {
+              "type": "number"
+            }
+          }
+        },
+        "profile_summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "is_compilable",
+        "is_correct"
+      ]
+    },
+    "seq": 11
+  },
+  {
+    "label": "features-1",
+    "phase": "Optimize",
+    "prompt": "You are the KernelSkill Feature Extractor. Derive the deterministic code-structure features the gate needs. Use a hybrid approach: rule-based pattern matching over the source for stable lexical/syntactic signatures, and structural inference for features that syntax alone cannot capture.\n\n# Kernel source:\n```cuda\n// optimized kernel round 0\n__global__ void relu_v4(float4* x, int n) {}\n\n```\n\n# Feature schema (provide every field):\nhas_reuse, streaming_no_reuse, has_vector_load_store, is_aligned_vector_access, has_tail_handling_overhead, tc_eligible, is_pointwise, uses_transcendentals, is_naive_gemm, has_k_loop, is_gemm_kloop, is_stencil_conv, has_shared_memory_tile, uses_vector_types, has_bounds_check, kernel_structure_id, has_multiple_kernels_in_forward\n\nDefinitions:\n- has_reuse: exploitable data reuse exists (shared tile / register blocking / repeated reads of same data).\n- streaming_no_reuse: pure load->compute->store, each element read once.\n- has_vector_load_store: uses or can trivially use float4/half2 vectorized access.\n- is_aligned_vector_access: vector accesses are 16B-aligned.\n- has_tail_handling_overhead: branchy remainder / masked-lane handling is significant.\n- tc_eligible: matmul-shaped compute with TC-compatible dtype (half/bf16) and tileable shapes.\n- is_pointwise / uses_transcendentals / is_naive_gemm / has_k_loop / is_gemm_kloop / is_stencil_conv / has_shared_memory_tile / uses_vector_types / has_bounds_check: as named.\n- kernel_structure_id: 0=elementwise/streaming(S0), 1=reuse-friendly tiling(S1), 2=irregular gather/scatter(S2), 3=reduction/scan(S3), 4=multi-kernel graph(S4).\n- has_multiple_kernels_in_forward: forward launches >1 distinct kernel.\n\nReturn ONLY the features object (booleans + the two ints).",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "has_reuse": {
+          "type": "boolean"
+        },
+        "streaming_no_reuse": {
+          "type": "boolean"
+        },
+        "has_vector_load_store": {
+          "type": "boolean"
+        },
+        "is_aligned_vector_access": {
+          "type": "boolean"
+        },
+        "has_tail_handling_overhead": {
+          "type": "boolean"
+        },
+        "tc_eligible": {
+          "type": "boolean"
+        },
+        "is_pointwise": {
+          "type": "boolean"
+        },
+        "uses_transcendentals": {
+          "type": "boolean"
+        },
+        "is_naive_gemm": {
+          "type": "boolean"
+        },
+        "has_k_loop": {
+          "type": "boolean"
+        },
+        "is_gemm_kloop": {
+          "type": "boolean"
+        },
+        "is_stencil_conv": {
+          "type": "boolean"
+        },
+        "has_shared_memory_tile": {
+          "type": "boolean"
+        },
+        "uses_vector_types": {
+          "type": "boolean"
+        },
+        "has_bounds_check": {
+          "type": "boolean"
+        },
+        "kernel_structure_id": {
+          "type": "number"
+        },
+        "has_multiple_kernels_in_forward": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kernel_structure_id",
+        "has_reuse",
+        "streaming_no_reuse"
+      ]
+    },
+    "seq": 12
+  },
+  {
+    "label": "gate-1",
+    "phase": "Optimize",
+    "prompt": "You are the KernelSkill deterministic GATE (machine_check layer). You DETERMINISTICALLY evaluate the decision policy. You do NOT use judgment about which optimization is \"best\" — you only apply the rules to compute normalized fields, derived fields, the headroom tier, the matched bottleneck case, and the resulting allowed_methods set.\n\n# Decision policy (long-term memory, machine_check layer):\n{\n  \"field_mapping_keys\": [\n    \"dram_throughput_pct\",\n    \"l2_throughput_pct\",\n    \"l1_throughput_pct\",\n    \"sm_throughput_pct\",\n    \"achieved_occupancy_pct\",\n    \"registers_per_thread\",\n    \"kernel_duration_ns\",\n    \"stall_long_scoreboard_ratio\",\n    \"stall_short_scoreboard_ratio\",\n    \"branch_divergent_cnt\",\n    \"branch_uniform_cnt\"\n  ],\n  \"derived_fields\": {\n    \"branch_divergence_pct\": \"100 * branch_divergent_cnt / max(1, (branch_divergent_cnt + branch_uniform_cnt))\",\n    \"memory_dependency_stall_ratio\": \"stall_long_scoreboard_ratio + stall_short_scoreboard_ratio\",\n    \"primary_limiter_util_pct\": \"max(dram_throughput_pct, l2_throughput_pct, sm_throughput_pct)\",\n    \"reuse_possible\": \"has_reuse OR is_naive_gemm OR is_gemm_kloop OR is_stencil_conv\",\n    \"bytes_structurally_unavoidable\": \"(kernel_structure_id == 0) AND streaming_no_reuse AND has_vector_load_store\",\n    \"needs_alignment_or_tail_fix\": \"(NOT is_aligned_vector_access) OR has_tail_handling_overhead\"\n  },\n  \"headroom_tiers\": {\n    \"Tier-H\": \"primary_limiter_util_pct < 60  (high headroom)\",\n    \"Tier-M\": \"60 <= primary_limiter_util_pct <= 80  (medium headroom)\",\n    \"Tier-L\": \"primary_limiter_util_pct > 80 AND bytes_structurally_unavoidable  (low headroom)\"\n  },\n  \"bottleneck_priority_rules\": [\n    \"BandwidthDominatesLatency: if dram_throughput_pct>=80 OR l2_throughput_pct>=80 -> force bottleneck=memory_bandwidth (do NOT classify as memory_latency even if memory-dependency stalls exist)\"\n  ],\n  \"decision_table\": [\n    {\n      \"case_id\": \"MEM_BW_SATURATED\",\n      \"when\": \"dram_throughput_pct>=80 OR l2_throughput_pct>=80\",\n      \"allowed_methods\": [\n        \"vectorized_memory_access\",\n        \"memory_coalescing\",\n        \"reduce_bytes_via_reuse\",\n        \"data_layout_transformation\"\n      ]\n    },\n    {\n      \"case_id\": \"MEM_LATENCY_BOUND\",\n      \"when\": \"memory_dependency_stall_ratio>=0.30 AND primary_limiter_util_pct<60\",\n      \"allowed_methods\": [\n        \"shared_memory_tiling\",\n        \"register_blocking\",\n        \"software_pipelining\",\n        \"increase_ilp_async_copy\"\n      ]\n    },\n    {\n      \"case_id\": \"COMPUTE_BOUND\",\n      \"when\": \"sm_throughput_pct>=70 AND memory_not_dominant\",\n      \"allowed_methods\": [\n        \"tensor_core_utilization\",\n        \"instruction_mix_optimization\",\n        \"fast_math_intrinsics\",\n        \"warp_level_reduction\"\n      ]\n    },\n    {\n      \"case_id\": \"LOW_OCCUPANCY\",\n      \"when\": \"achieved_occupancy_pct<40 AND primary_limiter_util_pct<60\",\n      \"allowed_methods\": [\n        \"block_size_tuning\",\n        \"register_pressure_reduction\",\n        \"occupancy_tuning\",\n        \"thread_coarsening\"\n      ]\n    },\n    {\n      \"case_id\": \"DIVERGENT\",\n      \"when\": \"branch_divergence_pct>=5\",\n      \"allowed_methods\": [\n        \"branch_reduction\",\n        \"thread_work_remapping\",\n        \"predication\"\n      ]\n    },\n    {\n      \"case_id\": \"GEMM_REWRITE\",\n      \"when\": \"tc_eligible AND (is_naive_gemm OR is_gemm_kloop OR has_k_loop)\",\n      \"allowed_methods\": [\n        \"tensor_core_utilization\",\n        \"shared_memory_tiling\",\n        \"register_blocking\"\n      ]\n    },\n    {\n      \"case_id\": \"NEEDS_ALIGN_OR_TAIL_FIX\",\n      \"when\": \"needs_alignment_or_tail_fix\",\n      \"allowed_methods\": [\n        \"fix_vector_alignment\",\n        \"improve_tail_handling\",\n        \"vectorized_memory_access\"\n      ]\n    },\n    {\n      \"case_id\": \"NO_MATCH\",\n      \"when\": \"no deterministic case matched\",\n      \"allowed_methods\": []\n    }\n  ]\n}\n\n# Normalized NCU metrics (from Profiler):\n{\n  \"dram_throughput_pct\": 92,\n  \"l2_throughput_pct\": 65,\n  \"l1_throughput_pct\": 35,\n  \"sm_throughput_pct\": 28,\n  \"achieved_occupancy_pct\": 72,\n  \"registers_per_thread\": 30,\n  \"kernel_duration_ns\": 300000,\n  \"stall_long_scoreboard_ratio\": 0.18,\n  \"stall_short_scoreboard_ratio\": 0.1,\n  \"branch_divergent_cnt\": 0,\n  \"branch_uniform_cnt\": 1,\n  \"kernel_launch_count\": 1\n}\n\n# Code features (from Feature Extractor):\n{\n  \"has_reuse\": false,\n  \"streaming_no_reuse\": true,\n  \"has_vector_load_store\": true,\n  \"is_aligned_vector_access\": true,\n  \"has_tail_handling_overhead\": false,\n  \"tc_eligible\": false,\n  \"is_pointwise\": true,\n  \"uses_transcendentals\": false,\n  \"is_naive_gemm\": false,\n  \"has_k_loop\": false,\n  \"is_gemm_kloop\": false,\n  \"is_stencil_conv\": false,\n  \"has_shared_memory_tile\": false,\n  \"uses_vector_types\": true,\n  \"has_bounds_check\": true,\n  \"kernel_structure_id\": 0,\n  \"has_multiple_kernels_in_forward\": false\n}\n\n# Procedure (apply in order, deterministically):\n1. Compute derived_fields from the metrics + features.\n2. Apply bottleneck_priority_rules (hard overrides).\n3. Determine the headroom tier.\n4. Find the FIRST decision_table case whose 'when' predicate is satisfied by the evidence.\n5. Emit that case's allowed_methods VERBATIM as the hard-constraint set. If no case matches, use case_id NO_MATCH with an empty allowed_methods (the planner may then self-generate, justified by evidence).\n6. Apply mechanism gates: if a reuse-based method (shared_memory_tiling, register_blocking, reduce_bytes_via_reuse) is in allowed_methods but reuse_possible is false, REMOVE it.\n\nReturn the gate decision. allowed_methods MUST be a subset of the matched case's list (after mechanism gating).",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "tier": {
+          "type": "string"
+        },
+        "bottleneck_id": {
+          "type": "string"
+        },
+        "matched_case_id": {
+          "type": "string"
+        },
+        "allowed_methods": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "key_metrics": {
+          "type": "string"
+        },
+        "derived_values": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "matched_case_id",
+        "allowed_methods"
+      ]
+    },
+    "seq": 13
+  },
+  {
+    "label": "plan-1",
+    "phase": "Optimize",
+    "prompt": "You are the KernelSkill Planner. The deterministic gate has ALREADY decided which optimization methods are FEASIBLE. You MUST select your method from allowed_methods (HARD CONSTRAINT). Then produce a concrete, stepwise optimization plan. Use the short-term optimization memory to avoid repeating an unproductive method and to build coupled multi-step improvements.\n\n# Gate result:\n- tier: Tier-H\n- bottleneck_id: memory_bandwidth_bound\n- matched_case: M1_streaming_no_reuse_high_dram\n- allowed_methods (HARD CONSTRAINT): vectorized_load_store, improve_tail_handling\n- key metrics: dram_throughput_pct=92, near roofline\n\n# Method knowledge (rationale + implementation cues) for the allowed methods:\n{\n  \"improve_tail_handling\": \"Remove branchy remainder overhead. Implementation: process the bulk vectorized, handle the residual with a single masked epilogue.\"\n}\n\n# Short-term OPTIMIZATION memory (methods tried this task + measured outcomes):\n1. round 1: method=\"vectorized_load_store\" | evidence: dram_throughput_pct=85, streaming_no_reuse=true | speedup 1.20x -> ?x | outcome: pending\n\n# Current performance: 1.40x vs Torch Eager\n# Profiler summary: DRAM near roofline\n\n# Current kernel:\n```cuda\n// optimized kernel round 0\n__global__ void relu_v4(float4* x, int n) {}\n\n```\n\nRules:\n- method_name MUST be exactly one of allowed_methods (unless allowed_methods is empty, in which case justify a self-generated method from the profiling evidence).\n- If a method was already tried with no gain (see memory), pick a DIFFERENT allowed method or justify why a refined re-application will help.\n- The plan must be complete enough that following it step-by-step fully implements the method.\n\nReturn: method_name, rationale (citing the metric evidence), and plan (numbered, concrete edits).",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "method_name": {
+          "type": "string"
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "plan": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "method_name",
+        "plan"
+      ]
+    },
+    "seq": 14
+  },
+  {
+    "label": "optimize-1",
+    "phase": "Optimize",
+    "prompt": "You are the KernelSkill Optimizer. Apply the optimization plan to the current kernel and output a COMPLETE, compilable kernel that is still correct vs the PyTorch reference within tolerance (rtol=0.01, atol=0.01).\n\n# Selected method: improve_tail_handling\n# Rationale: DRAM throughput at 92% — addressing tail/edge cases for the residual reduces remaining overhead.\n# Plan:\n1. Process bulk vec4. 2. Single masked epilogue for residual.\n\n# Method implementation cues:\nRemove branchy remainder overhead. Implementation: process the bulk vectorized, handle the residual with a single masked epilogue.\n\n# Current kernel:\n```cuda\n// optimized kernel round 0\n__global__ void relu_v4(float4* x, int n) {}\n\n```\n\nRequirements:\n1. Apply the plan faithfully — it is grounded in real profiling evidence.\n2. Keep the forward() signature identical to the reference.\n3. Output the COMPLETE kernel source (all includes, kernels, bindings).\n4. Do not regress correctness.\n\nReturn the optimized kernel.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "implementation_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code"
+      ]
+    },
+    "seq": 15
+  },
+  {
+    "label": "final-report",
+    "phase": "Report",
+    "prompt": "Write a concise technical report for this KernelSkill optimization run.\n\n# KernelSkill Results\n- Operation: ReLU activation (relu)\n- Reference: /tmp/kernelskill-fixture/19_ReLU.py\n- Target GPU: A100-80GB\n- Run timestamp: 2026-06-09T00:00:00+08:00\n- Torch Eager baseline: 0.42ms\n- Best speedup vs Torch Eager: 1.40x\n- Rounds: 2\n- Skills applied (in order): vectorized_load_store -> improve_tail_handling\n- Speedup trajectory (per round, null=invalid): [1.2,1.2,1.4]\n\n# Short-term optimization memory:\n1. round 1: method=\"vectorized_load_store\" | evidence: dram_throughput_pct=85, streaming_no_reuse=true | speedup 1.20x -> ?x | outcome: pending\n2. round 2: method=\"improve_tail_handling\" | evidence: dram_throughput_pct=92, near roofline | speedup 1.40x -> ?x | outcome: pending\n\n# Best kernel:\n```cuda\n// optimized kernel round 0\n__global__ void relu_v4(float4* x, int n) {}\n\n```\n\nWrite:\n1. Dual-memory narrative: which long-term skills (methods) were selected, what profiling evidence the gate matched, and how short-term memory steered plan revision.\n2. The speedup trajectory and which method delivered the biggest gain.\n3. Repair episodes (if any) and how chained repair memory avoided cyclic fixes.\n4. Remaining bottleneck for the best kernel and the next method to try.",
+    "seq": 16
+  }
+]

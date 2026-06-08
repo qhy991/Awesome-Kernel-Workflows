@@ -1,0 +1,17 @@
+{
+  "problem_path": "/tmp/kernelskill-fixture/19_ReLU.py",
+  "problem_definition": "class Model(nn.Module):\n    def forward(self, x):\n        return torch.relu(x)",
+  "op_description": "ReLU activation",
+  "target_gpu": "A100-80GB",
+  "iterations": 2,
+  "seed_candidates": 2,
+  "benchmark_command": "python /tmp/kernelskill-fixture/bench.py {kernel_path} {result_path}",
+  "ncu_binary": "ncu",
+  "nsys_binary": "nsys",
+  "exp_dir": "/tmp/kernelskill-fixture",
+  "rtol": 0.01,
+  "atol": 0.01,
+  "warmup": 25,
+  "repeat": 100,
+  "run_timestamp_iso": "2026-06-09T00:00:00+08:00"
+}
