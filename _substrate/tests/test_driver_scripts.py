@@ -186,3 +186,48 @@ class TestCudaBuild(unittest.TestCase):
         code, sout, _ = _run([self.SCRIPT, '--source', '/x.cu'])  # no --out
         self.assertEqual(code, 3)
         self.assertEqual(_json_or_raw(sout).get('ok'), False)
+
+
+class TestCudaRun(unittest.TestCase):
+    SCRIPT = os.path.join(CUDA, 'run.sh')
+
+    def _problem(self, td):
+        p = os.path.join(td, 'problem.json')
+        with open(p, 'w') as fh:
+            json.dump({"op": "add", "shape": [128, 128]}, fh)
+        return p
+
+    def test_exists_executable_and_syntax(self):
+        self.assertTrue(os.path.isfile(self.SCRIPT), "cuda/run.sh missing")
+        self.assertTrue(os.access(self.SCRIPT, os.X_OK))
+        code, _, err = _run(['bash', '-n', self.SCRIPT])
+        self.assertEqual(code, 0, msg=err)
+
+    def test_missing_artifact_clean_error_envelope_exit_3(self):
+        # No GPU needed: a nonexistent artifact is a preflight/bad-input failure -> clean JSON envelope, exit 3 (spec §4.5).
+        with tempfile.TemporaryDirectory() as td:
+            prob = self._problem(td); out = os.path.join(td, 'result.json')
+            code, sout, serr = _run([self.SCRIPT, '--artifact', '/nope/x.so',
+                                     '--problem', prob, '--out', out])
+            self.assertEqual(code, 3, msg=f"out={sout} err={serr}")
+            p = _json_or_raw(sout)
+            self.assertEqual(p.get('ok'), False, p)
+            # Contract keys must still be present (anti_cheat reads these exactly).
+            for k in ('compiled', 'correct', 'candidate_latency_ms', 'eager_latency_ms',
+                      'compile_latency_ms', 'claimed_speedup'):
+                self.assertIn(k, p, f"missing key {k}: {p}")
+            self.assertEqual(p['correct'], False, p)
+            self.assertLessEqual(p['claimed_speedup'], 1.0, p)  # correct:false ⇒ ≤1.0
+
+    def test_missing_args_exit_3(self):
+        code, sout, _ = _run([self.SCRIPT, '--artifact', '/x.so'])  # no --problem/--out
+        self.assertEqual(code, 3)
+        self.assertEqual(_json_or_raw(sout).get('ok'), False)
+
+    def test_bad_problem_file_exit_3(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = os.path.join(td, 'r.json')
+            code, sout, _ = _run([self.SCRIPT, '--artifact', '/x.so',
+                                  '--problem', '/no/problem.json', '--out', out])
+            self.assertEqual(code, 3)
+            self.assertEqual(_json_or_raw(sout).get('ok'), False)
