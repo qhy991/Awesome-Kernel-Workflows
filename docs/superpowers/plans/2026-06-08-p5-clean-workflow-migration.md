@@ -32,12 +32,9 @@ CI tiers (substrate diff-guard, driver conformance L0–L3, matrix smoke).
 Land the §9.4 documentation pass. No GPU dependency in any exit criterion;
 GPU verification is the opt-in deferred tier (carried over from P4).
 
-> **Workflow count reconciliation:** §7.2 names 13 clean workflows in the
-> first row, plus KernelBand as `clean*`, plus Generalist as `clean` — 15
-> clean / matrix-eligible total. Phase 2 of §9.1 enumerates the same 13 +
-> KernelBand + Generalist. This plan adopts §9.1 Phase 2's ordering verbatim:
-> AdaExplore + KernelAgent first (P5b), then mid-complexity (P5c), then
-> lower-complexity + KernelBand (P5d), then Generalist last (P5e).
+> **Workflow count:** §7.2 row 1 (13) + KernelBand (`clean*`) +
+> Generalist (`clean`) = **15 clean / matrix-eligible total**, same as
+> §9.1 Phase 2's enumeration. This plan adopts that ordering verbatim.
 
 ## 2. Non-goals (out of scope for P5)
 
@@ -105,21 +102,17 @@ to land the missing P1–P4 deliverable first.
 ```
 
 **Edges in plain English:**
-- `P5a → all` — the manifest `backend:` block and the validate-backend
-  contract are the schema everything else conforms to.
-- `P5b → P5c` — AdaExplore + KernelAgent are the proving ground; they
-  surface generalizing-the-AccelOpt-pattern unknowns (e.g. canonical
-  `kernel_path` discipline) that P5c batch-applies. Do not start P5c until
-  the P5b sub-plans are merged.
-- `P5c → P5d` — only sequencing for risk management (mid-complexity first;
-  bug discoveries here adjust the P5d checklist). Not a hard contract edge.
-- `P5b → P5e` (matrix smoke) — the matrix smoke needs ≥1 matrix_eligible
-  workflow to actually exercise; P5b's AdaExplore guarantees that.
-- `Generalist last` — it is the substrate reference (§9.1 Phase 2); any
-  bug found in earlier batches still has a clean reference to compare
-  against until P5e edits it.
-- `P5e → P5f` — docs pass references the new CI tiers + the matrix smoke
-  outcome; finalize after the CI lands.
+- `P5a → all` — manifest `backend:` block + validate-backend contract is
+  the schema everything conforms to.
+- `P5b → P5c` — AdaExplore + KernelAgent are the proving ground; their
+  spikes (canonical `kernel_path`, determinism) inform P5c.
+- `P5c → P5d` — sequencing for risk management only; bug discoveries in
+  P5c adjust the P5d checklist. Not a hard contract edge.
+- `P5b → P5e` (matrix smoke) — needs ≥1 matrix_eligible workflow
+  retrofitted; AdaExplore guarantees that.
+- `Generalist last` — substrate reference (§9.1 Phase 2); earlier
+  batches still have a clean reference to compare against until P5e.
+- `P5e → P5f` — docs reference the new CI tiers as live.
 
 ## 5. Sub-plan catalogue
 
@@ -137,68 +130,53 @@ contract-only.
 
 **Files touched:**
 - `_meta/manifests/schema.yaml` — add top-level `backend:` block
-  (`supported[]`, `default` (clean methods may set `null` → force explicit
-  `--backend`), `matrix_eligible: true|partial|false`, `portability:
+  (`supported[]`, `default` (may be `null` → force explicit `--backend`),
+  `matrix_eligible: true|partial|false`, `portability:
   clean|vendor_locked|method_intrinsic`, `intrinsic_to` (required when
-  not clean)). Extend `args.optional[]` examples to include neutral
-  `backend`, `backend_dir`, `driver_shell_prefix`, `substrate_dir` and a
-  neutral `profile_command`; keep `ncu_command` as a documented alias with
-  a deprecation-window comment (`ncu_command` is currently first-class per
-  `generate-workflow.js:282`, so this is a deliberate contract change, not
-  a "tightening"). Bump header to "Manifest Schema v1.1".
-- `_meta/tools/generate-workflow.js` — edit the **agent prompts**, not a
-  substitution table. Two regions:
-  - model-args prompt at ~L263–282 (the standard-args list + the
-    "Do not emit concrete default commands…" paragraph): teach the agent to
-    extract `native_backend` + `portability_class` from the manifest, to
-    emit `backend`/`backend_dir` as standard optional args, and to mark
-    `ncu_command` as a deprecated alias for `profile_command`.
-  - generate prompt at ~L492–524 (the "Generation Rules" list, currently
-    rule #2 emits `WORKFLOW_SUITABILITY` with `supported_languages`): teach
-    the agent to emit the §6.4 `method_supported_backends` /
-    `default_backend` / `requires_capability` split, the §6.1 path-helper
-    block (`SUBSTRATE` / `PY` / `SH` / `DRIVER_DIR` / `USE_DRIVER` /
-    `substrateInstruction` / `driverPy` / `driverSh`), and the §6.2 Setup
-    `load-driver` agent gated on `USE_DRIVER`. Rule #10 ("Never hardcode
-    an evaluator/compiler/profiler command") tightened to forbid naming
-    `nvcc`/`ncu`/`@triton.jit`/`__global__`/`PYBIND11_MODULE` in workflow
-    body prompts — those come from `idioms.json:impl_requirements` /
-    `lang_fence` injected at Setup.
-- `_meta/tools/validate-workflow.js` — add **prompt checklist items only**
-  (LLM-driven validator; see spec §9.2: any backend checks here are prompt
-  hints, *not* hard gates). Items: warn on `supported_languages:` (legacy
-  key); warn on `nvcc`/`ncu`/literal CUDA tokens in any agent prompt of
-  a workflow whose manifest declares `portability: clean`.
+  not clean)). Extend `args.optional[]` examples: neutral `backend`,
+  `backend_dir`, `driver_shell_prefix`, `substrate_dir`, neutral
+  `profile_command`; keep `ncu_command` as a documented deprecated alias
+  (deliberate contract change, not a "tightening" — it is first-class
+  today per `generate-workflow.js:282`). Bump header to v1.1.
+- `_meta/tools/generate-workflow.js` — edit two **agent-prompt** regions
+  (not a substitution table):
+  - model-args prompt ~L263–282: teach the agent to extract
+    `native_backend` + `portability_class` from manifest, emit
+    `backend`/`backend_dir` as standard optional args, mark
+    `ncu_command` deprecated.
+  - generate prompt ~L492–524 (the "Generation Rules"; rule #2 today
+    emits `WORKFLOW_SUITABILITY` with `supported_languages`): teach the
+    agent to emit the §6.4 split (`method_supported_backends` /
+    `default_backend` / `requires_capability`), the §6.1 path-helper
+    block, and the §6.2 Setup `load-driver` agent gated on `USE_DRIVER`.
+    Tighten rule #10 to forbid naming `nvcc`/`ncu`/`@triton.jit`/
+    `__global__`/`PYBIND11_MODULE` in workflow body prompts.
+- `_meta/tools/validate-workflow.js` — add **prompt checklist items**
+  only (LLM-driven; per spec §9.2 NOT a hard gate). Warn on
+  `supported_languages:` and on CUDA literal tokens in any prompt of a
+  `portability: clean` workflow.
 - `_meta/tools/validate-backend.js` (**new**) OR
-  `_substrate/backends/validate_backend.py` (per the SDK doc's
-  "Deviations" section — Python won; settle that here, not in P5a's
-  implementation plan). Deterministic L0 checks: `manifest.json` validates,
-  `backend_id == basename(dir)`, `idioms.json` references only real
-  `method_gate.TABLE` names, `capabilities.metrics ⊆` the 4 canonical
-  keys, `bottleneck_classes ⊆` the 4 meaningful ∪ `{unknown}`, substrate
-  scripts byte-identical to baseline EXCEPT the three §5.3 hunks. This is
-  separate from the LLM-driven `validate-workflow.js`.
-- `_templates/iterative-loop.js` and the other three templates
-  (`search-based.js`, `single-pass.js`, `tree-exploration.js`): update the
-  `[BLOCK]`/`{{TOKEN}}` **guidance text** + the input-policy comment
-  (currently `_templates/iterative-loop.js:62-66`) to teach the LLM "the
-  body never names a vendor profiler or vendor metric; backend tokens come
-  from `idioms.json`". Documentation edits — not a substitution API.
-  **Mirror the same edits to `_meta/templates/`** so the canonical tree
-  is consistent; do NOT deepen `_tools/`↔`_meta/tools/` divergence (spec
-  §2.3) — flag the duplication, edit `_meta/templates/` authoritatively.
-- `_meta/tools/test/validate-backend.test.js` (**new**) OR Python pytest
-  equivalent — exercises L0 against the cuda + triton drivers from P3 as
-  positive cases plus crafted negatives (bad `backend_id`, unknown
-  method_gate name, missing manifest field).
+  `_substrate/backends/validate_backend.py` — per SDK doc's "Deviations"
+  section, Python won; settle in P5a's implementation plan, do not ship
+  both. Deterministic L0: manifest validates, `backend_id ==
+  basename(dir)`, `idioms.json` references only real `method_gate.TABLE`
+  names, `capabilities.metrics ⊆` 4 canonical keys,
+  `bottleneck_classes ⊆` 4 meaningful ∪ `{unknown}`, substrate scripts
+  byte-identical to baseline except the three §5.3 hunks. Separate from
+  LLM-driven `validate-workflow.js`.
+- `_templates/{iterative-loop,search-based,single-pass,tree-exploration}.js`
+  AND `_meta/templates/` mirrors — update `{{TOKEN}}`/`[BLOCK]` guidance
+  text + input-policy comment (currently `_templates/iterative-loop.js:62-66`)
+  to teach "body never names a vendor profiler or vendor metric; tokens
+  come from `idioms.json`". Edit `_meta/templates/` authoritatively per
+  §2.3 convention; flag duplication, do not deepen.
+- `_meta/tools/test/validate-backend.test.js` (**new**, or Python pytest)
+  — L0 against P3 cuda + triton drivers as positives + ≥3 crafted negatives.
 - `_meta/tools/test/generator-prompt-schema.test.js` (**new**) — the
-  regression test the user called out: assert generator-prompt OUTPUT
-  SCHEMA is unchanged for vendor-omitted (clean) manifest inputs.
-  Concretely: pin the generate-workflow agent's `schema:` (the existing
-  object after the L520 region) — backend-axis prompt edits must not
-  alter the structured output keys the rest of the pipeline reads. Use
-  the P4 `capturePrompts` harness in **prompt-introspection mode** (the
-  generator IS itself a workflow .js) — same fixture style as P4.
+  regression test: pin generate-workflow agent's structured-output
+  `schema:` (the object after L520) — backend-axis prompt edits must
+  not alter the keys downstream consumes. Use P4 `capturePrompts` in
+  prompt-introspection mode (the generator is itself a workflow .js).
 
 **Depends on:** P1, P2, P3, P4. Hard precondition.
 
@@ -229,19 +207,17 @@ contract-only.
 6. validate-workflow.js prompt-checklist additions
 7. final integration: full `node --test _meta/tools/test/*.test.js` green
 
-**Open questions for P5a's implementation plan to resolve (spike first):**
-- **Manifest tree location.** Spec §9.2 names `_meta/manifests/schema.yaml`,
-  but there is also a top-level `_manifests/` dir. Confirm which is the
-  authoritative tree before editing. (Spec §2.3 calls out `_tools/`↔
-  `_meta/tools/` duplication; if a parallel `_manifests/`↔`_meta/manifests/`
-  divergence exists, do NOT deepen it.)
-- **Python vs Node validator.** The SDK doc declared the L0 validator is
-  Python in `_substrate/backends/validate_backend.py`. The spec §9.2 + §9.3
-  name `_meta/tools/validate-backend.js`. Resolve once and document the
-  choice in the BACKEND-DRIVER-SDK "Deviations" log; do not ship both.
-- **`ncu_command` deprecation window length.** Spec §10 lists this as an
-  "open question". Pick a number (1 minor version? 2?) in P5a so the
-  schema comment is concrete; do not paper over.
+**Open questions for P5a's implementation plan (spike first):**
+- **Manifest tree location.** Spec §9.2 names `_meta/manifests/schema.yaml`
+  but a top-level `_manifests/` also exists. Confirm canonical tree
+  before editing; do not deepen any `_manifests/`↔`_meta/manifests/`
+  divergence (mirrors §2.3 convention).
+- **Python vs Node validator.** SDK doc says Python in
+  `_substrate/backends/validate_backend.py`; spec §9.2/§9.3 name
+  `_meta/tools/validate-backend.js`. Resolve once; document in SDK
+  "Deviations"; do not ship both.
+- **`ncu_command` deprecation window length.** Spec §10 lists as open;
+  pick a concrete number in P5a (1 or 2 minor versions).
 
 ---
 
@@ -259,39 +235,35 @@ in P5e's matrix smoke as the first matrix_eligible retrofitted workflow.
 AccelOpt that generalizes); §7.2 row 1 (clean tier; `'any'`
 method-supported-backends).
 
-**Generalized AccelOpt-pattern checklist** (apply per workflow; the
-per-workflow detail lives in each implementation plan):
-1. **Golden capture** — capture today's prompts via
-   `_meta/tools/print-workflow-prompts.js` with a fixed args fixture +
-   deterministic `agentReturns` map that unlocks the full loop (the P4
-   AccelOpt fixture is the reference shape). Commit pre-retrofit goldens
-   under `_meta/tools/fixtures/<workflow>-today.golden.json` PLUS a
-   `<workflow>-GOLDEN-BASELINE-SHA.txt` per P4 Stage A Task 4.
+**Generalized AccelOpt-pattern checklist** (apply per workflow; per-workflow
+detail lives in each implementation plan):
+1. **Golden capture** — `_meta/tools/print-workflow-prompts.js` with fixed
+   args + deterministic `agentReturns` map that unlocks the full loop.
+   Commit pre-retrofit goldens + `<workflow>-GOLDEN-BASELINE-SHA.txt` per
+   P4 Stage A Task 4.
 2. **Harness fixtures** — args.json + agent-returns.json per mode
-   (optimize-existing vs generate-then-optimize, when both apply).
-3. **`USE_DRIVER` gate** — add §6.1 path helpers + §6.4 guard split;
-   wrap every backend-laden seam in `USE_DRIVER ? <driver> : <legacy>`.
-   Legacy literal extracted to a column-0 named const before gating (P4
-   "col-0 extraction" rule — load-bearing).
+   (optimize vs generate, when both apply).
+3. **`USE_DRIVER` gate** — §6.1 path helpers + §6.4 guard split; wrap
+   each backend-laden seam in `USE_DRIVER ? <driver> : <legacy>`. Legacy
+   literal extracted to column-0 named const before gating (P4 col-0
+   rule — load-bearing).
 4. **Driver-path guards** — Setup `load-driver` agent (§6.2) only when
    `USE_DRIVER`; `JSON_PASSTHROUGH` schema; `diagnose.py` + Layer-A
    evidence assembly only on the driver path.
-5. **Triton dry-run** — at least one non-CUDA driver-path render verified;
-   assert no CUDA tokens (`nvcc`/`ncu`/`__global__`/`PYBIND11_MODULE`/
-   `cuda_runtime.h`/`NCU Profile Results`/`cuda` fence) leak across the
-   FULL rendered set.
-6. **Byte-identity gate** — Stage-C-style test diffing
-   no-`backend_dir` capture against the pre-retrofit golden; green is the
-   merge gate.
-7. **Deferred-GPU checklist update** — append the workflow to
-   `_meta/tools/test/DEFERRED-GPU-VERIFICATION.md` (created in P4).
+5. **Triton dry-run** — non-CUDA driver-path render verified; assert no
+   CUDA tokens (`nvcc`/`ncu`/`__global__`/`PYBIND11_MODULE`/
+   `cuda_runtime.h`/`NCU Profile Results`/`cuda` fence) leak.
+6. **Byte-identity gate** — Stage-C-style test diffing no-`backend_dir`
+   capture against pre-retrofit golden; green is the merge gate.
+7. **Deferred-GPU checklist update** — append workflow to
+   `_meta/tools/test/DEFERRED-GPU-VERIFICATION.md`.
 
 **Backend posture per workflow:**
 
-| Workflow | Source language(s) today | Triton-capable? | CUDA-only? | Notes |
-|---|---|---|---|---|
-| AdaExplore | CUDA `.cu` (MCTS over kernel space) | Yes (clean) | No | Method is backend-agnostic per §7.2; the *current* prompts name CUDA. Spike #1: confirm `args.kernel_path` is the only source-input arg before applying the checklist. |
-| KernelAgent | Triton (per `KernelAgent/kernelagent-triton-synthesis.js` filename) | Triton-intrinsic *today*; clean tier per §7.2 means the topology generalizes | No | Verify: is KernelAgent's *method* triton-only, or is the topology language-agnostic and only the prompts triton-flavored? If method-intrinsic, demote to P5e/P3 phase classification. |
+| Workflow | Triton-capable? | Notes |
+|---|---|---|
+| AdaExplore | Yes (clean) | CUDA `.cu` today (MCTS). Spike #1: confirm `args.kernel_path` is the only source-input arg. |
+| KernelAgent | Triton-flavored today (per filename `kernelagent-triton-synthesis.js`); clean per §7.2 | Verify: is the *method* triton-only, or is the topology language-agnostic and only the prompts triton-flavored? If method-intrinsic, reclassify. |
 
 **Files touched:**
 - `AdaExplore/adaexplore-kernel-optimization.js` — Stage B retrofit
@@ -405,12 +377,12 @@ KernelFoundryDx + KernelSkill, P5d.2 = AKO4X + KernelBand.
 
 | Workflow | Notes |
 |---|---|
-| KSearch | **Verify Triton-intrinsic vs clean.** User explicitly flagged: "KSearch may be Triton-intrinsic — verify." Spec §7.2 lists it as clean, but the implementation may be triton-flavored such that the method IS the backend. If triton-intrinsic, demote to vendor_locked `['triton']` and skip matrix smoke. |
-| ReGraphT | "ReGraph" + "T" — possibly Triton-flavored; verify in spike. |
+| KSearch | **Verify Triton-intrinsic vs clean.** §7.2 lists as clean, but implementation may be triton-flavored such that method IS the backend. If triton-intrinsic, reclassify to `vendor_locked ['triton']` + skip matrix smoke. |
+| ReGraphT | "ReGraph"+"T" — possibly Triton-flavored; verify in spike. |
 | KernelFoundry, KernelFoundryDx | Likely paired; check if Dx is a strict superset / experimental fork. May share fixtures. |
 | KernelSkill | Check topology in spike. |
-| AKO4X | Largest .js in the lower batch (46.8K per `ls` output); may need extra reviewer attention but pattern is the same. |
-| KernelBand | `clean*`. NVIDIA-utilization φ-gate threshold becomes driver-resolved (read from `idioms.json:read_metric_guide` or a new manifest field). This is a *substantive* extra task on top of the checklist — call it out explicitly in the per-workflow plan. |
+| AKO4X | Largest .js in batch (46.8K); extra review attention but same pattern. |
+| KernelBand | `clean*`. φ-gate threshold becomes driver-resolved (from `idioms.json:read_metric_guide` or new manifest field). Substantive extra task on top of the checklist. |
 
 **Files touched:** 7 workflow .js files; 7 sets of fixtures + tests;
 KernelBand additionally edits a φ-gate threshold lookup; deferred-GPU
@@ -515,18 +487,13 @@ fixtures 2–3).
 
 **Open questions for P5e spike:**
 - **CI runner.** What CI does this repo actually use? If none, P5e ships
-  the test files but not the CI wiring; document the gap.
-- **Matrix smoke determinism without P4 harness extensions.** The P4
-  harness was designed for a single workflow at a time; can it iterate
-  cleanly over N workflows × M drivers in one process, or do we need a
-  `matrix-runner.js` orchestrator? Suspect the latter; size it in the
-  implementation plan.
-- **Mock-harness contract.** §9.3 says "mock harness (a documented
-  interface injecting canned `build.sh`/`run.sh`/`profile.sh` JSON
-  without a GPU)". The interface needs to be specified — does
-  `build.sh` get replaced by a `fixture://` URL, or does the test set
-  `$PATH` to point at fake scripts? Pick one in the implementation
-  plan.
+  test files but not CI wiring; document the gap.
+- **Matrix smoke determinism.** Can P4 harness iterate N workflows × M
+  drivers in one process, or do we need a `matrix-runner.js` orchestrator?
+  Suspect the latter; size in implementation plan.
+- **Mock-harness contract.** §9.3 says "documented interface injecting
+  canned JSON"; specify exactly (fixture URL? `$PATH` redirection to
+  fake scripts?). Pick one.
 
 ---
 
@@ -589,67 +556,43 @@ optional spec amendment).
 
 ## 6. Risks (P5-level — beyond per-sub-plan risks already inline)
 
-- **Generator-prompt drift.** P5a edits agent prompts in
-  `generate-workflow.js`. Per spec §9.2: "the generator and validator
-  are LLM-agent pipelines, not substitution engines." A prompt edit
-  that *says* "emit the §6.1 helpers" may produce non-conforming code
-  for novel manifests. **Mitigation:** P5a ships a regression test
-  pinning the structured-output schema, but cannot pin the body content
-  — accept that the next workflow generated post-P5a may need a manual
-  conformance check against the P4 AccelOpt pattern; carry this as a
-  known limitation in the SDK doc.
+- **Generator-prompt drift.** P5a edits agent prompts; per spec §9.2 the
+  generator is an LLM-agent pipeline, not a substitution engine. The P5a
+  regression test pins structured-output schema but cannot pin body
+  content — accept that the next generated workflow may need a manual
+  conformance check; carry as a known limitation in the SDK doc.
 - **Determinism assumption.** P5b/c/d/e all rely on workflows being
-  deterministic (no `Date.now` / `Math.random` / `performance.now`) so
-  the byte-identity gate works. AccelOpt satisfies this. Per workflow
-  spike: grep for those tokens. If a workflow uses them, the gate
-  weakens to a label-set + schema check, and the merge criterion gets
-  laxer — flag in that workflow's implementation plan.
-- **Per-workflow tier reclassification.** Spec §7.2 is one author's
-  classification. Spikes (KSearch in P5d, KernelAgent in P5b) may
-  reveal a workflow is actually `vendor_locked` or `method_intrinsic`.
-  Each reclassification is a spec amendment, not a hidden
-  implementation-plan choice. **Mitigation:** every spike output gets a
-  one-paragraph note appended to the spec §7.2 table; the
-  implementation plan does not proceed until the table is updated.
+  deterministic (no `Date.now`/`Math.random`/`performance.now`) so the
+  byte-identity gate works. Per-workflow spike: grep for these tokens; if
+  found, the gate weakens to label-set + schema check.
+- **Per-workflow tier reclassification.** §7.2 is one author's
+  classification. Spikes (KSearch in P5d, KernelAgent in P5b) may reveal
+  a workflow is actually `vendor_locked` or `method_intrinsic`. Each
+  reclassification is a spec amendment via a §7.2-table edit committed
+  before that workflow's implementation plan proceeds.
 - **CI runner unknown.** P5e assumes a CI exists. If not, P5e ships
-  the test files but does not gate PRs; the matrix smoke becomes a
-  manual-run procedure. Surfaces in P5e spike.
-- **Manifest tree duplication (`_manifests/` vs `_meta/manifests/`).**
-  Mirrors the §2.3 `_tools/`↔`_meta/tools/` issue. If both trees exist,
-  P5a edits the canonical one (`_meta/` per §2.3 convention) and
-  flags the duplication — does not dedup it (out of scope, spec §2.3).
-- **Workflow count drift.** §7.2 says 15 clean / matrix-eligible
-  total. §9.1 Phase 2 names 13 + Generalist + KernelBand = 15. P5b/c/d/e
-  collectively cover all 15. If a new clean workflow lands between
-  P5b and P5d, slot it into the appropriate batch — do not silently skip.
+  tests but does not gate PRs; matrix smoke becomes a manual procedure.
+- **Manifest tree duplication** (`_manifests/` vs `_meta/manifests/`) —
+  mirrors the §2.3 `_tools/`↔`_meta/tools/` issue. P5a edits `_meta/`
+  authoritatively and flags duplication; does not dedup (out of scope).
 
-## 7. Recommended sub-plan ordering for the author
+## 7. Recommended sub-plan authoring order
 
-1. **Write P5a's implementation plan first.** It is the schema; everything
-   depends on it; the spikes (manifest tree location; Python vs Node
-   validator; `ncu_command` deprecation window) are well-bounded and
-   resolvable in a single session.
-2. After P5a merges, write P5b's implementation plan. P5b's spikes
-   (canonical `kernel_path`; per-workflow determinism) inform P5c/d's
-   scope.
-3. P5c/d implementation plans are mechanical applications of the P4+P5b
-   pattern; each can be written in one session per batch.
-4. P5e's implementation plan should be written after P5b is merged but
-   can start before P5c/d merge (the matrix-smoke design does not depend
-   on P5c/d, only on the contract being stable).
-5. P5f's implementation plan can be written last; it is a docs cleanup.
+1. **P5a first** — schema; everything depends on it; spikes are bounded.
+2. **P5b** after P5a merges — its spikes (canonical `kernel_path`,
+   per-workflow determinism) inform P5c/d scope.
+3. **P5c, P5d** — mechanical applications of P4+P5b pattern; one session
+   per batch.
+4. **P5e** — can be drafted in parallel with P5c/d (matrix-smoke design
+   only depends on contract stability), but merges after P5d.
+5. **P5f** — docs cleanup, last.
 
 ## 8. What this master plan deliberately does NOT decide
 
-- Per-workflow seam inventories (each implementation plan does its own,
-  patterned on P4's "Seam inventory — 21 CUDA/NCU couplings" table).
-- Per-workflow agent-returns map contents (each implementation plan
-  derives these from reading the workflow source, like P4 did).
-- The exact CI runner / GitHub Actions YAML (P5e spike-then-decide).
-- Spec amendments triggered by spikes (each spike commits its amendment
-  separately; the master plan only flags that this can happen).
-- GPU-tier verification — opt-in self-hosted-runner; out of scope per
-  §10 + carried over from P4's `DEFERRED-GPU-VERIFICATION.md`.
+Per-workflow seam inventories; per-workflow agent-returns map contents;
+exact CI runner / YAML; spec amendments triggered by spikes (each spike
+commits its amendment separately); GPU-tier verification (opt-in,
+inherited from P4's `DEFERRED-GPU-VERIFICATION.md`).
 
 ---
 
@@ -669,25 +612,9 @@ optional spec amendment).
 | §10 risks — performance-comparable cross-backend | documented as a known limitation in P5e + P5f |
 | Appendix A "P5+" row | this entire master plan |
 
-## Appendix B — Workflow → sub-plan mapping
-
-| Workflow | Sub-plan | Tier (per spec §7.2) |
-|---|---|---|
-| AdaExplore | P5b | clean / any |
-| KernelAgent | P5b | clean / any (verify in spike) |
-| KDA | P5c | clean / any |
-| CUDALLM | P5c | clean / any |
-| Astra | P5c | clean / any |
-| StitchCUDA | P5c | clean / any |
-| STARK | P5c | clean / any |
-| KSearch | P5d | clean / any (**verify Triton-intrinsic**) |
-| ReGraphT | P5d | clean / any |
-| KernelFoundry | P5d | clean / any |
-| KernelFoundryDx | P5d | clean / any |
-| KernelSkill | P5d | clean / any |
-| AKO4X | P5d | clean / any |
-| KernelBand | P5d | clean* (φ-gate driver-resolved) |
-| Generalist | P5e | clean / any (substrate reference; migrate last) |
-
-15 workflows total. All exit P5 with byte-identical legacy paths plus a
-working driver path validated against the cuda + triton P3 drivers.
+**Workflow → sub-plan summary:** P5b={AdaExplore, KernelAgent};
+P5c={KDA, CUDALLM, Astra, StitchCUDA, STARK}; P5d={KSearch, ReGraphT,
+KernelFoundry, KernelFoundryDx, KernelSkill, AKO4X, KernelBand};
+P5e={Generalist + matrix-smoke CI}. 15 workflows total. All exit P5 with
+byte-identical legacy paths plus a working driver path validated against
+the cuda + triton P3 drivers.
