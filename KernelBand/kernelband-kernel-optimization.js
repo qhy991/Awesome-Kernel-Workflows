@@ -71,7 +71,23 @@ function assertWorkflowSuitability() {
   }
 }
 
-assertWorkflowSuitability()
+function resolveBackendAxis() {
+  const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
+  const l = args.language ? normalizeSuitabilityValue(args.language) : null
+  if (b && l && b !== l) {
+    throw new Error(`Conflicting args: backend="${args.backend}" vs language="${args.language}". Pass only one.`)
+  }
+  if (args.backend && !args.backend_dir) {
+    throw new Error(`args.backend="${args.backend}" requires args.backend_dir; driver dispatch has no implicit-resolve path.`)
+  }
+  return b || l || null
+}
+const RESOLVED_BACKEND = resolveBackendAxis()
+const USE_DRIVER = !!args.backend_dir
+
+if (!USE_DRIVER) {
+  assertWorkflowSuitability()
+}
 
 // =============================================================================
 // KernelBand: Steering LLM-based Kernel Optimization via Hardware-Aware
@@ -163,7 +179,8 @@ const ITERATIONS = args.iterations || 20
 const NUM_CLUSTERS = args.num_clusters || 3
 const RECLUSTER_PERIOD = args.recluster_period || 10
 const UCB_C = args.ucb_exploration || 2.0
-const SATURATION_THRESHOLD = args.saturation_threshold || 0.75
+LEGACY_SATURATION_THRESHOLD = 0.75
+let SATURATION_THRESHOLD = args.saturation_threshold || LEGACY_SATURATION_THRESHOLD
 const EXP_DIR = args.exp_dir || '/tmp/kernelband_exp'
 const EVIDENCE_MODE = (COMPILE_CMD && BENCHMARK_CMD && (NCU_CMD || NCU_BINARY))
   ? 'measured'
@@ -178,6 +195,33 @@ const SEED_CANDIDATES = args.seed_candidates || 3
 let generatedKernelPath = ''
 let initialCandidates = []
 let initialGenerationResult = null
+
+// --- Backend driver wiring (P5d Stage B; off-by-default; legacy path byte-identical) ---
+const BACKEND_DIR = args.backend_dir || ''
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const SH = args.driver_shell_prefix || ''
+const PY = args.substrate_command_prefix || ''
+const LEGACY_LANG_TOKEN = LANGUAGE
+const LEGACY_FENCE_TOKEN = LANGUAGE
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+
+function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
+function driverSh(script, cliArgs) {
+  return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
+}
+
+let DRIVER = null
+let DRIVER_LANG_FENCE = LEGACY_FENCE_TOKEN
+let DRIVER_IMPL_REQUIREMENTS = ''
+let DRIVER_SOURCE_EXT = ''
+let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
+
+function langToken(legacy) {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : legacy
+}
+function fenceToken() {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : LEGACY_FENCE_TOKEN
+}
 
 const STRATEGIES = args.strategies || [
   'tiling',
@@ -258,6 +302,28 @@ for (let i = 0; i < NUM_CLUSTERS; i++) {
 // Phase 1: Setup — Parse kernel, identify hardware, establish baseline
 // =============================================================================
 phase('Setup')
+
+if (USE_DRIVER) {
+  DRIVER = await agent(
+    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
+    `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
+    `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods, saturation_threshold}.`,
+    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (!DRIVER || DRIVER.present === false) {
+    throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
+  }
+  if (RESOLVED_BACKEND && DRIVER.backend_id && normalizeSuitabilityValue(DRIVER.backend_id) !== RESOLVED_BACKEND) {
+    throw new Error(`backend_dir manifest backend_id="${DRIVER.backend_id}" conflicts with args.backend/language="${RESOLVED_BACKEND}".`)
+  }
+  DRIVER_LANG_FENCE = DRIVER.lang_fence || DRIVER_LANG_FENCE
+  DRIVER_IMPL_REQUIREMENTS = DRIVER.impl_requirements || ''
+  DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT
+  DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID
+  // φ-gate driver resolution: driver may supply its own saturation threshold
+  SATURATION_THRESHOLD = DRIVER.saturation_threshold != null ? DRIVER.saturation_threshold : LEGACY_SATURATION_THRESHOLD
+  log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE}, θ_sat=${SATURATION_THRESHOLD})`)
+}
 
 if (INPUT_MODE === 'generate_then_optimize') {
   KERNEL_PATH = await resolveInitialKernelFromProblem()
