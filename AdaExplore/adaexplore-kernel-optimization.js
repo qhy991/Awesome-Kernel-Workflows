@@ -78,7 +78,23 @@ function assertWorkflowSuitability() {
   }
 }
 
-assertWorkflowSuitability()
+function resolveBackendAxis() {
+  const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
+  const l = args.language ? normalizeSuitabilityValue(args.language) : null
+  if (b && l && b !== l) {
+    throw new Error(`Conflicting args: backend="${args.backend}" vs language="${args.language}". Pass only one.`)
+  }
+  if (args.backend && !args.backend_dir) {
+    throw new Error(`args.backend="${args.backend}" requires args.backend_dir; driver dispatch has no implicit-resolve path.`)
+  }
+  return b || l || null
+}
+const RESOLVED_BACKEND = resolveBackendAxis()
+const USE_DRIVER = !!args.backend_dir
+
+if (!USE_DRIVER) {
+  assertWorkflowSuitability()
+}
 
 // =============================================================================
 // AdaExplore-Style Standalone Kernel Optimization
@@ -163,6 +179,31 @@ const KERNEL_PATH = args.kernel_path || ''
 const INPUT_MODE = KERNEL_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const MAX_MEMORY_RULES = args.max_memory_rules || 40
 const EST_PER_ROUND = args.est_tokens_per_round || 60000
+
+// --- Backend driver wiring (P5b Stage B; off-by-default; legacy path byte-identical) ---
+const BACKEND_DIR = args.backend_dir || ''
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const SH = args.driver_shell_prefix || ''
+const PY = args.substrate_command_prefix || ''
+const LEGACY_SETUP_LANG_TOKEN = 'Triton'
+const LEGACY_LARGE_STEP_INTERFACE_LANG = 'PyTorch operator interface'
+const LEGACY_REVISER_PERF_HINT = 'Apply a small, local performance or correctness fix based on the evaluator logs.'
+const LEGACY_EVALUATE_RUN_INSTRUCTION = 'Run the evaluator command if provided. If not provided, do not create one; mark compiled=false, correct=false, speedup=0, and explain missing evidence.'
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+
+function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
+function driverSh(script, cliArgs) {
+  return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
+}
+function workspaceKernelPath(stepIndex, isLarge, ext) {
+  return `${EXP_DIR}/kernels/step_${stepIndex + 1}_${isLarge ? 'large' : 'small'}${ext}`
+}
+
+let DRIVER = null
+let DRIVER_LANG_FENCE = LEGACY_SETUP_LANG_TOKEN.toLowerCase()
+let DRIVER_IMPL_REQUIREMENTS = ''
+let DRIVER_SOURCE_EXT = '.py'
+let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
 
 if (!KERNEL_PATH && !OPERATOR_SPEC && !PROBLEM_PATH) {
   throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
@@ -347,6 +388,26 @@ function renderCommand(template, replacements) {
 // Phase 1: Setup
 // =============================================================================
 phase('Setup')
+
+if (USE_DRIVER) {
+  DRIVER = await agent(
+    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
+    `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
+    `Return {present, backend_id, source_ext, lang_fence, impl_requirements, methods}.`,
+    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (!DRIVER || DRIVER.present === false) {
+    throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
+  }
+  if (RESOLVED_BACKEND && DRIVER.backend_id && normalizeSuitabilityValue(DRIVER.backend_id) !== RESOLVED_BACKEND) {
+    throw new Error(`backend_dir manifest backend_id="${DRIVER.backend_id}" conflicts with args.backend/language="${RESOLVED_BACKEND}".`)
+  }
+  DRIVER_LANG_FENCE = DRIVER.lang_fence || DRIVER_LANG_FENCE
+  DRIVER_IMPL_REQUIREMENTS = DRIVER.impl_requirements || ''
+  DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT
+  DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID
+  log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
+}
 
 const setupResult = await agent(`Set up a standalone AdaExplore-style Triton kernel optimization run.
 
