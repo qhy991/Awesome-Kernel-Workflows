@@ -1,0 +1,654 @@
+[
+  {
+    "label": "setup-task",
+    "phase": "Setup",
+    "prompt": "You are a CUDA kernel generation expert. Read and structure this CUDA-LLM task.\n\n# Inputs\n- problem_definition: Implement a CUDA kernel that computes row-wise softmax over Tensor[B,N]\n- problem_path: /tmp/cudallm-fixture/task.md\n- reference_code_path: /tmp/cudallm-fixture/reference.py\n- target_gpu: H100\n- benchmark_command: python /tmp/cudallm-fixture/bench.py {kernel_path} {result_path}\n- tolerances: rtol=0.01, atol=0.01\n\n# Tasks\n1. Read problem_path and reference implementation when provided.\n2. Use problem_definition as the authoritative task specification when provided.\n3. Identify operation type, tensor shapes/dtypes, layout assumptions, and expected output.\n4. Identify hard constraints: pure CUDA/C++ only, no PyTorch fallback in generated kernel, preserve numerical tolerance.\n5. State the evaluator JSON contract and how {kernel_path}/{result_path} are substituted.\n6. List baseline performance if available.\n\nReturn structured task information.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "problem_definition": {
+          "type": "string"
+        },
+        "reference_code": {
+          "type": "string"
+        },
+        "operation_type": {
+          "type": "string"
+        },
+        "input_contract": {
+          "type": "string"
+        },
+        "output_contract": {
+          "type": "string"
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "baseline_latency_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "problem_definition",
+        "operation_type",
+        "constraints"
+      ]
+    },
+    "seq": 0
+  },
+  {
+    "label": "feature-catalog",
+    "phase": "FeatureCatalog",
+    "prompt": "Build a CUDA optimization feature catalog for Feature Search and Reinforcement.\n\n# Task\nImplement a CUDA kernel that computes row-wise softmax over Tensor[B,N]\n\n# Reference\n```\nimport torch\\ndef ref(x): return torch.softmax(x, dim=-1)\\n\n```\n\n# Target GPU\nH100\n\n# Required feature families\n- tiling and block/grid decomposition\n- shared memory staging\n- vectorized/global memory access\n- warp-level primitives\n- loop unrolling and instruction scheduling\n- occupancy/register pressure tuning\n- fast math or CUDA intrinsics, only when tolerance allows\n- boundary handling / tail masking\n\n# Tasks\n1. Produce feature entries with id, name, family, description, prerequisites, incompatibilities, and risk.\n2. Mark features that are unsafe under the given tolerance.\n3. Include a conservative baseline feature set.\n4. Initialize all feature scores with neutral priors.\n\nReturn feature catalog.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "features": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "baseline_feature_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unsafe_feature_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "features",
+        "baseline_feature_ids"
+      ]
+    },
+    "seq": 1
+  },
+  {
+    "label": "generate-tests",
+    "phase": "GenerateTests",
+    "prompt": "Generate diverse correctness tests for this CUDA-LLM task.\n\n# Operation\nsoftmax\n\n# Input contract\nx: float32[B,N] contiguous\n\n# Output contract\ny: float32[B,N] contiguous\n\n# Tolerances\nrtol=0.01, atol=0.01\n\n# Requirements\n1. Cover small, medium, and large shapes.\n2. Cover boundary/tail cases that stress masking and vectorized loads.\n3. Cover dtype/layout variations if the task allows them.\n4. Include random and adversarial value distributions.\n5. These tests define what the user-provided benchmark_command should verify; model self-judgment is not enough.\n\nReturn test cases.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "test_cases": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "tolerance_policy": {
+          "type": "string"
+        },
+        "harness_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "test_cases",
+        "tolerance_policy"
+      ]
+    },
+    "seq": 2
+  },
+  {
+    "label": "select-features-0-0",
+    "phase": "SelectFeatures",
+    "prompt": "Select a CUDA feature combination for the next candidate.\n\n# Feature catalog\n```json\n[\n  {\n    \"id\": \"tile\",\n    \"name\": \"tiling\",\n    \"family\": \"tiling\",\n    \"description\": \"block/grid tiling\"\n  },\n  {\n    \"id\": \"smem\",\n    \"name\": \"shared_memory\",\n    \"family\": \"memory\",\n    \"description\": \"shared mem staging\"\n  },\n  {\n    \"id\": \"vec\",\n    \"name\": \"vectorized_load\",\n    \"family\": \"memory\",\n    \"description\": \"float4 loads\"\n  }\n]\n```\n\n# Feature scores\n```json\n{\n  \"tile\": {\n    \"id\": \"tile\",\n    \"name\": \"tiling\",\n    \"attempts\": 0,\n    \"compiled\": 0,\n    \"correct\": 0,\n    \"reward\": 0,\n    \"best_speedup\": 0,\n    \"failures\": []\n  },\n  \"smem\": {\n    \"id\": \"smem\",\n    \"name\": \"shared_memory\",\n    \"attempts\": 0,\n    \"compiled\": 0,\n    \"correct\": 0,\n    \"reward\": 0,\n    \"best_speedup\": 0,\n    \"failures\": []\n  },\n  \"vec\": {\n    \"id\": \"vec\",\n    \"name\": \"vectorized_load\",\n    \"attempts\": 0,\n    \"compiled\": 0,\n    \"correct\": 0,\n    \"reward\": 0,\n    \"best_speedup\": 0,\n    \"failures\": []\n  }\n}\n```\n\n# Recent candidates\n```json\n[]\n```\n\n# Selection rules\n1. Select at most 4 features.\n2. Combine compatible features only.\n3. Use exploration early: try under-tested but plausible features.\n4. Use exploitation when feature evidence shows compile/correctness/speedup reward.\n5. Avoid unsafe features unless explicitly justified by tolerance and tests.\n\nReturn selected feature ids and rationale.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "selected_feature_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "expected_risks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "selected_feature_ids",
+        "rationale"
+      ]
+    },
+    "seq": 3
+  },
+  {
+    "label": "generate-kernel-0-0",
+    "phase": "GenerateKernel",
+    "prompt": "Generate a CUDA kernel using the selected CUDA-LLM FSR features.\n\n# Task specification\nImplement a CUDA kernel that computes row-wise softmax over Tensor[B,N]\n\n# Reference implementation\n```\nimport torch\\ndef ref(x): return torch.softmax(x, dim=-1)\\n\n```\n\n# Selected features\n```json\n{\n  \"selected_feature_ids\": [\n    \"tile\"\n  ],\n  \"rationale\": \"start with tiling baseline\",\n  \"expected_risks\": []\n}\n```\n\n# Hard constraints\n1. Return complete CUDA/C++ source, not a patch.\n2. Do not call PyTorch or reference implementation from generated kernel.\n3. Preserve input/output contract and tolerances.\n4. Implement selected features concretely; if a feature is skipped, explain why.\n5. Keep code benchmarkable by benchmark_command.\n\nReturn candidate code and implemented features.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "candidate_code": {
+          "type": "string"
+        },
+        "implemented_feature_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skipped_feature_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "implementation_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_code",
+        "implemented_feature_ids"
+      ]
+    },
+    "seq": 4
+  },
+  {
+    "label": "evaluate-0-0",
+    "phase": "Evaluate",
+    "prompt": "Evaluate this CUDA candidate with compile, correctness, and latency evidence.\n\n# Candidate code\n```cuda\n__global__ void softmax_kernel(const float* x, float* y, int N) {}\\n\n```\n\n# Eval command\npython /tmp/cudallm-fixture/bench.py {kernel_path} {result_path}\n\n# Paths\n- kernel_path: /tmp/cudallm-fixture/cudallm_iter_0_sample_0.cu\n- result_path: /tmp/cudallm-fixture/cudallm_iter_0_sample_0.json\n\n# Tests\n```json\n[\n  {\n    \"name\": \"small\",\n    \"shape\": [\n      4,\n      16\n    ],\n    \"dtype\": \"float32\"\n  },\n  {\n    \"name\": \"medium\",\n    \"shape\": [\n      64,\n      1024\n    ],\n    \"dtype\": \"float32\"\n  }\n]\n```\n\n# Required behavior\n1. If benchmark_command is available, materialize the kernel and run it with {kernel_path}/{result_path}.\n2. Parse evaluator JSON.\n3. If benchmark_command is unavailable, set compiled=false, correct=false, speedup=0 and explain missing evidence.\n4. Reward must be based on compile success, functional correctness over diverse tests, and measured latency.\n5. Report suspected reward-hacking signs: hardcoded shapes, skipped computation, PyTorch fallback, or ignored inputs.\n\nReturn evaluator result.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compiled": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "boolean"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "latency_ms": {
+          "type": "number"
+        },
+        "baseline_latency_ms": {
+          "type": "number"
+        },
+        "passed_tests": {
+          "type": "number"
+        },
+        "total_tests": {
+          "type": "number"
+        },
+        "error_message": {
+          "type": "string"
+        },
+        "reward_hacking_flags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "compiled",
+        "correct",
+        "speedup"
+      ]
+    },
+    "seq": 5
+  },
+  {
+    "label": "reinforce-0-0",
+    "phase": "Reinforce",
+    "prompt": "Update CUDA feature scores from this measured candidate.\n\n# Candidate\n```json\n{\n  \"id\": \"iter_0_sample_0\",\n  \"selected_feature_ids\": [\n    \"tile\"\n  ],\n  \"implemented_feature_ids\": [\n    \"tile\"\n  ],\n  \"eval\": {\n    \"compiled\": true,\n    \"correct\": true,\n    \"speedup\": 1.1,\n    \"latency_ms\": 0.38,\n    \"baseline_latency_ms\": 0.42,\n    \"passed_tests\": 2,\n    \"total_tests\": 2,\n    \"error_message\": \"\",\n    \"reward_hacking_flags\": []\n  }\n}\n```\n\n# Current feature scores\n```json\n{\n  \"tile\": {\n    \"id\": \"tile\",\n    \"name\": \"tiling\",\n    \"attempts\": 0,\n    \"compiled\": 0,\n    \"correct\": 0,\n    \"reward\": 0,\n    \"best_speedup\": 0,\n    \"failures\": []\n  },\n  \"smem\": {\n    \"id\": \"smem\",\n    \"name\": \"shared_memory\",\n    \"attempts\": 0,\n    \"compiled\": 0,\n    \"correct\": 0,\n    \"reward\": 0,\n    \"best_speedup\": 0,\n    \"failures\": []\n  },\n  \"vec\": {\n    \"id\": \"vec\",\n    \"name\": \"vectorized_load\",\n    \"attempts\": 0,\n    \"compiled\": 0,\n    \"correct\": 0,\n    \"reward\": 0,\n    \"best_speedup\": 0,\n    \"failures\": []\n  }\n}\n```\n\n# Reward rules\n1. compiled=false gives strong penalty to implemented features.\n2. compiled=true but correct=false gives weak compile credit and correctness penalty.\n3. correct=true gives correctness credit plus speedup reward.\n4. reward_hacking_flags suppress reward even if speedup appears high.\n5. Features not implemented should not receive credit.\n\nReturn updated score records for affected features.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "updated_scores": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "reinforcement_notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "updated_scores"
+      ]
+    },
+    "seq": 6
+  },
+  {
+    "label": "select-features-0-1",
+    "phase": "SelectFeatures",
+    "prompt": "Select a CUDA feature combination for the next candidate.\n\n# Feature catalog\n```json\n[\n  {\n    \"id\": \"tile\",\n    \"name\": \"tiling\",\n    \"family\": \"tiling\",\n    \"description\": \"block/grid tiling\"\n  },\n  {\n    \"id\": \"smem\",\n    \"name\": \"shared_memory\",\n    \"family\": \"memory\",\n    \"description\": \"shared mem staging\"\n  },\n  {\n    \"id\": \"vec\",\n    \"name\": \"vectorized_load\",\n    \"family\": \"memory\",\n    \"description\": \"float4 loads\"\n  }\n]\n```\n\n# Feature scores\n```json\n{\n  \"tile\": {\n    \"id\": \"tile\",\n    \"name\": \"tiling\",\n    \"attempts\": 1,\n    \"compiled\": 1,\n    \"correct\": 1,\n    \"reward\": 0.1,\n    \"best_speedup\": 1.1,\n    \"failures\": []\n  },\n  \"smem\": {\n    \"id\": \"smem\",\n    \"name\": \"shared_memory\",\n    \"attempts\": 0,\n    \"compiled\": 0,\n    \"correct\": 0,\n    \"reward\": 0,\n    \"best_speedup\": 0,\n    \"failures\": []\n  },\n  \"vec\": {\n    \"id\": \"vec\",\n    \"name\": \"vectorized_load\",\n    \"attempts\": 0,\n    \"compiled\": 0,\n    \"correct\": 0,\n    \"reward\": 0,\n    \"best_speedup\": 0,\n    \"failures\": []\n  }\n}\n```\n\n# Recent candidates\n```json\n[\n  {\n    \"id\": \"iter_0_sample_0\",\n    \"selected_feature_ids\": [\n      \"tile\"\n    ],\n    \"implemented_feature_ids\": [\n      \"tile\"\n    ],\n    \"code\": \"__global__ void softmax_kernel(const float* x, float* y, int N) {}\\\\n\",\n    \"eval\": {\n      \"compiled\": true,\n      \"correct\": true,\n      \"speedup\": 1.1,\n      \"latency_ms\": 0.38,\n      \"baseline_latency_ms\": 0.42,\n      \"passed_tests\": 2,\n      \"total_tests\": 2,\n      \"error_message\": \"\",\n      \"reward_hacking_flags\": []\n    }\n  }\n]\n```\n\n# Selection rules\n1. Select at most 4 features.\n2. Combine compatible features only.\n3. Use exploration early: try under-tested but plausible features.\n4. Use exploitation when feature evidence shows compile/correctness/speedup reward.\n5. Avoid unsafe features unless explicitly justified by tolerance and tests.\n\nReturn selected feature ids and rationale.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "selected_feature_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "expected_risks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "selected_feature_ids",
+        "rationale"
+      ]
+    },
+    "seq": 7
+  },
+  {
+    "label": "generate-kernel-0-1",
+    "phase": "GenerateKernel",
+    "prompt": "Generate a CUDA kernel using the selected CUDA-LLM FSR features.\n\n# Task specification\nImplement a CUDA kernel that computes row-wise softmax over Tensor[B,N]\n\n# Reference implementation\n```\nimport torch\\ndef ref(x): return torch.softmax(x, dim=-1)\\n\n```\n\n# Selected features\n```json\n{\n  \"selected_feature_ids\": [\n    \"tile\",\n    \"smem\"\n  ],\n  \"rationale\": \"add shared memory\",\n  \"expected_risks\": [\n    \"bank conflicts\"\n  ]\n}\n```\n\n# Hard constraints\n1. Return complete CUDA/C++ source, not a patch.\n2. Do not call PyTorch or reference implementation from generated kernel.\n3. Preserve input/output contract and tolerances.\n4. Implement selected features concretely; if a feature is skipped, explain why.\n5. Keep code benchmarkable by benchmark_command.\n\nReturn candidate code and implemented features.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "candidate_code": {
+          "type": "string"
+        },
+        "implemented_feature_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skipped_feature_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "implementation_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_code",
+        "implemented_feature_ids"
+      ]
+    },
+    "seq": 8
+  },
+  {
+    "label": "evaluate-0-1",
+    "phase": "Evaluate",
+    "prompt": "Evaluate this CUDA candidate with compile, correctness, and latency evidence.\n\n# Candidate code\n```cuda\n__global__ void softmax_kernel(const float* x, float* y, int N) { __shared__ float s[256]; }\\n\n```\n\n# Eval command\npython /tmp/cudallm-fixture/bench.py {kernel_path} {result_path}\n\n# Paths\n- kernel_path: /tmp/cudallm-fixture/cudallm_iter_0_sample_1.cu\n- result_path: /tmp/cudallm-fixture/cudallm_iter_0_sample_1.json\n\n# Tests\n```json\n[\n  {\n    \"name\": \"small\",\n    \"shape\": [\n      4,\n      16\n    ],\n    \"dtype\": \"float32\"\n  },\n  {\n    \"name\": \"medium\",\n    \"shape\": [\n      64,\n      1024\n    ],\n    \"dtype\": \"float32\"\n  }\n]\n```\n\n# Required behavior\n1. If benchmark_command is available, materialize the kernel and run it with {kernel_path}/{result_path}.\n2. Parse evaluator JSON.\n3. If benchmark_command is unavailable, set compiled=false, correct=false, speedup=0 and explain missing evidence.\n4. Reward must be based on compile success, functional correctness over diverse tests, and measured latency.\n5. Report suspected reward-hacking signs: hardcoded shapes, skipped computation, PyTorch fallback, or ignored inputs.\n\nReturn evaluator result.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compiled": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "boolean"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "latency_ms": {
+          "type": "number"
+        },
+        "baseline_latency_ms": {
+          "type": "number"
+        },
+        "passed_tests": {
+          "type": "number"
+        },
+        "total_tests": {
+          "type": "number"
+        },
+        "error_message": {
+          "type": "string"
+        },
+        "reward_hacking_flags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "compiled",
+        "correct",
+        "speedup"
+      ]
+    },
+    "seq": 9
+  },
+  {
+    "label": "reinforce-0-1",
+    "phase": "Reinforce",
+    "prompt": "Update CUDA feature scores from this measured candidate.\n\n# Candidate\n```json\n{\n  \"id\": \"iter_0_sample_1\",\n  \"selected_feature_ids\": [\n    \"tile\",\n    \"smem\"\n  ],\n  \"implemented_feature_ids\": [\n    \"tile\",\n    \"smem\"\n  ],\n  \"eval\": {\n    \"compiled\": true,\n    \"correct\": false,\n    \"speedup\": 0,\n    \"latency_ms\": 0,\n    \"baseline_latency_ms\": 0.42,\n    \"passed_tests\": 1,\n    \"total_tests\": 2,\n    \"error_message\": \"mismatch on medium\",\n    \"reward_hacking_flags\": []\n  }\n}\n```\n\n# Current feature scores\n```json\n{\n  \"tile\": {\n    \"id\": \"tile\",\n    \"name\": \"tiling\",\n    \"attempts\": 1,\n    \"compiled\": 1,\n    \"correct\": 1,\n    \"reward\": 0.1,\n    \"best_speedup\": 1.1,\n    \"failures\": []\n  },\n  \"smem\": {\n    \"id\": \"smem\",\n    \"name\": \"shared_memory\",\n    \"attempts\": 0,\n    \"compiled\": 0,\n    \"correct\": 0,\n    \"reward\": 0,\n    \"best_speedup\": 0,\n    \"failures\": []\n  },\n  \"vec\": {\n    \"id\": \"vec\",\n    \"name\": \"vectorized_load\",\n    \"attempts\": 0,\n    \"compiled\": 0,\n    \"correct\": 0,\n    \"reward\": 0,\n    \"best_speedup\": 0,\n    \"failures\": []\n  }\n}\n```\n\n# Reward rules\n1. compiled=false gives strong penalty to implemented features.\n2. compiled=true but correct=false gives weak compile credit and correctness penalty.\n3. correct=true gives correctness credit plus speedup reward.\n4. reward_hacking_flags suppress reward even if speedup appears high.\n5. Features not implemented should not receive credit.\n\nReturn updated score records for affected features.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "updated_scores": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "reinforcement_notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "updated_scores"
+      ]
+    },
+    "seq": 10
+  },
+  {
+    "label": "select-features-1-0",
+    "phase": "SelectFeatures",
+    "prompt": "Select a CUDA feature combination for the next candidate.\n\n# Feature catalog\n```json\n[\n  {\n    \"id\": \"tile\",\n    \"name\": \"tiling\",\n    \"family\": \"tiling\",\n    \"description\": \"block/grid tiling\"\n  },\n  {\n    \"id\": \"smem\",\n    \"name\": \"shared_memory\",\n    \"family\": \"memory\",\n    \"description\": \"shared mem staging\"\n  },\n  {\n    \"id\": \"vec\",\n    \"name\": \"vectorized_load\",\n    \"family\": \"memory\",\n    \"description\": \"float4 loads\"\n  }\n]\n```\n\n# Feature scores\n```json\n{\n  \"tile\": {\n    \"id\": \"tile\",\n    \"name\": \"tiling\",\n    \"attempts\": 1,\n    \"compiled\": 1,\n    \"correct\": 1,\n    \"reward\": 0.1,\n    \"best_speedup\": 1.1,\n    \"failures\": []\n  },\n  \"smem\": {\n    \"id\": \"smem\",\n    \"name\": \"shared_memory\",\n    \"attempts\": 1,\n    \"compiled\": 1,\n    \"correct\": 0,\n    \"reward\": -0.05,\n    \"best_speedup\": 0,\n    \"failures\": [\n      \"mismatch\"\n    ]\n  },\n  \"vec\": {\n    \"id\": \"vec\",\n    \"name\": \"vectorized_load\",\n    \"attempts\": 0,\n    \"compiled\": 0,\n    \"correct\": 0,\n    \"reward\": 0,\n    \"best_speedup\": 0,\n    \"failures\": []\n  }\n}\n```\n\n# Recent candidates\n```json\n[\n  {\n    \"id\": \"iter_0_sample_0\",\n    \"selected_feature_ids\": [\n      \"tile\"\n    ],\n    \"implemented_feature_ids\": [\n      \"tile\"\n    ],\n    \"code\": \"__global__ void softmax_kernel(const float* x, float* y, int N) {}\\\\n\",\n    \"eval\": {\n      \"compiled\": true,\n      \"correct\": true,\n      \"speedup\": 1.1,\n      \"latency_ms\": 0.38,\n      \"baseline_latency_ms\": 0.42,\n      \"passed_tests\": 2,\n      \"total_tests\": 2,\n      \"error_message\": \"\",\n      \"reward_hacking_flags\": []\n    }\n  },\n  {\n    \"id\": \"iter_0_sample_1\",\n    \"selected_feature_ids\": [\n      \"tile\",\n      \"smem\"\n    ],\n    \"implemented_feature_ids\": [\n      \"tile\",\n      \"smem\"\n    ],\n    \"code\": \"__global__ void softmax_kernel(const float* x, float* y, int N) { __shared__ float s[256]; }\\\\n\",\n    \"eval\": {\n      \"compiled\": true,\n      \"correct\": false,\n      \"speedup\": 0,\n      \"latency_ms\": 0,\n      \"baseline_latency_ms\": 0.42,\n      \"passed_tests\": 1,\n      \"total_tests\": 2,\n      \"error_message\": \"mismatch on medium\",\n      \"reward_hacking_flags\": []\n    }\n  }\n]\n```\n\n# Selection rules\n1. Select at most 4 features.\n2. Combine compatible features only.\n3. Use exploration early: try under-tested but plausible features.\n4. Use exploitation when feature evidence shows compile/correctness/speedup reward.\n5. Avoid unsafe features unless explicitly justified by tolerance and tests.\n\nReturn selected feature ids and rationale.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "selected_feature_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "expected_risks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "selected_feature_ids",
+        "rationale"
+      ]
+    },
+    "seq": 11
+  },
+  {
+    "label": "generate-kernel-1-0",
+    "phase": "GenerateKernel",
+    "prompt": "Generate a CUDA kernel using the selected CUDA-LLM FSR features.\n\n# Task specification\nImplement a CUDA kernel that computes row-wise softmax over Tensor[B,N]\n\n# Reference implementation\n```\nimport torch\\ndef ref(x): return torch.softmax(x, dim=-1)\\n\n```\n\n# Selected features\n```json\n{\n  \"selected_feature_ids\": [\n    \"tile\",\n    \"vec\"\n  ],\n  \"rationale\": \"swap smem for vectorized load\",\n  \"expected_risks\": []\n}\n```\n\n# Hard constraints\n1. Return complete CUDA/C++ source, not a patch.\n2. Do not call PyTorch or reference implementation from generated kernel.\n3. Preserve input/output contract and tolerances.\n4. Implement selected features concretely; if a feature is skipped, explain why.\n5. Keep code benchmarkable by benchmark_command.\n\nReturn candidate code and implemented features.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "candidate_code": {
+          "type": "string"
+        },
+        "implemented_feature_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skipped_feature_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "implementation_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_code",
+        "implemented_feature_ids"
+      ]
+    },
+    "seq": 12
+  },
+  {
+    "label": "evaluate-1-0",
+    "phase": "Evaluate",
+    "prompt": "Evaluate this CUDA candidate with compile, correctness, and latency evidence.\n\n# Candidate code\n```cuda\n__global__ void softmax_kernel(const float4* x, float4* y, int N) {}\\n\n```\n\n# Eval command\npython /tmp/cudallm-fixture/bench.py {kernel_path} {result_path}\n\n# Paths\n- kernel_path: /tmp/cudallm-fixture/cudallm_iter_1_sample_0.cu\n- result_path: /tmp/cudallm-fixture/cudallm_iter_1_sample_0.json\n\n# Tests\n```json\n[\n  {\n    \"name\": \"small\",\n    \"shape\": [\n      4,\n      16\n    ],\n    \"dtype\": \"float32\"\n  },\n  {\n    \"name\": \"medium\",\n    \"shape\": [\n      64,\n      1024\n    ],\n    \"dtype\": \"float32\"\n  }\n]\n```\n\n# Required behavior\n1. If benchmark_command is available, materialize the kernel and run it with {kernel_path}/{result_path}.\n2. Parse evaluator JSON.\n3. If benchmark_command is unavailable, set compiled=false, correct=false, speedup=0 and explain missing evidence.\n4. Reward must be based on compile success, functional correctness over diverse tests, and measured latency.\n5. Report suspected reward-hacking signs: hardcoded shapes, skipped computation, PyTorch fallback, or ignored inputs.\n\nReturn evaluator result.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compiled": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "boolean"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "latency_ms": {
+          "type": "number"
+        },
+        "baseline_latency_ms": {
+          "type": "number"
+        },
+        "passed_tests": {
+          "type": "number"
+        },
+        "total_tests": {
+          "type": "number"
+        },
+        "error_message": {
+          "type": "string"
+        },
+        "reward_hacking_flags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "compiled",
+        "correct",
+        "speedup"
+      ]
+    },
+    "seq": 13
+  },
+  {
+    "label": "reinforce-1-0",
+    "phase": "Reinforce",
+    "prompt": "Update CUDA feature scores from this measured candidate.\n\n# Candidate\n```json\n{\n  \"id\": \"iter_1_sample_0\",\n  \"selected_feature_ids\": [\n    \"tile\",\n    \"vec\"\n  ],\n  \"implemented_feature_ids\": [\n    \"tile\",\n    \"vec\"\n  ],\n  \"eval\": {\n    \"compiled\": true,\n    \"correct\": true,\n    \"speedup\": 1.45,\n    \"latency_ms\": 0.29,\n    \"baseline_latency_ms\": 0.42,\n    \"passed_tests\": 2,\n    \"total_tests\": 2,\n    \"error_message\": \"\",\n    \"reward_hacking_flags\": []\n  }\n}\n```\n\n# Current feature scores\n```json\n{\n  \"tile\": {\n    \"id\": \"tile\",\n    \"name\": \"tiling\",\n    \"attempts\": 1,\n    \"compiled\": 1,\n    \"correct\": 1,\n    \"reward\": 0.1,\n    \"best_speedup\": 1.1,\n    \"failures\": []\n  },\n  \"smem\": {\n    \"id\": \"smem\",\n    \"name\": \"shared_memory\",\n    \"attempts\": 1,\n    \"compiled\": 1,\n    \"correct\": 0,\n    \"reward\": -0.05,\n    \"best_speedup\": 0,\n    \"failures\": [\n      \"mismatch\"\n    ]\n  },\n  \"vec\": {\n    \"id\": \"vec\",\n    \"name\": \"vectorized_load\",\n    \"attempts\": 0,\n    \"compiled\": 0,\n    \"correct\": 0,\n    \"reward\": 0,\n    \"best_speedup\": 0,\n    \"failures\": []\n  }\n}\n```\n\n# Reward rules\n1. compiled=false gives strong penalty to implemented features.\n2. compiled=true but correct=false gives weak compile credit and correctness penalty.\n3. correct=true gives correctness credit plus speedup reward.\n4. reward_hacking_flags suppress reward even if speedup appears high.\n5. Features not implemented should not receive credit.\n\nReturn updated score records for affected features.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "updated_scores": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "reinforcement_notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "updated_scores"
+      ]
+    },
+    "seq": 14
+  },
+  {
+    "label": "select-features-1-1",
+    "phase": "SelectFeatures",
+    "prompt": "Select a CUDA feature combination for the next candidate.\n\n# Feature catalog\n```json\n[\n  {\n    \"id\": \"tile\",\n    \"name\": \"tiling\",\n    \"family\": \"tiling\",\n    \"description\": \"block/grid tiling\"\n  },\n  {\n    \"id\": \"smem\",\n    \"name\": \"shared_memory\",\n    \"family\": \"memory\",\n    \"description\": \"shared mem staging\"\n  },\n  {\n    \"id\": \"vec\",\n    \"name\": \"vectorized_load\",\n    \"family\": \"memory\",\n    \"description\": \"float4 loads\"\n  }\n]\n```\n\n# Feature scores\n```json\n{\n  \"tile\": {\n    \"id\": \"tile\",\n    \"name\": \"tiling\",\n    \"attempts\": 1,\n    \"compiled\": 1,\n    \"correct\": 1,\n    \"reward\": 0.1,\n    \"best_speedup\": 1.1,\n    \"failures\": []\n  },\n  \"smem\": {\n    \"id\": \"smem\",\n    \"name\": \"shared_memory\",\n    \"attempts\": 1,\n    \"compiled\": 1,\n    \"correct\": 0,\n    \"reward\": -0.05,\n    \"best_speedup\": 0,\n    \"failures\": [\n      \"mismatch\"\n    ]\n  },\n  \"vec\": {\n    \"id\": \"vec\",\n    \"name\": \"vectorized_load\",\n    \"attempts\": 1,\n    \"compiled\": 1,\n    \"correct\": 1,\n    \"reward\": 0.45,\n    \"best_speedup\": 1.45,\n    \"failures\": []\n  }\n}\n```\n\n# Recent candidates\n```json\n[\n  {\n    \"id\": \"iter_0_sample_0\",\n    \"selected_feature_ids\": [\n      \"tile\"\n    ],\n    \"implemented_feature_ids\": [\n      \"tile\"\n    ],\n    \"code\": \"__global__ void softmax_kernel(const float* x, float* y, int N) {}\\\\n\",\n    \"eval\": {\n      \"compiled\": true,\n      \"correct\": true,\n      \"speedup\": 1.1,\n      \"latency_ms\": 0.38,\n      \"baseline_latency_ms\": 0.42,\n      \"passed_tests\": 2,\n      \"total_tests\": 2,\n      \"error_message\": \"\",\n      \"reward_hacking_flags\": []\n    }\n  },\n  {\n    \"id\": \"iter_0_sample_1\",\n    \"selected_feature_ids\": [\n      \"tile\",\n      \"smem\"\n    ],\n    \"implemented_feature_ids\": [\n      \"tile\",\n      \"smem\"\n    ],\n    \"code\": \"__global__ void softmax_kernel(const float* x, float* y, int N) { __shared__ float s[256]; }\\\\n\",\n    \"eval\": {\n      \"compiled\": true,\n      \"correct\": false,\n      \"speedup\": 0,\n      \"latency_ms\": 0,\n      \"baseline_latency_ms\": 0.42,\n      \"passed_tests\": 1,\n      \"total_tests\": 2,\n      \"error_message\": \"mismatch on medium\",\n      \"reward_hacking_flags\": []\n    }\n  },\n  {\n    \"id\": \"iter_1_sample_0\",\n    \"selected_feature_ids\": [\n      \"tile\",\n      \"vec\"\n    ],\n    \"implemented_feature_ids\": [\n      \"tile\",\n      \"vec\"\n    ],\n    \"code\": \"__global__ void softmax_kernel(const float4* x, float4* y, int N) {}\\\\n\",\n    \"eval\": {\n      \"compiled\": true,\n      \"correct\": true,\n      \"speedup\": 1.45,\n      \"latency_ms\": 0.29,\n      \"baseline_latency_ms\": 0.42,\n      \"passed_tests\": 2,\n      \"total_tests\": 2,\n      \"error_message\": \"\",\n      \"reward_hacking_flags\": []\n    }\n  }\n]\n```\n\n# Selection rules\n1. Select at most 4 features.\n2. Combine compatible features only.\n3. Use exploration early: try under-tested but plausible features.\n4. Use exploitation when feature evidence shows compile/correctness/speedup reward.\n5. Avoid unsafe features unless explicitly justified by tolerance and tests.\n\nReturn selected feature ids and rationale.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "selected_feature_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "expected_risks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "selected_feature_ids",
+        "rationale"
+      ]
+    },
+    "seq": 15
+  },
+  {
+    "label": "generate-kernel-1-1",
+    "phase": "GenerateKernel",
+    "prompt": "Generate a CUDA kernel using the selected CUDA-LLM FSR features.\n\n# Task specification\nImplement a CUDA kernel that computes row-wise softmax over Tensor[B,N]\n\n# Reference implementation\n```\nimport torch\\ndef ref(x): return torch.softmax(x, dim=-1)\\n\n```\n\n# Selected features\n```json\n{\n  \"selected_feature_ids\": [\n    \"tile\",\n    \"vec\",\n    \"smem\"\n  ],\n  \"rationale\": \"combine successes\",\n  \"expected_risks\": [\n    \"smem bank conflicts\"\n  ]\n}\n```\n\n# Hard constraints\n1. Return complete CUDA/C++ source, not a patch.\n2. Do not call PyTorch or reference implementation from generated kernel.\n3. Preserve input/output contract and tolerances.\n4. Implement selected features concretely; if a feature is skipped, explain why.\n5. Keep code benchmarkable by benchmark_command.\n\nReturn candidate code and implemented features.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "candidate_code": {
+          "type": "string"
+        },
+        "implemented_feature_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skipped_feature_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "implementation_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_code",
+        "implemented_feature_ids"
+      ]
+    },
+    "seq": 16
+  },
+  {
+    "label": "evaluate-1-1",
+    "phase": "Evaluate",
+    "prompt": "Evaluate this CUDA candidate with compile, correctness, and latency evidence.\n\n# Candidate code\n```cuda\n__global__ void softmax_kernel(const float4* x, float4* y, int N) { __shared__ float s[256]; }\\n\n```\n\n# Eval command\npython /tmp/cudallm-fixture/bench.py {kernel_path} {result_path}\n\n# Paths\n- kernel_path: /tmp/cudallm-fixture/cudallm_iter_1_sample_1.cu\n- result_path: /tmp/cudallm-fixture/cudallm_iter_1_sample_1.json\n\n# Tests\n```json\n[\n  {\n    \"name\": \"small\",\n    \"shape\": [\n      4,\n      16\n    ],\n    \"dtype\": \"float32\"\n  },\n  {\n    \"name\": \"medium\",\n    \"shape\": [\n      64,\n      1024\n    ],\n    \"dtype\": \"float32\"\n  }\n]\n```\n\n# Required behavior\n1. If benchmark_command is available, materialize the kernel and run it with {kernel_path}/{result_path}.\n2. Parse evaluator JSON.\n3. If benchmark_command is unavailable, set compiled=false, correct=false, speedup=0 and explain missing evidence.\n4. Reward must be based on compile success, functional correctness over diverse tests, and measured latency.\n5. Report suspected reward-hacking signs: hardcoded shapes, skipped computation, PyTorch fallback, or ignored inputs.\n\nReturn evaluator result.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compiled": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "boolean"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "latency_ms": {
+          "type": "number"
+        },
+        "baseline_latency_ms": {
+          "type": "number"
+        },
+        "passed_tests": {
+          "type": "number"
+        },
+        "total_tests": {
+          "type": "number"
+        },
+        "error_message": {
+          "type": "string"
+        },
+        "reward_hacking_flags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "compiled",
+        "correct",
+        "speedup"
+      ]
+    },
+    "seq": 17
+  },
+  {
+    "label": "reinforce-1-1",
+    "phase": "Reinforce",
+    "prompt": "Update CUDA feature scores from this measured candidate.\n\n# Candidate\n```json\n{\n  \"id\": \"iter_1_sample_1\",\n  \"selected_feature_ids\": [\n    \"tile\",\n    \"vec\",\n    \"smem\"\n  ],\n  \"implemented_feature_ids\": [\n    \"tile\",\n    \"vec\",\n    \"smem\"\n  ],\n  \"eval\": {\n    \"compiled\": true,\n    \"correct\": true,\n    \"speedup\": 1.62,\n    \"latency_ms\": 0.26,\n    \"baseline_latency_ms\": 0.42,\n    \"passed_tests\": 2,\n    \"total_tests\": 2,\n    \"error_message\": \"\",\n    \"reward_hacking_flags\": []\n  }\n}\n```\n\n# Current feature scores\n```json\n{\n  \"tile\": {\n    \"id\": \"tile\",\n    \"name\": \"tiling\",\n    \"attempts\": 1,\n    \"compiled\": 1,\n    \"correct\": 1,\n    \"reward\": 0.1,\n    \"best_speedup\": 1.1,\n    \"failures\": []\n  },\n  \"smem\": {\n    \"id\": \"smem\",\n    \"name\": \"shared_memory\",\n    \"attempts\": 1,\n    \"compiled\": 1,\n    \"correct\": 0,\n    \"reward\": -0.05,\n    \"best_speedup\": 0,\n    \"failures\": [\n      \"mismatch\"\n    ]\n  },\n  \"vec\": {\n    \"id\": \"vec\",\n    \"name\": \"vectorized_load\",\n    \"attempts\": 1,\n    \"compiled\": 1,\n    \"correct\": 1,\n    \"reward\": 0.45,\n    \"best_speedup\": 1.45,\n    \"failures\": []\n  }\n}\n```\n\n# Reward rules\n1. compiled=false gives strong penalty to implemented features.\n2. compiled=true but correct=false gives weak compile credit and correctness penalty.\n3. correct=true gives correctness credit plus speedup reward.\n4. reward_hacking_flags suppress reward even if speedup appears high.\n5. Features not implemented should not receive credit.\n\nReturn updated score records for affected features.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "updated_scores": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "reinforcement_notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "updated_scores"
+      ]
+    },
+    "seq": 18
+  },
+  {
+    "label": "final-report",
+    "phase": "Report",
+    "prompt": "Write a concise CUDA-LLM FSR optimization report.\n\n# Task\nImplement a CUDA kernel that computes row-wise softmax over Tensor[B,N]\n\n# Adaptation scope\nworkflow_adaptation\n\n# Best candidate summary\n```json\n{\n  \"id\": \"iter_1_sample_1\",\n  \"selected_feature_ids\": [\n    \"tile\",\n    \"vec\",\n    \"smem\"\n  ],\n  \"implemented_feature_ids\": [\n    \"tile\",\n    \"vec\",\n    \"smem\"\n  ],\n  \"eval\": {\n    \"compiled\": true,\n    \"correct\": true,\n    \"speedup\": 1.62,\n    \"latency_ms\": 0.26,\n    \"baseline_latency_ms\": 0.42,\n    \"passed_tests\": 2,\n    \"total_tests\": 2,\n    \"error_message\": \"\",\n    \"reward_hacking_flags\": []\n  }\n}\n```\n\n# Feature scores\n```json\n{\n  \"tile\": {\n    \"id\": \"tile\",\n    \"name\": \"tiling\",\n    \"attempts\": 1,\n    \"compiled\": 1,\n    \"correct\": 1,\n    \"reward\": 0.1,\n    \"best_speedup\": 1.1,\n    \"failures\": []\n  },\n  \"smem\": {\n    \"id\": \"smem\",\n    \"name\": \"shared_memory\",\n    \"attempts\": 2,\n    \"compiled\": 2,\n    \"correct\": 1,\n    \"reward\": 0.1,\n    \"best_speedup\": 1.62,\n    \"failures\": [\n      \"mismatch\"\n    ]\n  },\n  \"vec\": {\n    \"id\": \"vec\",\n    \"name\": \"vectorized_load\",\n    \"attempts\": 1,\n    \"compiled\": 1,\n    \"correct\": 1,\n    \"reward\": 0.45,\n    \"best_speedup\": 1.45,\n    \"failures\": []\n  }\n}\n```\n\n# Candidate history\n```json\n[\n  {\n    \"id\": \"iter_0_sample_0\",\n    \"selected_feature_ids\": [\n      \"tile\"\n    ],\n    \"implemented_feature_ids\": [\n      \"tile\"\n    ],\n    \"eval\": {\n      \"compiled\": true,\n      \"correct\": true,\n      \"speedup\": 1.1,\n      \"latency_ms\": 0.38,\n      \"baseline_latency_ms\": 0.42,\n      \"passed_tests\": 2,\n      \"total_tests\": 2,\n      \"error_message\": \"\",\n      \"reward_hacking_flags\": []\n    }\n  },\n  {\n    \"id\": \"iter_0_sample_1\",\n    \"selected_feature_ids\": [\n      \"tile\",\n      \"smem\"\n    ],\n    \"implemented_feature_ids\": [\n      \"tile\",\n      \"smem\"\n    ],\n    \"eval\": {\n      \"compiled\": true,\n      \"correct\": false,\n      \"speedup\": 0,\n      \"latency_ms\": 0,\n      \"baseline_latency_ms\": 0.42,\n      \"passed_tests\": 1,\n      \"total_tests\": 2,\n      \"error_message\": \"mismatch on medium\",\n      \"reward_hacking_flags\": []\n    }\n  },\n  {\n    \"id\": \"iter_1_sample_0\",\n    \"selected_feature_ids\": [\n      \"tile\",\n      \"vec\"\n    ],\n    \"implemented_feature_ids\": [\n      \"tile\",\n      \"vec\"\n    ],\n    \"eval\": {\n      \"compiled\": true,\n      \"correct\": true,\n      \"speedup\": 1.45,\n      \"latency_ms\": 0.29,\n      \"baseline_latency_ms\": 0.42,\n      \"passed_tests\": 2,\n      \"total_tests\": 2,\n      \"error_message\": \"\",\n      \"reward_hacking_flags\": []\n    }\n  },\n  {\n    \"id\": \"iter_1_sample_1\",\n    \"selected_feature_ids\": [\n      \"tile\",\n      \"vec\",\n      \"smem\"\n    ],\n    \"implemented_feature_ids\": [\n      \"tile\",\n      \"vec\",\n      \"smem\"\n    ],\n    \"eval\": {\n      \"compiled\": true,\n      \"correct\": true,\n      \"speedup\": 1.62,\n      \"latency_ms\": 0.26,\n      \"baseline_latency_ms\": 0.42,\n      \"passed_tests\": 2,\n      \"total_tests\": 2,\n      \"error_message\": \"\",\n      \"reward_hacking_flags\": []\n    }\n  }\n]\n```\n\nCover:\n1. Which CUDA features were reinforced by measured evidence.\n2. Which feature combinations failed and why.\n3. Whether the best kernel is trustworthy under diverse tests.\n4. Which feature sets should be tried next.\n5. Any reward-hacking risks that remain.",
+    "seq": 19
+  }
+]
