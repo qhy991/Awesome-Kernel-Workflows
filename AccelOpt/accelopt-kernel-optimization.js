@@ -1,22 +1,24 @@
 export const meta = {
   name: 'accelopt-kernel-optimization',
-  description: 'Self-improving CUDA kernel optimization loop with NCU profiling (AccelOpt methodology)',
-  whenToUse: 'When you need to iteratively optimize a CUDA kernel through plan-execute-profile-learn cycles. Uses Nsight Compute (ncu) for evidence-based profiling rather than guessing bottlenecks.',
+  description: 'Self-improving kernel optimization loop with profiler-driven evidence (AccelOpt methodology; NCU on the cuda backend)',
+  whenToUse: 'When you need to iteratively optimize a GPU kernel through plan-execute-profile-learn cycles. Uses the backend driver\'s profiler (e.g. Nsight Compute on cuda) for evidence-based bottleneck classification rather than guessing.',
   phases: [
-    { title: 'Setup', detail: 'Read target kernel, compile harness, NCU profile baseline' },
-    { title: 'Plan', detail: 'Generate optimization plans guided by NCU data + candidate beam context' },
+    { title: 'Setup', detail: 'Read target kernel, build via driver, profile baseline' },
+    { title: 'Plan', detail: 'Generate optimization plans guided by profiler data + candidate beam context' },
     { title: 'Execute', detail: 'Implement optimized kernels from each plan' },
-    { title: 'Evaluate', detail: 'NCU profile variants, per-branch dedup, update candidate beam' },
+    { title: 'Evaluate', detail: 'Profile variants, per-branch dedup, update candidate beam' },
     { title: 'Learn', detail: 'Threshold-filtered slow-fast pairs → reusable patterns (AccelOpt format)' },
     { title: 'Iterate', detail: 'Feed sampled experience + beam state into next optimization round' },
   ],
 }
 
 const WORKFLOW_SUITABILITY = {
-  supported_languages: ['cuda'],
+  method_supported_backends: ['cuda', 'triton'],
+  default_backend: 'cuda',
+  requires_capability: { bottleneck_classes: [], metrics: ['dram_pct', 'sm_pct'] },
   supported_problem_types: ['cuda-kernel-optimization', 'cuda-kernel-generation'],
   problem_types: ['existing CUDA kernel optimization', 'CUDA generation from problem_definition with benchmark contract'],
-  reason: 'AccelOpt workflow is built around CUDA kernels, NCU metrics, CUDA harnesses, and CUDA-specific optimization patterns.',
+  reason: 'AccelOpt is intrinsic to NCU-class profiling (dram_pct/sm_pct); runs on any NVIDIA-vendor backend (cuda, triton) with a present driver.',
 }
 
 function normalizeSuitabilityValue(value) {
@@ -42,17 +44,28 @@ function supportsSuitabilityValue(supported, requested) {
   return supported.includes(requested) || supported.some(value => value.endsWith(`-${requested}`))
 }
 
+function resolveBackend() {
+  const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
+  const l = args.language ? normalizeSuitabilityValue(args.language) : null
+  if (b && l && b !== l) {
+    throw new Error(`Conflicting args: backend="${b}" vs language="${l}". Pass only one.`)
+  }
+  if (b) return b
+  if (l) return l
+  const ms = WORKFLOW_SUITABILITY.method_supported_backends
+  if (Array.isArray(ms) && ms.length === 1) return normalizeSuitabilityValue(ms[0])
+  return WORKFLOW_SUITABILITY.default_backend
+}
+
 function assertWorkflowSuitability() {
-  const requestedLanguage = normalizeSuitabilityValue(args.language)
-  if (requestedLanguage && requestedLanguage !== 'auto') {
-    const supported = WORKFLOW_SUITABILITY.supported_languages.map(normalizeSuitabilityValue)
-    if (!supported.includes(requestedLanguage)) {
-      throw new Error(
-        `${meta.name} is not suitable for language="${args.language}". ` +
-        `Supported languages/backends: ${WORKFLOW_SUITABILITY.supported_languages.join(', ')}. ` +
-        `Reason: ${WORKFLOW_SUITABILITY.reason}`
-      )
-    }
+  const backend = resolveBackend()
+
+  const ms = WORKFLOW_SUITABILITY.method_supported_backends
+  if (ms !== 'any' && !ms.map(normalizeSuitabilityValue).includes(backend)) {
+    throw new Error(
+      `${meta.name}'s method does not support backend="${backend}". ` +
+      `Method-supported: ${ms.join(', ')}. Reason: ${WORKFLOW_SUITABILITY.reason}`
+    )
   }
 
   const requestedProblemType = normalizeSuitabilityValue(args.problem_type)
@@ -67,9 +80,11 @@ function assertWorkflowSuitability() {
       )
     }
   }
+
+  return backend
 }
 
-assertWorkflowSuitability()
+const BACKEND = assertWorkflowSuitability()
 
 // =============================================================================
 // AccelOpt Self-Improving Kernel Optimization Workflow (NCU-Enhanced, v2)
@@ -103,6 +118,12 @@ assertWorkflowSuitability()
 //     max_threshold: 1.05,
 //     min_threshold: 1.05,
 //     topk_learn: 5,
+//     // Backend-driver wiring (optional; absent → legacy cuda inline-prompt path):
+//     backend: 'cuda',
+//     backend_dir: '_substrate/backends/cuda',
+//     substrate_dir: '_substrate',
+//     substrate_command_prefix: 'python3',
+//     driver_shell_prefix: '',
 //   }})
 //
 // =============================================================================
@@ -146,6 +167,56 @@ const MAX_THRESHOLD = args.max_threshold || 1.05
 const MIN_THRESHOLD = args.min_threshold || 1.05
 const TOPK_LEARN = args.topk_learn || 5
 
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const PY = args.substrate_command_prefix || ''
+const SH = args.driver_shell_prefix || ''
+const BACKEND_DIR = args.backend_dir || ''
+const DRIVER_DIR = BACKEND_DIR || `${SUBSTRATE}/backends/${BACKEND}`
+const USE_DRIVER = !!args.backend_dir
+
+function substrateInstruction(script, cliArgs) {
+  const p = `${SUBSTRATE}/${script}`
+  return PY ? `Run exactly: \`${PY} ${p} ${cliArgs}\`.`
+            : `No substrate_command_prefix for ${p} ${cliArgs}; do not invent an interpreter.`
+}
+function driverPy(script, cliArgs) {
+  const p = `${DRIVER_DIR}/${script}`
+  return PY ? `Run exactly: \`${PY} ${p} ${cliArgs}\`.`
+            : `No substrate_command_prefix for ${p}; do not invent an interpreter.`
+}
+function driverSh(script, cliArgs) {
+  return `Run exactly: \`${SH ? SH + ' ' : ''}${DRIVER_DIR}/${script} ${cliArgs}\`.`
+}
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+const DRIVER_EXT = '.json'
+
+let IDIOMS = {
+  lang_fence: 'cuda',
+  impl_requirements:
+    'Output a COMPLETE .cu file: all #includes, struct definitions, __global__ kernel(s), forward() wrapper, PYBIND11_MODULE',
+  plan_angles: [
+    'memory latency hiding: address long_scoreboard stalls via ILP, prefetching, async copies, or software pipelining',
+    'memory coalescing and vectorization: fix uncoalesced accesses (sectors/request > 4), use float4/int4 loads',
+    'occupancy and parallelism: address SM idle time, tail effects, or low achieved occupancy',
+    'compute restructuring: tensor core usage, warp-level reductions, reduced synchronization',
+    'data layout and tiling: shared memory staging, bank-conflict-free layouts, double-buffering',
+  ],
+  read_metric_guide: [
+    '- If top stall is "long_scoreboard" (>40%): kernel is MEMORY-LATENCY-BOUND. Add ILP, async loads, or data reuse.',
+    '- If top stall is "short_scoreboard" (>30%): heavy shared-mem or dep chains. Shorten chains, add ILP.',
+    '- If top stall is "barrier" (>20%): too much __syncthreads. Use warp-level primitives.',
+    '- If top stall is "math_pipe_throttle": actually compute-bound — good! Look elsewhere.',
+    '- If DRAM throughput > 80%: bandwidth-bound. Reduce bytes read (compression, shared-mem reuse).',
+    '- If DRAM throughput < 10% AND long_scoreboard high: latency-bound on L1, not DRAM.',
+    '- If sectors/request > 5: uncoalesced access — big optimization opportunity.',
+    '- If achieved occupancy << theoretical: stalls prevent filling SM, fix stall source first.',
+    '- If waves/SM < 1: grid too small, parallelize more or use persistent kernel.',
+    '- If registers/thread > 128: likely register spill — add __launch_bounds__.',
+    '- NCU rule suggestions with "Est. Speedup: X%" are surprisingly accurate — prioritize them.',
+  ].join('\n'),
+  unsupported_methods: [],
+}
+
 // State
 let experienceMemory = []       // Full pool of learned patterns (grows unbounded)
 let lastIterNewPatterns = []    // Patterns discovered in the most recent Learn phase
@@ -154,11 +225,174 @@ let bestKernelCode = null
 let baselineLatency = null
 let baselineNcuProfile = ''
 let candidateBeam = []          // [{code, latency, speedup, ncuSummary, planTitle}]
+let bottleneckClass = 'unknown'
 
-async function resolveInitialKernelFromProblem() {
-  if (INPUT_MODE !== 'generate_then_optimize') return ''
+function legacyEvaluatePrompt(variant, bestLatency, ncuSetup) {
+  return `You are a CUDA kernel evaluator using Nsight Compute. Evaluate this optimized kernel variant.
 
-  const generated = await agent(`No kernel_path was provided. Generate and verify an initial CUDA kernel before starting AccelOpt.
+# Variant: ${variant.id} — Plan: "${variant.plan.title}"
+# NCU Evidence for this plan: ${variant.plan.ncu_evidence}
+
+# Kernel Code:
+\`\`\`cuda
+${variant.code.substring(0, 4000)}
+\`\`\`
+
+# Baseline Performance:
+- Latency: ${bestLatency}ms
+- Top stall: ${ncuSetup.top_stall_reason || 'unknown'}
+
+# Evaluation Steps:
+
+## Step 1: Static correctness check
+- Race conditions? (check __syncthreads placement, shared-mem access patterns)
+- Out-of-bounds? (check index computations against dimensions)
+- Missing synchronization? (writes to shared followed by reads without barrier)
+- Incorrect reductions? (warp shuffle masks, final-warp logic)
+
+## Step 2: Compilability check
+- All #includes present? (torch/extension.h, cuda_runtime.h, cuda_fp16.h, etc.)
+- Valid CUDA syntax? (correct use of __global__, __shared__, __device__)
+- PYBIND11_MODULE present?
+
+## Step 3: Build and profile (if environment allows)
+Use only the user-provided harness_build_cmd, harness_path/run args, and ncu_binary contract. If any required command is missing, do not invent one; return static correctness/compilability analysis and mark NCU fields as missing evidence.
+
+## Step 4: Compare with baseline
+Calculate speedup = baseline_latency / variant_latency.
+Note which NCU metrics improved and which degraded.
+
+If NCU is not available, provide your expert static analysis:
+- Did the optimization address the identified bottleneck (${ncuSetup.top_stall_reason})?
+- Would you expect sectors/request to decrease?
+- Would occupancy change?
+- Estimate speedup based on the targeted inefficiency.
+
+Return evaluation results.`
+}
+
+function legacyIterProfile(iter, candidateBeam, bestResult, bestLatency, baselineLatency, baselineNcuProfile) {
+  return `
+## NCU Profile Results (After Iteration ${iter + 1} — Best: "${candidateBeam[0].planTitle}")
+- Latency: ${bestLatency}ms (${(baselineLatency / bestLatency).toFixed(2)}x speedup vs original)
+- Bottleneck addressed: ${bestResult.evaluation.bottleneck_addressed ? 'YES' : 'NO'}
+- New bottleneck: ${bestResult.evaluation.new_bottleneck || 'unknown'}
+- Comparison: ${bestResult.evaluation.ncu_comparison}
+
+Previous profile data for reference:
+${baselineNcuProfile}`
+}
+
+function legacyFinalReportPrompt(OP_DESC, opType, baselineLatency, bestLatency, ITERATIONS, candidateBeam, experienceMemory, baselineNcuProfile, bestKernelCode) {
+  return `Write a concise technical optimization report.
+
+# AccelOpt + NCU Optimization Results
+- Operation: ${OP_DESC} (${opType})
+- Baseline Latency: ${baselineLatency}ms
+- Final Best Latency: ${bestLatency}ms
+- Overall Speedup: ${(baselineLatency / bestLatency).toFixed(2)}x
+- Iterations: ${ITERATIONS}
+- Candidate Beam (final): ${candidateBeam.length} kernels
+- Experience Patterns: ${experienceMemory.length}
+
+# Initial NCU Diagnosis:
+${baselineNcuProfile.substring(0, 1000)}
+
+# Final Candidate Beam:
+${candidateBeam.map((c, i) => `${i + 1}. "${c.planTitle}" — ${c.speedup.toFixed(2)}x (${c.latency.toFixed(3)}ms)`).join('\n')}
+
+# Learned Optimization Knowledge Base:
+${experienceMemory.map((e, i) => `${i + 1}. ${e}`).join('\n\n')}
+
+# Final Kernel:
+\`\`\`cuda
+${bestKernelCode.substring(0, 3000)}
+\`\`\`
+
+Write:
+1. NCU-driven optimization journey (what metrics → what actions → what results)
+2. Which NCU patterns reliably predicted optimization opportunities
+3. Anti-patterns: what NCU data looked promising but the optimization failed
+4. Candidate beam evolution: how the population of solutions evolved
+5. Remaining bottlenecks (what NCU shows for the final kernel)
+6. Recommendations for further optimization with specific NCU metrics to target`
+}
+
+function legacyLearnPrompt(pair) {
+  return `You are a CUDA optimization expert with NCU profiling expertise. Analyze this slow-fast kernel pair and extract a GENERAL, REUSABLE optimization insight.
+
+# Slow Kernel:
+\`\`\`cuda
+${pair.slow.substring(0, 2500)}
+\`\`\`
+
+# Fast Kernel:
+\`\`\`cuda
+${pair.fast.substring(0, 2500)}
+\`\`\`
+
+# Speedup: ${pair.speedup.toFixed(2)}x
+# This is a ${pair.type === 'positive' ? 'POSITIVE example (do this)' : 'NEGATIVE example (avoid this)'}
+
+# NCU Evidence that motivated this optimization:
+${pair.ncu_evidence || 'N/A'}
+
+# NCU Metric Comparison (before vs after):
+${pair.ncu_comparison || 'N/A'}
+
+# Was the targeted bottleneck addressed? ${pair.bottleneck_addressed ? 'YES' : 'NO/UNKNOWN'}
+
+## Your task:
+Extract a GENERAL optimization rule following this EXACT format:
+
+**{Short title}**
+NCU trigger: {what metric/stall pattern signals this opportunity}
+Rule: {one sentence — when you see X in NCU, do Y to the code}
+Original code:
+\`\`\`cuda
+{2-5 lines of slow pattern}
+\`\`\`
+Optimized code:
+\`\`\`cuda
+{2-5 lines of fast pattern}
+\`\`\`
+Why: {hardware-level explanation}
+
+Make the rule GENERAL enough to apply to other kernels (not specific to this one kernel).`
+}
+
+function legacySetupReadPrompt() {
+  return `Read the CUDA kernel file at: ${KERNEL_PATH}
+
+Analyze it and return a JSON object with:
+- kernel_code: the full source code
+- op_type: operation type (e.g., "quantized_gemm", "attention", "rmsnorm", "softmax")
+- key_functions: list of key function names (especially __global__ kernels)
+- current_approach: brief description of the implementation strategy
+- launch_config: if visible, the grid/block dimensions used
+- shared_memory_usage: whether and how shared memory is used
+- memory_access_patterns: description of global memory access patterns
+
+Return ONLY the JSON object.`
+}
+
+function driverSetupReadPrompt() {
+  return `Read the ${BACKEND} kernel source file at: ${KERNEL_PATH}
+
+Analyze it and return a JSON object with:
+- kernel_code: the full source code
+- op_type: operation type (e.g., "quantized_gemm", "attention", "rmsnorm", "softmax")
+- key_functions: list of key function names (entry kernels (the backend's launch entrypoints))
+- current_approach: brief description of the implementation strategy
+- launch_config: if visible, the grid/block dimensions used
+- shared_memory_usage: whether and how shared memory is used
+- memory_access_patterns: description of global memory access patterns
+
+Return ONLY the JSON object.`
+}
+
+function legacyGenerateSeedPrompt() {
+  return `No kernel_path was provided. Generate and verify an initial CUDA kernel before starting AccelOpt.
 
 # Problem Input
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
@@ -178,7 +412,38 @@ async function resolveInitialKernelFromProblem() {
 3. Materialize candidates under ${EXP_DIR}/generated/.
 4. Run available commands with {kernel_path} and {result_path} substitutions.
 5. Select the best candidate that compiles and passes correctness. If no real evaluator is available, select the strongest candidate and mark verified=false.
-6. Return generated_kernel_path plus candidate and evidence metadata.`, {
+6. Return generated_kernel_path plus candidate and evidence metadata.`
+}
+
+function driverGenerateSeedPrompt() {
+  return `No kernel_path was provided. Generate and verify an initial ${BACKEND} kernel before starting AccelOpt.
+
+# Problem Input
+- problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
+- problem_path: ${PROBLEM_PATH || '(not provided)'}
+- op_description: ${OP_DESC}
+- backend: ${BACKEND}
+- target_gpu: ${TARGET_GPU}
+- seed_candidates: ${SEED_CANDIDATES}
+
+# Evidence Commands
+- test_command: ${TEST_CMD || '(not provided)'}
+- benchmark_command: ${BENCH_CMD || '(not provided)'}
+
+# Contract
+1. If problem_path is provided, read it first.
+2. Generate ${SEED_CANDIDATES} complete ${BACKEND} kernel candidates.
+3. Materialize complete kernels honoring: ${IDIOMS.impl_requirements}
+4. Materialize candidates under ${EXP_DIR}/generated/.
+5. Run available commands with {kernel_path} and {result_path} substitutions.
+6. Select the best candidate that compiles and passes correctness. If no real evaluator is available, select the strongest candidate and mark verified=false.
+7. Return generated_kernel_path plus candidate and evidence metadata.`
+}
+
+async function resolveInitialKernelFromProblem() {
+  if (INPUT_MODE !== 'generate_then_optimize') return ''
+
+  const generated = await agent(USE_DRIVER ? driverGenerateSeedPrompt() : legacyGenerateSeedPrompt(), {
     label: 'generate-initial-kernel',
     phase: 'Setup',
     schema: {
@@ -220,6 +485,29 @@ function sampleWithoutReplacement(arr, n) {
 }
 
 // Helper: construct experience section for planner prompt (AccelOpt sampling logic)
+function legacyExecutePrompt(bestKernelCode, plan, sampleIdx, SAMPLES_PER_PLAN) {
+  return `You are an expert CUDA kernel developer. Implement this NCU-informed optimization plan as a complete, compilable kernel.
+
+# Original Kernel:
+\`\`\`cuda
+${bestKernelCode.substring(0, 4000)}
+\`\`\`
+
+# Optimization Plan: "${plan.title}"
+NCU Evidence: ${plan.ncu_evidence}
+Plan: ${plan.plan}
+
+# Requirements:
+1. Output a COMPLETE .cu file: all #includes, struct definitions, __global__ kernel(s), forward() wrapper, PYBIND11_MODULE
+2. Must be FUNCTIONALLY CORRECT (same output as baseline within FP tolerance)
+3. Apply the plan faithfully — the plan is based on real NCU data, so the optimization targets a real bottleneck
+4. Keep the forward() function signature unchanged
+5. MUST compile with -lineinfo (don't use features that break debug info)
+6. This is variant ${sampleIdx + 1}/${SAMPLES_PER_PLAN}
+
+Return the complete CUDA code.`
+}
+
 function buildExperienceSection(experienceMemory, lastIterNewPatterns, maxInPrompt) {
   if (experienceMemory.length === 0) return ''
 
@@ -241,9 +529,9 @@ function buildExperienceSection(experienceMemory, lastIterNewPatterns, maxInProm
 }
 
 // Helper: format candidate beam info for planner prompt
-function buildBeamSection(candidateBeam) {
+function buildBeamSection(candidateBeam, fence) {
   if (candidateBeam.length <= 1) return ''
-  return `\n\n# Candidate Beam (top-${candidateBeam.length} kernels from previous iterations)\n${candidateBeam.map((c, i) => `## Candidate ${i + 1}: "${c.planTitle}" — ${c.speedup.toFixed(2)}x, ${c.latency.toFixed(3)}ms\nNCU: ${c.ncuSummary || 'N/A'}\n\`\`\`cuda\n${c.code.substring(0, 1500)}\n\`\`\``).join('\n\n')}`
+  return `\n\n# Candidate Beam (top-${candidateBeam.length} kernels from previous iterations)\n${candidateBeam.map((c, i) => `## Candidate ${i + 1}: "${c.planTitle}" — ${c.speedup.toFixed(2)}x, ${c.latency.toFixed(3)}ms\nNCU: ${c.ncuSummary || 'N/A'}\n\`\`\`${fence}\n${c.code.substring(0, 1500)}\n\`\`\``).join('\n\n')}`
 }
 
 // =============================================================================
@@ -251,22 +539,47 @@ function buildBeamSection(candidateBeam) {
 // =============================================================================
 phase('Setup')
 
+if (USE_DRIVER) {
+  const driver = await agent(
+    `Load the backend driver for backend="${BACKEND}".\n` +
+    `1. Run exactly: \`cat ${DRIVER_DIR}/manifest${DRIVER_EXT}\` and parse JSON.\n` +
+    `2. Run exactly: \`cat ${DRIVER_DIR}/idioms${DRIVER_EXT}\` and parse JSON.\n` +
+    `If either is missing, return {present:false, reason:"no driver for backend ${BACKEND}"}.\n` +
+    `Also compare manifest.capabilities against the required capability floor ` +
+    `${JSON.stringify(WORKFLOW_SUITABILITY.requires_capability)};\n` +
+    `if a required metric/class is missing return {present:true, capability_ok:false, missing:[...]}.\n` +
+    `Return {present, capability_ok, missing, backend_id, source_ext, lang_fence, hw_vendor,\n` +
+    `  profiler_name|null, profiler_format, capability_metrics, supported_classes, problem_types,\n` +
+    `  requires_tools, impl_requirements, read_metric_guide,\n` +
+    `  plan_angles:[...], unsupported_methods:[...],\n` +
+    `  idioms:{<method>:{idiom,prompt_guidance}}}.`,
+    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+
+  if (!driver.present) {
+    throw new Error(`No backend driver present for backend="${BACKEND}". Provide ${DRIVER_DIR}/ or pick a supported backend.`)
+  }
+  if (driver.capability_ok === false) {
+    throw new Error(`backend="${BACKEND}" lacks required capability: ${(driver.missing || []).join(', ')}.`)
+  }
+  IDIOMS = {
+    lang_fence: driver.lang_fence || IDIOMS.lang_fence,
+    impl_requirements: driver.impl_requirements || IDIOMS.impl_requirements,
+    plan_angles: (driver.plan_angles && driver.plan_angles.length) ? driver.plan_angles : IDIOMS.plan_angles,
+    read_metric_guide: driver.read_metric_guide || IDIOMS.read_metric_guide,
+    unsupported_methods: driver.unsupported_methods || [],
+    profiler_name: driver.profiler_name || null,
+    profiler_format: driver.profiler_format || '',
+    source_ext: driver.source_ext || '.cu',
+    ...(driver.idioms || {}),
+  }
+  log(`Driver loaded: ${BACKEND} (fence=${IDIOMS.lang_fence}, profiler=${IDIOMS.profiler_name || 'none'})`)
+}
+
 if (INPUT_MODE === 'generate_then_optimize') {
   KERNEL_PATH = await resolveInitialKernelFromProblem()
 }
 
-const setupResult = await agent(`Read the CUDA kernel file at: ${KERNEL_PATH}
-
-Analyze it and return a JSON object with:
-- kernel_code: the full source code
-- op_type: operation type (e.g., "quantized_gemm", "attention", "rmsnorm", "softmax")
-- key_functions: list of key function names (especially __global__ kernels)
-- current_approach: brief description of the implementation strategy
-- launch_config: if visible, the grid/block dimensions used
-- shared_memory_usage: whether and how shared memory is used
-- memory_access_patterns: description of global memory access patterns
-
-Return ONLY the JSON object.`, {
+const setupResult = await agent(USE_DRIVER ? driverSetupReadPrompt() : legacySetupReadPrompt(), {
   label: 'read-baseline',
   phase: 'Setup',
   schema: {
@@ -289,7 +602,8 @@ const opType = setupResult.op_type
 log(`Baseline: ${opType}, kernels: ${setupResult.key_functions.join(', ')}`)
 
 // NCU Profile the baseline
-const ncuSetup = await agent(`You are a CUDA profiling expert using Nsight Compute (ncu). Set up and run profiling for the baseline kernel only through the user-provided harness/profiler contract.
+function legacyNcuBaselinePrompt(baselineKernel) {
+  return `You are a CUDA profiling expert using Nsight Compute (ncu). Set up and run profiling for the baseline kernel only through the user-provided harness/profiler contract.
 
 # Environment
 - NCU binary: ${NCU_BINARY || '(not provided)'}
@@ -334,32 +648,76 @@ Read the details page and the report to extract:
 
 Execute only the steps backed by provided commands/artifacts. If ncu or the harness contract is unavailable, fall back to static code analysis and mark measured fields as missing.
 
-Return a structured profile result.`, {
-  label: 'ncu-baseline',
-  phase: 'Setup',
-  schema: {
-    type: 'object',
-    properties: {
-      latency_ms: { type: 'number' },
-      sm_throughput_pct: { type: 'number' },
-      dram_throughput_pct: { type: 'number' },
-      achieved_occupancy_pct: { type: 'number' },
-      theoretical_occupancy_pct: { type: 'number' },
-      waves_per_sm: { type: 'number' },
-      registers_per_thread: { type: 'number' },
-      top_stall_reason: { type: 'string' },
-      top_stall_pct: { type: 'number' },
-      sectors_per_request: { type: 'number' },
-      l1_hit_rate_pct: { type: 'number' },
-      l2_hit_rate_pct: { type: 'number' },
-      ncu_rule_suggestions: { type: 'array', items: { type: 'string' } },
-      bottleneck_diagnosis: { type: 'string' },
-      profile_summary: { type: 'string' },
-      ncu_available: { type: 'boolean' },
-    },
-    required: ['latency_ms', 'bottleneck_diagnosis', 'profile_summary'],
+Return a structured profile result.`
+}
+const LEGACY_NCU_BASELINE_SCHEMA = {
+  type: 'object',
+  properties: {
+    latency_ms: { type: 'number' },
+    sm_throughput_pct: { type: 'number' },
+    dram_throughput_pct: { type: 'number' },
+    achieved_occupancy_pct: { type: 'number' },
+    theoretical_occupancy_pct: { type: 'number' },
+    waves_per_sm: { type: 'number' },
+    registers_per_thread: { type: 'number' },
+    top_stall_reason: { type: 'string' },
+    top_stall_pct: { type: 'number' },
+    sectors_per_request: { type: 'number' },
+    l1_hit_rate_pct: { type: 'number' },
+    l2_hit_rate_pct: { type: 'number' },
+    ncu_rule_suggestions: { type: 'array', items: { type: 'string' } },
+    bottleneck_diagnosis: { type: 'string' },
+    profile_summary: { type: 'string' },
+    ncu_available: { type: 'boolean' },
   },
-})
+  required: ['latency_ms', 'bottleneck_diagnosis', 'profile_summary'],
+}
+
+let ncuSetup
+if (USE_DRIVER) {
+  const profileResult = await agent(
+    IDIOMS.profiler_name
+      ? `Profile the baseline kernel via the backend driver and normalize to canonical metrics.\n` +
+        `Kernel: ${KERNEL_PATH}. Experiment dir: ${EXP_DIR}/baseline.\n` +
+        `1. ` + driverSh('build.sh', `--source ${KERNEL_PATH} --out ${EXP_DIR}/baseline/artifact ${HARNESS_BUILD_CMD ? `--build-cmd "${HARNESS_BUILD_CMD}"` : ''}`) + `\n` +
+        `2. ` + driverSh('profile.sh', `--artifact ${EXP_DIR}/baseline/artifact --problem ${PROBLEM_PATH || PROBLEM_DEFINITION || KERNEL_PATH} --out ${EXP_DIR}/baseline/prof.native`) + `\n` +
+        `3. ` + driverPy('to_evidence.py', `--native ${EXP_DIR}/baseline/prof.native --format ${IDIOMS.profiler_format}`) + `\n` +
+        `Return its stdout JSON verbatim: {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy,...}, coverage:[...], source_backend}. ` +
+        `If the profiler exits 4 (unavailable), return {ok:true, metrics:{latency_ms:null,dram_pct:null,sm_pct:null,occupancy:null}, coverage:[], profiler_available:false}.`
+      : `Backend "${BACKEND}" declares no profiler. Do not invent one. ` +
+        `Build via ` + driverSh('build.sh', `--source ${KERNEL_PATH} --out ${EXP_DIR}/baseline/artifact`) + ` then ` +
+        driverSh('run.sh', `--artifact ${EXP_DIR}/baseline/artifact --problem ${PROBLEM_PATH || KERNEL_PATH} --out ${EXP_DIR}/baseline/result.json`) + ` for latency only. ` +
+        `Return {ok:true, metrics:{latency_ms:<from run.sh>,dram_pct:null,sm_pct:null,occupancy:null}, coverage:["latency_ms"], profiler_available:false}.`,
+    { label: 'ncu-baseline', phase: 'Setup', schema: JSON_PASSTHROUGH })
+
+  const metrics = profileResult.metrics || {}
+  const diag = await agent(
+    `Write these metrics to ${EXP_DIR}/baseline/metrics.json:\n${JSON.stringify(metrics)}\n` +
+    `${substrateInstruction('diagnose.py', `--metrics ${EXP_DIR}/baseline/metrics.json`)} Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+    { label: 'diagnose-baseline', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  bottleneckClass = diag.bottleneck_class || 'unknown'
+
+  ncuSetup = {
+    latency_ms: metrics.latency_ms,
+    sm_throughput_pct: metrics.sm_pct,
+    dram_throughput_pct: metrics.dram_pct,
+    achieved_occupancy_pct: (metrics.occupancy != null) ? metrics.occupancy * 100 : undefined,
+    bottleneck_diagnosis: `${bottleneckClass}: ${(diag.evidence || []).join('; ')}`,
+    profile_summary: profileResult.profiler_available === false
+      ? `profiler unavailable; static analysis only (class=${bottleneckClass})`
+      : `class=${bottleneckClass}, metrics=${JSON.stringify(metrics)}`,
+    profile_evidence: diag.evidence || [],
+    profiler_available: profileResult.profiler_available !== false,
+    _metrics: metrics,
+    _coverage: profileResult.coverage || [],
+  }
+} else {
+  ncuSetup = await agent(legacyNcuBaselinePrompt(baselineKernel), {
+    label: 'ncu-baseline',
+    phase: 'Setup',
+    schema: LEGACY_NCU_BASELINE_SCHEMA,
+  })
+}
 
 baselineLatency = ncuSetup.latency_ms
 bestLatency = baselineLatency
@@ -375,7 +733,8 @@ candidateBeam = [{
 }]
 
 // Build the NCU profile string
-baselineNcuProfile = `
+function legacyBaselineProfile(ncuSetup) {
+  return `
 ## NCU Profile Results (Baseline)
 - Latency: ${ncuSetup.latency_ms} ms
 - SM Throughput: ${ncuSetup.sm_throughput_pct || 'N/A'}% of peak
@@ -395,6 +754,27 @@ ${ncuSetup.bottleneck_diagnosis}
 ## NCU Rule Suggestions:
 ${(ncuSetup.ncu_rule_suggestions || []).map(s => `- ${s}`).join('\n') || 'N/A'}
 `
+}
+if (USE_DRIVER) {
+  const m = ncuSetup._metrics || {}
+  const lines = []
+  if (m.latency_ms != null) lines.push(`- Latency: ${m.latency_ms} ms`)
+  if (m.sm_pct != null) lines.push(`- SM Throughput: ${m.sm_pct}% of peak`)
+  if (m.dram_pct != null) lines.push(`- DRAM Throughput: ${m.dram_pct}% of peak`)
+  if (m.occupancy != null) lines.push(`- Achieved Occupancy: ${(m.occupancy * 100).toFixed(1)}%`)
+  baselineNcuProfile = `
+## Profile Results (Baseline, backend=${BACKEND}, class=${bottleneckClass})
+${lines.join('\n')}
+
+## Bottleneck Diagnosis:
+${ncuSetup.bottleneck_diagnosis}
+
+## Evidence:
+${(ncuSetup.profile_evidence || []).map(s => `- ${s}`).join('\n') || 'N/A'}
+`
+} else {
+  baselineNcuProfile = legacyBaselineProfile(ncuSetup)
+}
 
 log(`Baseline: ${baselineLatency}ms | ${ncuSetup.bottleneck_diagnosis}`)
 
@@ -414,18 +794,40 @@ for (let iter = 0; iter < ITERATIONS; iter++) {
   const experienceSection = buildExperienceSection(experienceMemory, lastIterNewPatterns, MAX_EXPERIENCE_IN_PROMPT)
 
   // Candidate beam context for planner
-  const beamSection = buildBeamSection(candidateBeam)
+  const beamSection = buildBeamSection(candidateBeam, IDIOMS.lang_fence)
 
-  // NCU-informed focus areas
-  const planAngles = [
-    'memory latency hiding: address long_scoreboard stalls via ILP, prefetching, async copies, or software pipelining',
-    'memory coalescing and vectorization: fix uncoalesced accesses (sectors/request > 4), use float4/int4 loads',
-    'occupancy and parallelism: address SM idle time, tail effects, or low achieved occupancy',
-    'compute restructuring: tensor core usage, warp-level reductions, reduced synchronization',
-    'data layout and tiling: shared memory staging, bank-conflict-free layouts, double-buffering',
-  ]
+  const planAngles = IDIOMS.plan_angles
 
-  const planPromptBase = `You are a CUDA kernel optimization expert. You have REAL Nsight Compute (NCU) profiling data for this kernel. Use it to generate ONE specific, evidence-based optimization plan.
+  const planPromptBase = USE_DRIVER
+    ? `You are a ${BACKEND} kernel optimization expert. You have REAL ${IDIOMS.profiler_name || 'profiler'} profiling data for this kernel. Use it to generate ONE specific, evidence-based optimization plan.
+
+# Operation: ${OP_DESC} (${opType})
+
+# Current Best Implementation:
+\`\`\`${IDIOMS.lang_fence}
+${bestKernelCode.substring(0, 4000)}
+\`\`\`
+
+# PROFILING DATA (THIS IS REAL MEASURED DATA — base your plan on this):
+${baselineNcuProfile}
+
+# Current Performance:
+- Latency: ${bestLatency}ms
+- Speedup vs original baseline: ${(baselineLatency / bestLatency).toFixed(2)}x
+${beamSection}
+${experienceSection}
+
+# How to read profile data for planning:
+${IDIOMS.read_metric_guide}
+
+# Optimization Plan Requirements:
+1. CITE the specific profile metric(s) that justify your plan
+2. Name the exact code region and transformation
+3. Prefer STRUCTURAL changes over parameter tuning
+4. Don't suggest lowering precision below the baseline
+5. Estimate expected speedup based on the profile data
+6. If candidate beam shows multiple approaches, consider COMBINING strengths from different candidates`
+    : `You are a CUDA kernel optimization expert. You have REAL Nsight Compute (NCU) profiling data for this kernel. Use it to generate ONE specific, evidence-based optimization plan.
 
 # Operation: ${OP_DESC} (${opType})
 
@@ -444,17 +846,7 @@ ${beamSection}
 ${experienceSection}
 
 # How to read NCU data for planning:
-- If top stall is "long_scoreboard" (>40%): kernel is MEMORY-LATENCY-BOUND. Add ILP, async loads, or data reuse.
-- If top stall is "short_scoreboard" (>30%): heavy shared-mem or dep chains. Shorten chains, add ILP.
-- If top stall is "barrier" (>20%): too much __syncthreads. Use warp-level primitives.
-- If top stall is "math_pipe_throttle": actually compute-bound — good! Look elsewhere.
-- If DRAM throughput > 80%: bandwidth-bound. Reduce bytes read (compression, shared-mem reuse).
-- If DRAM throughput < 10% AND long_scoreboard high: latency-bound on L1, not DRAM.
-- If sectors/request > 5: uncoalesced access — big optimization opportunity.
-- If achieved occupancy << theoretical: stalls prevent filling SM, fix stall source first.
-- If waves/SM < 1: grid too small, parallelize more or use persistent kernel.
-- If registers/thread > 128: likely register spill — add __launch_bounds__.
-- NCU rule suggestions with "Est. Speedup: X%" are surprisingly accurate — prioritize them.
+${IDIOMS.read_metric_guide}
 
 # Optimization Plan Requirements:
 1. CITE the specific NCU metric(s) that justify your plan
@@ -464,29 +856,47 @@ ${experienceSection}
 5. Estimate expected speedup based on the NCU data (e.g., "NCU reports sectors/request=8.2; fixing to 4.0 should cut load time ~2x on those lines")
 6. If candidate beam shows multiple approaches, consider COMBINING strengths from different candidates`
 
+  const planSchema = USE_DRIVER
+    ? {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          focus_area: { type: 'string' },
+          profile_evidence: { type: 'string' },
+          ncu_evidence: { type: 'string' },
+          analysis: { type: 'string' },
+          plan: { type: 'string' },
+          expected_impact: { type: 'string' },
+          risk: { type: 'string' },
+        },
+        required: ['title', 'plan', 'expected_impact'],
+      }
+    : {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          focus_area: { type: 'string' },
+          ncu_evidence: { type: 'string' },
+          analysis: { type: 'string' },
+          plan: { type: 'string' },
+          expected_impact: { type: 'string' },
+          risk: { type: 'string' },
+        },
+        required: ['title', 'ncu_evidence', 'plan', 'expected_impact'],
+      }
+
   const plans = await parallel(
     Array.from({length: BREADTH}, (_, i) => () =>
       agent(`${planPromptBase}\n\n# YOUR FOCUS AREA: ${planAngles[i % planAngles.length]}\nYou are planner #${i + 1}/${BREADTH}. Focus on: ${planAngles[i % planAngles.length]}.`, {
         label: `plan-${iter}-${i}`,
         phase: 'Plan',
-        schema: {
-          type: 'object',
-          properties: {
-            title: { type: 'string' },
-            focus_area: { type: 'string' },
-            ncu_evidence: { type: 'string' },
-            analysis: { type: 'string' },
-            plan: { type: 'string' },
-            expected_impact: { type: 'string' },
-            risk: { type: 'string' },
-          },
-          required: ['title', 'ncu_evidence', 'plan', 'expected_impact'],
-        },
+        schema: planSchema,
       })
     )
   )
 
   const validPlans = plans.filter(Boolean)
+  const planEvidence = (p) => (p.profile_evidence ?? p.ncu_evidence)
   log(`Plans: ${validPlans.map(p => `${p.title} (evidence: ${(p.ncu_evidence || '').substring(0, 50)}...)`).join(' | ')}`)
 
   // ===========================================================================
@@ -498,26 +908,27 @@ ${experienceSection}
     validPlans,
     (plan) => parallel(
       Array.from({length: SAMPLES_PER_PLAN}, (_, sampleIdx) => () =>
-        agent(`You are an expert CUDA kernel developer. Implement this NCU-informed optimization plan as a complete, compilable kernel.
+        agent(USE_DRIVER
+          ? `You are an expert ${BACKEND} kernel developer. Implement this profiler-informed optimization plan as a complete, compilable kernel.
 
 # Original Kernel:
-\`\`\`cuda
+\`\`\`${IDIOMS.lang_fence}
 ${bestKernelCode.substring(0, 4000)}
 \`\`\`
 
 # Optimization Plan: "${plan.title}"
-NCU Evidence: ${plan.ncu_evidence}
+Profiler Evidence: ${planEvidence(plan)}
 Plan: ${plan.plan}
 
 # Requirements:
-1. Output a COMPLETE .cu file: all #includes, struct definitions, __global__ kernel(s), forward() wrapper, PYBIND11_MODULE
+1. ${IDIOMS.impl_requirements}
 2. Must be FUNCTIONALLY CORRECT (same output as baseline within FP tolerance)
-3. Apply the plan faithfully — the plan is based on real NCU data, so the optimization targets a real bottleneck
-4. Keep the forward() function signature unchanged
-5. MUST compile with -lineinfo (don't use features that break debug info)
-6. This is variant ${sampleIdx + 1}/${SAMPLES_PER_PLAN}
+3. Apply the plan faithfully — the plan is based on real profiler data, so the optimization targets a real bottleneck
+4. Keep the entrypoint signature unchanged
+5. This is variant ${sampleIdx + 1}/${SAMPLES_PER_PLAN}
 
-Return the complete CUDA code.`, {
+Return the complete ${BACKEND} code.`
+          : legacyExecutePrompt(bestKernelCode, plan, sampleIdx, SAMPLES_PER_PLAN), {
           label: `impl-${iter}-${plan.title.substring(0, 15)}-v${sampleIdx}`,
           phase: 'Execute',
           schema: {
@@ -557,66 +968,81 @@ Return the complete CUDA code.`, {
   // ===========================================================================
   phase('Evaluate')
 
+  const evalSchema = USE_DRIVER
+    ? {
+        type: 'object',
+        properties: {
+          is_correct: { type: 'boolean' },
+          is_compilable: { type: 'boolean' },
+          estimated_latency_ms: { type: 'number' },
+          estimated_speedup: { type: 'number' },
+          correctness_issues: { type: 'array', items: { type: 'string' } },
+          profile_comparison: { type: 'string' },
+          ncu_comparison: { type: 'string' },
+          bottleneck_addressed: { type: 'boolean' },
+          new_bottleneck: { type: 'string' },
+          performance_analysis: { type: 'string' },
+        },
+        required: ['is_correct', 'is_compilable', 'estimated_speedup'],
+      }
+    : {
+        type: 'object',
+        properties: {
+          is_correct: { type: 'boolean' },
+          is_compilable: { type: 'boolean' },
+          estimated_latency_ms: { type: 'number' },
+          estimated_speedup: { type: 'number' },
+          correctness_issues: { type: 'array', items: { type: 'string' } },
+          ncu_comparison: { type: 'string' },
+          bottleneck_addressed: { type: 'boolean' },
+          new_bottleneck: { type: 'string' },
+          performance_analysis: { type: 'string' },
+        },
+        required: ['is_correct', 'is_compilable', 'estimated_speedup'],
+      }
+  const evalProfile = (e) => (e.profile_comparison ?? e.ncu_comparison)
+
   const evaluations = await parallel(
     allVariants.map((variant, varIdx) => () =>
-      agent(`You are a CUDA kernel evaluator using Nsight Compute. Evaluate this optimized kernel variant.
+      agent(USE_DRIVER
+        ? `You are a ${BACKEND} kernel evaluator. Evaluate this optimized kernel variant.
 
 # Variant: ${variant.id} — Plan: "${variant.plan.title}"
-# NCU Evidence for this plan: ${variant.plan.ncu_evidence}
+# Profiler Evidence for this plan: ${planEvidence(variant.plan)}
 
 # Kernel Code:
-\`\`\`cuda
+\`\`\`${IDIOMS.lang_fence}
 ${variant.code.substring(0, 4000)}
 \`\`\`
 
 # Baseline Performance:
 - Latency: ${bestLatency}ms
-- Top stall: ${ncuSetup.top_stall_reason || 'unknown'}
+- Bottleneck class: ${bottleneckClass}
 
 # Evaluation Steps:
 
 ## Step 1: Static correctness check
-- Race conditions? (check __syncthreads placement, shared-mem access patterns)
-- Out-of-bounds? (check index computations against dimensions)
-- Missing synchronization? (writes to shared followed by reads without barrier)
-- Incorrect reductions? (warp shuffle masks, final-warp logic)
+- Race conditions, out-of-bounds, missing synchronization, incorrect reductions.
 
 ## Step 2: Compilability check
-- All #includes present? (torch/extension.h, cuda_runtime.h, cuda_fp16.h, etc.)
-- Valid CUDA syntax? (correct use of __global__, __shared__, __device__)
-- PYBIND11_MODULE present?
+- Required: ${IDIOMS.impl_requirements}
 
 ## Step 3: Build and profile (if environment allows)
-Use only the user-provided harness_build_cmd, harness_path/run args, and ncu_binary contract. If any required command is missing, do not invent one; return static correctness/compilability analysis and mark NCU fields as missing evidence.
+Use only the user-provided build/run/profile contract. If any required command is missing, do not invent one; return static correctness/compilability analysis and mark profile fields as missing evidence.
 
 ## Step 4: Compare with baseline
 Calculate speedup = baseline_latency / variant_latency.
-Note which NCU metrics improved and which degraded.
+Note which profile metrics improved and which degraded.
 
-If NCU is not available, provide your expert static analysis:
-- Did the optimization address the identified bottleneck (${ncuSetup.top_stall_reason})?
-- Would you expect sectors/request to decrease?
-- Would occupancy change?
+If the profiler is not available, provide your expert static analysis:
+- Did the optimization address the identified bottleneck (${bottleneckClass})?
 - Estimate speedup based on the targeted inefficiency.
 
-Return evaluation results.`, {
+Return evaluation results.`
+        : legacyEvaluatePrompt(variant, bestLatency, ncuSetup), {
         label: `eval-${variant.id}`,
         phase: 'Evaluate',
-        schema: {
-          type: 'object',
-          properties: {
-            is_correct: { type: 'boolean' },
-            is_compilable: { type: 'boolean' },
-            estimated_latency_ms: { type: 'number' },
-            estimated_speedup: { type: 'number' },
-            correctness_issues: { type: 'array', items: { type: 'string' } },
-            ncu_comparison: { type: 'string' },
-            bottleneck_addressed: { type: 'boolean' },
-            new_bottleneck: { type: 'string' },
-            performance_analysis: { type: 'string' },
-          },
-          required: ['is_correct', 'is_compilable', 'estimated_speedup'],
-        },
+        schema: evalSchema,
       })
     )
   )
@@ -670,15 +1096,17 @@ Return evaluation results.`, {
     // Update NCU profile for next iteration
     const bestResult = dedupedResults.find(r => r.variant.code === candidateBeam[0].code)
     if (bestResult && bestResult.evaluation.ncu_comparison) {
-      baselineNcuProfile = `
-## NCU Profile Results (After Iteration ${iter + 1} — Best: "${candidateBeam[0].planTitle}")
+      baselineNcuProfile = USE_DRIVER
+        ? `
+## Profile Results (After Iteration ${iter + 1}, class=${bottleneckClass} — Best: "${candidateBeam[0].planTitle}")
 - Latency: ${bestLatency}ms (${(baselineLatency / bestLatency).toFixed(2)}x speedup vs original)
 - Bottleneck addressed: ${bestResult.evaluation.bottleneck_addressed ? 'YES' : 'NO'}
 - New bottleneck: ${bestResult.evaluation.new_bottleneck || 'unknown'}
-- Comparison: ${bestResult.evaluation.ncu_comparison}
+- Comparison: ${evalProfile(bestResult.evaluation)}
 
 Previous profile data for reference:
 ${baselineNcuProfile}`
+        : legacyIterProfile(iter, candidateBeam, bestResult, bestLatency, baselineLatency, baselineNcuProfile)
     }
 
     log(`NEW BEST: "${candidateBeam[0].planTitle}" — ${(baselineLatency / bestLatency).toFixed(2)}x, ~${bestLatency.toFixed(3)}ms`)
@@ -717,6 +1145,10 @@ ${baselineNcuProfile}`
       plan_title: r.variant.plan.title,
       ncu_evidence: r.variant.plan.ncu_evidence,
       ncu_comparison: r.evaluation.ncu_comparison || '',
+      ...(USE_DRIVER ? {
+        profile_evidence: planEvidence(r.variant.plan),
+        profile_comparison: evalProfile(r.evaluation) || '',
+      } : {}),
       bottleneck_addressed: r.evaluation.bottleneck_addressed,
       type: 'positive',
     })
@@ -730,34 +1162,67 @@ ${baselineNcuProfile}`
       plan_title: r.variant.plan.title + ' [ANTI-PATTERN]',
       ncu_evidence: r.variant.plan.ncu_evidence,
       ncu_comparison: r.evaluation.ncu_comparison || '',
+      ...(USE_DRIVER ? {
+        profile_evidence: planEvidence(r.variant.plan),
+        profile_comparison: evalProfile(r.evaluation) || '',
+      } : {}),
       bottleneck_addressed: r.evaluation.bottleneck_addressed,
       type: 'negative',
     })
   }
 
   if (pairsToSummarize.length > 0) {
+    const learnSchema = USE_DRIVER
+      ? {
+          type: 'object',
+          properties: {
+            title: { type: 'string' },
+            profile_trigger: { type: 'string' },
+            ncu_trigger: { type: 'string' },
+            rule: { type: 'string' },
+            original_snippet: { type: 'string' },
+            optimized_snippet: { type: 'string' },
+            why: { type: 'string' },
+            is_antipattern: { type: 'boolean' },
+          },
+          required: ['title', 'rule', 'original_snippet', 'optimized_snippet', 'why'],
+        }
+      : {
+          type: 'object',
+          properties: {
+            title: { type: 'string' },
+            ncu_trigger: { type: 'string' },
+            rule: { type: 'string' },
+            original_snippet: { type: 'string' },
+            optimized_snippet: { type: 'string' },
+            why: { type: 'string' },
+            is_antipattern: { type: 'boolean' },
+          },
+          required: ['title', 'ncu_trigger', 'rule', 'original_snippet', 'optimized_snippet', 'why'],
+        }
     const summaries = await parallel(
       pairsToSummarize.map((pair) => () =>
-        agent(`You are a CUDA optimization expert with NCU profiling expertise. Analyze this slow-fast kernel pair and extract a GENERAL, REUSABLE optimization insight.
+        agent(USE_DRIVER
+          ? `You are a ${BACKEND} optimization expert with profiler expertise. Analyze this slow-fast kernel pair and extract a GENERAL, REUSABLE optimization insight.
 
 # Slow Kernel:
-\`\`\`cuda
+\`\`\`${IDIOMS.lang_fence}
 ${pair.slow.substring(0, 2500)}
 \`\`\`
 
 # Fast Kernel:
-\`\`\`cuda
+\`\`\`${IDIOMS.lang_fence}
 ${pair.fast.substring(0, 2500)}
 \`\`\`
 
 # Speedup: ${pair.speedup.toFixed(2)}x
 # This is a ${pair.type === 'positive' ? 'POSITIVE example (do this)' : 'NEGATIVE example (avoid this)'}
 
-# NCU Evidence that motivated this optimization:
-${pair.ncu_evidence || 'N/A'}
+# Profiler Evidence that motivated this optimization:
+${(pair.profile_evidence ?? pair.ncu_evidence) || 'N/A'}
 
-# NCU Metric Comparison (before vs after):
-${pair.ncu_comparison || 'N/A'}
+# Profile Comparison (before vs after):
+${(pair.profile_comparison ?? pair.ncu_comparison) || 'N/A'}
 
 # Was the targeted bottleneck addressed? ${pair.bottleneck_addressed ? 'YES' : 'NO/UNKNOWN'}
 
@@ -765,34 +1230,23 @@ ${pair.ncu_comparison || 'N/A'}
 Extract a GENERAL optimization rule following this EXACT format:
 
 **{Short title}**
-NCU trigger: {what metric/stall pattern signals this opportunity}
-Rule: {one sentence — when you see X in NCU, do Y to the code}
+Profiler trigger: {what metric/pattern signals this opportunity}
+Rule: {one sentence — when you see X in the profile, do Y to the code}
 Original code:
-\`\`\`cuda
+\`\`\`${IDIOMS.lang_fence}
 {2-5 lines of slow pattern}
 \`\`\`
 Optimized code:
-\`\`\`cuda
+\`\`\`${IDIOMS.lang_fence}
 {2-5 lines of fast pattern}
 \`\`\`
 Why: {hardware-level explanation}
 
-Make the rule GENERAL enough to apply to other kernels (not specific to this one kernel).`, {
+Make the rule GENERAL enough to apply to other kernels (not specific to this one kernel).`
+          : legacyLearnPrompt(pair), {
           label: `learn-${pair.plan_title.substring(0, 20)}`,
           phase: 'Learn',
-          schema: {
-            type: 'object',
-            properties: {
-              title: { type: 'string' },
-              ncu_trigger: { type: 'string' },
-              rule: { type: 'string' },
-              original_snippet: { type: 'string' },
-              optimized_snippet: { type: 'string' },
-              why: { type: 'string' },
-              is_antipattern: { type: 'boolean' },
-            },
-            required: ['title', 'ncu_trigger', 'rule', 'original_snippet', 'optimized_snippet', 'why'],
-          },
+          schema: learnSchema,
         })
       )
     )
@@ -800,7 +1254,9 @@ Make the rule GENERAL enough to apply to other kernels (not specific to this one
     // Format experience entries aligned with AccelOpt's summarizer output format
     lastIterNewPatterns = []
     for (const s of summaries.filter(Boolean)) {
-      const formatted = `**${s.title}**\nNCU trigger: ${s.ncu_trigger}\n${s.rule}\nOriginal code:\n\`\`\`cuda\n${s.original_snippet}\n\`\`\`\nOptimized code:\n\`\`\`cuda\n${s.optimized_snippet}\n\`\`\`\nWhy: ${s.why}`
+      const formatted = USE_DRIVER
+        ? `**${s.title}**\nProfiler trigger: ${s.profile_trigger ?? s.ncu_trigger}\n${s.rule}\nOriginal code:\n\`\`\`${IDIOMS.lang_fence}\n${s.original_snippet}\n\`\`\`\nOptimized code:\n\`\`\`${IDIOMS.lang_fence}\n${s.optimized_snippet}\n\`\`\`\nWhy: ${s.why}`
+        : `**${s.title}**\nNCU trigger: ${s.ncu_trigger}\n${s.rule}\nOriginal code:\n\`\`\`cuda\n${s.original_snippet}\n\`\`\`\nOptimized code:\n\`\`\`cuda\n${s.optimized_snippet}\n\`\`\`\nWhy: ${s.why}`
       experienceMemory.push(formatted)
       lastIterNewPatterns.push(formatted)
     }
@@ -817,9 +1273,10 @@ Make the rule GENERAL enough to apply to other kernels (not specific to this one
 // =============================================================================
 // Final Report
 // =============================================================================
-const finalReport = await agent(`Write a concise technical optimization report.
+const finalReport = await agent(USE_DRIVER
+  ? `Write a concise technical optimization report.
 
-# AccelOpt + NCU Optimization Results
+# AccelOpt (${BACKEND} backend, profiler=${IDIOMS.profiler_name || 'none'})
 - Operation: ${OP_DESC} (${opType})
 - Baseline Latency: ${baselineLatency}ms
 - Final Best Latency: ${bestLatency}ms
@@ -827,8 +1284,9 @@ const finalReport = await agent(`Write a concise technical optimization report.
 - Iterations: ${ITERATIONS}
 - Candidate Beam (final): ${candidateBeam.length} kernels
 - Experience Patterns: ${experienceMemory.length}
+- Bottleneck class: ${bottleneckClass}
 
-# Initial NCU Diagnosis:
+# Initial Profile Diagnosis:
 ${baselineNcuProfile.substring(0, 1000)}
 
 # Final Candidate Beam:
@@ -838,20 +1296,48 @@ ${candidateBeam.map((c, i) => `${i + 1}. "${c.planTitle}" — ${c.speedup.toFixe
 ${experienceMemory.map((e, i) => `${i + 1}. ${e}`).join('\n\n')}
 
 # Final Kernel:
-\`\`\`cuda
+\`\`\`${IDIOMS.lang_fence}
 ${bestKernelCode.substring(0, 3000)}
 \`\`\`
 
 Write:
-1. NCU-driven optimization journey (what metrics → what actions → what results)
-2. Which NCU patterns reliably predicted optimization opportunities
-3. Anti-patterns: what NCU data looked promising but the optimization failed
+1. Profiler-driven optimization journey (what metrics → what actions → what results)
+2. Which profile patterns reliably predicted optimization opportunities
+3. Anti-patterns: what profile data looked promising but the optimization failed
 4. Candidate beam evolution: how the population of solutions evolved
-5. Remaining bottlenecks (what NCU shows for the final kernel)
-6. Recommendations for further optimization with specific NCU metrics to target`, {
+5. Remaining bottlenecks (bottleneck_class=${bottleneckClass} for the final kernel)
+6. Recommendations for further optimization with specific profiler metrics to target`
+  : legacyFinalReportPrompt(OP_DESC, opType, baselineLatency, bestLatency, ITERATIONS, candidateBeam, experienceMemory, baselineNcuProfile, bestKernelCode), {
   label: 'final-report',
   phase: 'Iterate',
 })
+
+let evidenceEnvelope = null
+if (USE_DRIVER) {
+  const insightItems = experienceMemory.slice(0, TOPK_LEARN).map(e => ({
+    kind: 'bottleneck',
+    directive: 'explore',
+    evidence: IDIOMS.profiler_name ? 'ncu' : 'profile_heuristic',
+    confidence: 'inferred',
+    claim: e,
+  }))
+  const built = await agent(
+    `Build a Layer-A evidence envelope for this AccelOpt run, then validate it.\n` +
+    `1. ${substrateInstruction('evidence_schema.py', 'template')} to get the envelope shape.\n` +
+    `2. Fill it: attempt_id="accelopt-${BACKEND}", backend="${BACKEND}", ` +
+    `compiled=true, correct=true, speedup=${(baselineLatency / bestLatency)}, ` +
+    `metrics=${JSON.stringify(ncuSetup._metrics || {})}, ` +
+    `bottleneck_class="${bottleneckClass}", ` +
+    `insights=${JSON.stringify(insightItems)}.\n` +
+    `Each insight item already has {kind, directive, evidence, confidence, claim} as required by ` +
+    `evidence_schema.py _validate_item.\n` +
+    `3. Write it to ${EXP_DIR}/evidence.json.\n` +
+    `4. ${substrateInstruction('evidence_schema.py', `validate ${EXP_DIR}/evidence.json`)}\n` +
+    `Return {valid, normalized} (the validator stdout JSON verbatim).`,
+    { label: 'assemble-evidence', phase: 'Iterate', schema: JSON_PASSTHROUGH })
+  evidenceEnvelope = built.valid ? (built.normalized || null) : null
+  if (!built.valid) log(`WARN: Layer-A envelope failed evidence_schema validation`)
+}
 
 return {
   input_mode: INPUT_MODE,
@@ -874,4 +1360,10 @@ return {
   best_kernel_code: bestKernelCode,
   ncu_baseline_profile: baselineNcuProfile,
   report: finalReport,
+  ...(USE_DRIVER ? {
+    backend: BACKEND,
+    baseline_profile: baselineNcuProfile,
+    bottleneck_class: bottleneckClass,
+    evidence: evidenceEnvelope,
+  } : {}),
 }

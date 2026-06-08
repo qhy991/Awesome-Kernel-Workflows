@@ -1,0 +1,12 @@
+{
+  "kernel_path": "/tmp/fixture/kernel.cu",
+  "harness_path": "/tmp/fixture/harness.cu",
+  "problem_path": "/tmp/fixture/problem.json",
+  "iterations": 1,
+  "breadth": 1,
+  "samples_per_plan": 1,
+  "substrate_command_prefix": "python3",
+  "ncu_binary": "ncu",
+  "harness_build_cmd": "nvcc -O3 -lineinfo",
+  "kernel_name_regex": "my_kernel"
+}
