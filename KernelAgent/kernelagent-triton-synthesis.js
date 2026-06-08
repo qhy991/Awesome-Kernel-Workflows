@@ -512,8 +512,10 @@ ${target.description}
 ${testCode.substring(0, 3000)}
 \`\`\`
 
-# Triton Guidelines
-1. Use @triton.jit decorator for kernel functions
+# ${USE_DRIVER ? `${DRIVER_LANG_FENCE} Guidelines` : 'Triton Guidelines'}
+${USE_DRIVER
+  ? (DRIVER_IMPL_REQUIREMENTS || `1. Follow the ${DRIVER_LANG_FENCE} kernel idiom for this backend.\n2. Provide a callable host wrapper.\n3. DO NOT use torch.nn, torch.nn.functional, or PyTorch activation helpers.`)
+  : `1. Use @triton.jit decorator for kernel functions
 2. Use tl.program_id() for block indexing
 3. Use tl.load/tl.store for memory access with proper masking
 4. Use tl.arange() for offset computation
@@ -521,18 +523,18 @@ ${testCode.substring(0, 3000)}
 6. The kernel_function() wrapper must handle tensor allocation and kernel launch
 7. DO NOT use torch.nn, torch.nn.functional, or PyTorch activation helpers
 8. Use tl.constexpr for compile-time constants where appropriate
-9. Handle edge cases: non-divisible sizes, boundary conditions
+9. Handle edge cases: non-divisible sizes, boundary conditions`}
 
 # Seed Variant ${seedIdx + 1}/${MAX_SEEDS}
 Generate a unique implementation approach. Temperature: ${temperature.toFixed(1)}
 ${seedIdx === 0 ? 'Start with the most straightforward implementation.' : ''}
 ${seedIdx === 1 ? 'Try a different tiling strategy or block size.' : ''}
-${seedIdx === 2 ? 'Consider using vectorized loads (tl.load with mask) or different memory layout.' : ''}
+${seedIdx === 2 ? (USE_DRIVER ? 'Consider using vectorized memory access or a different memory layout.' : 'Consider using vectorized loads (tl.load with mask) or different memory layout.') : ''}
 ${seedIdx >= 3 ? 'Explore an alternative algorithmic approach.' : ''}
 
 # Output
 Return a JSON object with:
-- kernel_code: complete Python file with @triton.jit kernel and kernel_function wrapper
+- kernel_code: ${USE_DRIVER ? `complete source file with ${DRIVER_LANG_FENCE} kernel(s) and a callable wrapper` : 'complete Python file with @triton.jit kernel and kernel_function wrapper'}
 - approach: brief description of the implementation strategy
 - potential_issues: any concerns about correctness or performance`, {
         label: `gen-${target.id}-seed${seedIdx}`,
@@ -610,7 +612,7 @@ ${testCode.substring(0, 3000)}
 6. If exit code is non-zero or output contains "FAIL", report the error
 
 # Verification Rules
-- The kernel MUST use @triton.jit (no torch.nn fallbacks allowed)
+- ${USE_DRIVER ? `The kernel MUST follow the ${DRIVER_LANG_FENCE} backend idiom (no torch.nn fallbacks allowed)` : 'The kernel MUST use @triton.jit (no torch.nn fallbacks allowed)'}
 - The test must complete within 30 seconds (timeout = kill)
 - Any import of torch.nn or torch.nn.functional is a hard failure
 
@@ -775,11 +777,17 @@ ${refinementHistory.filter(h => h.candidate_id === candidate.id).map(h =>
 # Debugging Guidelines
 1. Analyze the error message carefully — it often points to the exact issue
 2. Common fixes:
-   - Shape mismatch: check tl.load mask dimensions
+${USE_DRIVER
+  ? `   - Shape mismatch: check load/store mask dimensions
+   - Index out of bounds: verify offset calculations and masking
+   - Compilation error: check ${DRIVER_LANG_FENCE} API usage
+   - Wrong output: verify reduction logic, accumulation, synchronization
+   - torch.nn fallback: remove any PyTorch nn/functional usage, rewrite in pure ${DRIVER_LANG_FENCE}`
+  : `   - Shape mismatch: check tl.load mask dimensions
    - Index out of bounds: verify offset calculations and masking
    - Compilation error: check Triton API usage (tl.constexpr, tl.load signature)
    - Wrong output: verify reduction logic, accumulation, synchronization
-   - torch.nn fallback: remove any PyTorch nn/functional usage, rewrite in pure Triton
+   - torch.nn fallback: remove any PyTorch nn/functional usage, rewrite in pure Triton`}
 3. Make MINIMAL changes — don't rewrite from scratch unless necessary
 4. Preserve the overall approach, fix only the bug
 
