@@ -1,5 +1,5 @@
 # =============================================================================
-# Awesome-Kernel-Workflows — Manifest Schema v1.0
+# Awesome-Kernel-Workflows — Manifest Schema v1.1
 # =============================================================================
 #
 # Every new kernel optimization method to be converted into a Claude Code
@@ -14,6 +14,16 @@
 #   [R] = required, [O] = optional
 #   Type shown in parentheses after description
 #
+# -----------------------------------------------------------------------------
+# v1.1 changelog (additive; v1.0 manifests still parse):
+#   - NEW top-level `backend:` block declaring (language x vendor) posture.
+#     See docs/superpowers/specs/2026-06-05-backend-driver-axis-design.md §4.4.
+#   - `args.optional[]` learns neutral backend-axis args: `backend`,
+#     `backend_dir`, `profile_command`.
+#   - `ncu_command` retained as a DEPRECATED alias for `profile_command`.
+#     Deprecation window: v1.1 introduces alias; v1.2 emits generator-prompt
+#     warning; v1.3 removes the alias. Two minor versions = one warn cycle +
+#     one removal cycle.
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -121,6 +131,38 @@ topology:
     pass_order: []
 
 # ---------------------------------------------------------------------------
+# BACKEND POSTURE — Which (language x vendor) drivers this workflow can run
+# ---------------------------------------------------------------------------
+# Added v1.1. Mirrors _substrate/backends/<id>/manifest.json's contract.
+# See docs/superpowers/specs/2026-06-05-backend-driver-axis-design.md §4.4 + §7.2.
+backend:
+  # [R] Backend ids this workflow's method can honor.
+  #     Use ['any'] when the method is fully backend-agnostic (clean tier).
+  #     Use a concrete list (e.g. ['cuda','triton']) for vendor_locked methods.
+  #     Single-element list (e.g. ['rocm']) for method_intrinsic.
+  #     Every entry must equal a directory name under _substrate/backends/.
+  supported: []
+  # [R] Default backend id when args.backend is not provided.
+  #     May be null -> forces callers to pass --backend explicitly (clean tier convention).
+  default: null
+  # [R] Whether this workflow participates in the matrix-smoke CI (§9.3).
+  #     true     = run every supported x every matrix driver
+  #     partial  = run a declared subset (e.g. {cuda} only)
+  #     false    = excluded (method_intrinsic always false)
+  matrix_eligible: false
+  # [R] Tier per spec §7.2. One of: clean | vendor_locked | method_intrinsic.
+  portability: ""
+  # [R when portability != clean] The vendor/tool this method is intrinsic to.
+  #     clean         -> omit
+  #     vendor_locked -> e.g. "ncu" / "torch.profiler"
+  #     method_intrinsic -> e.g. "cutlass" / "rocm"
+  intrinsic_to: ""
+  # [O] Capability floor — only set on vendor_locked or capability-sensitive workflows.
+  #     metrics:    [dram_pct, sm_pct]   # min set the driver must populate
+  #     problem_types: [cuda-kernel-optimization]
+  requires_capability: {}
+
+# ---------------------------------------------------------------------------
 # PHASES — Maps to meta.phases[] and phase() calls in the workflow
 # ---------------------------------------------------------------------------
 # Each entry becomes one entry in meta.phases and one phase() call.
@@ -179,6 +221,27 @@ args:
       default: ""          # [R] JS expression for default value (string)
       description: ""      # [R] What this arg is (string)
       example: ""          # [O] Concrete example value (string)
+    # --- v1.1 additions: neutral backend-axis args ---
+    - name: "backend"
+      type: "string"
+      default: "null"
+      description: "Backend id (matches _substrate/backends/<id>); null -> use backend.default from manifest"
+      example: "cuda"
+    - name: "backend_dir"
+      type: "string"
+      default: "''"
+      description: "Path to the driver dir; empty -> legacy inline-prompt path (back-compat)"
+      example: "_substrate/backends/cuda"
+    - name: "profile_command"
+      type: "string"
+      default: "''"
+      description: "Neutral profile command template (replaces legacy ncu_command). Empty -> driver-resolved."
+      example: "ncu --csv --target-processes all -o {out} {bin}"
+    - name: "ncu_command"
+      type: "string"
+      default: "''"
+      description: "DEPRECATED v1.1 alias for profile_command. Retained for back-compat; remove in v1.3."
+      example: ""
 
 # ---------------------------------------------------------------------------
 # CORRECTNESS — How does the Evaluate agent check functional correctness?

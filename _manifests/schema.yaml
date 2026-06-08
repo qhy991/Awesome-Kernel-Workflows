@@ -1,3 +1,7 @@
+# DEPRECATED MIRROR — see _meta/manifests/schema.yaml for the authoritative v1.1+ schema.
+# This file is preserved for back-compat against tools still hard-coding the _manifests/ path
+# (see _meta/tools/generate-workflow.js:394 stale reference — corrected in P5a Task 4).
+# Do not edit. Spec §2.3.
 # =============================================================================
 # Awesome-Kernel-Workflows — Manifest Schema v1.0
 # =============================================================================
