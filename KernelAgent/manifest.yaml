@@ -5,6 +5,15 @@
 # Blog: https://pytorch.org/blog/kernelfalcon-autonomous-gpu-kernel-generation-via-deep-agents/
 # =============================================================================
 
+schema_version: "1.1"
+
+backend:
+  portability: clean
+  matrix_eligible: true
+  method_supported_backends: any
+  supported: [cuda, triton]
+  default: triton
+
 source:
   paper_title: "KernelAgent: Multi-Agent GPU Kernel Synthesis with Deep Agents"
   paper_url: "https://pytorch.org/blog/kernelfalcon-autonomous-gpu-kernel-generation-via-deep-agents/"
