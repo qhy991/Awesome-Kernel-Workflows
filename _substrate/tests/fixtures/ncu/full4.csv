@@ -1,0 +1,7 @@
+"ID","Kernel Name","Metric Name","Metric Unit","Metric Value"
+"0","fused_gemm_kernel","sm__throughput.avg.pct_of_peak_sustained_elapsed","%","48.0"
+"0","fused_gemm_kernel","gpu__time_duration.sum","ns","410000"
+"0","fused_gemm_kernel","sm__warps_active.avg.pct_of_peak_sustained_active","%","51.0"
+"0","fused_gemm_kernel","dram__bytes_read.sum.pct_of_peak_sustained_elapsed","%","40.0"
+"0","fused_gemm_kernel","dram__bytes_write.sum.pct_of_peak_sustained_elapsed","%","22.0"
+"0","fused_gemm_kernel","lts__t_sector_hit_rate.pct","%","73.0"
