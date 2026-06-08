@@ -1,0 +1,179 @@
+{
+  "read-reference": {
+    "reference_code": "class Model(nn.Module):\n    def forward(self, x):\n        return torch.relu(x)\n",
+    "op_type": "relu",
+    "forward_summary": "Pointwise ReLU activation over a tensor.",
+    "input_shapes": "[1024,1024]",
+    "dtype": "float32",
+    "num_ops": 1,
+    "has_matmul": false
+  },
+  "eager-baseline": {
+    "baseline_latency_ms": 0.42,
+    "baseline_available": true,
+    "harness_notes": "torch.cuda.synchronize warmup=25 repeat=100"
+  },
+  "seed-0": {
+    "code": "// seed kernel 0\n__global__ void relu_k(float* x, int n) {}\n",
+    "strategy": "naive elementwise",
+    "kernels_materialized": 1
+  },
+  "seed-1": {
+    "code": "// seed kernel 1\n__global__ void relu_v4(float4* x, int n) {}\n",
+    "strategy": "vectorized float4",
+    "kernels_materialized": 1
+  },
+  "seed-eval-0": {
+    "is_compilable": true,
+    "is_correct": true,
+    "latency_ms": 0.40,
+    "speedup": 1.05,
+    "issues": []
+  },
+  "seed-eval-1": {
+    "is_compilable": true,
+    "is_correct": true,
+    "latency_ms": 0.35,
+    "speedup": 1.20,
+    "issues": []
+  },
+  "review-0": {
+    "is_compilable": true,
+    "is_correct": true,
+    "latency_ms": 0.35,
+    "speedup": 1.20,
+    "error_excerpt": "",
+    "ncu_metrics": {
+      "dram_throughput_pct": 85,
+      "l2_throughput_pct": 60,
+      "l1_throughput_pct": 30,
+      "sm_throughput_pct": 25,
+      "achieved_occupancy_pct": 70,
+      "registers_per_thread": 32,
+      "kernel_duration_ns": 350000,
+      "stall_long_scoreboard_ratio": 0.2,
+      "stall_short_scoreboard_ratio": 0.1,
+      "branch_divergent_cnt": 0,
+      "branch_uniform_cnt": 1,
+      "kernel_launch_count": 1
+    },
+    "profile_summary": "memory-bound; DRAM throughput high"
+  },
+  "features-0": {
+    "has_reuse": false,
+    "streaming_no_reuse": true,
+    "has_vector_load_store": true,
+    "is_aligned_vector_access": true,
+    "has_tail_handling_overhead": false,
+    "tc_eligible": false,
+    "is_pointwise": true,
+    "uses_transcendentals": false,
+    "is_naive_gemm": false,
+    "has_k_loop": false,
+    "is_gemm_kloop": false,
+    "is_stencil_conv": false,
+    "has_shared_memory_tile": false,
+    "uses_vector_types": true,
+    "has_bounds_check": true,
+    "kernel_structure_id": 0,
+    "has_multiple_kernels_in_forward": false
+  },
+  "gate-0": {
+    "tier": "Tier-H",
+    "bottleneck_id": "memory_bandwidth_bound",
+    "matched_case_id": "M1_streaming_no_reuse_high_dram",
+    "allowed_methods": ["vectorized_load_store", "improve_tail_handling"],
+    "key_metrics": "dram_throughput_pct=85, streaming_no_reuse=true",
+    "derived_values": "primary_limiter=DRAM"
+  },
+  "plan-0": {
+    "method_name": "vectorized_load_store",
+    "rationale": "DRAM throughput 85% — coalesced vec4 already partial; ensure 16B alignment.",
+    "plan": "1. Cast pointer to float4. 2. Process 4 elements per thread. 3. Tail handles residual."
+  },
+  "optimize-0": {
+    "code": "// optimized kernel round 0\n__global__ void relu_v4(float4* x, int n) {}\n",
+    "implementation_notes": "Applied vec4 path; tail loop guarded."
+  },
+  "review-1": {
+    "is_compilable": true,
+    "is_correct": true,
+    "latency_ms": 0.30,
+    "speedup": 1.40,
+    "error_excerpt": "",
+    "ncu_metrics": {
+      "dram_throughput_pct": 92,
+      "l2_throughput_pct": 65,
+      "l1_throughput_pct": 35,
+      "sm_throughput_pct": 28,
+      "achieved_occupancy_pct": 72,
+      "registers_per_thread": 30,
+      "kernel_duration_ns": 300000,
+      "stall_long_scoreboard_ratio": 0.18,
+      "stall_short_scoreboard_ratio": 0.1,
+      "branch_divergent_cnt": 0,
+      "branch_uniform_cnt": 1,
+      "kernel_launch_count": 1
+    },
+    "profile_summary": "DRAM near roofline"
+  },
+  "features-1": {
+    "has_reuse": false,
+    "streaming_no_reuse": true,
+    "has_vector_load_store": true,
+    "is_aligned_vector_access": true,
+    "has_tail_handling_overhead": false,
+    "tc_eligible": false,
+    "is_pointwise": true,
+    "uses_transcendentals": false,
+    "is_naive_gemm": false,
+    "has_k_loop": false,
+    "is_gemm_kloop": false,
+    "is_stencil_conv": false,
+    "has_shared_memory_tile": false,
+    "uses_vector_types": true,
+    "has_bounds_check": true,
+    "kernel_structure_id": 0,
+    "has_multiple_kernels_in_forward": false
+  },
+  "gate-1": {
+    "tier": "Tier-H",
+    "bottleneck_id": "memory_bandwidth_bound",
+    "matched_case_id": "M1_streaming_no_reuse_high_dram",
+    "allowed_methods": ["vectorized_load_store", "improve_tail_handling"],
+    "key_metrics": "dram_throughput_pct=92, near roofline",
+    "derived_values": "primary_limiter=DRAM"
+  },
+  "plan-1": {
+    "method_name": "improve_tail_handling",
+    "rationale": "DRAM throughput at 92% — addressing tail/edge cases for the residual reduces remaining overhead.",
+    "plan": "1. Process bulk vec4. 2. Single masked epilogue for residual."
+  },
+  "optimize-1": {
+    "code": "// optimized kernel round 1\n__global__ void relu_v4_tail(float4* x, int n) {}\n",
+    "implementation_notes": "Masked epilogue replaces branchy tail."
+  },
+  "final-report": "KernelSkill ReLU run: best 1.40x via vectorized_load_store + improve_tail_handling.",
+  "driver-build-0": { "ok": true, "log": "ok" },
+  "driver-run-0": { "ok": true, "latency_ms": 0.30, "compiled": true, "correct": true, "log": "ok" },
+  "driver-profile-0": { "ok": true, "native_path": "/tmp/p0.native" },
+  "driver-to-evidence-0": { "ok": true, "metrics": { "latency_ms": 0.30, "dram_pct": 85 }, "coverage": [], "source_backend": "cuda" },
+  "driver-diagnose-0": { "bottleneck_class": "memory_bound", "evidence": [] },
+  "driver-anti-cheat-0": { "ok": true, "suspicious": false, "reasons": [] },
+  "driver-build-1": { "ok": true, "log": "ok" },
+  "driver-run-1": { "ok": true, "latency_ms": 0.27, "compiled": true, "correct": true, "log": "ok" },
+  "driver-profile-1": { "ok": true, "native_path": "/tmp/p1.native" },
+  "driver-to-evidence-1": { "ok": true, "metrics": { "latency_ms": 0.27, "dram_pct": 92 }, "coverage": [], "source_backend": "cuda" },
+  "driver-diagnose-1": { "bottleneck_class": "memory_bound", "evidence": [] },
+  "driver-anti-cheat-1": { "ok": true, "suspicious": false, "reasons": [] },
+  "load-driver": {
+    "present": true,
+    "backend_id": "cuda",
+    "source_ext": ".cu",
+    "aux_ext": ".h",
+    "lang_fence": "cuda",
+    "impl_requirements": "Provide a CUDA __global__ kernel.",
+    "methods": {},
+    "hw_vendor": "nvidia"
+  }
+}

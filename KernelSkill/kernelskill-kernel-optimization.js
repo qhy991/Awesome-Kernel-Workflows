@@ -70,7 +70,23 @@ function assertWorkflowSuitability() {
   }
 }
 
-assertWorkflowSuitability()
+function resolveBackendAxis() {
+  const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
+  const l = args.language ? normalizeSuitabilityValue(args.language) : null
+  if (b && l && b !== l) {
+    throw new Error(`Conflicting args: backend="${args.backend}" vs language="${args.language}". Pass only one.`)
+  }
+  if (args.backend && !args.backend_dir) {
+    throw new Error(`args.backend="${args.backend}" requires args.backend_dir; driver dispatch has no implicit-resolve path.`)
+  }
+  return b || l || null
+}
+const RESOLVED_BACKEND = resolveBackendAxis()
+const USE_DRIVER = !!args.backend_dir
+
+if (!USE_DRIVER) {
+  assertWorkflowSuitability()
+}
 
 // =============================================================================
 // KernelSkill: A Multi-Agent Framework for GPU Kernel Optimization
@@ -159,6 +175,37 @@ const ATOL = args.atol != null ? args.atol : 0.01
 const WARMUP = args.warmup || 25
 const REPEAT = args.repeat || 100
 const RUN_TS = args.run_timestamp_iso || 'unknown'
+
+// --- Backend driver wiring (P5d Stage B; off-by-default; legacy path byte-identical) ---
+const BACKEND_DIR = args.backend_dir || ''
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const SH = args.driver_shell_prefix || ''
+const PY = args.substrate_command_prefix || ''
+const LEGACY_LANG_TOKEN = 'cuda'
+const LEGACY_FENCE_TOKEN = 'cuda'
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+
+function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
+function driverSh(script, cliArgs) {
+  return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
+}
+
+let DRIVER = null
+let DRIVER_LANG_FENCE = LEGACY_FENCE_TOKEN
+let DRIVER_IMPL_REQUIREMENTS = ''
+let DRIVER_SOURCE_EXT = ''
+let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
+
+function langToken(legacy) {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : legacy
+}
+function fenceToken() {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : LEGACY_FENCE_TOKEN
+}
+function kernelPathForRound(round) {
+  const ext = USE_DRIVER ? (DRIVER_SOURCE_EXT || '.cu') : '.cu'
+  return `${EXP_DIR}/round_${round}${ext}`
+}
 
 if (!REFERENCE_PATH && !PROBLEM_DEFINITION) {
   throw new Error('Provide one of problem_path or problem_definition')
@@ -340,6 +387,26 @@ function buildRepairMemoryBlock(mem) {
 // =============================================================================
 phase('Setup')
 
+if (USE_DRIVER) {
+  DRIVER = await agent(
+    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
+    `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
+    `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
+    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (!DRIVER || DRIVER.present === false) {
+    throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
+  }
+  if (RESOLVED_BACKEND && DRIVER.backend_id && normalizeSuitabilityValue(DRIVER.backend_id) !== RESOLVED_BACKEND) {
+    throw new Error(`backend_dir manifest backend_id="${DRIVER.backend_id}" conflicts with args.backend/language="${RESOLVED_BACKEND}".`)
+  }
+  DRIVER_LANG_FENCE = DRIVER.lang_fence || DRIVER_LANG_FENCE
+  DRIVER_IMPL_REQUIREMENTS = DRIVER.impl_requirements || ''
+  DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT
+  DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID
+  log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
+}
+
 // Load (optionally) an external long-term skill library to override the default.
 let skillLibrary = DEFAULT_SKILL_LIBRARY
 if (SKILL_LIBRARY_PATH) {
@@ -488,7 +555,7 @@ const seedEvals = await parallel(
 # Tolerance: rtol=${RTOL}, atol=${ATOL}
 
 # Seed kernel (candidate ${i + 1}):
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${seed.code.substring(0, 4000)}
 \`\`\`
 
@@ -568,7 +635,7 @@ for (let round = 0; round < ROUNDS; round++) {
 # Target GPU: ${TARGET_GPU}
 
 # Current kernel:
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${currentKernelCode.substring(0, 4500)}
 \`\`\`
 
@@ -618,6 +685,43 @@ Return the structured review. Always include the normalized ncu_metrics object (
     },
   })
 
+  if (USE_DRIVER) {
+    const suffix = `${round}`
+    const kPath = kernelPathForRound(round)
+    const buildOut = `${EXP_DIR}/round_${round}.artifact`
+    const profOut = `${EXP_DIR}/round_${round}.prof.native`
+    const resultPath = `${EXP_DIR}/round_${round}.result.json`
+    await agent(
+      `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+      `Return its stdout JSON verbatim.`,
+      { label: `driver-build-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const runOut = await agent(
+      `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath} --result ${resultPath}`)}\n` +
+      `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+      { label: `driver-run-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    await agent(
+      `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+      `Return {ok, native_path}.`,
+      { label: `driver-profile-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const evidenceOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+      { label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const diagOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+      `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+      { label: `driver-diagnose-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${resultPath}\`.\n` +
+      `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+      { label: `driver-anti-cheat-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    review.driver_envelope = {
+      latency_ms: Number((runOut && runOut.latency_ms) || 0),
+      bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',
+      backend_id: DRIVER_BACKEND_ID,
+    }
+  }
+
   currentValid = !!(review.is_compilable && review.is_correct)
   const roundSpeedup = currentValid
     ? (review.speedup || (review.latency_ms ? baselineLatency / review.latency_ms : (bestSpeedup || 1.0)))
@@ -643,7 +747,7 @@ Return the structured review. Always include the normalized ncu_metrics object (
 ${(review.error_excerpt || 'unknown failure').slice(0, 1500)}
 
 # Current (faulty) kernel:
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${currentKernelCode.substring(0, 3500)}
 \`\`\`
 
@@ -670,7 +774,7 @@ Return: root_cause (concise), repair_strategy (a concrete, DIFFERENT plan than a
 # Repair strategy: ${diagnosis.repair_strategy}
 
 # Faulty kernel:
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${currentKernelCode.substring(0, 4000)}
 \`\`\`
 
@@ -716,7 +820,7 @@ Keep the forward() signature identical to the reference. Return the complete fix
     const features = await agent(`You are the KernelSkill Feature Extractor. Derive the deterministic code-structure features the gate needs. Use a hybrid approach: rule-based pattern matching over the source for stable lexical/syntactic signatures, and structural inference for features that syntax alone cannot capture.
 
 # Kernel source:
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${currentKernelCode.substring(0, 4000)}
 \`\`\`
 
@@ -834,7 +938,7 @@ ${buildOptimizeMemoryBlock(optimizeMemory, 8)}
 # Profiler summary: ${(review.profile_summary || '').slice(0, 500)}
 
 # Current kernel:
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${currentKernelCode.substring(0, 3500)}
 \`\`\`
 
@@ -869,7 +973,7 @@ ${plan.plan}
 ${skillLibrary.llm_assist[plan.method_name] || '(self-generated method — follow the plan)'}
 
 # Current kernel:
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${currentKernelCode.substring(0, 4000)}
 \`\`\`
 
@@ -945,7 +1049,7 @@ const finalReport = await agent(`Write a concise technical report for this Kerne
 ${buildOptimizeMemoryBlock(optimizeMemory, 50)}
 
 # Best kernel:
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${(bestKernelCode || currentKernelCode || '').substring(0, 3000)}
 \`\`\`
 
