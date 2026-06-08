@@ -390,6 +390,36 @@ Return the baseline metrics and hardware signature.`, {
   },
 })
 
+if (USE_DRIVER) {
+  const kPath = KERNEL_PATH || `${EXP_DIR}/baseline.kernel`
+  const buildOut = `${EXP_DIR}/baseline.artifact`
+  const profOut = `${EXP_DIR}/baseline.prof.native`
+  await agent(
+    `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+    `Return its stdout JSON verbatim.`,
+    { label: 'driver-build-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  const runOut = await agent(
+    `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+    `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+    { label: 'driver-run-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agent(
+    `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+    `Return {ok, native_path}.`,
+    { label: 'driver-profile-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  const evidenceOut = await agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+    `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+    { label: 'driver-to-evidence-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+    `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+    { label: 'driver-diagnose-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/baseline.result.json\`.\n` +
+    `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+    { label: 'driver-anti-cheat-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+}
+
 baselineLatency = setupResult?.baseline_latency_us || 1000
 const initialCode = setupResult?.kernel_code || ''
 const hwSignature = setupResult?.hardware_signature || { dram_throughput_pct: 50, l2_throughput_pct: 50, sm_throughput_pct: 50 }
@@ -736,6 +766,37 @@ Return evaluation results.`, {
       required: ['compiled', 'correct'],
     },
   })
+
+  if (USE_DRIVER) {
+    const suffix = `t${t}`
+    const kPath = `${EXP_DIR}/iter_${t}.kernel`
+    const buildOut = `${EXP_DIR}/iter_${t}.artifact`
+    const profOut = `${EXP_DIR}/iter_${t}.prof.native`
+    await agent(
+      `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+      `Return its stdout JSON verbatim.`,
+      { label: `driver-build-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const runOut = await agent(
+      `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+      `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+      { label: `driver-run-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    await agent(
+      `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+      `Return {ok, native_path}.`,
+      { label: `driver-profile-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const evidenceOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+      { label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+      `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+      { label: `driver-diagnose-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/iter_${t}.result.json\`.\n` +
+      `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+      { label: `driver-anti-cheat-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+  }
 
   // ===========================================================================
   // Bandit Update (Algorithm 1, lines 20-23)
