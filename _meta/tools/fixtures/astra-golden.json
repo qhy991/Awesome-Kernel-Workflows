@@ -1,0 +1,404 @@
+[
+  {
+    "label": "setup-astra",
+    "phase": "Setup",
+    "prompt": "You are the Astra setup agent for production CUDA kernel optimization.\n\n# Inputs\n- kernel_path: /tmp/astra-fixture/baseline.cu\n- compare_kind: rmsnorm\n- baseline_module: sgl_kernel\n- baseline_func: fused_add_rmsnorm\n- generated_export_func: sgl_fused_add_rmsnorm\n- integration_mode: standalone\n- target_gpu: H100\n- exp_dir: /tmp/astra-fixture\n\n# Tasks\n1. Read the initial CUDA kernel from kernel_path.\n2. Identify exported PyBind/CUDA entry points and the function that must remain callable as generated_export_func.\n3. Summarize the baseline function contract and compare_kind semantics.\n4. Identify whether this should be optimized as a standalone kernel or reintegrated into SGLang-style code.\n5. List likely performance-sensitive regions before profiling.\n\nReturn the kernel text and integration contract.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "initial_kernel_code": {
+          "type": "string"
+        },
+        "kernel_summary": {
+          "type": "string"
+        },
+        "entry_points": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "integration_contract": {
+          "type": "string"
+        },
+        "likely_hotspots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "initial_kernel_code",
+        "integration_contract"
+      ]
+    },
+    "seq": 0
+  },
+  {
+    "label": "prepare-tests",
+    "phase": "PrepareTests",
+    "prompt": "You are Astra's Testing Agent. Build a correctness and benchmark test suite for this CUDA kernel.\n\n# Compare kind\nrmsnorm\n\n# Baseline module/function\nsgl_kernel.fused_add_rmsnorm\n\n# Generated export function\nsgl_fused_add_rmsnorm\n\n# User-provided commands\n- test_command: python /tmp/astra-fixture/test.py {kernel_path} {result_path}\n- benchmark_command: python /tmp/astra-fixture/bench.py {kernel_path} {result_path}\n\n# Kernel summary\nfused add + rmsnorm kernel\n\n# Requirements\n1. If test_command is provided, treat it as authoritative and document its JSON contract.\n2. If no command is provided, do not propose a concrete program or harness; describe the required command contract and mark evidence as missing.\n3. Generate representative shapes for compare_kind. Cover small, medium, and large cases.\n4. Include tolerance rules for floating-point comparison.\n5. Do not accept performance measurements unless they come from benchmark_command or an explicit user-provided harness.\n\nReturn the test plan and shape suite.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "test_cases": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "correctness_tolerance": {
+          "type": "string"
+        },
+        "harness_plan": {
+          "type": "string"
+        },
+        "authoritative_commands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "test_cases",
+        "harness_plan"
+      ]
+    },
+    "seq": 1
+  },
+  {
+    "label": "profile-baseline",
+    "phase": "ProfileBaseline",
+    "prompt": "You are Astra's Profiling Agent. Establish the baseline profile for the initial kernel.\n\n# Initial kernel\n```cuda\n__global__ void rmsnorm(float* out, float* x, float* w, int N) {}\n```\n\n# Commands\n- test_command: python /tmp/astra-fixture/test.py {kernel_path} {result_path}\n- benchmark_command: python /tmp/astra-fixture/bench.py {kernel_path} {result_path}\n\n# Test suite\n```json\n[\n  {\n    \"shape\": \"[1, 4096]\",\n    \"dtype\": \"float16\"\n  },\n  {\n    \"shape\": \"[32, 4096]\",\n    \"dtype\": \"float16\"\n  }\n]\n```\n\n# Required behavior\n1. Run or specify the exact benchmark command with {kernel_path} and {result_path} substitutions.\n2. Report per-shape baseline runtime if available.\n3. Identify bottlenecks from measurements, code inspection, and optional profiler output.\n4. If command execution is unavailable, mark measured=false and keep performance claims conservative.\n\nReturn baseline profile evidence.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "measured": {
+          "type": "boolean"
+        },
+        "baseline_runtime_ms": {
+          "type": "number"
+        },
+        "per_shape_runtime": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "bottlenecks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "profiler_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "measured",
+        "bottlenecks"
+      ]
+    },
+    "seq": 2
+  },
+  {
+    "label": "plan-0",
+    "phase": "Plan",
+    "prompt": "You are Astra's Planning Agent. Propose the next CUDA optimization.\n\n# Current best kernel\n```cuda\n__global__ void rmsnorm(float* out, float* x, float* w, int N) {}\n```\n\n# Baseline profile\n```json\n{\n  \"measured\": true,\n  \"baseline_runtime_ms\": 0.085,\n  \"per_shape_runtime\": [\n    {\n      \"shape\": \"[1, 4096]\",\n      \"ms\": 0.012\n    },\n    {\n      \"shape\": \"[32, 4096]\",\n      \"ms\": 0.073\n    }\n  ],\n  \"bottlenecks\": [\n    \"global memory bandwidth\",\n    \"reduction tail latency\"\n  ],\n  \"profiler_notes\": \"Per ncu, memory_bound class\"\n}\n```\n\n# Prior run log\n```json\n[]\n```\n\n# Lessons\nNo lessons yet.\n\n# Planning rules\n1. Pick one coherent optimization direction for this iteration.\n2. Ground the plan in bottlenecks or failed evidence, not generic advice.\n3. Preserve generated_export_func=sgl_fused_add_rmsnorm.\n4. Prefer production-safe changes: loop transformations, memory access improvements, CUDA intrinsics, fast math only when correctness tolerance allows it.\n5. Include explicit risk and rollback criteria.\n\nReturn a structured plan.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "optimization_goal": {
+          "type": "string"
+        },
+        "target_regions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "proposed_changes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "correctness_risks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "expected_speedup_reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "optimization_goal",
+        "proposed_changes"
+      ]
+    },
+    "seq": 3
+  },
+  {
+    "label": "code-0",
+    "phase": "Code",
+    "prompt": "You are Astra's Coding Agent. Apply the planning agent's optimization to the current best CUDA kernel.\n\n# Current best kernel\n```cuda\n__global__ void rmsnorm(float* out, float* x, float* w, int N) {}\n```\n\n# Integration contract\nMust export sgl_fused_add_rmsnorm with (out, x, residual, weight, eps) signature; preserve PyBind surface.\n\n# Plan\n```json\n{\n  \"optimization_goal\": \"Improve memory coalescing on input loads\",\n  \"target_regions\": [\n    \"input load loop\"\n  ],\n  \"proposed_changes\": [\n    \"use float4 vectorized loads\",\n    \"stride access by warp size\"\n  ],\n  \"correctness_risks\": [\n    \"unaligned tail elements\"\n  ],\n  \"expected_speedup_reason\": \"Increase DRAM throughput utilization\"\n}\n```\n\n# Hard requirements\n1. Return complete CUDA/C++ code, not a patch.\n2. Keep generated export function callable as sgl_fused_add_rmsnorm.\n3. Preserve includes, PyBind/export surface, and baseline-compatible function signature unless the integration contract allows a change.\n4. Apply only the planned optimization. Do not combine unrelated rewrites.\n5. Add short comments only where they clarify non-obvious CUDA choices.\n\nReturn the candidate code and changed regions.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "candidate_code": {
+          "type": "string"
+        },
+        "changed_regions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "implementation_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_code"
+      ]
+    },
+    "seq": 4
+  },
+  {
+    "label": "evaluate-0",
+    "phase": "Evaluate",
+    "prompt": "You are Astra's Testing and Profiling Agents working together. Evaluate this candidate with real evidence.\n\n# Candidate code\n```cuda\n__global__ void rmsnorm_v1(float* out, float* x, float* w, int N) { /* float4 loads */ }\n```\n\n# Commands\n- test_command: python /tmp/astra-fixture/test.py {kernel_path} {result_path}\n- benchmark_command: python /tmp/astra-fixture/bench.py {kernel_path} {result_path}\n\n# Path convention\n- kernel_path: /tmp/astra-fixture/astra_iter_0.cu\n- result_path: /tmp/astra-fixture/astra_iter_0.json\n\n# Test suite\n```json\n[\n  {\n    \"shape\": \"[1, 4096]\",\n    \"dtype\": \"float16\"\n  },\n  {\n    \"shape\": \"[32, 4096]\",\n    \"dtype\": \"float16\"\n  }\n]\n```\n\n# Required behavior\n1. If commands are available, write candidate to kernel_path and run correctness and benchmark commands.\n2. Parse result_path JSON.\n3. If commands are unavailable, compiled=false, correct=false, speedup=0, and explain missing evidence.\n4. Runtime and speedup must come from measured evidence only.\n5. Include profile summary and failure logs that Planning can use next iteration.\n\nReturn evaluator evidence.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compiled": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "boolean"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "runtime_ms": {
+          "type": "number"
+        },
+        "baseline_runtime_ms": {
+          "type": "number"
+        },
+        "per_shape_results": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "error_message": {
+          "type": "string"
+        },
+        "profile_summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "compiled",
+        "correct",
+        "speedup"
+      ]
+    },
+    "seq": 5
+  },
+  {
+    "label": "record-0",
+    "phase": "Record",
+    "prompt": "Distill the useful lesson from this Astra iteration.\n\n# Record\n```json\n{\n  \"iteration\": 0,\n  \"plan\": {\n    \"optimization_goal\": \"Improve memory coalescing on input loads\",\n    \"target_regions\": [\n      \"input load loop\"\n    ],\n    \"proposed_changes\": [\n      \"use float4 vectorized loads\",\n      \"stride access by warp size\"\n    ],\n    \"correctness_risks\": [\n      \"unaligned tail elements\"\n    ],\n    \"expected_speedup_reason\": \"Increase DRAM throughput utilization\"\n  },\n  \"changed_regions\": [\n    \"input load loop\"\n  ],\n  \"implementation_notes\": \"Float4 vectorized loads\",\n  \"evaluation\": {\n    \"compiled\": true,\n    \"correct\": true,\n    \"speedup\": 1.15,\n    \"runtime_ms\": 0.074,\n    \"baseline_runtime_ms\": 0.085,\n    \"per_shape_results\": [\n      {\n        \"shape\": \"[32, 4096]\",\n        \"ms\": 0.063\n      }\n    ],\n    \"error_message\": \"\",\n    \"profile_summary\": \"DRAM utilization 78% (was 64%)\"\n  }\n}\n```\n\n# Best updated?\ntrue\n\nReturn one or two concise lessons for the next Planning Agent. Focus on measured evidence.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "lessons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "lessons"
+      ]
+    },
+    "seq": 6
+  },
+  {
+    "label": "plan-1",
+    "phase": "Plan",
+    "prompt": "You are Astra's Planning Agent. Propose the next CUDA optimization.\n\n# Current best kernel\n```cuda\n__global__ void rmsnorm_v1(float* out, float* x, float* w, int N) { /* float4 loads */ }\n```\n\n# Baseline profile\n```json\n{\n  \"measured\": true,\n  \"baseline_runtime_ms\": 0.085,\n  \"per_shape_runtime\": [\n    {\n      \"shape\": \"[1, 4096]\",\n      \"ms\": 0.012\n    },\n    {\n      \"shape\": \"[32, 4096]\",\n      \"ms\": 0.073\n    }\n  ],\n  \"bottlenecks\": [\n    \"global memory bandwidth\",\n    \"reduction tail latency\"\n  ],\n  \"profiler_notes\": \"Per ncu, memory_bound class\"\n}\n```\n\n# Prior run log\n```json\n[\n  {\n    \"iteration\": 0,\n    \"plan\": {\n      \"optimization_goal\": \"Improve memory coalescing on input loads\",\n      \"target_regions\": [\n        \"input load loop\"\n      ],\n      \"proposed_changes\": [\n        \"use float4 vectorized loads\",\n        \"stride access by warp size\"\n      ],\n      \"correctness_risks\": [\n        \"unaligned tail elements\"\n      ],\n      \"expected_speedup_reason\": \"Increase DRAM throughput utilization\"\n    },\n    \"changed_regions\": [\n      \"input load loop\"\n    ],\n    \"implementation_notes\": \"Float4 vectorized loads\",\n    \"evaluation\": {\n      \"compiled\": true,\n      \"correct\": true,\n      \"speedup\": 1.15,\n      \"runtime_ms\": 0.074,\n      \"baseline_runtime_ms\": 0.085,\n      \"per_shape_results\": [\n        {\n          \"shape\": \"[32, 4096]\",\n          \"ms\": 0.063\n        }\n      ],\n      \"error_message\": \"\",\n      \"profile_summary\": \"DRAM utilization 78% (was 64%)\"\n    }\n  }\n]\n```\n\n# Lessons\nFloat4 loads improve DRAM utilization on rmsnorm shapes.\n\n# Planning rules\n1. Pick one coherent optimization direction for this iteration.\n2. Ground the plan in bottlenecks or failed evidence, not generic advice.\n3. Preserve generated_export_func=sgl_fused_add_rmsnorm.\n4. Prefer production-safe changes: loop transformations, memory access improvements, CUDA intrinsics, fast math only when correctness tolerance allows it.\n5. Include explicit risk and rollback criteria.\n\nReturn a structured plan.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "optimization_goal": {
+          "type": "string"
+        },
+        "target_regions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "proposed_changes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "correctness_risks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "expected_speedup_reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "optimization_goal",
+        "proposed_changes"
+      ]
+    },
+    "seq": 7
+  },
+  {
+    "label": "code-1",
+    "phase": "Code",
+    "prompt": "You are Astra's Coding Agent. Apply the planning agent's optimization to the current best CUDA kernel.\n\n# Current best kernel\n```cuda\n__global__ void rmsnorm_v1(float* out, float* x, float* w, int N) { /* float4 loads */ }\n```\n\n# Integration contract\nMust export sgl_fused_add_rmsnorm with (out, x, residual, weight, eps) signature; preserve PyBind surface.\n\n# Plan\n```json\n{\n  \"optimization_goal\": \"Reduce warp divergence in reduction\",\n  \"target_regions\": [\n    \"block reduction\"\n  ],\n  \"proposed_changes\": [\n    \"warp shuffle reduction\"\n  ],\n  \"correctness_risks\": [\n    \"off-by-one in warp tail\"\n  ],\n  \"expected_speedup_reason\": \"Cut sync overhead\"\n}\n```\n\n# Hard requirements\n1. Return complete CUDA/C++ code, not a patch.\n2. Keep generated export function callable as sgl_fused_add_rmsnorm.\n3. Preserve includes, PyBind/export surface, and baseline-compatible function signature unless the integration contract allows a change.\n4. Apply only the planned optimization. Do not combine unrelated rewrites.\n5. Add short comments only where they clarify non-obvious CUDA choices.\n\nReturn the candidate code and changed regions.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "candidate_code": {
+          "type": "string"
+        },
+        "changed_regions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "implementation_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_code"
+      ]
+    },
+    "seq": 8
+  },
+  {
+    "label": "evaluate-1",
+    "phase": "Evaluate",
+    "prompt": "You are Astra's Testing and Profiling Agents working together. Evaluate this candidate with real evidence.\n\n# Candidate code\n```cuda\n__global__ void rmsnorm_v2(float* out, float* x, float* w, int N) { /* warp shuffle */ }\n```\n\n# Commands\n- test_command: python /tmp/astra-fixture/test.py {kernel_path} {result_path}\n- benchmark_command: python /tmp/astra-fixture/bench.py {kernel_path} {result_path}\n\n# Path convention\n- kernel_path: /tmp/astra-fixture/astra_iter_1.cu\n- result_path: /tmp/astra-fixture/astra_iter_1.json\n\n# Test suite\n```json\n[\n  {\n    \"shape\": \"[1, 4096]\",\n    \"dtype\": \"float16\"\n  },\n  {\n    \"shape\": \"[32, 4096]\",\n    \"dtype\": \"float16\"\n  }\n]\n```\n\n# Required behavior\n1. If commands are available, write candidate to kernel_path and run correctness and benchmark commands.\n2. Parse result_path JSON.\n3. If commands are unavailable, compiled=false, correct=false, speedup=0, and explain missing evidence.\n4. Runtime and speedup must come from measured evidence only.\n5. Include profile summary and failure logs that Planning can use next iteration.\n\nReturn evaluator evidence.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compiled": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "boolean"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "runtime_ms": {
+          "type": "number"
+        },
+        "baseline_runtime_ms": {
+          "type": "number"
+        },
+        "per_shape_results": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "error_message": {
+          "type": "string"
+        },
+        "profile_summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "compiled",
+        "correct",
+        "speedup"
+      ]
+    },
+    "seq": 9
+  },
+  {
+    "label": "record-1",
+    "phase": "Record",
+    "prompt": "Distill the useful lesson from this Astra iteration.\n\n# Record\n```json\n{\n  \"iteration\": 1,\n  \"plan\": {\n    \"optimization_goal\": \"Reduce warp divergence in reduction\",\n    \"target_regions\": [\n      \"block reduction\"\n    ],\n    \"proposed_changes\": [\n      \"warp shuffle reduction\"\n    ],\n    \"correctness_risks\": [\n      \"off-by-one in warp tail\"\n    ],\n    \"expected_speedup_reason\": \"Cut sync overhead\"\n  },\n  \"changed_regions\": [\n    \"block reduction\"\n  ],\n  \"implementation_notes\": \"Warp shuffle reduction\",\n  \"evaluation\": {\n    \"compiled\": true,\n    \"correct\": true,\n    \"speedup\": 1.32,\n    \"runtime_ms\": 0.064,\n    \"baseline_runtime_ms\": 0.085,\n    \"per_shape_results\": [\n      {\n        \"shape\": \"[32, 4096]\",\n        \"ms\": 0.054\n      }\n    ],\n    \"error_message\": \"\",\n    \"profile_summary\": \"Sync overhead reduced\"\n  }\n}\n```\n\n# Best updated?\ntrue\n\nReturn one or two concise lessons for the next Planning Agent. Focus on measured evidence.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "lessons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "lessons"
+      ]
+    },
+    "seq": 10
+  },
+  {
+    "label": "post-process",
+    "phase": "PostProcess",
+    "prompt": "Prepare final Astra post-processing guidance.\n\n# Integration mode\nstandalone\n\n# Generated export function\nsgl_fused_add_rmsnorm\n\n# Best kernel\n```cuda\n__global__ void rmsnorm_v2(float* out, float* x, float* w, int N) { /* warp shuffle */ }\n```\n\n# Best result\n```json\n{\n  \"compiled\": true,\n  \"correct\": true,\n  \"speedup\": 1.32,\n  \"runtime_ms\": 0.064,\n  \"baseline_runtime_ms\": 0.085,\n  \"per_shape_results\": [\n    {\n      \"shape\": \"[32, 4096]\",\n      \"ms\": 0.054\n    }\n  ],\n  \"error_message\": \"\",\n  \"profile_summary\": \"Sync overhead reduced\"\n}\n```\n\n# Tasks\n1. Produce reintegration notes for standalone or SGLang mode.\n2. Identify files/functions likely needing manual review.\n3. Note any precision or shape limitations discovered during testing.\n4. Provide a safe rollback criterion.\n\nReturn post-processing notes.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "reintegration_notes": {
+          "type": "string"
+        },
+        "manual_review_items": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rollback_criteria": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "reintegration_notes"
+      ]
+    },
+    "seq": 11
+  },
+  {
+    "label": "final-report",
+    "phase": "Report",
+    "prompt": "Write a concise technical report for this Astra optimization campaign.\n\n# Kernel\n/tmp/astra-fixture/baseline.cu\n\n# Compare kind\nrmsnorm\n\n# Baseline/profile\n```json\n{\n  \"measured\": true,\n  \"baseline_runtime_ms\": 0.085,\n  \"per_shape_runtime\": [\n    {\n      \"shape\": \"[1, 4096]\",\n      \"ms\": 0.012\n    },\n    {\n      \"shape\": \"[32, 4096]\",\n      \"ms\": 0.073\n    }\n  ],\n  \"bottlenecks\": [\n    \"global memory bandwidth\",\n    \"reduction tail latency\"\n  ],\n  \"profiler_notes\": \"Per ncu, memory_bound class\"\n}\n```\n\n# Best result\n```json\n{\n  \"compiled\": true,\n  \"correct\": true,\n  \"speedup\": 1.32,\n  \"runtime_ms\": 0.064,\n  \"baseline_runtime_ms\": 0.085,\n  \"per_shape_results\": [\n    {\n      \"shape\": \"[32, 4096]\",\n      \"ms\": 0.054\n    }\n  ],\n  \"error_message\": \"\",\n  \"profile_summary\": \"Sync overhead reduced\"\n}\n```\n\n# Run log\n```json\n[\n  {\n    \"iteration\": 0,\n    \"plan\": {\n      \"optimization_goal\": \"Improve memory coalescing on input loads\",\n      \"target_regions\": [\n        \"input load loop\"\n      ],\n      \"proposed_changes\": [\n        \"use float4 vectorized loads\",\n        \"stride access by warp size\"\n      ],\n      \"correctness_risks\": [\n        \"unaligned tail elements\"\n      ],\n      \"expected_speedup_reason\": \"Increase DRAM throughput utilization\"\n    },\n    \"changed_regions\": [\n      \"input load loop\"\n    ],\n    \"implementation_notes\": \"Float4 vectorized loads\",\n    \"evaluation\": {\n      \"compiled\": true,\n      \"correct\": true,\n      \"speedup\": 1.15,\n      \"runtime_ms\": 0.074,\n      \"baseline_runtime_ms\": 0.085,\n      \"per_shape_results\": [\n        {\n          \"shape\": \"[32, 4096]\",\n          \"ms\": 0.063\n        }\n      ],\n      \"error_message\": \"\",\n      \"profile_summary\": \"DRAM utilization 78% (was 64%)\"\n    }\n  },\n  {\n    \"iteration\": 1,\n    \"plan\": {\n      \"optimization_goal\": \"Reduce warp divergence in reduction\",\n      \"target_regions\": [\n        \"block reduction\"\n      ],\n      \"proposed_changes\": [\n        \"warp shuffle reduction\"\n      ],\n      \"correctness_risks\": [\n        \"off-by-one in warp tail\"\n      ],\n      \"expected_speedup_reason\": \"Cut sync overhead\"\n    },\n    \"changed_regions\": [\n      \"block reduction\"\n    ],\n    \"implementation_notes\": \"Warp shuffle reduction\",\n    \"evaluation\": {\n      \"compiled\": true,\n      \"correct\": true,\n      \"speedup\": 1.32,\n      \"runtime_ms\": 0.064,\n      \"baseline_runtime_ms\": 0.085,\n      \"per_shape_results\": [\n        {\n          \"shape\": \"[32, 4096]\",\n          \"ms\": 0.054\n        }\n      ],\n      \"error_message\": \"\",\n      \"profile_summary\": \"Sync overhead reduced\"\n    }\n  }\n]\n```\n\n# Post-process notes\n```json\n{\n  \"reintegration_notes\": \"Drop replacement into sgl_kernel/csrc/elementwise/fused_add_rmsnorm.cu; export preserved.\",\n  \"manual_review_items\": [\n    \"Validate signature alignment with PyBind module\"\n  ],\n  \"limitations\": [\n    \"Tested on N=4096; verify other widths\"\n  ],\n  \"rollback_criteria\": [\n    \"Revert if correctness regresses on tail shapes\"\n  ]\n}\n```\n\nCover:\n1. Which agent loop decisions mattered most.\n2. Which optimizations improved measured runtime.\n3. Which attempted changes failed and why.\n4. Whether evidence is strong enough for production reintegration.\n5. Next high-value optimization opportunities.",
+    "seq": 12
+  }
+]
