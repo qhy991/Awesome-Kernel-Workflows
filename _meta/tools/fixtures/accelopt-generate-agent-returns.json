@@ -1,0 +1,64 @@
+{
+  "generate-initial-kernel": {
+    "generated_kernel_path": "/tmp/fixture/generated/best.cu",
+    "initial_candidates": [{ "id": "c0" }],
+    "initial_generation_result": { "verified": true }
+  },
+  "read-baseline": {
+    "kernel_code": "__global__ void k(){}",
+    "op_type": "gemm",
+    "key_functions": ["k"],
+    "current_approach": "x"
+  },
+  "ncu-baseline": {
+    "latency_ms": 1.0,
+    "sm_throughput_pct": 50,
+    "dram_throughput_pct": 50,
+    "achieved_occupancy_pct": 50,
+    "theoretical_occupancy_pct": 60,
+    "waves_per_sm": 2,
+    "registers_per_thread": 32,
+    "top_stall_reason": "long_scoreboard",
+    "top_stall_pct": 45,
+    "sectors_per_request": 8,
+    "l1_hit_rate_pct": 50,
+    "l2_hit_rate_pct": 50,
+    "ncu_rule_suggestions": ["s"],
+    "bottleneck_diagnosis": "memory-latency-bound",
+    "profile_summary": "summary",
+    "ncu_available": true
+  },
+  "plan-0-0": {
+    "title": "t",
+    "focus_area": "memory",
+    "ncu_evidence": "long_scoreboard 45%",
+    "analysis": "a",
+    "plan": "p",
+    "expected_impact": "2x",
+    "risk": "low"
+  },
+  "impl-0-t-v0": {
+    "code": "__global__ void k_opt(){}",
+    "implementation_notes": "n"
+  },
+  "eval-plan_0_sample_0": {
+    "is_correct": true,
+    "is_compilable": true,
+    "estimated_latency_ms": 0.94,
+    "estimated_speedup": 1.06,
+    "correctness_issues": [],
+    "ncu_comparison": "c",
+    "bottleneck_addressed": true,
+    "new_bottleneck": "none",
+    "performance_analysis": "pa"
+  },
+  "learn-t": {
+    "title": "rule",
+    "ncu_trigger": "long_scoreboard high",
+    "rule": "add ILP",
+    "original_snippet": "a",
+    "optimized_snippet": "b",
+    "why": "hides latency",
+    "is_antipattern": false
+  }
+}
