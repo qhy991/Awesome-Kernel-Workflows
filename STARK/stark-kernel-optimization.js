@@ -71,7 +71,23 @@ function assertWorkflowSuitability() {
   }
 }
 
-assertWorkflowSuitability()
+function resolveBackendAxis() {
+  const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
+  const l = args.language ? normalizeSuitabilityValue(args.language) : null
+  if (b && l && b !== l) {
+    throw new Error(`Conflicting args: backend="${args.backend}" vs language="${args.language}". Pass only one.`)
+  }
+  if (args.backend && !args.backend_dir) {
+    throw new Error(`args.backend="${args.backend}" requires args.backend_dir; driver dispatch has no implicit-resolve path.`)
+  }
+  return b || l || null
+}
+const RESOLVED_BACKEND = resolveBackendAxis()
+const USE_DRIVER = !!args.backend_dir
+
+if (!USE_DRIVER) {
+  assertWorkflowSuitability()
+}
 
 // =============================================================================
 // STARK — Strategic Team of Agents for Refining Kernels Workflow
@@ -135,8 +151,67 @@ const LANGUAGE = args.language || 'cuda'
 const TARGET_GPU = args.target_gpu || 'unknown GPU'
 const SEED_CANDIDATES = args.seed_candidates || 3
 
+// Seeded RNG (P5c STARK A0). Replaces Math.random() in selectNode() only.
+// When args.rng_seed is null/undefined, falls through to native Math.random()
+// — legacy byte-identical for callers that do not pin a seed.
+const RNG_SEED = args.rng_seed
+let _rngState = (RNG_SEED !== undefined && RNG_SEED !== null) ? (((RNG_SEED | 0) || 1) >>> 0) : null
+function rng() {
+  if (_rngState === null) return Math.random()
+  let s = _rngState | 0
+  s ^= s << 13
+  s ^= s >>> 17
+  s ^= s << 5
+  _rngState = s >>> 0
+  return (_rngState / 0x1_0000_0000)
+}
+
 if (!REF_KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
   throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
+}
+
+// --- Backend driver wiring (P5c Stage B; off-by-default; legacy path byte-identical) ---
+const BACKEND_DIR = args.backend_dir || ''
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const SH = args.driver_shell_prefix || ''
+const PY = args.substrate_command_prefix || ''
+const LEGACY_GENERATION_LANG_TOKEN = 'CUDA'
+const LEGACY_SETUP_LANG_TOKEN = 'CUDA'
+const LEGACY_DEBUG_LANG_TOKEN = 'CUDA'
+const LEGACY_PLAN_LANG_TOKEN = 'CUDA'
+const LEGACY_CODE_LANG_TOKEN = 'CUDA'
+const LEGACY_EVAL_LANG_TOKEN = 'CUDA'
+const LEGACY_SOURCE_EXT = '.cu'
+const LEGACY_FENCE_TOKEN = 'cuda'
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+
+function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
+function driverSh(script, cliArgs) {
+  return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
+}
+
+let DRIVER = null
+let DRIVER_LANG_FENCE = LEGACY_FENCE_TOKEN
+let DRIVER_IMPL_REQUIREMENTS = ''
+let DRIVER_SOURCE_EXT = LEGACY_SOURCE_EXT
+let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
+
+function langToken(legacy) {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : legacy
+}
+function fenceToken() {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : LEGACY_FENCE_TOKEN
+}
+// Hybrid kernel-path helper (KDA/Astra-style): AccelOpt-pattern for the
+// user-supplied REF_KERNEL_PATH; KernelAgent-workspace-local for per-node
+// candidate kernels written under EXP_DIR.
+function starkGeneratedKernelPath() {
+  const ext = USE_DRIVER ? DRIVER_SOURCE_EXT : LEGACY_SOURCE_EXT
+  return `${EXP_DIR}/generated/kernel${ext}`
+}
+function starkNodeKernelPath(nodeId) {
+  const ext = USE_DRIVER ? DRIVER_SOURCE_EXT : LEGACY_SOURCE_EXT
+  return `${EXP_DIR}/${nodeId}${ext}`
 }
 
 // --- State ---
@@ -209,12 +284,12 @@ function selectNode() {
       const c = getChildren(n.id)
       return c.length < N_CHILD_MAX * 2
     })
-    if (fallback.length > 0) return fallback[Math.floor(Math.random() * fallback.length)]
-    return tree[Math.floor(Math.random() * tree.length)]
+    if (fallback.length > 0) return fallback[Math.floor(rng() * fallback.length)]
+    return tree[Math.floor(rng() * tree.length)]
   }
 
   // With probability (1 - epsilon), pick the best node by score (exploitation)
-  const coin = Math.random()
+  const coin = rng()
   if (coin > EPSILON) {
     // Exploitation: pick the best-scoring expandable node
     const sorted = [...expandable].sort((a, b) => getScore(a) - getScore(b))
@@ -225,21 +300,22 @@ function selectNode() {
   // Leaf-biased: sample uniformly from expandable leaves
   const leaves = expandable.filter(n => isLeaf(n.id))
   if (leaves.length > 0) {
-    return leaves[Math.floor(Math.random() * leaves.length)]
+    return leaves[Math.floor(rng() * leaves.length)]
   }
   // Fallback to all expandable
-  return expandable[Math.floor(Math.random() * expandable.length)]
+  return expandable[Math.floor(rng() * expandable.length)]
 }
 
 // =============================================================================
 // Helper: Build agent-specific context windows (Section 4.4)
 // =============================================================================
 
-function buildPlanContext(nodeId) {
+function buildPlanContext(nodeId, langFence) {
   const node = getNode(nodeId)
   if (!node) return ''
   const children = getChildren(nodeId)
   const topR = leaderboard.slice(0, LEADERBOARD_SIZE).filter(n => n.id !== nodeId)
+  const fence = langFence || LEGACY_FENCE_TOKEN
 
   let ctx = `# Context Window for PLAN Agent\n\n## Selected Node (id=${nodeId})\n`
   ctx += `- Runtime: ${node.runtime !== null ? node.runtime + ' ms' : 'N/A'}\n`
@@ -260,24 +336,25 @@ function buildPlanContext(nodeId) {
     ctx += `${i + 1}. ${l.id}: ${l.runtime}ms\n`
   }
 
-  ctx += `\n## Source Reference Kernel\n\`\`\`cuda\n${referenceKernelCode.substring(0, 3000)}\n\`\`\`\n`
+  ctx += `\n## Source Reference Kernel\n\`\`\`${fence}\n${referenceKernelCode.substring(0, 3000)}\n\`\`\`\n`
 
   return ctx
 }
 
-function buildCodeContext(nodeId) {
+function buildCodeContext(nodeId, langFence) {
   const node = getNode(nodeId)
   if (!node) return ''
   const children = getChildren(nodeId)
   const siblings = getSiblings(nodeId)
+  const fence = langFence || LEGACY_FENCE_TOKEN
 
   let ctx = `# Context Window for CODE Agent\n\n## Selected Node (id=${nodeId})\n`
-  ctx += `Selected kernel code:\n\`\`\`cuda\n${node.kernel_code.substring(0, 2500)}\n\`\`\`\n`
+  ctx += `Selected kernel code:\n\`\`\`${fence}\n${node.kernel_code.substring(0, 2500)}\n\`\`\`\n`
 
   ctx += `\n## Children of Selected Node (${children.length})\n`
   for (const c of children) {
     if (c.correct && c.runtime !== null) {
-      ctx += `- ${c.id}: SUCCESS, ${c.runtime}ms. Code snippet:\n\`\`\`cuda\n${c.kernel_code.substring(0, 800)}\n\`\`\`\n`
+      ctx += `- ${c.id}: SUCCESS, ${c.runtime}ms. Code snippet:\n\`\`\`${fence}\n${c.kernel_code.substring(0, 800)}\n\`\`\`\n`
     } else if (!c.compile_ok || !c.correct) {
       ctx += `- ${c.id}: FAILED — ${c.logs?.substring(0, 200) || 'unknown error'}\n`
     }
@@ -286,22 +363,23 @@ function buildCodeContext(nodeId) {
   ctx += `\n## Sibling Nodes (${siblings.length}) — Transferable patches\n`
   for (const s of siblings) {
     if (s.correct && s.runtime !== null) {
-      ctx += `- ${s.id}: ${s.runtime}ms. Key implementation:\n\`\`\`cuda\n${s.kernel_code.substring(0, 600)}\n\`\`\`\n`
+      ctx += `- ${s.id}: ${s.runtime}ms. Key implementation:\n\`\`\`${fence}\n${s.kernel_code.substring(0, 600)}\n\`\`\`\n`
     }
   }
 
-  ctx += `\n## Source Reference Kernel\n\`\`\`cuda\n${referenceKernelCode.substring(0, 1500)}\n\`\`\`\n`
+  ctx += `\n## Source Reference Kernel\n\`\`\`${fence}\n${referenceKernelCode.substring(0, 1500)}\n\`\`\`\n`
 
   return ctx
 }
 
-function buildDebugContext(nodeId) {
+function buildDebugContext(nodeId, langFence) {
   const node = getNode(nodeId)
   if (!node) return ''
   const siblings = getSiblings(nodeId)
+  const fence = langFence || LEGACY_FENCE_TOKEN
 
   let ctx = `# Context Window for DEBUG Agent\n\n## Failing Node (id=${nodeId})\n`
-  ctx += `Failing kernel code:\n\`\`\`cuda\n${node.kernel_code.substring(0, 2500)}\n\`\`\`\n`
+  ctx += `Failing kernel code:\n\`\`\`${fence}\n${node.kernel_code.substring(0, 2500)}\n\`\`\`\n`
   ctx += `\n## Error Logs\n\`\`\`\n${(node.logs || '').substring(0, 2000)}\n\`\`\`\n`
   ctx += `\n## Original Plan (if any)\n${node.plan || 'No plan recorded'}\n`
   ctx += `\n## Anchors (if any)\n${node.anchors || 'No anchors recorded'}\n`
@@ -310,13 +388,13 @@ function buildDebugContext(nodeId) {
   for (const s of siblings) {
     ctx += `### ${s.id}\n`
     if (s.correct) {
-      ctx += `CORRECT — ${s.runtime}ms:\n\`\`\`cuda\n${s.kernel_code.substring(0, 800)}\n\`\`\`\n`
+      ctx += `CORRECT — ${s.runtime}ms:\n\`\`\`${fence}\n${s.kernel_code.substring(0, 800)}\n\`\`\`\n`
     } else {
       ctx += `Also failing — ${s.logs?.substring(0, 200) || 'unknown'}\n`
     }
   }
 
-  ctx += `\n## Source Reference Kernel\n\`\`\`cuda\n${referenceKernelCode.substring(0, 1500)}\n\`\`\`\n`
+  ctx += `\n## Source Reference Kernel\n\`\`\`${fence}\n${referenceKernelCode.substring(0, 1500)}\n\`\`\`\n`
 
   return ctx
 }
@@ -336,8 +414,28 @@ function updateLeaderboard() {
 // =============================================================================
 phase('Setup')
 
+if (USE_DRIVER) {
+  DRIVER = await agent(
+    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
+    `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
+    `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
+    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (!DRIVER || DRIVER.present === false) {
+    throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
+  }
+  if (RESOLVED_BACKEND && DRIVER.backend_id && normalizeSuitabilityValue(DRIVER.backend_id) !== RESOLVED_BACKEND) {
+    throw new Error(`backend_dir manifest backend_id="${DRIVER.backend_id}" conflicts with args.backend/language="${RESOLVED_BACKEND}".`)
+  }
+  DRIVER_LANG_FENCE = DRIVER.lang_fence || DRIVER_LANG_FENCE
+  DRIVER_IMPL_REQUIREMENTS = DRIVER.impl_requirements || ''
+  DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT
+  DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID
+  log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
+}
+
 if (INPUT_MODE === 'generate_then_optimize') {
-  const generated = await agent(`No kernel_path was provided. Generate and verify an initial CUDA kernel before constructing the STARK search tree.
+  const generated = await agent(`No kernel_path was provided. Generate and verify an initial ${langToken(LEGACY_GENERATION_LANG_TOKEN)} kernel before constructing the STARK search tree.
 
 # Problem Input
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
@@ -413,7 +511,7 @@ log(`Reference loaded: ${setupResult.op_type}, ${referenceKernelCode.length} cha
 const rootEval = await agent(`Evaluate this reference kernel for correctness and performance.
 
 # Kernel Code
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${referenceKernelCode.substring(0, 4000)}
 \`\`\`
 
@@ -439,6 +537,41 @@ Return JSON with:
     required: ['compile_ok', 'correct', 'runtime_ms', 'logs'],
   },
 })
+
+if (USE_DRIVER) {
+  const kPath = REF_KERNEL_PATH
+  const buildOut = `${EXP_DIR}/stark_root.artifact`
+  const profOut = `${EXP_DIR}/stark_root.prof.native`
+  await agent(
+    `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+    `Return its stdout JSON verbatim.`,
+    { label: 'driver-build-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  const runOut = await agent(
+    `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+    `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+    { label: 'driver-run-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agent(
+    `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+    `Return {ok, native_path}.`,
+    { label: 'driver-profile-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  const evidenceOut = await agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+    `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+    { label: 'driver-to-evidence-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+    `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+    { label: 'driver-diagnose-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/stark_root.result.json\`.\n` +
+    `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+    { label: 'driver-anti-cheat-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  rootEval.driver_envelope = {
+    latency_ms: Number((runOut && runOut.latency_ms) || 0),
+    metrics: (evidenceOut && evidenceOut.metrics) || {},
+    backend_id: DRIVER_BACKEND_ID,
+  }
+}
 
 // Initialize root node
 rootNode = {
@@ -499,7 +632,7 @@ for (let t = 0; t < BUDGET; t++) {
     isDebugPath = true
     log(`Debug path for ${selectedId}: ${selectedNode.logs?.substring(0, 200) || 'unknown error'}`)
 
-    const debugCtx = buildDebugContext(selectedId)
+    const debugCtx = buildDebugContext(selectedId, fenceToken())
 
     const debugResult = await agent(`You are a kernel debugging expert. Fix the failing kernel using sibling patterns.
 
@@ -512,7 +645,7 @@ ${debugCtx}
 4. Return the COMPLETE fixed kernel code
 
 Return a JSON object with:
-- kernel_code: string (complete fixed CUDA kernel)
+- kernel_code: string (complete fixed ${langToken(LEGACY_DEBUG_LANG_TOKEN)} kernel)
 - fix_summary: string (brief description of what was wrong and how it was fixed)
 - confidence: 'high' | 'medium' | 'low'`, {
       label: `debug-${selectedId}-a${attemptCount}`,
@@ -537,7 +670,7 @@ Return a JSON object with:
     // Normal path: Plan + Code
     phase('Plan')
 
-    const planCtx = buildPlanContext(selectedId)
+    const planCtx = buildPlanContext(selectedId, fenceToken())
 
     const planResult = await agent(`You are a kernel optimization strategist. Propose a concrete, actionable optimization plan with grounded instruction anchors.
 
@@ -595,9 +728,9 @@ Return a JSON object with:
     // =========================================================================
     phase('Code')
 
-    const codeCtx = buildCodeContext(selectedId)
+    const codeCtx = buildCodeContext(selectedId, fenceToken())
 
-    const codeResult = await agent(`You are a kernel coding expert. Realize the grounded instructions into executable CUDA code.
+    const codeResult = await agent(`You are a kernel coding expert. Realize the grounded instructions into executable ${langToken(LEGACY_CODE_LANG_TOKEN)} code.
 
 ${codeCtx}
 
@@ -605,7 +738,7 @@ ${codeCtx}
 Plan: ${planResult.plan}
 
 Anchored Scaffold:
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${planResult.anchored_scaffold.substring(0, 4000)}
 \`\`\`
 
@@ -613,14 +746,14 @@ ${planResult.anchored_scaffold.substring(0, 4000)}
 ${planResult.anchors.map(a => `- ${a.name} (lines ${a.begin_line}-${a.end_line}): ${a.description}`).join('\n')}
 
 # Instructions
-1. Replace each <<<IMPROVE BEGINS/ENDS>>> anchor with concrete, correct CUDA code
+1. Replace each <<<IMPROVE BEGINS/ENDS>>> anchor with concrete, correct ${langToken(LEGACY_CODE_LANG_TOKEN)} code
 2. Preserve all code OUTSIDE the anchors exactly as-is
 3. Use successful patterns from sibling kernels when appropriate
 4. Ensure the resulting code is syntactically valid and compilable
 5. Do NOT use <<<IMPROVE>>> markers in the final output — they must be fully resolved
 
 Return a JSON object with:
-- kernel_code: string (complete, anchor-free CUDA kernel)
+- kernel_code: string (complete, anchor-free ${langToken(LEGACY_CODE_LANG_TOKEN)} kernel)
 - implementation_notes: string (brief notes on how anchors were resolved)
 - anchor_resolutions: array of {name, resolution_summary}`, {
       label: `code-${selectedId}-a${attemptCount}`,
@@ -648,7 +781,7 @@ Return a JSON object with:
   const evalResult = await agent(`Evaluate this kernel for correctness and performance.
 
 # Kernel Code
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${newKernelCode.substring(0, 4000)}
 \`\`\`
 
@@ -681,6 +814,42 @@ Return JSON with:
       required: ['compile_ok', 'correct', 'runtime_ms', 'logs', 'error_category'],
     },
   })
+
+  if (USE_DRIVER) {
+    const kPath = starkNodeKernelPath(`node_${attemptCount}`)
+    const buildOut = `${EXP_DIR}/node_${attemptCount}.artifact`
+    const profOut = `${EXP_DIR}/node_${attemptCount}.prof.native`
+    await agent(
+      `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+      `Return its stdout JSON verbatim.`,
+      { label: `driver-build-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const runOut = await agent(
+      `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+      `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+      { label: `driver-run-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    await agent(
+      `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+      `Return {ok, native_path}.`,
+      { label: `driver-profile-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const evidenceOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+      { label: `driver-to-evidence-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const diagOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+      `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+      { label: `driver-diagnose-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/node_${attemptCount}.result.json\`.\n` +
+      `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+      { label: `driver-anti-cheat-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    evalResult.driver_envelope = {
+      latency_ms: Number((runOut && runOut.latency_ms) || 0),
+      metrics: (evidenceOut && evidenceOut.metrics) || {},
+      bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',
+      backend_id: DRIVER_BACKEND_ID,
+    }
+  }
 
   // ===========================================================================
   // Phase 6: Update — Append to tree, update leaderboard
@@ -746,7 +915,7 @@ const report = await agent(`Generate a comprehensive optimization report for thi
 - Best speedup: ${bestNode?.speedup || 'N/A'}x
 
 # Best Kernel (id=${bestNode.id})
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${bestNode.kernel_code.substring(0, 4000)}
 \`\`\`
 

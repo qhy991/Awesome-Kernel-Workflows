@@ -1,0 +1,75 @@
+{
+  "setup-read-reference": {
+    "kernel_code": "__global__ void rmsnorm(float* out, float* x, float* w, int N) {}",
+    "op_type": "rmsnorm",
+    "algorithm_description": "Row-wise RMS normalization with affine scale.",
+    "launch_config": "grid=(N/256,1,1) block=(256,1,1)",
+    "optimization_assessment": "Naive baseline with non-coalesced loads and shared-memory reduction.",
+    "potential_directions": ["vectorized loads", "warp shuffle reduction", "shared-memory tiling"]
+  },
+  "setup-eval-root": {
+    "compile_ok": true,
+    "correct": true,
+    "runtime_ms": 0.085,
+    "logs": "nvcc ok; bench ok"
+  },
+  "plan-root-a1": {
+    "plan": "Apply float4 vectorized loads on the input tile to raise DRAM throughput.",
+    "anchored_scaffold": "__global__ void rmsnorm(float* out, float* x, float* w, int N) {\n  <<<IMPROVE BEGINS: vec_load>>>\n  // scalar load\n  <<<IMPROVE ENDS: vec_load>>>\n}",
+    "anchors": [
+      {"name": "vec_load", "begin_line": 2, "end_line": 3, "description": "replace scalar load with float4 vectorized load"}
+    ],
+    "rationale": "Memory-bound kernel; vectorized loads cut instruction count and improve DRAM utilization."
+  },
+  "code-root-a1": {
+    "kernel_code": "__global__ void rmsnorm_v1(float* out, float* x, float* w, int N) { /* float4 loads */ }",
+    "implementation_notes": "Resolved vec_load anchor with float4 LD.",
+    "anchor_resolutions": [{"name": "vec_load", "resolution_summary": "float4 LD with aligned tail handling"}]
+  },
+  "eval-a1": {
+    "compile_ok": true,
+    "correct": true,
+    "runtime_ms": 0.074,
+    "speedup_vs_baseline": 1.15,
+    "logs": "nvcc ok; bench ok; DRAM 78%",
+    "error_category": "none"
+  },
+  "plan-node_1-a2": {
+    "plan": "Add warp-shuffle reduction to remove the shared-memory sync tail.",
+    "anchored_scaffold": "__global__ void rmsnorm_v1(float* out, float* x, float* w, int N) {\n  <<<IMPROVE BEGINS: warp_reduce>>>\n  // shared-memory reduction\n  <<<IMPROVE ENDS: warp_reduce>>>\n}",
+    "anchors": [
+      {"name": "warp_reduce", "begin_line": 2, "end_line": 3, "description": "replace shared-memory reduction with __shfl_sync"}
+    ],
+    "rationale": "Reduces sync overhead by keeping the reduction in registers."
+  },
+  "code-node_1-a2": {
+    "kernel_code": "__global__ void rmsnorm_v2(float* out, float* x, float* w, int N) { /* float4 + warp shuffle */ }",
+    "implementation_notes": "Resolved warp_reduce with __shfl_sync.",
+    "anchor_resolutions": [{"name": "warp_reduce", "resolution_summary": "__shfl_sync over 32-lane warp"}]
+  },
+  "eval-a2": {
+    "compile_ok": true,
+    "correct": true,
+    "runtime_ms": 0.064,
+    "speedup_vs_baseline": 1.32,
+    "logs": "nvcc ok; bench ok; sync overhead reduced",
+    "error_category": "none"
+  },
+  "report-final": {
+    "outcome": "success",
+    "summary": "STARK reduced rmsnorm runtime from 0.085ms to 0.064ms via vec loads + warp shuffle.",
+    "best_runtime_ms": 0.064,
+    "baseline_runtime_ms": 0.085,
+    "speedup": 1.32,
+    "total_attempts": 2,
+    "correct_kernels": 3,
+    "failed_kernels": 0,
+    "best_kernel_code": "__global__ void rmsnorm_v2() {}",
+    "best_kernel_plan": "warp_reduce",
+    "best_kernel_id": "node_2",
+    "optimization_trajectory": [
+      {"attempt": 1, "node_id": "node_1", "runtime": 0.074, "speedup": 1.15, "plan_summary": "vec_load"},
+      {"attempt": 2, "node_id": "node_2", "runtime": 0.064, "speedup": 1.32, "plan_summary": "warp_reduce"}
+    ]
+  }
+}
