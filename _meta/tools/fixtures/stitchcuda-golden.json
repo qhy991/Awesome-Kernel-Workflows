@@ -1,0 +1,380 @@
+[
+  {
+    "label": "Setup StitchCUDA",
+    "phase": "Setup",
+    "prompt": "Set up StitchCUDA orchestration environment:\n\n1. Initialize CUDA environment:\n   - CUDA version and user-provided compiler/toolchain\n   - Target GPU architecture (sm_80, sm_89, sm_90, etc.)\n   - PyTorch load_inline integration\n2. Configure KernelBench evaluation:\n   - Benchmark suite selection\n   - Performance metrics\n   - Correctness test suite\n3. Set up three-agent orchestration:\n   - Planner: strategic optimization planning\n   - Coder: kernel code generation\n   - Verifier: correctness and performance verification\n4. Configure adaptive replanning heuristics:\n   - Replan trigger: N consecutive compile failures\n   - Replan trigger: N consecutive correctness failures\n   - Replan trigger: performance stagnation (M iterations)\n5. Identify target kernel specification:\n   - Operation type\n   - Input/output shapes\n   - Data types\n   - Performance baseline\n\nReturn JSON:\n{\n  \"cuda_version\": \"12.x|11.x\",\n  \"target_architecture\": \"sm_80|sm_89|sm_90\",\n  \"pytorch_available\": true/false,\n  \"kernel_spec\": {\n    \"operation\": \"gemm|conv2d|attention|reduce|...\",\n    \"shapes\": \"shape description\",\n    \"dtypes\": [\"float32\", \"float16\", ...],\n    \"baseline_gflops\": <float or null>\n  },\n  \"kernelbench_config\": {\n    \"benchmark_suite\": \"suite name\",\n    \"metrics\": [\"correctness\", \"performance\", ...]\n  },\n  \"replan_heuristics\": {\n    \"compile_failure_threshold\": <int>,\n    \"correctness_failure_threshold\": <int>,\n    \"stagnation_iterations\": <int>\n  },\n  \"max_attempts\": <int>\n}",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "cuda_version": {
+          "type": "string"
+        },
+        "target_architecture": {
+          "type": "string"
+        },
+        "pytorch_available": {
+          "type": "boolean"
+        },
+        "kernel_spec": {
+          "type": "object"
+        },
+        "kernelbench_config": {
+          "type": "object"
+        },
+        "replan_heuristics": {
+          "type": "object"
+        },
+        "max_attempts": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cuda_version",
+        "target_architecture",
+        "kernel_spec"
+      ]
+    },
+    "seq": 0
+  },
+  {
+    "label": "Plan attempt 1",
+    "phase": "Plan",
+    "prompt": "Generate optimization plan (Attempt 1):\n\nKernel specification:\n- Operation: gemm\n- Shapes: [M=4096,N=4096,K=4096]\n- Data types: float16\n- Target: sm_90\n\n\n\nPlanning strategy:\n1. High-level optimization approach:\n   - Memory optimization strategy\n   - Compute optimization strategy\n   - Threading/block configuration\n2. Decompose into implementation steps:\n   - Data loading and layout\n   - Core computation kernel\n   - Memory hierarchy usage (shared memory, registers)\n   - Output writing\n3. Identify key optimizations:\n   - Coalesced memory access\n   - Shared memory usage\n   - Register blocking\n   - Instruction-level parallelism\n   - Warp-level primitives\n4. Specify constraints:\n   - Resource limits (registers, shared memory)\n   - Correctness requirements\n   - Performance targets\n\nReturn JSON:\n{\n  \"attempt\": 1,\n  \"plan_summary\": \"high-level plan summary\",\n  \"optimization_approach\": \"memory-bound|compute-bound|balanced\",\n  \"key_strategies\": [\n    \"strategy1\",\n    \"strategy2\",\n    ...\n  ],\n  \"implementation_steps\": [\n    {\"step\": 1, \"description\": \"step description\"},\n    ...\n  ],\n  \"threading_config\": {\n    \"block_size\": \"block dimension\",\n    \"grid_size\": \"grid dimension\",\n    \"threads_per_block\": <int>\n  },\n  \"memory_strategy\": \"description of memory usage\",\n  \"expected_bottleneck\": \"memory|compute|latency\"\n}",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "attempt": {
+          "type": "integer"
+        },
+        "plan_summary": {
+          "type": "string"
+        },
+        "optimization_approach": {
+          "type": "string"
+        },
+        "key_strategies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "implementation_steps": {
+          "type": "array"
+        },
+        "threading_config": {
+          "type": "object"
+        },
+        "memory_strategy": {
+          "type": "string"
+        },
+        "expected_bottleneck": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "attempt",
+        "plan_summary",
+        "key_strategies",
+        "implementation_steps"
+      ]
+    },
+    "seq": 1
+  },
+  {
+    "label": "Code attempt 1",
+    "phase": "Code",
+    "prompt": "Generate CUDA kernel implementation (Attempt 1):\n\nPlan to implement:\n{\n  \"attempt\": 1,\n  \"plan_summary\": \"tile + shared memory baseline\",\n  \"optimization_approach\": \"balanced\",\n  \"key_strategies\": [\n    \"tile-128x128\",\n    \"shared-memory-staging\"\n  ],\n  \"implementation_steps\": [\n    {\n      \"step\": 1,\n      \"description\": \"load tiles to shared memory\"\n    },\n    {\n      \"step\": 2,\n      \"description\": \"accumulate fragments\"\n    }\n  ],\n  \"threading_config\": {\n    \"block_size\": \"128x128\",\n    \"grid_size\": \"32x32\",\n    \"threads_per_block\": 256\n  },\n  \"memory_strategy\": \"shared memory tiling\",\n  \"expected_bottleneck\": \"memory\"\n}\n\nCode generation:\n1. Implement complete CUDA kernel following the plan\n2. Use PyTorch load_inline compatible format:\n   - __global__ kernel function\n   - Template parameters if needed\n   - Extern \"C\" wrapper if needed\n3. Implement all steps from the plan:\n   1. load tiles to shared memory\n   2. accumulate fragments\n4. Apply key optimizations:\n   - tile-128x128\n   - shared-memory-staging\n5. Include host launch code\n\nReturn JSON:\n{\n  \"attempt\": 1,\n  \"kernel_code\": \"complete CUDA kernel code\",\n  \"host_code\": \"host launch code\",\n  \"kernel_name\": \"kernel function name\",\n  \"implementation_notes\": \"notes on implementation choices\"\n}",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "attempt": {
+          "type": "integer"
+        },
+        "kernel_code": {
+          "type": "string"
+        },
+        "host_code": {
+          "type": "string"
+        },
+        "kernel_name": {
+          "type": "string"
+        },
+        "implementation_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "attempt",
+        "kernel_code",
+        "kernel_name"
+      ]
+    },
+    "seq": 2
+  },
+  {
+    "label": "Verify attempt 1",
+    "phase": "Verify",
+    "prompt": "Verify CUDA kernel (Attempt 1):\n\nKernel to verify:\n```cuda\n__global__ void gemm_kernel(const half* A, const half* B, float* C, int M, int N, int K) {}\n\n```\n\nVerification process:\n1. Compile check:\n   - Use the user-provided compile/build contract for sm_90; if none is provided, perform static compileability review only.\n   - Check for syntax errors, warnings\n   - Verify resource usage (registers, shared memory)\n2. Correctness check:\n   - Run with test inputs\n   - Compare with reference implementation\n   - Check numerical accuracy (absolute/relative error)\n   - Test edge cases\n3. Performance check:\n   - Benchmark on sm_90\n   - Measure execution time, GFLOPS\n   - Profile with nsys/ncu if available\n   - Compare with baseline: 100 GFLOPS\n4. KernelBench evaluation (if configured):\n   - Run full benchmark suite\n   - Aggregate scores\n\nReturn JSON:\n{\n  \"attempt\": 1,\n  \"compilation_success\": true/false,\n  \"compilation_errors\": [\"error1\", ...],\n  \"resource_usage\": {\n    \"registers_per_thread\": <int>,\n    \"shared_memory_bytes\": <int>\n  },\n  \"correctness_passed\": true/false,\n  \"correctness_errors\": [\"error1\", ...],\n  \"max_error\": <float>,\n  \"performance_gflops\": <float>,\n  \"execution_time_ms\": <float>,\n  \"speedup_vs_baseline\": <float>,\n  \"kernelbench_score\": <float or null>,\n  \"verification_passed\": true/false,\n  \"failure_reason\": \"compilation|correctness|performance|null\"\n}",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "attempt": {
+          "type": "integer"
+        },
+        "compilation_success": {
+          "type": "boolean"
+        },
+        "compilation_errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "resource_usage": {
+          "type": "object"
+        },
+        "correctness_passed": {
+          "type": "boolean"
+        },
+        "correctness_errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "max_error": {
+          "type": "number"
+        },
+        "performance_gflops": {
+          "type": "number"
+        },
+        "execution_time_ms": {
+          "type": "number"
+        },
+        "speedup_vs_baseline": {
+          "type": "number"
+        },
+        "verification_passed": {
+          "type": "boolean"
+        },
+        "failure_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "attempt",
+        "compilation_success",
+        "correctness_passed",
+        "verification_passed"
+      ]
+    },
+    "seq": 3
+  },
+  {
+    "label": "Replan",
+    "phase": "Replan",
+    "prompt": "Adaptive replanning triggered (Attempt 2):\n\nCurrent situation:\n- Consecutive compile failures: 1\n- Consecutive correctness failures: 0\n- Performance stagnation: false\n- Recent performance:  GFLOPS\n\nCurrent plan summary:\ntile + shared memory baseline\n\nReplanning strategy:\n1. Diagnose root cause of failures:\n   - Compile failures: likely syntax/API errors or invalid configurations\n   - Correctness failures: likely algorithmic bugs or numerical issues\n   - Stagnation: current approach hitting fundamental limits\n2. Generate alternative approach:\n   - Different optimization strategy\n   - Different algorithm implementation\n   - Different tiling/threading configuration\n   - Fallback to simpler baseline if needed\n3. Create new plan that avoids previous failure modes\n\nReturn JSON:\n{\n  \"diagnosis\": \"root cause analysis\",\n  \"alternative_approach\": \"description of new approach\",\n  \"key_changes\": [\"change1\", \"change2\", ...],\n  \"new_plan_summary\": \"summary of new plan\"\n}",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "diagnosis": {
+          "type": "string"
+        },
+        "alternative_approach": {
+          "type": "string"
+        },
+        "key_changes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "new_plan_summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "diagnosis",
+        "alternative_approach",
+        "new_plan_summary"
+      ]
+    },
+    "seq": 4
+  },
+  {
+    "label": "Plan attempt 2",
+    "phase": "Plan",
+    "prompt": "Generate optimization plan (Attempt 2):\n\nKernel specification:\n- Operation: gemm\n- Shapes: [M=4096,N=4096,K=4096]\n- Data types: float16\n- Target: sm_90\n\n\nReplanning context:\n- Previous failures: compile=0, correctness=0\n- Performance history:  GFLOPS\n\n\nPlanning strategy:\n1. High-level optimization approach:\n   - Memory optimization strategy\n   - Compute optimization strategy\n   - Threading/block configuration\n2. Decompose into implementation steps:\n   - Data loading and layout\n   - Core computation kernel\n   - Memory hierarchy usage (shared memory, registers)\n   - Output writing\n3. Identify key optimizations:\n   - Coalesced memory access\n   - Shared memory usage\n   - Register blocking\n   - Instruction-level parallelism\n   - Warp-level primitives\n4. Specify constraints:\n   - Resource limits (registers, shared memory)\n   - Correctness requirements\n   - Performance targets\n\nReturn JSON:\n{\n  \"attempt\": 2,\n  \"plan_summary\": \"high-level plan summary\",\n  \"optimization_approach\": \"memory-bound|compute-bound|balanced\",\n  \"key_strategies\": [\n    \"strategy1\",\n    \"strategy2\",\n    ...\n  ],\n  \"implementation_steps\": [\n    {\"step\": 1, \"description\": \"step description\"},\n    ...\n  ],\n  \"threading_config\": {\n    \"block_size\": \"block dimension\",\n    \"grid_size\": \"grid dimension\",\n    \"threads_per_block\": <int>\n  },\n  \"memory_strategy\": \"description of memory usage\",\n  \"expected_bottleneck\": \"memory|compute|latency\"\n}",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "attempt": {
+          "type": "integer"
+        },
+        "plan_summary": {
+          "type": "string"
+        },
+        "optimization_approach": {
+          "type": "string"
+        },
+        "key_strategies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "implementation_steps": {
+          "type": "array"
+        },
+        "threading_config": {
+          "type": "object"
+        },
+        "memory_strategy": {
+          "type": "string"
+        },
+        "expected_bottleneck": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "attempt",
+        "plan_summary",
+        "key_strategies",
+        "implementation_steps"
+      ]
+    },
+    "seq": 5
+  },
+  {
+    "label": "Code attempt 2",
+    "phase": "Code",
+    "prompt": "Generate CUDA kernel implementation (Attempt 2):\n\nPlan to implement:\n{\n  \"attempt\": 2,\n  \"plan_summary\": \"WMMA fragment GEMM\",\n  \"optimization_approach\": \"compute-bound\",\n  \"key_strategies\": [\n    \"wmma-fragments\",\n    \"double-buffering\"\n  ],\n  \"implementation_steps\": [\n    {\n      \"step\": 1,\n      \"description\": \"stage A,B into shared memory\"\n    },\n    {\n      \"step\": 2,\n      \"description\": \"wmma::load + wmma::mma_sync\"\n    }\n  ],\n  \"threading_config\": {\n    \"block_size\": \"128x128\",\n    \"grid_size\": \"32x32\",\n    \"threads_per_block\": 128\n  },\n  \"memory_strategy\": \"shared memory + double buffering\",\n  \"expected_bottleneck\": \"compute\"\n}\n\nCode generation:\n1. Implement complete CUDA kernel following the plan\n2. Use PyTorch load_inline compatible format:\n   - __global__ kernel function\n   - Template parameters if needed\n   - Extern \"C\" wrapper if needed\n3. Implement all steps from the plan:\n   1. stage A,B into shared memory\n   2. wmma::load + wmma::mma_sync\n4. Apply key optimizations:\n   - wmma-fragments\n   - double-buffering\n5. Include host launch code\n\nReturn JSON:\n{\n  \"attempt\": 2,\n  \"kernel_code\": \"complete CUDA kernel code\",\n  \"host_code\": \"host launch code\",\n  \"kernel_name\": \"kernel function name\",\n  \"implementation_notes\": \"notes on implementation choices\"\n}",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "attempt": {
+          "type": "integer"
+        },
+        "kernel_code": {
+          "type": "string"
+        },
+        "host_code": {
+          "type": "string"
+        },
+        "kernel_name": {
+          "type": "string"
+        },
+        "implementation_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "attempt",
+        "kernel_code",
+        "kernel_name"
+      ]
+    },
+    "seq": 6
+  },
+  {
+    "label": "Verify attempt 2",
+    "phase": "Verify",
+    "prompt": "Verify CUDA kernel (Attempt 2):\n\nKernel to verify:\n```cuda\n__global__ void gemm_wmma(const half* A, const half* B, float* C, int M, int N, int K) { /* wmma */ }\n\n```\n\nVerification process:\n1. Compile check:\n   - Use the user-provided compile/build contract for sm_90; if none is provided, perform static compileability review only.\n   - Check for syntax errors, warnings\n   - Verify resource usage (registers, shared memory)\n2. Correctness check:\n   - Run with test inputs\n   - Compare with reference implementation\n   - Check numerical accuracy (absolute/relative error)\n   - Test edge cases\n3. Performance check:\n   - Benchmark on sm_90\n   - Measure execution time, GFLOPS\n   - Profile with nsys/ncu if available\n   - Compare with baseline: 100 GFLOPS\n4. KernelBench evaluation (if configured):\n   - Run full benchmark suite\n   - Aggregate scores\n\nReturn JSON:\n{\n  \"attempt\": 2,\n  \"compilation_success\": true/false,\n  \"compilation_errors\": [\"error1\", ...],\n  \"resource_usage\": {\n    \"registers_per_thread\": <int>,\n    \"shared_memory_bytes\": <int>\n  },\n  \"correctness_passed\": true/false,\n  \"correctness_errors\": [\"error1\", ...],\n  \"max_error\": <float>,\n  \"performance_gflops\": <float>,\n  \"execution_time_ms\": <float>,\n  \"speedup_vs_baseline\": <float>,\n  \"kernelbench_score\": <float or null>,\n  \"verification_passed\": true/false,\n  \"failure_reason\": \"compilation|correctness|performance|null\"\n}",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "attempt": {
+          "type": "integer"
+        },
+        "compilation_success": {
+          "type": "boolean"
+        },
+        "compilation_errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "resource_usage": {
+          "type": "object"
+        },
+        "correctness_passed": {
+          "type": "boolean"
+        },
+        "correctness_errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "max_error": {
+          "type": "number"
+        },
+        "performance_gflops": {
+          "type": "number"
+        },
+        "execution_time_ms": {
+          "type": "number"
+        },
+        "speedup_vs_baseline": {
+          "type": "number"
+        },
+        "verification_passed": {
+          "type": "boolean"
+        },
+        "failure_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "attempt",
+        "compilation_success",
+        "correctness_passed",
+        "verification_passed"
+      ]
+    },
+    "seq": 7
+  },
+  {
+    "label": "Generate report",
+    "phase": "Report",
+    "prompt": "Generate StitchCUDA synthesis report:\n\nOrchestration summary:\n- Target: gemm on sm_90\n- Total attempts: 1 successful / 2 max\n- Best performance: 320.00 GFLOPS\n- Speedup: 3.20x\n- Best attempt: 2\n\nBest kernel plan:\nWMMA fragment GEMM\nKey strategies: wmma-fragments, double-buffering\n\nPerformance trajectory:\n  Attempt 1: 320.00 GFLOPS\n\nGenerate report with:\n1. Executive summary\n2. Orchestration overview (Planner-Coder-Verifier)\n3. Replanning events and reasons\n4. Performance progression\n5. Best kernel analysis\n6. Optimization breakdown\n\nReturn JSON:\n{\n  \"summary\": \"brief summary\",\n  \"total_attempts\": 1,\n  \"successful_attempts\": 1,\n  \"best_gflops\": 320,\n  \"speedup\": 3.2,\n  \"best_attempt\": 2,\n  \"report_path\": \"path/to/report.md\"\n}",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "string"
+        },
+        "total_attempts": {
+          "type": "integer"
+        },
+        "successful_attempts": {
+          "type": "integer"
+        },
+        "best_gflops": {
+          "type": "number"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "best_attempt": {
+          "type": "integer"
+        },
+        "report_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "best_gflops"
+      ]
+    },
+    "seq": 8
+  }
+]
