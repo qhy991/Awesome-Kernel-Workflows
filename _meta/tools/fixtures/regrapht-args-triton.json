@@ -1,0 +1,13 @@
+{
+  "kernel_path": "/tmp/regrapht-fixture/source.py",
+  "op_description": "stencil",
+  "language": "triton",
+  "backend": "triton",
+  "backend_dir": "_substrate/backends/triton",
+  "target_gpu": "H100",
+  "iterations": 2,
+  "rollouts_per_select": 4,
+  "max_path_length": 4,
+  "benchmark_command": "python /tmp/regrapht-fixture/bench.py {kernel_path} {result_path}",
+  "exp_dir": "/tmp/regrapht-fixture"
+}

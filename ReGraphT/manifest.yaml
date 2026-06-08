@@ -5,6 +5,24 @@
 #         Optimization Expertise via Reasoning Graph"
 # =============================================================================
 
+schema_version: "1.1"
+name: regrapht-kernel-optimization
+entrypoint: regrapht-kernel-optimization.js
+
+backend:
+  portability: clean
+  matrix_eligible: true
+  method_supported_backends: any
+  supported: [cuda, triton]
+  default: cuda
+  # ReGraphT's reasoning-graph + Monte Carlo Graph Search topology is
+  # backend-agnostic verbatim; per-language surface lives in (i) the
+  # LANGUAGE arg threaded into setup/build-graph/select/generate/evaluate
+  # prompts and (ii) the ```${LANGUAGE} code fence wrapping source and
+  # candidate kernels. All driver dispatch is gated by args.backend_dir;
+  # the legacy CUDA path remains byte-identical when backend_dir is unset.
+  # No vendor-bound mode args; no intersectional guard required.
+
 source:
   paper_title: "From Large to Small: Transferring CUDA Optimization Expertise via Reasoning Graph"
   paper_url: "https://arxiv.org/abs/2510.19873"
