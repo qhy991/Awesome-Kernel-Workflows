@@ -25,6 +25,14 @@ class TestValidateBackendGood(unittest.TestCase):
         self.assertEqual(payload.get('ok'), True, msg=f"payload={payload}")
         self.assertEqual(payload.get('errors'), [], msg=f"payload={payload}")
 
+    def test_bottleneck_classes_may_list_unknown(self):
+        # `unknown` is an allowed bottleneck_classes entry (ALLOWED_BCLASSES = the 4
+        # meaningful classes | {"unknown"}); listing it must NOT be rejected.
+        code, payload = run_validator('good_unknown_bclass')
+        self.assertEqual(code, 0, msg=f"expected exit 0, got {code}; payload={payload}")
+        self.assertEqual(payload.get('ok'), True, msg=f"payload={payload}")
+        self.assertEqual(payload.get('errors'), [], msg=f"payload={payload}")
+
 
 class TestValidateBackendBad(unittest.TestCase):
     def assert_bad(self, driver_dir, substring):
