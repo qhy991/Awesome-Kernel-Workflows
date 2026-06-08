@@ -502,8 +502,8 @@ ${(generation.candidate_code || '').substring(0, 16000)}
 ${EVAL_CMD || '(no benchmark_command provided)'}
 
 # Paths
-- kernel_path: ${EXP_DIR}/cudallm_iter_${iteration}_sample_${sample}.cu
-- result_path: ${EXP_DIR}/cudallm_iter_${iteration}_sample_${sample}.json
+- kernel_path: ${cudallmCandidatePath(iteration, sample)}
+- result_path: ${cudallmResultPath(iteration, sample)}
 
 # Tests
 \`\`\`json
@@ -544,6 +544,47 @@ Return evaluator result.`, {
       code: generation.candidate_code || '',
       eval: evaluation,
     }
+
+    if (USE_DRIVER) {
+      const kPath = cudallmCandidatePath(iteration, sample)
+      const rPath = cudallmResultPath(iteration, sample)
+      const buildOut = `${EXP_DIR}/cudallm_iter_${iteration}_sample_${sample}.artifact`
+      const profOut = `${EXP_DIR}/cudallm_iter_${iteration}_sample_${sample}.prof.native`
+      await agent(
+        `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+        `Return its stdout JSON verbatim.`,
+        { label: `driver-build-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      const runOut = await agent(
+        `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath} --result ${rPath}`)}\n` +
+        `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+        { label: `driver-run-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      await agent(
+        `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+        `Return {ok, native_path}.`,
+        { label: `driver-profile-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      const evidenceOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+        `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+        { label: `driver-to-evidence-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      const diagOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+        `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+        { label: `driver-diagnose-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      const antiCheatOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${rPath}\`.\n` +
+        `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+        { label: `driver-anti-cheat-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      candidate.driver_envelope = {
+        anti_cheat: antiCheatOut || {},
+        metrics: (evidenceOut && evidenceOut.metrics) || {},
+        vendor: (DRIVER && DRIVER.hw_vendor) || '',
+        coverage: (evidenceOut && evidenceOut.coverage) || [],
+        bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',
+        latency_ms: Number((runOut && runOut.latency_ms) || 0),
+        backend_id: DRIVER_BACKEND_ID,
+      }
+    }
+
     candidates.push(candidate)
 
     if (isBetterCandidate(candidate, bestCandidate)) {
