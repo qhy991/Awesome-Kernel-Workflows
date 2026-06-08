@@ -231,3 +231,67 @@ class TestCudaRun(unittest.TestCase):
                                   '--problem', '/no/problem.json', '--out', out])
             self.assertEqual(code, 3)
             self.assertEqual(_json_or_raw(sout).get('ok'), False)
+
+
+class TestCudaProfile(unittest.TestCase):
+    SCRIPT = os.path.join(CUDA, 'profile.sh')
+
+    def _problem(self, td):
+        p = os.path.join(td, 'problem.json')
+        json.dump({"op": "add"}, open(p, 'w'))
+        return p
+
+    def test_exists_executable_and_syntax(self):
+        self.assertTrue(os.path.isfile(self.SCRIPT), "cuda/profile.sh missing")
+        self.assertTrue(os.access(self.SCRIPT, os.X_OK))
+        code, _, err = _run(['bash', '-n', self.SCRIPT])
+        self.assertEqual(code, 0, msg=err)
+
+    def test_profile_ok_with_fake_ncu_writes_csv_and_pointer(self):
+        with tempfile.TemporaryDirectory() as td:
+            _write_exec(os.path.join(td, 'ncu'), FAKE_NCU_CSV)
+            art = os.path.join(td, 'k.so'); open(art, 'w').write("")
+            prob = self._problem(td); out = os.path.join(td, 'native.csv')
+            code, sout, serr = _run([self.SCRIPT, '--artifact', art,
+                                     '--problem', prob, '--out', out], env=_path_env(td))
+            self.assertEqual(code, 0, msg=f"out={sout} err={serr}")
+            p = _json_or_raw(sout)
+            self.assertEqual(p.get('ok'), True, p)
+            self.assertEqual(p.get('profiler'), 'ncu', p)
+            self.assertEqual(p.get('native_profile'), out, p)
+            self.assertEqual(p.get('format'), 'ncu-csv', p)
+            self.assertTrue(os.path.isfile(out), "csv not written")
+            self.assertIn('sm__warps_active', open(out).read())
+
+    def test_profile_requests_the_four_counters(self):
+        with tempfile.TemporaryDirectory() as td:
+            rec = os.path.join(td, 'argv.txt')
+            _write_exec(os.path.join(td, 'ncu'), textwrap.dedent(f'''\
+                #!/usr/bin/env bash
+                echo "$@" > "{rec}"
+                echo '"ID","Metric Name","Metric Value"' ; exit 0
+            '''))
+            art = os.path.join(td, 'k.so'); open(art, 'w').write("")
+            prob = self._problem(td); out = os.path.join(td, 'n.csv')
+            _run([self.SCRIPT, '--artifact', art, '--problem', prob, '--out', out],
+                 env=_path_env(td))
+            argv = open(rec).read()
+            for c in ('gpu__time_duration.sum',
+                      'sm__throughput.avg.pct_of_peak_sustained_elapsed',
+                      'dram__bytes_read.sum.pct_of_peak_sustained_elapsed',
+                      'sm__warps_active.avg.pct_of_peak_sustained_active'):
+                self.assertIn(c, argv, f"profile.sh did not request {c}")
+
+    def test_profiler_absent_exit_4(self):
+        with tempfile.TemporaryDirectory() as td:
+            art = os.path.join(td, 'k.so'); open(art, 'w').write("")
+            prob = self._problem(td); out = os.path.join(td, 'n.csv')
+            env = dict(os.environ)   # ncu genuinely absent on macOS; keep PATH so the shebang resolves (wiping it => exit 127, not the exit-4 guard)
+            code, sout, serr = _run([self.SCRIPT, '--artifact', art,
+                                     '--problem', prob, '--out', out], env=env)
+            self.assertEqual(code, 4, msg=f"out={sout} err={serr}")
+            self.assertEqual(_json_or_raw(sout).get('ok'), False)
+
+    def test_missing_args_exit_3(self):
+        code, sout, _ = _run([self.SCRIPT, '--artifact', '/x.so'])
+        self.assertEqual(code, 3)
