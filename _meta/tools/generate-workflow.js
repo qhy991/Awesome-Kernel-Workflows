@@ -398,7 +398,7 @@ const methodName = METHOD_NAME || (paperResearch?.paper_title || 'unknown')
 const manifestResult = await agent(`You are a YAML generator. Assemble a complete manifest YAML for Awesome-Kernel-Workflows from the structured data below.
 
 # Schema Reference
-The manifest must conform to the schema at _manifests/schema.yaml. Fill ALL required fields.
+The manifest must conform to the schema at _meta/manifests/schema.yaml. Fill ALL required fields.
 
 # Data to assemble:
 
@@ -431,6 +431,13 @@ The manifest must conform to the schema at _manifests/schema.yaml. Fill ALL requ
 - max_iterations_arg: ${topologyModel?.max_iterations_arg || 'iterations'}
 - convergence_condition: ${topologyModel?.convergence_condition || ''}
 
+## Backend posture (v1.1; see _meta/manifests/schema.yaml \`backend:\` block):
+- supported: ${JSON.stringify(paperResearch?.supported_backends || ['any'])}
+- default: ${paperResearch?.default_backend || 'null'}
+- matrix_eligible: ${paperResearch?.matrix_eligible !== false}
+- portability: ${paperResearch?.portability_class || 'clean'}
+- intrinsic_to: ${paperResearch?.intrinsic_to || ''}
+
 ## Phases
 ${JSON.stringify(phasesModel?.phases || [], null, 2)}
 
@@ -458,13 +465,14 @@ ${JSON.stringify(anglesResult?.plan_angles || [], null, 2)}
 ${PARTIAL_MANIFEST ? `# User-provided partial manifest (override above values where specified):\n${PARTIAL_MANIFEST}` : ''}
 
 # Instructions:
-Generate a complete, valid YAML manifest. Include ALL sections: source, workflow, inputs, method, topology, phases (with full agent schemas), plan_angles, args, correctness, return_fields, template.
+Generate a complete, valid YAML manifest. Include ALL sections: source, workflow, inputs, method, topology, backend, phases (with full agent schemas), plan_angles, args, correctness, return_fields, template.
 
 For agent output_schema fields, design sensible JSON schemas based on what each agent needs to return.
 
 Return the manifest as a single YAML string.`, {
   label: 'assemble-manifest',
   phase: 'Assemble',
+  // SCHEMA PINNED — see _meta/tools/test/generator-prompt-schema.test.js
   schema: {
     type: 'object',
     properties: {
@@ -498,10 +506,24 @@ ${manifestResult.manifest_yaml}
 
 # Generation Rules:
 1. Start with \`export const meta = {...}\` — fill from manifest workflow.* and phases[].name/detail
-2. Immediately after meta, emit \`WORKFLOW_SUITABILITY\` with supported_languages, supported_problem_types, problem_types, reason, plus \`assertWorkflowSuitability()\` that hard-fails only when explicit \`args.language\` or \`args.problem_type\` is incompatible
+2. Immediately after meta, emit \`WORKFLOW_SUITABILITY\` with the §6.4 split:
+   - \`method_supported_backends\` (from manifest \`backend.supported\`; \`['any']\` for clean methods),
+   - \`default_backend\` (from manifest \`backend.default\`; may be \`null\`),
+   - \`requires_capability\` (from manifest \`backend.requires_capability\`; \`{}\` if absent),
+   - \`supported_problem_types\`, \`problem_types\`, \`reason\` (unchanged from v1.0).
+   Plus \`assertWorkflowSuitability()\` that hard-fails when explicit \`args.backend\` is not in \`method_supported_backends\`, when \`args.problem_type\` is incompatible, or when a manifest declares \`portability: method_intrinsic\` and \`args.backend\` is off-list (throwing the intrinsic-reason message verbatim). Preserve the legacy \`supported_languages\` key as an alias of \`method_supported_backends\` for one minor version (v1.2).
 3. Add header comment block documenting: source paper, usage example with all args, arg descriptions
 4. Emit const declarations for all args (required without default, optional with || default)
 5. Emit canonical input resolution: optimize args.kernel_path when present; otherwise require args.problem_definition or args.problem_path, generate seed_candidates initial kernels, verify with test_command or benchmark_command, and optimize the best verified seed
+5a. If \`args.backend_dir\` is provided (the driver path), emit the §6.1 path-helper block immediately after the arg const declarations:
+   \`\`\`js
+   const USE_DRIVER = Boolean(BACKEND_DIR)
+   const driverSh = (script, ...flags) =>
+     \`\${DRIVER_SHELL_PREFIX || ''} \${BACKEND_DIR}/\${script} \${flags.join(' ')}\`.trim()
+   const driverPy = (script, ...flags) =>
+     \`\${SUBSTRATE_COMMAND_PREFIX} \${BACKEND_DIR}/\${script} \${flags.join(' ')}\`
+   \`\`\`
+   and a §6.2 \`load-driver\` Setup agent that reads \`\${BACKEND_DIR}/manifest.json\` + \`\${BACKEND_DIR}/idioms.json\`, gated on \`USE_DRIVER\`. Per the §6.4 contract: never emit \`load-driver\` outside \`USE_DRIVER\`.
 6. Emit let declarations for all state_variables
 7. Emit phase('Setup') with the Setup phase agents
 8. Emit the main loop (for iterative/search: for loop controlled by iterations unless the source method requires a specific budget name)
@@ -509,7 +531,7 @@ ${manifestResult.manifest_yaml}
    - "single" → await agent(...)
    - "parallel_fan_out" → await parallel(array.map(item => () => agent(...)))
    - "pipeline_then_parallel" → await pipeline(items, item => parallel([...]))
-10. Never hardcode an evaluator/compiler/profiler command in Usage examples or agent prompts. Describe the JSON/artifact contract and consume user-provided command args.
+10. Never hardcode an evaluator/compiler/profiler command in Usage examples or agent prompts. For workflows with manifest \`backend.portability: clean\`, never name the literal tokens \`nvcc\`, \`ncu\`, \`__global__\`, \`PYBIND11_MODULE\`, \`cuda_runtime.h\`, \`@triton.jit\`, or \`tl.load\` in any agent prompt body — these are backend-specific idioms and must arrive through the driver's \`idioms.json\` (read by the \`load-driver\` agent) and be interpolated as \`\${IDIOMS.lang_fence}\`/\`\${IDIOMS.impl_requirements}\`/etc. Describe the JSON/artifact contract and consume user-provided command args.
 11. Emit epilogue (final report agent)
 12. Emit return {...} with all return_fields, including input_mode, generated_kernel_path, initial_candidates, and initial_generation_result when generation is supported
 
@@ -532,6 +554,7 @@ ${manifestResult.manifest_yaml}
 Return the complete .js workflow code as a single string.`, {
   label: 'generate-workflow',
   phase: 'Generate',
+  // SCHEMA PINNED — see _meta/tools/test/generator-prompt-schema.test.js
   schema: {
     type: 'object',
     properties: {
