@@ -500,6 +500,50 @@ Return JSON:
     log(`Generated kernel: ${codeResult.kernel_name}`);
 
     // ==========================================================================
+    // Layer-A driver envelope (USE_DRIVER only): build -> run -> profile ->
+    // to_evidence -> diagnose -> anti_cheat. Maps onto Verify schema below.
+    // ==========================================================================
+    let driverEnvelope = null;
+    if (USE_DRIVER) {
+      const kPath = attemptKernelPath(attempt);
+      const buildOut = `${WORKSPACE}/attempt_${attempt}/artifact`;
+      const profOut = `${WORKSPACE}/attempt_${attempt}/profile.native`;
+      await agent(
+        `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+        `Return its stdout JSON verbatim.`,
+        { label: `driver-build-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH });
+      const runOut = await agent(
+        `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+        `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+        { label: `driver-run-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH });
+      await agent(
+        `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+        `Return {ok, native_path}.`,
+        { label: `driver-profile-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH });
+      const evidenceOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+        `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+        { label: `driver-to-evidence-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH });
+      const diagOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+        `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+        { label: `driver-diagnose-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH });
+      const antiCheatOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath}\`.\n` +
+        `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+        { label: `driver-anti-cheat-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH });
+      driverEnvelope = {
+        anti_cheat: antiCheatOut || {},
+        metrics: (evidenceOut && evidenceOut.metrics) || {},
+        vendor: (DRIVER && DRIVER.hw_vendor) || '',
+        coverage: (evidenceOut && evidenceOut.coverage) || [],
+        bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',
+        latency_ms: Number((runOut && runOut.latency_ms) || 0),
+        backend_id: DRIVER_BACKEND_ID,
+      };
+    }
+
+    // ==========================================================================
     // Phase 4: Verify (Verifier Agent)
     // ==========================================================================
     phase('Verify');
