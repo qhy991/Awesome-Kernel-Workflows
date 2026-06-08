@@ -35,6 +35,8 @@
 //   {{LEARN_SCHEMA}}           — JSON schema for learn output
 //   {{REPORT_PROMPT}}          — prompt text for final report agent
 //   {{RETURN_OBJECT}}          — fields of the return {} statement
+//   {{USE_DRIVER}}             — `Boolean(args.backend_dir)` gate (v1.1)
+//   {{DRIVER_DISPATCH_BLOCK}}  — §6.1 driverSh / driverPy path helpers (v1.1)
 //
 // Block reference (conditional sections):
 //   [BLOCK:experience_memory]  — Learn phase with experienceMemory accumulation
@@ -73,6 +75,12 @@ export const meta = {
 //   verify them with test_command or benchmark_command, and optimize the best verified seed.
 // - Do not hardcode evaluator/compiler/profiler commands; consume user-provided command args.
 // - Return input_mode, generated_kernel_path, initial_candidates, and initial_generation_result.
+// - Backend (v1.1): the workflow body never names a vendor profiler (`nvcc`/`ncu`),
+//   a vendor metric (`sm_throughput_pct`/`dram_throughput_pct`), or a vendor idiom
+//   (`__global__`/`@triton.jit`/`PYBIND11_MODULE`). All such tokens come from the
+//   driver's `idioms.json` via the load-driver Setup agent (see spec §6.1/§6.2).
+// - Backend (v1.1): args.backend_dir gates the driver path; when empty the body
+//   falls back to the legacy inline-prompt path (USE_DRIVER = Boolean(BACKEND_DIR)).
 
 // --- State ---
 {{STATE_VARIABLES}}
