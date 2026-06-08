@@ -250,7 +250,7 @@ async function resolveInitialKernelFromProblem() {
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
 - problem_path: ${PROBLEM_PATH || '(not provided)'}
 - op_description: ${OP_DESCRIPTION}
-- language: ${LANGUAGE}
+- language: ${langToken(LANGUAGE)}
 - target_gpu: ${GPU_TARGET}
 - seed_candidates: ${SEED_CANDIDATES}
 
@@ -615,7 +615,7 @@ Return updated hardware signatures and masks.`, {
 # Operation: ${OP_DESCRIPTION}
 
 # Source Kernel (ID ${selectedKernel.id}, current speedup: ${selectedKernel.speedup.toFixed(2)}x):
-\`\`\`
+\`\`\`${fenceToken()}
 ${(selectedKernel.code || '').substring(0, 6000)}
 \`\`\`
 
@@ -682,7 +682,7 @@ Return the optimized kernel code.`, {
   const evalResult = await agent(`You are the KernelBand Evaluation module. Verify correctness and measure performance.
 
 # Generated Kernel:
-\`\`\`
+\`\`\`${fenceToken()}
 ${generatedCode.substring(0, 6000)}
 \`\`\`
 

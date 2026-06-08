@@ -8,7 +8,7 @@
 //   (2) apply the SAME logical edit there,
 //   (3) re-run the capture with --agent-returns into the golden,
 //   (4) commit the new golden + new SHA alone, explaining the intent.
-// Stage-A commit SHA: 9a3df7964912e77d6b6512b6759ba3138218037b
+// Stage-A commit SHA: 93b7a09884937918ee6bc324ad38d1b49dc08b3b
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
