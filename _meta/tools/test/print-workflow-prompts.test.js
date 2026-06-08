@@ -162,7 +162,7 @@ const os = require('node:os')
 const SYNTHETIC_WF_PATH = path.join(os.tmpdir(), 'synthetic-test-workflow.js')
 fs.writeFileSync(SYNTHETIC_WF_PATH, SYNTHETIC_WORKFLOW)
 
-test('capturePrompts: resolves to Array<{seq,label,phase,prompt}>', async () => {
+test('capturePrompts: resolves to Array<{seq,label,phase,prompt,schema}>', async () => {
   const results = await capturePrompts({ workflowPath: SYNTHETIC_WF_PATH, args: {}, agentReturns: {} })
   assert.ok(Array.isArray(results), 'result is array')
   assert.strictEqual(results.length, 2)
@@ -171,7 +171,12 @@ test('capturePrompts: resolves to Array<{seq,label,phase,prompt}>', async () => 
     assert.ok('label' in r, 'has label')
     assert.ok('phase' in r, 'has phase')
     assert.ok('prompt' in r, 'has prompt')
+    assert.ok('schema' in r, 'has schema (P5a Task 5 — run-workflow.js captures opts.schema)')
   }
+  // The synthetic workflow declares { type: 'string' } and { type: 'number' } schemas;
+  // both must round-trip as plain host objects (not vm-realm objects).
+  assert.deepStrictEqual(results[0].schema, { type: 'string' })
+  assert.deepStrictEqual(results[1].schema, { type: 'number' })
 })
 
 test('capturePrompts: agentReturns consulted before schema generator', async () => {
