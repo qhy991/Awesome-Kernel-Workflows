@@ -1,0 +1,21 @@
+{
+  "kernel_path": "/tmp/ako4x-fixture/baseline.py",
+  "op_description": "rmsnorm fused kernel",
+  "language": "triton",
+  "benchmark_command": "python /tmp/ako4x-fixture/bench.py {kernel_path} {result_path}",
+  "smoke_test_command": "python /tmp/ako4x-fixture/smoke.py {kernel_path}",
+  "test_command": "",
+  "ncu_binary": "",
+  "harness_path": "",
+  "harness_build_cmd": "",
+  "harness_run_args": "",
+  "kernel_name_regex": "",
+  "exp_dir": "/tmp/ako4x-fixture",
+  "iterations": 1,
+  "iters_per_round": 1,
+  "breadth": 1,
+  "samples_per_plan": 1,
+  "target_gpu": "b200",
+  "mode": 2,
+  "use_ako4x_skills": true
+}

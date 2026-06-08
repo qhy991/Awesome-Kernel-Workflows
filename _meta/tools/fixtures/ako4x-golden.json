@@ -1,0 +1,280 @@
+[
+  {
+    "label": "read-baseline",
+    "phase": "Setup",
+    "prompt": "Read the kernel file at: /tmp/ako4x-fixture/baseline.py\n\nAnalyze it and return a JSON object with:\n- kernel_code: the full source code\n- language: detected language (triton/cuda/cute-dsl/tilelang/cpp/pytorch)\n- op_type: operation type (e.g., \"attention\", \"gemm\", \"rmsnorm\", \"softmax\", \"reduction\")\n- key_functions: list of key function names (especially __global__ or @triton.jit functions)\n- current_approach: brief description of the implementation strategy\n- launch_config: if visible, the grid/block dimensions used\n- shared_memory_usage: whether and how shared memory is used\n- memory_access_patterns: description of global memory access patterns\n- potential_bottlenecks: initial observations about potential performance issues\n- imports_used: list of all imports (to check for library delegation later)\n\nReturn ONLY the JSON object.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "kernel_code": {
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "op_type": {
+          "type": "string"
+        },
+        "key_functions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "current_approach": {
+          "type": "string"
+        },
+        "launch_config": {
+          "type": "string"
+        },
+        "shared_memory_usage": {
+          "type": "string"
+        },
+        "memory_access_patterns": {
+          "type": "string"
+        },
+        "potential_bottlenecks": {
+          "type": "string"
+        },
+        "imports_used": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "kernel_code",
+        "language",
+        "op_type",
+        "key_functions",
+        "current_approach"
+      ]
+    },
+    "seq": 0
+  },
+  {
+    "label": "create-workspace",
+    "phase": "Setup",
+    "prompt": "Create the optimization workspace:\n\n```bash\nmkdir -p /tmp/ako4x-fixture/{variants,round-logs,failed-rounds,ncu-profiles}\n```\n\nCreate /tmp/ako4x-fixture/TRAPS.md:\n```markdown\n# TRAPS — Silent-Bug Patterns\n\nCross-variant toolchain and methodology facts that apply regardless of which\nvariant is anchor. Create only when the first such fact is found.\n\n*No traps discovered yet.*\n```\n\nCreate /tmp/ako4x-fixture/state.json:\n```json\n{\n  \"round\": 0,\n  \"best_score\": null,\n  \"best_variant\": null,\n  \"language\": \"triton\",\n  \"op_type\": \"rmsnorm\",\n  \"benchmark_command\": \"python /tmp/ako4x-fixture/bench.py {kernel_path} {result_path}\",\n  \"mode\": 2,\n  \"started_at\": \"<current ISO timestamp>\",\n  \"status\": \"initializing\"\n}\n```\n\nExecute these commands.",
+    "seq": 1
+  },
+  {
+    "label": "benchmark-baseline",
+    "phase": "Setup",
+    "prompt": "Run benchmark to establish baseline.\n\n# Command: python /tmp/ako4x-fixture/bench.py {kernel_path} {result_path}\n# Kernel: /tmp/ako4x-fixture/baseline.py\n\nRun the benchmark and extract the performance score (latency in ms or speedup).\nReturn the baseline performance metric.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "score": {
+          "type": "number"
+        },
+        "latency_ms": {
+          "type": "number"
+        },
+        "raw_output": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "score"
+      ]
+    },
+    "seq": 2
+  },
+  {
+    "label": "hypothesis-0-0",
+    "phase": "Iterate",
+    "prompt": "You are a GPU kernel optimization expert. Generate ONE specific, evidence-based optimization hypothesis.\n\n# Operation: rmsnorm fused kernel (rmsnorm)\n# Language: triton | GPU: b200\n# Round: 1 | Parent: original\n\n# Current Best Kernel:\n```triton\nimport triton\n@triton.jit\ndef rmsnorm_kernel(x, y, N): pass\n\n```\n\n# No NCU data. Use static code analysis.\n\n# Performance: Best=0.085 | Baseline=0.085 | Speedup=1.00x\n\n\n\n\n# DSL Guidance:\nRead the triton SKILL (.claude/skills/triton/) for:\n- num_warps/num_stages tuning (tiny tiles prefer fewer warps)\n- MMA tile picker regression at small-N fp8 tiles\n- PDL bindings: gdc_launch_dependents() / gdc_wait()\n- Split-K reduce: prefer 2D-tile merged form over scalar tl.static_range\n\n# Benchmark Methodology:\nNoise-aware benchmarking (from bench SKILL):\n- A/B compare: run old and new back-to-back in same session to cancel drift\n- Variance check: run 3-5 times to measure noise floor\n- Single-run headlines can drift 5-15% without code change — NOT evidence\n- For sub-1x deltas: ALWAYS use A/B compare\n- For headline claims: run variance check to verify\n- Subset filters (--first, --smoke) are for compile/correctness ONLY — NOT performance verdicts\n\n# Requirements:\n1. CITE the specific bottleneck (NCU metric or code pattern)\n2. Name the exact code region and transformation\n3. Prefer STRUCTURAL changes over parameter tuning\n4. Estimate expected improvement\n5. Identify risk\n6. DO NOT retry dead-ends unless you have new reasoning that flips the expectation\n\nYou are planner #1/1. Focus on a DIFFERENT angle than other planners.\n\nOptimization levers (pick ONE):\n- Memory access: coalescing, vectorization, prefetch, cache efficiency\n- Parallelism: occupancy, warp utilization, grid/block dimensions\n- Data reuse: shared memory, register tiling, double-buffering\n- Compute: tensor cores, warp-level primitives, reduced synchronization\n- Algorithmic: split-K, fusion, tiling strategy, kernel merging\n- DSL-specific: num_warps/num_stages (Triton), layout composition (CuTe), schedule (TileLang)",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "bottleneck": {
+          "type": "string"
+        },
+        "ncu_evidence": {
+          "type": "string"
+        },
+        "hypothesis": {
+          "type": "string"
+        },
+        "expected_impact": {
+          "type": "string"
+        },
+        "risk": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "bottleneck",
+        "hypothesis",
+        "expected_impact"
+      ]
+    },
+    "seq": 3
+  },
+  {
+    "label": "impl-0-vec-loads-v0",
+    "phase": "Iterate",
+    "prompt": "Implement this optimization hypothesis as a complete, working kernel.\n\n# Original Kernel:\n```triton\nimport triton\n@triton.jit\ndef rmsnorm_kernel(x, y, N): pass\n\n```\n\n# Hypothesis: \"vec-loads\"\nBottleneck: global memory bandwidth\nEvidence: static-analysis\nPlan: vectorize input loads\n\n# DSL Guidance:\nRead the triton SKILL (.claude/skills/triton/) for:\n- num_warps/num_stages tuning (tiny tiles prefer fewer warps)\n- MMA tile picker regression at small-N fp8 tiles\n- PDL bindings: gdc_launch_dependents() / gdc_wait()\n- Split-K reduce: prefer 2D-tile merged form over scalar tl.static_range\n\n# Requirements:\n1. COMPLETE kernel file — all imports, helpers, main kernel, launch wrapper\n2. FUNCTIONALLY CORRECT (same output as baseline within tolerance)\n3. Apply the hypothesis faithfully\n4. Keep function signature unchanged\n5. Add comment at top explaining the optimization\n6. This is variant 1/1\n\n# Anti-patterns (dead-ends from previous rounds):\n\n\nReturn the complete kernel code.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "implementation_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code"
+      ]
+    },
+    "seq": 4
+  },
+  {
+    "label": "smoke-r1-iter1-vec-loads",
+    "phase": "Iterate",
+    "prompt": "Run smoke test for this kernel variant. This is a COMPILE + CORRECTNESS check only — NOT a performance verdict.\n\n# Kernel Code:\n```triton\nimport triton\n@triton.jit\ndef rmsnorm_kernel(x, y, N): pass # vec\n\n```\n\n# Smoke Test Command: python /tmp/ako4x-fixture/smoke.py {kernel_path}\n\nRun the command and check:\n1. Does it compile? (no compile errors)\n2. Does it pass correctness? (no INCORRECT_NUMERICAL, no runtime errors)\n\nReturn pass/fail with error details if failed.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "passed": {
+          "type": "boolean"
+        },
+        "error_message": {
+          "type": "string"
+        },
+        "compile_error": {
+          "type": "boolean"
+        },
+        "correctness_error": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "passed"
+      ]
+    },
+    "seq": 5
+  },
+  {
+    "label": "bench-r1-iter1-vec-loads",
+    "phase": "Iterate",
+    "prompt": "Run the full benchmark for this kernel variant. This IS the performance verdict.\n\n# Kernel Code:\n```triton\nimport triton\n@triton.jit\ndef rmsnorm_kernel(x, y, N): pass # vec\n\n```\n\n# Benchmark Command: python /tmp/ako4x-fixture/bench.py {kernel_path} {result_path}\n# Baseline Score: 0.085\n\n# Noise-aware protocol:\n- Run the benchmark command\n- If available, also run A/B compare with the parent kernel\n- Report the score and any variance information\n\nReturn benchmark results.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "score": {
+          "type": "number"
+        },
+        "latency_ms": {
+          "type": "number"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "passed_workloads": {
+          "type": "string"
+        },
+        "ab_compare_delta": {
+          "type": "string"
+        },
+        "variance_info": {
+          "type": "string"
+        },
+        "raw_output": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "score"
+      ]
+    },
+    "seq": 6
+  },
+  {
+    "label": "iterations-1",
+    "phase": "Iterate",
+    "prompt": "Write the iteration log for this round.\n\n# Round: 1\n# Iterations:\n| r1-iter1-vec-loads | vec-loads | 0.07 | 2/2 | +15% | Expected: Expected: vectorize input loads. Predicted: 1.2x. Risk: tail alignment. |\n\nWrite to /tmp/ako4x-fixture/round-logs/round-1-iterations.md with format:\n```markdown\n# Round 1 — Iteration Log\n\n## Summary\n| Iter | Title | Score | Speedup | Passed | Notes |\n|------|-------|-------|---------|--------|-------|\n| r1-iter1-vec-loads | vec-loads | 0.07 | 1.21x | 2/2 | +15% |\n\n## Notes\n- **r1-iter1-vec-loads**: Expected: vectorize input loads. Predicted: 1.2x. Risk: tail alignment.\n```\n\nExecute this step.",
+    "seq": 7
+  },
+  {
+    "label": "silent-skip-check-1",
+    "phase": "Archive",
+    "prompt": "Check this kernel variant for silent-skip patterns.\n\n# Variant: r1-iter1-vec-loads\n# Score: 0.07 (1.21x vs baseline)\n# Hypothesis: vec-loads\n# Implementation: float4 loads\n\n# Kernel Code (excerpt):\n```triton\nimport triton\n@triton.jit\ndef rmsnorm_kernel(x, y, N): pass # vec\n\n```\n\n# Check for silent-skip patterns:\n1. Is the speedup PLAUSIBLE for the structural change actually made?\n   - A +50% speedup from a minor parameter change is suspicious\n   - A +10% speedup from a major algorithmic change might be underreported\n2. Did the benchmark run correctly? (all workloads passed, no errors)\n3. Does the code change actually address the stated bottleneck?\n4. Are there any correctness concerns that slipped through?\n\nReturn verdict: is this a legitimate improvement or suspicious?",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "is_legitimate": {
+          "type": "boolean"
+        },
+        "suspicion_level": {
+          "type": "string"
+        },
+        "concerns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recommendation": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "is_legitimate"
+      ]
+    },
+    "seq": 8
+  },
+  {
+    "label": "lib-check-1",
+    "phase": "Archive",
+    "prompt": "Check this kernel for library delegation (calling pre-built kernel libraries instead of writing own code).\n\n# Kernel Code:\n```triton\nimport triton\n@triton.jit\ndef rmsnorm_kernel(x, y, N): pass # vec\n\n```\n\n# BANNED (must NOT appear as the core compute):\n- flashinfer.*, torch.ops.flashinfer.*\n- deepgemm.*\n- cuBLAS (cublasSgemm, cublasGemmEx, etc.)\n- cuDNN (cudnnConvolutionForward, etc.)\n- torch.matmul / torch.mm / F.linear as the ENTIRE operator (glue around own kernel is OK)\n- F.scaled_dot_product_attention as the entire operator\n\n# ALLOWED (fine as building blocks):\n- CUTLASS / CuTe headers (template instantiation, not pre-built lib)\n- Triton @triton.jit kernels\n- TileLang @tl.program\n- CuTe DSL @cute.kernel\n- torch ops as GLUE around a kernel the agent wrote\n\n# Check:\n1. Does the kernel's core compute use any BANNED library?\n2. Is it a thin wrapper around a pre-built kernel library?\n3. Does it write its own compute logic?\n\nReturn verdict.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "is_own_kernel": {
+          "type": "boolean"
+        },
+        "banned_libs_found": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "concerns": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "is_own_kernel"
+      ]
+    },
+    "seq": 9
+  },
+  {
+    "label": "archive-iter-1-vec-loads",
+    "phase": "Archive",
+    "prompt": "Archive this kernel variant with a 5-section AKO4X header.\n\n# Variant: iter-1-vec-loads\n# Score: 0.07 (1.21x vs baseline)\n# Parent: original\n# Hypothesis: vec-loads\n# Evidence: static-analysis\n# Iter: r1-iter1-vec-loads\n\n# Kernel Code:\n```triton\nimport triton\n@triton.jit\ndef rmsnorm_kernel(x, y, N): pass # vec\n\n```\n\n# Instructions:\n1. mkdir -p /tmp/ako4x-fixture/variants/iter-1-vec-loads/\n2. Write kernel to /tmp/ako4x-fixture/variants/iter-1-vec-loads/kernel.py (or appropriate extension)\n3. Add 5-section header at the TOP of the kernel file:\n\n```python\n# iter-1-vec-loads — reference kernel.py header\n#\n# Identity\n#   0.07 (1.21x vs baseline) — Round 1, iter r1-iter1-vec-loads.\n#   Language: triton, GPU: b200\n#\n# Delta from original\n#   <one paragraph: what this variant adds at architecture level>\n#\n# Lessons on this variant\n#\n#   <lesson title>\n#     How:           <what was done>\n#     Why:           <mechanism explanation — in terms of hardware behavior>\n#     WHEN narrow:   <exact operational condition in this kernel>\n#     WHEN broad:    <principle-level condition that transfers>\n#\n# Dead-ends tried on this variant\n#   Each is an expectation prior. Re-verify cheaply if toolchain shifted.\n#\n#   - <dead-end>: <what happened> (WHY: <why it failed — the mechanism>)\n#\n# Open directions\n#   <narrative of where a future session continuing this line might go>\n#   Not a priority list, not a todo. This is forensic signal about what\n#   the current session considered and chose not to act on.\n```\n\n4. Fill in ALL sections based on the hypothesis, implementation, evaluation, and iteration log.\n5. For Lessons: use the exact WHAT/WHY/WHEN format shown above.\n6. For Dead-ends: each MUST include WHY — the mechanism of failure.\n7. For Open directions: write as forensic narrative, NOT as a checklist.\n\nExecute these steps.",
+    "seq": 10
+  },
+  {
+    "label": "update-state-1",
+    "phase": "Archive",
+    "prompt": "Update /tmp/ako4x-fixture/state.json:\n```json\n{\n  \"round\": 1,\n  \"best_score\": 0.07,\n  \"best_variant\": \"iter-1-vec-loads\",\n  \"language\": \"triton\",\n  \"op_type\": \"rmsnorm\",\n  \"benchmark_command\": \"python /tmp/ako4x-fixture/bench.py {kernel_path} {result_path}\",\n  \"mode\": 2,\n  \"started_at\": \"see-round-history\",\n  \"status\": \"optimizing\",\n  \"consecutive_no_improve\": 0,\n  \"experience_count\": 0,\n  \"dead_end_count\": 0,\n  \"trap_count\": 0,\n  \"round_history\": [{\"round\":1,\"variant\":\"iter-1-vec-loads\",\"score\":0.07,\"speedup\":1.2142857142857142,\"hypothesis\":\"vec-loads\",\"iter\":\"r1-iter1-vec-loads\"}]\n}\n```\nExecute.",
+    "seq": 11
+  },
+  {
+    "label": "final-report",
+    "phase": "Report",
+    "prompt": "Write a comprehensive optimization report.\n\n# AKO4X Kernel Optimization — Final Report\n\n## Summary\n- Operation: rmsnorm fused kernel (rmsnorm)\n- Language: triton | GPU: b200\n- Mode: 2 (static harness)\n- Rounds: 1 | Baseline: 0.085 | Best: 0.07\n- Speedup: 1.21x\n- Experience: 0 patterns | Dead-ends: 0 | Traps: 0\n\n## Round History\n- Round 1: iter-1-vec-loads (1.21x, r1-iter1-vec-loads) — vec-loads\n\n## Learned Patterns (with two-layer WHEN)\n\n\n## Dead-Ends (expectation priors — re-verify if toolchain shifted)\n\n\n## TRAPS (cross-variant silent-bug patterns)\n\n\n## Final Kernel:\n```triton\nimport triton\n@triton.jit\ndef rmsnorm_kernel(x, y, N): pass # vec\n\n```\n\n\n\nWrite a report covering:\n1. Optimization journey (what was tried, what worked, what didn't)\n2. Key lessons with two-layer WHEN (narrow + broad)\n3. Anti-patterns discovered (dead-ends with WHY)\n4. Remaining bottlenecks and Open directions (as forensic narrative, NOT checklist)\n5. Recommendations for further optimization",
+    "seq": 12
+  }
+]
