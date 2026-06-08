@@ -1,0 +1,372 @@
+[
+  {
+    "label": "setup-read-reference",
+    "phase": "Setup",
+    "prompt": "Read the reference kernel file at: /tmp/stark-fixture/reference.cu\n\nAnalyze it and return:\n1. Full kernel source code\n2. Operation type and algorithm description\n3. Launch configuration (grid/block dimensions if visible)\n4. Current optimization level assessment\n5. Potential optimization directions\n\nReturn ONLY a JSON object with:\n- kernel_code: string (full source)\n- op_type: string\n- algorithm_description: string\n- launch_config: string\n- optimization_assessment: string\n- potential_directions: array of strings",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "kernel_code": {
+          "type": "string"
+        },
+        "op_type": {
+          "type": "string"
+        },
+        "algorithm_description": {
+          "type": "string"
+        },
+        "launch_config": {
+          "type": "string"
+        },
+        "optimization_assessment": {
+          "type": "string"
+        },
+        "potential_directions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "kernel_code",
+        "op_type",
+        "algorithm_description"
+      ]
+    },
+    "seq": 0
+  },
+  {
+    "label": "setup-eval-root",
+    "phase": "Setup",
+    "prompt": "Evaluate this reference kernel for correctness and performance.\n\n# Kernel Code\n```cuda\n__global__ void rmsnorm(float* out, float* x, float* w, int N) {}\n```\n\n# Compile and Run\nCompile: nvcc {kernel_path} -o {result_path}\nBenchmark: python /tmp/stark-fixture/bench.py {kernel_path} {result_path}\n\nReturn JSON with:\n- compile_ok: boolean\n- correct: boolean (passes test)\n- runtime_ms: number (or null if failed)\n- logs: string (compiler/test output)",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compile_ok": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "boolean"
+        },
+        "runtime_ms": {
+          "type": "number"
+        },
+        "logs": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "compile_ok",
+        "correct",
+        "runtime_ms",
+        "logs"
+      ]
+    },
+    "seq": 1
+  },
+  {
+    "label": "plan-root-a1",
+    "phase": "Plan",
+    "prompt": "You are a kernel optimization strategist. Propose a concrete, actionable optimization plan with grounded instruction anchors.\n\n# Context Window for PLAN Agent\n\n## Selected Node (id=root)\n- Runtime: 0.085 ms\n- Correct: true\n- Compile OK: true\n\n## Children of Selected Node (0)\n\n## Global Leaderboard (Top-5)\n\n## Source Reference Kernel\n```cuda\n__global__ void rmsnorm(float* out, float* x, float* w, int N) {}\n```\n\n\n# Instructions\n1. Propose ONE specific optimization (e.g., shared memory tiling, vectorized loads, loop unrolling, warp-level primitives, register blocking)\n2. Provide GROUNDED INSTRUCTIONS by inserting span anchors in the kernel code:\n   Use markers like:\n   <<<IMPROVE BEGINS: optimization_name>>>\n   // existing code to be modified\n   <<<IMPROVE ENDS: optimization_name>>>\n3. The anchors must wrap EXACTLY the code spans that need modification\n4. Include a brief rationale for WHY this optimization is chosen\n5. Consider the code agent's demonstrated capabilities (seen in children nodes) — don't propose instructions beyond what has been shown to work\n\nReturn a JSON object with:\n- plan: string (text description of the optimization strategy)\n- anchored_scaffold: string (kernel code with <<<IMPROVE BEGINS/ENDS>>> anchors)\n- anchors: array of {name, begin_line, end_line, description}\n- rationale: string",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "plan": {
+          "type": "string"
+        },
+        "anchored_scaffold": {
+          "type": "string"
+        },
+        "anchors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "begin_line": {
+                "type": "number"
+              },
+              "end_line": {
+                "type": "number"
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "begin_line",
+              "end_line"
+            ]
+          }
+        },
+        "rationale": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan",
+        "anchored_scaffold",
+        "anchors",
+        "rationale"
+      ]
+    },
+    "seq": 2
+  },
+  {
+    "label": "code-root-a1",
+    "phase": "Code",
+    "prompt": "You are a kernel coding expert. Realize the grounded instructions into executable CUDA code.\n\n# Context Window for CODE Agent\n\n## Selected Node (id=root)\nSelected kernel code:\n```cuda\n__global__ void rmsnorm(float* out, float* x, float* w, int N) {}\n```\n\n## Children of Selected Node (0)\n\n## Sibling Nodes (0) — Transferable patches\n\n## Source Reference Kernel\n```cuda\n__global__ void rmsnorm(float* out, float* x, float* w, int N) {}\n```\n\n\n# Grounded Instructions from Plan Agent\nPlan: Apply float4 vectorized loads on the input tile to raise DRAM throughput.\n\nAnchored Scaffold:\n```cuda\n__global__ void rmsnorm(float* out, float* x, float* w, int N) {\n  <<<IMPROVE BEGINS: vec_load>>>\n  // scalar load\n  <<<IMPROVE ENDS: vec_load>>>\n}\n```\n\n# Anchor Details\n- vec_load (lines 2-3): replace scalar load with float4 vectorized load\n\n# Instructions\n1. Replace each <<<IMPROVE BEGINS/ENDS>>> anchor with concrete, correct CUDA code\n2. Preserve all code OUTSIDE the anchors exactly as-is\n3. Use successful patterns from sibling kernels when appropriate\n4. Ensure the resulting code is syntactically valid and compilable\n5. Do NOT use <<<IMPROVE>>> markers in the final output — they must be fully resolved\n\nReturn a JSON object with:\n- kernel_code: string (complete, anchor-free CUDA kernel)\n- implementation_notes: string (brief notes on how anchors were resolved)\n- anchor_resolutions: array of {name, resolution_summary}",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "kernel_code": {
+          "type": "string"
+        },
+        "implementation_notes": {
+          "type": "string"
+        },
+        "anchor_resolutions": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "kernel_code",
+        "implementation_notes"
+      ]
+    },
+    "seq": 3
+  },
+  {
+    "label": "eval-a1",
+    "phase": "Evaluate",
+    "prompt": "Evaluate this kernel for correctness and performance.\n\n# Kernel Code\n```cuda\n__global__ void rmsnorm_v1(float* out, float* x, float* w, int N) { /* float4 loads */ }\n```\n\n# Compile and Run\nCompile: nvcc {kernel_path} -o {result_path}\nBenchmark: python /tmp/stark-fixture/bench.py {kernel_path} {result_path}\n\n# Reference for comparison\nBaseline runtime: 0.085ms\n\nReturn JSON with:\n- compile_ok: boolean\n- correct: boolean (passes correctness test)\n- runtime_ms: number (wall-clock, lower is better; null if failed)\n- speedup_vs_baseline: number (or null)\n- logs: string (compiler + test output)\n- error_category: 'compile_error' | 'runtime_error' | 'correctness_fail' | 'timeout' | 'none'",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compile_ok": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "boolean"
+        },
+        "runtime_ms": {
+          "type": "number"
+        },
+        "speedup_vs_baseline": {
+          "type": "number"
+        },
+        "logs": {
+          "type": "string"
+        },
+        "error_category": {
+          "type": "string",
+          "enum": [
+            "compile_error",
+            "runtime_error",
+            "correctness_fail",
+            "timeout",
+            "none"
+          ]
+        }
+      },
+      "required": [
+        "compile_ok",
+        "correct",
+        "runtime_ms",
+        "logs",
+        "error_category"
+      ]
+    },
+    "seq": 4
+  },
+  {
+    "label": "plan-node_1-a2",
+    "phase": "Plan",
+    "prompt": "You are a kernel optimization strategist. Propose a concrete, actionable optimization plan with grounded instruction anchors.\n\n# Context Window for PLAN Agent\n\n## Selected Node (id=node_1)\n- Runtime: 0.074 ms\n- Correct: true\n- Compile OK: true\n\n## Children of Selected Node (0)\n\n## Global Leaderboard (Top-5)\n1. root: 0.085ms\n\n## Source Reference Kernel\n```cuda\n__global__ void rmsnorm(float* out, float* x, float* w, int N) {}\n```\n\n\n# Instructions\n1. Propose ONE specific optimization (e.g., shared memory tiling, vectorized loads, loop unrolling, warp-level primitives, register blocking)\n2. Provide GROUNDED INSTRUCTIONS by inserting span anchors in the kernel code:\n   Use markers like:\n   <<<IMPROVE BEGINS: optimization_name>>>\n   // existing code to be modified\n   <<<IMPROVE ENDS: optimization_name>>>\n3. The anchors must wrap EXACTLY the code spans that need modification\n4. Include a brief rationale for WHY this optimization is chosen\n5. Consider the code agent's demonstrated capabilities (seen in children nodes) — don't propose instructions beyond what has been shown to work\n\nReturn a JSON object with:\n- plan: string (text description of the optimization strategy)\n- anchored_scaffold: string (kernel code with <<<IMPROVE BEGINS/ENDS>>> anchors)\n- anchors: array of {name, begin_line, end_line, description}\n- rationale: string",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "plan": {
+          "type": "string"
+        },
+        "anchored_scaffold": {
+          "type": "string"
+        },
+        "anchors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "begin_line": {
+                "type": "number"
+              },
+              "end_line": {
+                "type": "number"
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "begin_line",
+              "end_line"
+            ]
+          }
+        },
+        "rationale": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan",
+        "anchored_scaffold",
+        "anchors",
+        "rationale"
+      ]
+    },
+    "seq": 5
+  },
+  {
+    "label": "code-node_1-a2",
+    "phase": "Code",
+    "prompt": "You are a kernel coding expert. Realize the grounded instructions into executable CUDA code.\n\n# Context Window for CODE Agent\n\n## Selected Node (id=node_1)\nSelected kernel code:\n```cuda\n__global__ void rmsnorm_v1(float* out, float* x, float* w, int N) { /* float4 loads */ }\n```\n\n## Children of Selected Node (0)\n\n## Sibling Nodes (0) — Transferable patches\n\n## Source Reference Kernel\n```cuda\n__global__ void rmsnorm(float* out, float* x, float* w, int N) {}\n```\n\n\n# Grounded Instructions from Plan Agent\nPlan: Add warp-shuffle reduction to remove the shared-memory sync tail.\n\nAnchored Scaffold:\n```cuda\n__global__ void rmsnorm_v1(float* out, float* x, float* w, int N) {\n  <<<IMPROVE BEGINS: warp_reduce>>>\n  // shared-memory reduction\n  <<<IMPROVE ENDS: warp_reduce>>>\n}\n```\n\n# Anchor Details\n- warp_reduce (lines 2-3): replace shared-memory reduction with __shfl_sync\n\n# Instructions\n1. Replace each <<<IMPROVE BEGINS/ENDS>>> anchor with concrete, correct CUDA code\n2. Preserve all code OUTSIDE the anchors exactly as-is\n3. Use successful patterns from sibling kernels when appropriate\n4. Ensure the resulting code is syntactically valid and compilable\n5. Do NOT use <<<IMPROVE>>> markers in the final output — they must be fully resolved\n\nReturn a JSON object with:\n- kernel_code: string (complete, anchor-free CUDA kernel)\n- implementation_notes: string (brief notes on how anchors were resolved)\n- anchor_resolutions: array of {name, resolution_summary}",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "kernel_code": {
+          "type": "string"
+        },
+        "implementation_notes": {
+          "type": "string"
+        },
+        "anchor_resolutions": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "kernel_code",
+        "implementation_notes"
+      ]
+    },
+    "seq": 6
+  },
+  {
+    "label": "eval-a2",
+    "phase": "Evaluate",
+    "prompt": "Evaluate this kernel for correctness and performance.\n\n# Kernel Code\n```cuda\n__global__ void rmsnorm_v2(float* out, float* x, float* w, int N) { /* float4 + warp shuffle */ }\n```\n\n# Compile and Run\nCompile: nvcc {kernel_path} -o {result_path}\nBenchmark: python /tmp/stark-fixture/bench.py {kernel_path} {result_path}\n\n# Reference for comparison\nBaseline runtime: 0.074ms\n\nReturn JSON with:\n- compile_ok: boolean\n- correct: boolean (passes correctness test)\n- runtime_ms: number (wall-clock, lower is better; null if failed)\n- speedup_vs_baseline: number (or null)\n- logs: string (compiler + test output)\n- error_category: 'compile_error' | 'runtime_error' | 'correctness_fail' | 'timeout' | 'none'",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compile_ok": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "boolean"
+        },
+        "runtime_ms": {
+          "type": "number"
+        },
+        "speedup_vs_baseline": {
+          "type": "number"
+        },
+        "logs": {
+          "type": "string"
+        },
+        "error_category": {
+          "type": "string",
+          "enum": [
+            "compile_error",
+            "runtime_error",
+            "correctness_fail",
+            "timeout",
+            "none"
+          ]
+        }
+      },
+      "required": [
+        "compile_ok",
+        "correct",
+        "runtime_ms",
+        "logs",
+        "error_category"
+      ]
+    },
+    "seq": 7
+  },
+  {
+    "label": "report-final",
+    "phase": "Report",
+    "prompt": "Generate a comprehensive optimization report for this STARK session.\n\n# Session Statistics\n- Total attempts: 2\n- Correct kernels: 3\n- Failed attempts: 0\n- Best runtime: 0.064ms\n- Initial runtime: 0.085ms\n- Best speedup: 1.32x\n\n# Best Kernel (id=node_2)\n```cuda\n__global__ void rmsnorm_v2(float* out, float* x, float* w, int N) { /* float4 + warp shuffle */ }\n```\n\n# Plan for Best Kernel\nAdd warp-shuffle reduction to remove the shared-memory sync tail.\n\n# Tree Summary\nNodes by depth:\n- Root: 1 node, 0.085ms\n- Level 1: 1 nodes\n- Level 2+: 1 nodes\n\nFailed breakdown:\n[object Object]\n\nReturn a JSON object with:\n- outcome: 'success' | 'partial' | 'failed'\n- summary: string (1-2 sentence executive summary)\n- best_runtime_ms: number\n- baseline_runtime_ms: number\n- speedup: number\n- total_attempts: number\n- correct_kernels: number\n- failed_kernels: number\n- best_kernel_code: string\n- best_kernel_plan: string\n- best_kernel_id: string\n- optimization_trajectory: array of {attempt, node_id, runtime, speedup, plan_summary}",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "success",
+            "partial",
+            "failed"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "best_runtime_ms": {
+          "type": "number"
+        },
+        "baseline_runtime_ms": {
+          "type": "number"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "total_attempts": {
+          "type": "number"
+        },
+        "correct_kernels": {
+          "type": "number"
+        },
+        "failed_kernels": {
+          "type": "number"
+        },
+        "best_kernel_code": {
+          "type": "string"
+        },
+        "best_kernel_plan": {
+          "type": "string"
+        },
+        "best_kernel_id": {
+          "type": "string"
+        },
+        "optimization_trajectory": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "outcome",
+        "summary",
+        "total_attempts",
+        "correct_kernels",
+        "failed_kernels"
+      ]
+    },
+    "seq": 8
+  }
+]
