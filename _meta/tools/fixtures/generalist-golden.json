@@ -1,0 +1,436 @@
+[
+  {
+    "label": "profile-1",
+    "phase": "Profile",
+    "prompt": "Profile the current best kernel and produce normalized metrics.\nKernel: /tmp/generalist-fixture/kernel.cu\nOp: matmul\nRun the benchmark command `python /tmp/generalist-fixture/bench.py {kernel_path} {result_path}` (writes a JSON result file).\nReturn the JSON exactly per the schema: compiled, correct, candidate_latency_ms, eager_latency_ms, compile_latency_ms, speedup, and metrics{dram_pct, sm_pct, occupancy, latency_ms}. Use null for unknown numbers. Do not fabricate; missing => null.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compiled": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "boolean"
+        },
+        "candidate_latency_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "eager_latency_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "compile_latency_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "speedup": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "metrics": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "compiled",
+        "correct",
+        "speedup",
+        "metrics"
+      ]
+    },
+    "seq": 0
+  },
+  {
+    "label": "diagnose-1",
+    "phase": "Diagnose",
+    "prompt": "Write these metrics to /tmp/generalist-fixture/run-1/metrics.json:\n{\"dram_pct\":50,\"sm_pct\":40,\"occupancy\":0.5,\"latency_ms\":1}\nRun exactly: `python3 _substrate/diagnose.py --metrics /tmp/generalist-fixture/run-1/metrics.json`. Return its stdout JSON verbatim ({bottleneck_class, evidence}). If the substrate command is unavailable, return {bottleneck_class:\"unknown\", evidence:\"missing_substrate_command_prefix\"}.",
+    "schema": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "seq": 1
+  },
+  {
+    "label": "retrieve-1",
+    "phase": "Retrieve",
+    "prompt": "Run exactly: `python3 _substrate/memory_store.py --db /tmp/generalist-fixture/memory.json retrieve --class memory_bound`. Return its stdout JSON verbatim ({bottleneck_class, techniques, dead_ends}). If unavailable, return empty techniques/dead_ends with missing evidence.",
+    "schema": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "seq": 2
+  },
+  {
+    "label": "gate-1",
+    "phase": "Retrieve",
+    "prompt": "Run exactly: `python3 _substrate/method_gate.py --class memory_bound --metrics /tmp/generalist-fixture/run-1/metrics.json`. Return its stdout JSON verbatim ({bottleneck_class, allowed_methods, rationale}). If unavailable, return allowed_methods:[] with missing evidence.",
+    "schema": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "seq": 3
+  },
+  {
+    "label": "plan-1-1",
+    "phase": "Plan",
+    "prompt": "You are planner #1/1 for a matmul kernel.\n# Bottleneck: memory_bound\n# Allowed methods (you MUST stay within these): tiling\n# Prior techniques by confidence: []\n# Dead-ends to AVOID (re-allowed only if revalidate_if holds): []\n# Current best: /tmp/generalist-fixture/kernel.cu @ 1.00x\n\nPropose ONE optimization plan that uses ONLY an allowed method. Mark the exact code region to change with grounded anchors <<<IMPROVE BEGINS>>> ... <<<IMPROVE ENDS>>>. Pick the highest-confidence prior technique that fits, unless a dead-end forbids it. Return {method, plan, anchors}.",
+    "schema": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "seq": 4
+  },
+  {
+    "label": "impl-1-1",
+    "phase": "Evaluate",
+    "prompt": "Implement this plan on a COPY of /tmp/generalist-fixture/kernel.cu into /tmp/generalist-fixture/run-1/cand-1/kernel, respecting the <<<IMPROVE BEGINS/ENDS>>> anchors. Method: tiling. Plan: \"Apply shared-memory tiling with 32x32 blocks\".\nThen run the benchmark command `python /tmp/generalist-fixture/bench.py {kernel_path} {result_path}` and return the JSON metrics per schema.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compiled": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "boolean"
+        },
+        "candidate_latency_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "eager_latency_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "compile_latency_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "speedup": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "metrics": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "compiled",
+        "correct",
+        "speedup",
+        "metrics"
+      ]
+    },
+    "seq": 5
+  },
+  {
+    "label": "anticheat-1-1",
+    "phase": "Evaluate",
+    "prompt": "Write these metrics to /tmp/generalist-fixture/run-1/cand-1/metrics.json:\n{\"compiled\":true,\"correct\":true,\"candidate_latency_ms\":0.8,\"eager_latency_ms\":2,\"compile_latency_ms\":0.4,\"speedup\":1.25,\"metrics\":{\"dram_pct\":40,\"sm_pct\":55,\"occupancy\":0.6,\"latency_ms\":0.8},\"claimed_speedup\":1.25}\nRun exactly: `python3 _substrate/anti_cheat.py --source /tmp/generalist-fixture/run-1/cand-1/kernel --metrics /tmp/generalist-fixture/run-1/cand-1/metrics.json`. Return its stdout JSON verbatim. Then Run exactly: `python3 _substrate/evidence_schema.py validate /tmp/generalist-fixture/run-1/cand-1/metrics.json`. If substrate commands are unavailable, mark valid=false with blocking_flags:[\"missing_substrate_command_prefix\"].",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "valid": {
+          "type": "boolean"
+        },
+        "reward": {
+          "type": "number"
+        },
+        "recorded_speedup": {
+          "type": "number"
+        },
+        "reward_reason": {
+          "type": "string"
+        },
+        "flags": {
+          "type": "array"
+        },
+        "blocking_flags": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "valid",
+        "reward",
+        "recorded_speedup"
+      ]
+    },
+    "seq": 6
+  },
+  {
+    "label": "learn-1-tiling",
+    "phase": "Learn",
+    "prompt": "Run exactly: `python3 _substrate/memory_store.py --db /tmp/generalist-fixture/memory.json update --class memory_bound --technique tiling --speedup 1.25 --correct 1`. Return {updated:true} if the command ran. If unavailable, return {updated:false, reason:\"missing_substrate_command_prefix\"}.",
+    "schema": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "seq": 7
+  },
+  {
+    "label": "refute-1",
+    "phase": "Learn",
+    "prompt": "Adversarially REFUTE this attribution against the MEASURED profile {\"dram_pct\":50,\"sm_pct\":40,\"occupancy\":0.5,\"latency_ms\":1}: \"bottleneck_class=memory_bound dominates matmul at this shape\". Default to refuted=true if the data does not clearly support it. Return {refuted, reason}.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "refuted": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "refuted"
+      ]
+    },
+    "seq": 8
+  },
+  {
+    "label": "verify-insight-1",
+    "phase": "Learn",
+    "prompt": "Write this insight to /tmp/generalist-fixture/run-1/insight.json:\n{\"kind\":\"bottleneck\",\"directive\":\"explore\",\"claim\":\"bottleneck_class=memory_bound dominates matmul at this shape\",\"evidence\":\"benchmark\",\"confidence\":\"measured\",\"source_round\":1}\nRun exactly: `python3 _substrate/verify_insight.py --insight /tmp/generalist-fixture/run-1/insight.json --refuted 0`. Return its stdout JSON verbatim. If unavailable, return {verified:false, reason:\"missing_substrate_command_prefix\"}.",
+    "schema": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "seq": 9
+  },
+  {
+    "label": "profile-2",
+    "phase": "Profile",
+    "prompt": "Profile the current best kernel and produce normalized metrics.\nKernel: /tmp/generalist-fixture/run-1/cand-1/kernel\nOp: matmul\nRun the benchmark command `python /tmp/generalist-fixture/bench.py {kernel_path} {result_path}` (writes a JSON result file).\nReturn the JSON exactly per the schema: compiled, correct, candidate_latency_ms, eager_latency_ms, compile_latency_ms, speedup, and metrics{dram_pct, sm_pct, occupancy, latency_ms}. Use null for unknown numbers. Do not fabricate; missing => null.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compiled": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "boolean"
+        },
+        "candidate_latency_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "eager_latency_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "compile_latency_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "speedup": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "metrics": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "compiled",
+        "correct",
+        "speedup",
+        "metrics"
+      ]
+    },
+    "seq": 10
+  },
+  {
+    "label": "diagnose-2",
+    "phase": "Diagnose",
+    "prompt": "Write these metrics to /tmp/generalist-fixture/run-2/metrics.json:\n{\"dram_pct\":40,\"sm_pct\":55,\"occupancy\":0.6,\"latency_ms\":0.8}\nRun exactly: `python3 _substrate/diagnose.py --metrics /tmp/generalist-fixture/run-2/metrics.json`. Return its stdout JSON verbatim ({bottleneck_class, evidence}). If the substrate command is unavailable, return {bottleneck_class:\"unknown\", evidence:\"missing_substrate_command_prefix\"}.",
+    "schema": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "seq": 11
+  },
+  {
+    "label": "retrieve-2",
+    "phase": "Retrieve",
+    "prompt": "Run exactly: `python3 _substrate/memory_store.py --db /tmp/generalist-fixture/memory.json retrieve --class compute_bound`. Return its stdout JSON verbatim ({bottleneck_class, techniques, dead_ends}). If unavailable, return empty techniques/dead_ends with missing evidence.",
+    "schema": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "seq": 12
+  },
+  {
+    "label": "gate-2",
+    "phase": "Retrieve",
+    "prompt": "Run exactly: `python3 _substrate/method_gate.py --class compute_bound --metrics /tmp/generalist-fixture/run-2/metrics.json`. Return its stdout JSON verbatim ({bottleneck_class, allowed_methods, rationale}). If unavailable, return allowed_methods:[] with missing evidence.",
+    "schema": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "seq": 13
+  },
+  {
+    "label": "plan-2-1",
+    "phase": "Plan",
+    "prompt": "You are planner #1/1 for a matmul kernel.\n# Bottleneck: compute_bound\n# Allowed methods (you MUST stay within these): vectorization\n# Prior techniques by confidence: [{\"method\":\"tiling\",\"speedup\":1.25,\"confidence\":\"measured\"}]\n# Dead-ends to AVOID (re-allowed only if revalidate_if holds): []\n# Current best: /tmp/generalist-fixture/run-1/cand-1/kernel @ 1.25x\n\nPropose ONE optimization plan that uses ONLY an allowed method. Mark the exact code region to change with grounded anchors <<<IMPROVE BEGINS>>> ... <<<IMPROVE ENDS>>>. Pick the highest-confidence prior technique that fits, unless a dead-end forbids it. Return {method, plan, anchors}.",
+    "schema": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "seq": 14
+  },
+  {
+    "label": "impl-2-1",
+    "phase": "Evaluate",
+    "prompt": "Implement this plan on a COPY of /tmp/generalist-fixture/run-1/cand-1/kernel into /tmp/generalist-fixture/run-2/cand-1/kernel, respecting the <<<IMPROVE BEGINS/ENDS>>> anchors. Method: vectorization. Plan: \"Use float4 vector loads for coalesced memory access\".\nThen run the benchmark command `python /tmp/generalist-fixture/bench.py {kernel_path} {result_path}` and return the JSON metrics per schema.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compiled": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "boolean"
+        },
+        "candidate_latency_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "eager_latency_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "compile_latency_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "speedup": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "metrics": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "compiled",
+        "correct",
+        "speedup",
+        "metrics"
+      ]
+    },
+    "seq": 15
+  },
+  {
+    "label": "anticheat-2-1",
+    "phase": "Evaluate",
+    "prompt": "Write these metrics to /tmp/generalist-fixture/run-2/cand-1/metrics.json:\n{\"compiled\":true,\"correct\":true,\"candidate_latency_ms\":0.65,\"eager_latency_ms\":2,\"compile_latency_ms\":0.35,\"speedup\":1.54,\"metrics\":{\"dram_pct\":35,\"sm_pct\":65,\"occupancy\":0.7,\"latency_ms\":0.65},\"claimed_speedup\":1.54}\nRun exactly: `python3 _substrate/anti_cheat.py --source /tmp/generalist-fixture/run-2/cand-1/kernel --metrics /tmp/generalist-fixture/run-2/cand-1/metrics.json`. Return its stdout JSON verbatim. Then Run exactly: `python3 _substrate/evidence_schema.py validate /tmp/generalist-fixture/run-2/cand-1/metrics.json`. If substrate commands are unavailable, mark valid=false with blocking_flags:[\"missing_substrate_command_prefix\"].",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "valid": {
+          "type": "boolean"
+        },
+        "reward": {
+          "type": "number"
+        },
+        "recorded_speedup": {
+          "type": "number"
+        },
+        "reward_reason": {
+          "type": "string"
+        },
+        "flags": {
+          "type": "array"
+        },
+        "blocking_flags": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "valid",
+        "reward",
+        "recorded_speedup"
+      ]
+    },
+    "seq": 16
+  },
+  {
+    "label": "learn-2-vectorization",
+    "phase": "Learn",
+    "prompt": "Run exactly: `python3 _substrate/memory_store.py --db /tmp/generalist-fixture/memory.json update --class compute_bound --technique vectorization --speedup 1.54 --correct 1`. Return {updated:true} if the command ran. If unavailable, return {updated:false, reason:\"missing_substrate_command_prefix\"}.",
+    "schema": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "seq": 17
+  },
+  {
+    "label": "refute-2",
+    "phase": "Learn",
+    "prompt": "Adversarially REFUTE this attribution against the MEASURED profile {\"dram_pct\":40,\"sm_pct\":55,\"occupancy\":0.6,\"latency_ms\":0.8}: \"bottleneck_class=compute_bound dominates matmul at this shape\". Default to refuted=true if the data does not clearly support it. Return {refuted, reason}.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "refuted": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "refuted"
+      ]
+    },
+    "seq": 18
+  },
+  {
+    "label": "verify-insight-2",
+    "phase": "Learn",
+    "prompt": "Write this insight to /tmp/generalist-fixture/run-2/insight.json:\n{\"kind\":\"bottleneck\",\"directive\":\"explore\",\"claim\":\"bottleneck_class=compute_bound dominates matmul at this shape\",\"evidence\":\"benchmark\",\"confidence\":\"measured\",\"source_round\":2}\nRun exactly: `python3 _substrate/verify_insight.py --insight /tmp/generalist-fixture/run-2/insight.json --refuted 0`. Return its stdout JSON verbatim. If unavailable, return {verified:false, reason:\"missing_substrate_command_prefix\"}.",
+    "schema": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "seq": 19
+  },
+  {
+    "label": "final-report",
+    "phase": "Report",
+    "prompt": "Write a final optimization report for matmul.\nBest speedup: 1.540x | status: budget_exhausted\nBeam (top-1): [{\"id\":\"it2-c1\",\"method\":\"vectorization\",\"speedup\":1.54}]\nAll attempts: [{\"iter\":1,\"method\":\"tiling\",\"valid\":true,\"reward\":0.25,\"speedup\":1.25},{\"iter\":2,\"method\":\"vectorization\",\"valid\":true,\"reward\":0.35,\"speedup\":1.54}]\nCover: which methods the gate allowed, what the persistent memory recommended, which attempts were rejected by anti-cheat and why, and the final best kernel path.",
+    "seq": 20
+  }
+]
