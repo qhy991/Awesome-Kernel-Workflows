@@ -83,7 +83,23 @@ function assertWorkflowSuitability() {
   }
 }
 
-assertWorkflowSuitability()
+function resolveBackendAxis() {
+  const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
+  const l = args.language ? normalizeSuitabilityValue(args.language) : null
+  if (b && l && b !== l) {
+    throw new Error(`Conflicting args: backend="${args.backend}" vs language="${args.language}". Pass only one.`)
+  }
+  if (args.backend && !args.backend_dir) {
+    throw new Error(`args.backend="${args.backend}" requires args.backend_dir; driver dispatch has no implicit-resolve path.`)
+  }
+  return b || l || null
+}
+const RESOLVED_BACKEND = resolveBackendAxis()
+const USE_DRIVER = !!args.backend_dir
+
+if (!USE_DRIVER) {
+  assertWorkflowSuitability()
+}
 
 // =============================================================================
 // KDA Kernel Workflow
@@ -133,6 +149,52 @@ const MAX_CANDIDATES = args.max_candidates || 5
 const LANGUAGE = args.language || 'cuda'
 const TARGET_GPU = args.target_gpu || 'unknown GPU'
 const SEED_CANDIDATES = args.seed_candidates || 3
+const EXP_DIR = args.exp_dir || '/tmp/kda_exp'
+const KDA_INPUT_MODE_OPTIMIZE = 'optimize_existing'
+
+// --- Backend driver wiring (P5c Stage B; off-by-default; legacy path byte-identical) ---
+const BACKEND_DIR = args.backend_dir || ''
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const SH = args.driver_shell_prefix || ''
+const PY = args.substrate_command_prefix || ''
+const LEGACY_INSPECT_LANG_TOKEN = 'CUDA'
+const LEGACY_DRAFT_LANG_TOKEN = 'CUDA'
+const LEGACY_PLAN_LANG_TOKEN = 'CUDA'
+const LEGACY_IMPL_LANG_TOKEN = 'CUDA'
+const LEGACY_VALIDATE_LANG_TOKEN = 'CUDA'
+const LEGACY_SOURCE_EXT = '.cu'
+const LEGACY_GENERATED_KERNEL_FILENAME = 'kernel.cu'
+const LEGACY_FENCE_TOKEN = 'cuda'
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+
+function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
+function driverSh(script, cliArgs) {
+  return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
+}
+
+let DRIVER = null
+let DRIVER_LANG_FENCE = 'cuda'
+let DRIVER_IMPL_REQUIREMENTS = ''
+let DRIVER_SOURCE_EXT = LEGACY_SOURCE_EXT
+let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
+
+function langToken(legacy) {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : legacy
+}
+function fenceToken() {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : LEGACY_FENCE_TOKEN
+}
+// Hybrid kernel-path helper combining AccelOpt and KernelAgent modes:
+//   - AccelOpt-style: caller passes args.kernel_path → use it verbatim
+//   - KernelAgent-style: workspace-local generated file under EXP_DIR with
+//     driver-aware source extension
+// Used both for the user-supplied optimize_existing path and the
+// generate_then_optimize path (where KERNEL_PATH is reassigned post-generation).
+function kdaKernelPath(userKernelPath) {
+  if (userKernelPath) return userKernelPath
+  const ext = USE_DRIVER ? DRIVER_SOURCE_EXT : LEGACY_SOURCE_EXT
+  return `${EXP_DIR}/generated/kernel${ext}`
+}
 
 if (!KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
   throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
@@ -172,6 +234,26 @@ function recordCandidate(id, parentId, status, code, metrics, reason) {
 //            and task documentation."
 // =============================================================================
 phase('Inspect')
+
+if (USE_DRIVER) {
+  DRIVER = await agent(
+    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
+    `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
+    `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
+    { label: 'load-driver', phase: 'Inspect', schema: JSON_PASSTHROUGH })
+  if (!DRIVER || DRIVER.present === false) {
+    throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
+  }
+  if (RESOLVED_BACKEND && DRIVER.backend_id && normalizeSuitabilityValue(DRIVER.backend_id) !== RESOLVED_BACKEND) {
+    throw new Error(`backend_dir manifest backend_id="${DRIVER.backend_id}" conflicts with args.backend/language="${RESOLVED_BACKEND}".`)
+  }
+  DRIVER_LANG_FENCE = DRIVER.lang_fence || DRIVER_LANG_FENCE
+  DRIVER_IMPL_REQUIREMENTS = DRIVER.impl_requirements || ''
+  DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT
+  DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID
+  log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
+}
 
 if (INPUT_MODE === 'generate_then_optimize') {
   const generated = await agent(`No kernel_path was provided. Generate and verify an initial kernel before KDA inspects and optimizes the workspace.
