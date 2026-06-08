@@ -70,7 +70,28 @@ function assertWorkflowSuitability() {
   }
 }
 
-assertWorkflowSuitability()
+function resolveBackendAxis() {
+  const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
+  const l = args.language ? normalizeSuitabilityValue(args.language) : null
+  if (b && l && b !== l) {
+    throw new Error(`Conflicting args: backend="${args.backend}" vs language="${args.language}". Pass only one.`)
+  }
+  if (args.backend && !args.backend_dir) {
+    throw new Error(`args.backend="${args.backend}" requires args.backend_dir; driver dispatch has no implicit-resolve path.`)
+  }
+  // triton-only: any resolved backend axis must be triton (supported=[triton]).
+  const resolved = b || l || null
+  if (resolved && resolved !== 'triton') {
+    throw new Error(`${meta.name} supports only backend="triton" (got "${resolved}"). This workflow is the triton-only "Dx" variant.`)
+  }
+  return resolved
+}
+const RESOLVED_BACKEND = resolveBackendAxis()
+const USE_DRIVER = !!args.backend_dir
+
+if (!USE_DRIVER) {
+  assertWorkflowSuitability()
+}
 
 // =============================================================================
 // Kernel Foundry: A Diagnosis-driven Evolutionary Kernel Optimizer with
@@ -176,6 +197,37 @@ const EXP_DIR = args.exp_dir || '/tmp/kernelfoundrydx_exp'
 const RUN_TS = args.run_timestamp_iso || 'unknown'
 const INPUT_MODE = 'generate_then_optimize'
 
+// --- Backend driver wiring (P5d Stage B; off-by-default; legacy path byte-identical) ---
+const BACKEND_DIR = args.backend_dir || ''
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const SH = args.driver_shell_prefix || ''
+const PY = args.substrate_command_prefix || ''
+const LEGACY_SETUP_LANG_TOKEN = 'Triton'
+const LEGACY_SEED_LANG_TOKEN = 'Triton'
+const LEGACY_VALIDATE_LANG_TOKEN = 'Triton'
+const LEGACY_MUTATE_LANG_TOKEN = 'Triton'
+const LEGACY_EVAL_LANG_TOKEN = 'Triton'
+const LEGACY_KERNEL_FILENAME = 'kernel.py'
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+
+function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
+function driverSh(script, cliArgs) {
+  return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
+}
+
+let DRIVER = null
+let DRIVER_LANG_FENCE = 'triton'
+let DRIVER_IMPL_REQUIREMENTS = ''
+let DRIVER_SOURCE_EXT = '.py'
+let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
+
+function langToken(legacy) {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : legacy
+}
+function kernelFilename() {
+  return USE_DRIVER ? `kernel${DRIVER_SOURCE_EXT}` : LEGACY_KERNEL_FILENAME
+}
+
 // --- Island roles (role-specialized system prompts; the "multi-experts" axis) ---
 // Each island focuses on a distinct optimization perspective. Cycled if ISLANDS > roles.
 const ISLAND_ROLES = [
@@ -247,6 +299,29 @@ function updateHint(hintId, speedup, correct) {
 // =============================================================================
 phase('Setup')
 
+if (USE_DRIVER) {
+  DRIVER = await agent(
+    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
+    `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
+    `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
+    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (!DRIVER || DRIVER.present === false) {
+    throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
+  }
+  if (DRIVER.backend_id && normalizeSuitabilityValue(DRIVER.backend_id) !== 'triton') {
+    throw new Error(`backend_dir manifest backend_id="${DRIVER.backend_id}" conflicts with KernelFoundryDx supported=[triton] (this workflow is triton-only).`)
+  }
+  if (RESOLVED_BACKEND && DRIVER.backend_id && normalizeSuitabilityValue(DRIVER.backend_id) !== RESOLVED_BACKEND) {
+    throw new Error(`backend_dir manifest backend_id="${DRIVER.backend_id}" conflicts with args.backend/language="${RESOLVED_BACKEND}".`)
+  }
+  DRIVER_LANG_FENCE = DRIVER.lang_fence || DRIVER_LANG_FENCE
+  DRIVER_IMPL_REQUIREMENTS = DRIVER.impl_requirements || ''
+  DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT
+  DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID
+  log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
+}
+
 const setup = await agent(`Read the PyTorch reference task file at: ${TASK_PATH || '(not provided)'}
 If problem_definition is provided, use it as the authoritative task description:
 ${PROBLEM_DEFINITION || '(not provided)'}
@@ -283,7 +358,7 @@ const opType = setup.op_type
 log(`Task: ${opType} | chain: ${(setup.op_chain || []).join(' -> ')}`)
 
 // Establish eager baseline + seed the experience/hint library (from NVIDIA best practices)
-const baseline = await agent(`You are setting up a Triton kernel optimization run for a PyTorch reference task.
+const baseline = await agent(`You are setting up a ${langToken(LEGACY_SETUP_LANG_TOKEN)} kernel optimization run for a PyTorch reference task.
 
 # Operation: ${OP_DESC} (${opType})
 # Op chain: ${(setup.op_chain || []).join(' -> ')}
@@ -349,7 +424,7 @@ phase('Init')
 
 const seeds = await parallel(
   Array.from({ length: SEED_CANDIDATES }, (_, i) => () =>
-    agent(`You are an EXPERT GPU-programming model specializing in PyTorch -> Triton translation. Produce a CORRECT initial Triton kernel for this task. Correctness is the ONLY goal here — not speed.
+    agent(`You are an EXPERT GPU-programming model specializing in PyTorch -> ${langToken(LEGACY_SEED_LANG_TOKEN)} translation. Produce a CORRECT initial ${langToken(LEGACY_SEED_LANG_TOKEN)} kernel for this task. Correctness is the ONLY goal here — not speed.
 
 # Operation: ${OP_DESC} (${opType})
 # Op chain: ${(setup.op_chain || []).join(' -> ')}
@@ -394,7 +469,7 @@ log(`Generated ${seedCandidates.length} expert seeds`)
 // Anti-cheating validation of seeds (prompt-level + LLM validator)
 const validatedSeeds = await parallel(
   seedCandidates.map((s, i) => () =>
-    agent(`You are an anti-cheating validator for Triton kernels. Determine whether this generated kernel does GENUINE kernel-level work or CHEATS (e.g. calls torch ops to do the math, returns precomputed/reference values, or omits the real computation).
+    agent(`You are an anti-cheating validator for ${langToken(LEGACY_VALIDATE_LANG_TOKEN)} kernels. Determine whether this generated kernel does GENUINE kernel-level work or CHEATS (e.g. calls torch ops to do the math, returns precomputed/reference values, or omits the real computation).
 
 # Reference op chain: ${(setup.op_chain || []).join(' -> ')}
 
@@ -482,7 +557,7 @@ for (let iter = 0; iter < ITERATIONS; iter++) {
         `  - gen ${k}: ${a.correct ? 'correct' : 'INCORRECT'}, ${a.speedup ? a.speedup.toFixed(2) + 'x' : 'n/a'}${a.diagnosis ? ', ' + (a.diagnosis.limiter || a.diagnosis.failure_mode || '') : ''}`
       ).join('\n') || '  (no history yet)'
 
-      return agent(`You are the OPTIMIZER model evolving a Triton kernel. You belong to a role-specialized evolutionary island.
+      return agent(`You are the OPTIMIZER model evolving a ${langToken(LEGACY_MUTATE_LANG_TOKEN)} kernel. You belong to a role-specialized evolutionary island.
 
 # ISLAND ROLE: ${island.role.name}
 ${island.role.focus}
@@ -537,7 +612,7 @@ Return JSON with the complete code, the applied hint(s), and a one-line summary 
 
   const evals = await parallel(
     variants.map((v) => () =>
-      agent(`You are a Triton kernel evaluator. Compile and run this candidate on real hardware and report LIGHTWEIGHT signals only (no ncu/nsys profiling).
+      agent(`You are a ${langToken(LEGACY_EVAL_LANG_TOKEN)} kernel evaluator. Compile and run this candidate on real hardware and report LIGHTWEIGHT signals only (no ncu/nsys profiling).
 
 # Target GPU: ${TARGET_GPU}
 # Reference op chain: ${(setup.op_chain || []).join(' -> ')}
@@ -575,6 +650,50 @@ Return JSON.`, {
       })
     )
   )
+
+  if (USE_DRIVER) {
+    for (let k = 0; k < variants.length; k++) {
+      const v = variants[k]
+      const suffix = `${iter}-isl${v.islIdx}`
+      const kPath = `${EXP_DIR}/variants/${suffix}/${kernelFilename()}`
+      const buildOut = `${EXP_DIR}/variants/${suffix}/artifact`
+      const profOut = `${EXP_DIR}/variants/${suffix}/prof.native`
+      const resultPath = `${EXP_DIR}/variants/${suffix}/result.json`
+      await agent(
+        `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+        `Return its stdout JSON verbatim.`,
+        { label: `driver-build-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      const runOut = await agent(
+        `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath} --result ${resultPath}`)}\n` +
+        `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+        { label: `driver-run-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      await agent(
+        `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+        `Return {ok, native_path}.`,
+        { label: `driver-profile-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      const evidenceOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+        `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+        { label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      const diagOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+        `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+        { label: `driver-diagnose-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      const antiCheatOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${resultPath}\`.\n` +
+        `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+        { label: `driver-anti-cheat-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      v.driver_envelope = {
+        anti_cheat: antiCheatOut || {},
+        metrics: (evidenceOut && evidenceOut.metrics) || {},
+        vendor: (DRIVER && DRIVER.hw_vendor) || '',
+        coverage: (evidenceOut && evidenceOut.coverage) || [],
+        bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',
+        latency_ms: Number((runOut && runOut.latency_ms) || 0),
+        backend_id: DRIVER_BACKEND_ID,
+      }
+    }
+  }
 
   // ===========================================================================
   // Phase: Diagnose — Result Analyzer (failure mode OR perf limiter) + hints
