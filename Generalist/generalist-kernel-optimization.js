@@ -247,7 +247,7 @@ if (INPUT_MODE === 'generate_then_optimize') {
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
 - problem_path: ${PROBLEM_PATH || '(not provided)'}
 - op_description: ${OP}
-- language: ${LANGUAGE}
+- language: ${langToken(LANGUAGE)}
 - target_gpu: ${TARGET_GPU}
 - seed_candidates: ${SEED_CANDIDATES}
 
