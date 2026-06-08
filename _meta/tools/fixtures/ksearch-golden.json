@@ -1,0 +1,451 @@
+[
+  {
+    "label": "read-spec",
+    "phase": "Setup",
+    "prompt": "You are a GPU kernel optimization expert. Read and analyze the kernel specification.\n\n# Task\nRead the kernel specification file at: /tmp/ksearch-fixture/spec.yaml\nIf problem_definition is provided, use it as the authoritative kernel specification:\n(not provided)\nAlso read the baseline kernel at: /tmp/ksearch-fixture/baseline.py\n\n# Analyze and return:\n1. **spec_text**: The full specification text (problem definition, input/output formats, constraints)\n2. **op_type**: Classification of the operation (e.g., \"mla_attention\", \"moe_routing\", \"gemm\", \"softmax\")\n3. **input_shapes**: Description of input tensor shapes and data types\n4. **output_shape**: Expected output shape and type\n5. **constraints**: List of hard constraints (numerical precision, memory limits, etc.)\n6. **baseline_code**: The baseline kernel code (if available)\n7. **key_challenges**: What makes this kernel hard to optimize?\n8. **design_dimensions**: Orthogonal axes of the design space (e.g., tiling strategy, memory hierarchy usage, parallelism decomposition, algorithmic variant)\n\nTarget language: triton\nTarget GPU: H100\nOperation: rmsnorm\n\nReturn structured analysis.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "spec_text": {
+          "type": "string"
+        },
+        "op_type": {
+          "type": "string"
+        },
+        "input_shapes": {
+          "type": "string"
+        },
+        "output_shape": {
+          "type": "string"
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "baseline_code": {
+          "type": "string"
+        },
+        "key_challenges": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "design_dimensions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "spec_text",
+        "op_type"
+      ]
+    },
+    "seq": 0
+  },
+  {
+    "label": "eval-baseline",
+    "phase": "Setup",
+    "prompt": "You are a kernel evaluation expert. Evaluate the baseline kernel to establish reference performance.\n\n# Kernel Spec:\nRMSNorm: y = x * rsqrt(mean(x^2) + eps) * w; shapes [B,H], fp16.\n\n# Baseline Code:\n```triton\n@triton.jit\ndef rmsnorm_kernel(x, w, y, N): pass\n\n```\n\n# Evaluation Instructions:\nRun: python /tmp/ksearch-fixture/bench.py {kernel_path} {result_path}\n\nEstablish the baseline metric. If a benchmark command is available, compile and run it.\nIf not, analyze the code only; do not report estimated performance as measured.\n\nThe metric is mean_vs_baseline_factor (this IS the baseline, so it should be 1.0).\nAlso report absolute latency if measurable.\n\nReturn evaluation results.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "baseline_metric": {
+          "type": "number"
+        },
+        "baseline_latency_ms": {
+          "type": "number"
+        },
+        "eval_passed": {
+          "type": "boolean"
+        },
+        "performance_profile": {
+          "type": "string"
+        },
+        "bottleneck_analysis": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "baseline_metric",
+        "eval_passed"
+      ]
+    },
+    "seq": 1
+  },
+  {
+    "label": "init-tree",
+    "phase": "Initialize",
+    "prompt": "You are a kernel optimization architect. Build an initial world model decision tree for systematic design space exploration.\n\n# Kernel Specification:\nRMSNorm: y = x * rsqrt(mean(x^2) + eps) * w; shapes [B,H], fp16.\n\n# Operation: rmsnorm (rmsnorm)\n# Language: triton\n# Target GPU: H100\n# Baseline performance: metric=1, latency=0.12ms\n# Bottleneck: shared-memory reduction tail\n\n# Design Dimensions Identified:\n1. tile size\n2. reduction strategy\n3. vector width\n\n# Key Challenges:\n1. row reduction sync\n\n# World Model Structure\n\nBuild a decision tree where:\n- Root node (id: \"root\") is a dummy anchor\n- Level 1+ nodes represent design DECISIONS (what aspect to optimize)\n- Each node has:\n  - node_id: unique string identifier\n  - parent_id: parent node id\n  - node_type: \"decision\" | \"action\"\n  - decision: what design dimension this addresses\n  - choice: the specific strategy chosen\n  - action: {title, description, difficulty_1_to_5, score_0_to_1, expected_vs_baseline_factor}\n  - status: \"open\" (no solution attached yet) | \"solved\" | \"failed\"\n  - children: array of child node ids\n\n# Requirements:\n1. Create at least 5 open action nodes across different design dimensions\n2. Each action should be concrete enough to implement (not vague like \"optimize memory\")\n3. Assign difficulty 1-5 (1=simple parameter tuning, 5=complete algorithmic redesign)\n4. Assign score 0-1 (expected value of pursuing this action, based on bottleneck analysis)\n5. Assign expected_vs_baseline_factor (realistic expected speedup if successful)\n6. Cover diverse strategies: don't put all nodes in the same design dimension\n7. Order by estimated impact: highest-value, lowest-difficulty actions should have higher scores\n\nReturn the complete decision tree.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "decision_tree": {
+          "type": "object"
+        },
+        "node_count": {
+          "type": "number"
+        },
+        "open_actions": {
+          "type": "number"
+        },
+        "design_dimensions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "initial_hypotheses": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "decision_tree",
+        "node_count",
+        "open_actions"
+      ]
+    },
+    "seq": 2
+  },
+  {
+    "label": "propose-0",
+    "phase": "Select",
+    "prompt": "You are a world model manager. Ensure the decision tree has enough high-quality open action nodes on the frontier.\n\n# Current Decision Tree:\n{\n  \"root\": {\n    \"node_id\": \"root\",\n    \"parent_id\": null,\n    \"status\": \"solved\",\n    \"children\": [\n      \"n1\",\n      \"n2\"\n    ]\n  },\n  \"n1\": {\n    \"node_id\": \"n1\",\n    \"parent_id\": \"root\",\n    \"action\": {\n      \"title\": \"tile_64\",\n      \"difficulty_1_to_5\": 2,\n      \"score_0_to_1\": 0.7,\n      \"expected_vs_baseline_factor\": 1.2\n    },\n    \"status\": \"open\"\n  },\n  \"n2\": {\n    \"node_id\": \"n2\",\n    \"parent_id\": \"root\",\n    \"action\": {\n      \"title\": \"warp_reduce\",\n      \"difficulty_1_to_5\": 3,\n      \"score_0_to_1\": 0.6,\n      \"expected_vs_baseline_factor\": 1.3\n    },\n    \"status\": \"open\"\n  }\n}\n\n# Frontier Requirements:\n- There must be at least 3 open frontier action nodes (status=\"open\", action.title non-empty)\n- At least one must have score_0_to_1 > 0.5\n- A frontier node is \"executable\" only if its parent has a solution attached OR it is a direct child of root\n- If requirements are already met, return the tree unchanged\n\n# If requirements NOT met:\n- Add 2-3 new open action nodes in under-explored design dimensions\n- Each new node needs: node_id, parent_id, action.title, action.description, difficulty_1_to_5, score_0_to_1, expected_vs_baseline_factor\n- Prefer attaching new actions as children of the best-performing solved nodes (builds on success)\n\n# Current best metric: 1\n\nReturn the (possibly updated) tree and a count of open frontier nodes.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "updated_tree": {
+          "type": "object"
+        },
+        "open_frontier_count": {
+          "type": "number"
+        },
+        "nodes_added": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "updated_tree",
+        "open_frontier_count"
+      ]
+    },
+    "seq": 3
+  },
+  {
+    "label": "select-0",
+    "phase": "Select",
+    "prompt": "You are a search strategy expert implementing the K-Search action selection algorithm.\n\n# Decision Tree (current state):\n{\n  \"root\": {\n    \"node_id\": \"root\",\n    \"parent_id\": null,\n    \"status\": \"solved\",\n    \"children\": [\n      \"n1\",\n      \"n2\"\n    ]\n  },\n  \"n1\": {\n    \"node_id\": \"n1\",\n    \"parent_id\": \"root\",\n    \"action\": {\n      \"title\": \"tile_64\",\n      \"difficulty_1_to_5\": 2,\n      \"score_0_to_1\": 0.7\n    },\n    \"status\": \"open\"\n  },\n  \"n2\": {\n    \"node_id\": \"n2\",\n    \"parent_id\": \"root\",\n    \"action\": {\n      \"title\": \"warp_reduce\",\n      \"difficulty_1_to_5\": 3,\n      \"score_0_to_1\": 0.6\n    },\n    \"status\": \"open\"\n  }\n}\n\n# Selection Algorithm (DETERMINISTIC — follow exactly):\n1. Identify all \"open frontier\" nodes: status=\"open\" AND action.title is non-empty AND (parent has solution_id OR parent is root)\n2. Filter: only keep nodes with difficulty_1_to_5 <= 4\n3. Sort remaining by: (-score_0_to_1, +difficulty_1_to_5, -overall_rating_0_to_10, +node_id alphabetically)\n4. Select the FIRST node after sorting (highest utility)\n\nIf no nodes pass the filter, relax difficulty constraint and try again with all candidates.\nIf still no candidates, return selected_node_id = null (search exhausted).\n\n# Current State:\n- Best metric: 1\n- Solutions: 0\n- Cycle: 1/2\n\n# Also provide:\n- parent_solution_code: code from the parent node's attached solution (or baseline code if parent is root)\n- parent_metric: the score of the parent node's solution\n- context_for_generation: ancestor path decisions + sibling outcomes (compact)\n\nReturn selection result.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "selected_node_id": {
+          "type": "string"
+        },
+        "action_title": {
+          "type": "string"
+        },
+        "action_description": {
+          "type": "string"
+        },
+        "action_score": {
+          "type": "number"
+        },
+        "action_difficulty": {
+          "type": "number"
+        },
+        "parent_solution_code": {
+          "type": "string"
+        },
+        "parent_metric": {
+          "type": "number"
+        },
+        "parent_is_root": {
+          "type": "boolean"
+        },
+        "context_for_generation": {
+          "type": "object"
+        },
+        "reasoning": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "selected_node_id",
+        "action_title"
+      ]
+    },
+    "seq": 4
+  },
+  {
+    "label": "gen-0-0",
+    "phase": "Generate",
+    "prompt": "You are an expert triton kernel developer. Generate a high-performance kernel implementing a SPECIFIC optimization action.\n\n# Operation: rmsnorm (rmsnorm)\n# Target: H100\n# Language: triton\n\n# Kernel Specification:\nRMSNorm: y = x * rsqrt(mean(x^2) + eps) * w; shapes [B,H], fp16.\n\n# Action to implement: \"tile_64\"\nRaise BLOCK_SIZE to 64 with vectorized loads\n\n# Base code (from parent node — start from this and apply the action):\n```triton\n@triton.jit\ndef rmsnorm_kernel(x, w, y, N): pass\n\n```\n\n# Tree context (ancestor decisions):\n{\"ancestor_decisions\":[\"root\"],\"siblings\":[\"n2\"]}\n\n\n# World Model (persistent decision tree — use it to guide design):\n{\n  \"root\": {\n    \"node_id\": \"root\",\n    \"parent_id\": null,\n    \"status\": \"solved\",\n    \"children\": [\n      \"n1\",\n      \"n2\"\n    ]\n  },\n  \"n1\": {\n    \"node_id\": \"n1\",\n    \"parent_id\": \"root\",\n    \"action\": {\n      \"title\": \"tile_64\",\n      \"difficulty_1_to_5\": 2,\n      \"score_0_to_1\": 0.7\n    },\n    \"status\": \"open\"\n  },\n  \"n2\": {\n    \"node_id\": \"n2\",\n    \"parent_id\": \"root\",\n    \"action\": {\n      \"title\": \"warp_reduce\",\n      \"difficulty_1_to_5\": 3,\n      \"score_0_to_1\": 0.6\n    },\n    \"status\": \"open\"\n  }\n}\n\n# Requirements:\n1. Output COMPLETE, COMPILABLE triton code\n2. Implement ONLY the specified action — keep everything else close to base\n3. Must be functionally correct (outputs within rtol=0.01, atol=0.01)\n4. Target H100 architecture\n5. Include all necessary imports/headers\n\nReturn the complete kernel code.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "implementation_notes": {
+          "type": "string"
+        },
+        "design_choices": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "code"
+      ]
+    },
+    "seq": 5
+  },
+  {
+    "label": "eval-0-0",
+    "phase": "Evaluate",
+    "prompt": "You are a kernel evaluation expert. Evaluate this triton kernel for correctness and performance.\n\n# Kernel Code:\n```triton\n@triton.jit\ndef rmsnorm_kernel_v1(x, w, y, N): pass  # tile=64\n\n```\n\n# Kernel Specification (for correctness reference):\nRMSNorm: y = x * rsqrt(mean(x^2) + eps) * w; shapes [B,H], fp16.\n\n# Evaluation Steps:\n\n## 1. Compilation Check\n- Is the code syntactically valid triton?\n- All imports/includes present?\n\n## 2. Correctness Check\n- Implements specification correctly?\n- No race conditions, out-of-bounds, precision issues?\n- Outputs match reference within rtol=0.01, atol=0.01?\n\n## 3. Performance Measurement\nRun benchmark: python /tmp/ksearch-fixture/bench.py {kernel_path} {result_path}\n- Latency (ms)\n- metric_value = mean_vs_baseline_factor (higher = better, baseline=1)\n\n## 4. Performance Analysis\n- Primary bottleneck?\n- Underutilized hardware resources?\n\n# Context:\n- Baseline: 1, Parent: 1, Global best: 1\n- Action: \"tile_64\"\n\nReturn evaluation.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "is_valid": {
+          "type": "boolean"
+        },
+        "metric_value": {
+          "type": "number"
+        },
+        "latency_ms": {
+          "type": "number"
+        },
+        "speedup_vs_baseline": {
+          "type": "number"
+        },
+        "pass_rate": {
+          "type": "string"
+        },
+        "error_log": {
+          "type": "string"
+        },
+        "performance_analysis": {
+          "type": "string"
+        },
+        "remaining_bottleneck": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "is_valid",
+        "metric_value"
+      ]
+    },
+    "seq": 6
+  },
+  {
+    "label": "refine-0",
+    "phase": "Refine",
+    "prompt": "You are a world model manager. The search cycle SUCCEEDED. Update the decision tree.\n\n# Outcome:\n- Node: n1\n- Action: \"tile_64\"\n- Achieved metric: 1.18 (vs baseline 1, vs parent 1)\n- Speedup vs baseline: 1.18x\n- Performance analysis: DRAM utilization climbed to 78%\n- Remaining bottleneck: reduction tail sync\n- Global best: 1.18\n\n# Current Decision Tree:\n{\n  \"root\": {\n    \"node_id\": \"root\",\n    \"parent_id\": null,\n    \"status\": \"solved\",\n    \"children\": [\n      \"n1\",\n      \"n2\"\n    ]\n  },\n  \"n1\": {\n    \"node_id\": \"n1\",\n    \"parent_id\": \"root\",\n    \"action\": {\n      \"title\": \"tile_64\",\n      \"difficulty_1_to_5\": 2,\n      \"score_0_to_1\": 0.7\n    },\n    \"status\": \"open\"\n  },\n  \"n2\": {\n    \"node_id\": \"n2\",\n    \"parent_id\": \"root\",\n    \"action\": {\n      \"title\": \"warp_reduce\",\n      \"difficulty_1_to_5\": 3,\n      \"score_0_to_1\": 0.6\n    },\n    \"status\": \"open\"\n  }\n}\n\n# Tasks (ALL REQUIRED):\n1. **Attach solution**: Mark node n1 as status=\"solved\", record metric=1.18\n2. **Update ancestor scores**: Increase scores of ancestors if result exceeded expected_vs_baseline_factor; decrease slightly if below\n3. **MANDATORY — Add continuation children**: You MUST add at least 2 NEW open action nodes as children of n1. This is a HARD REQUIREMENT — the solved node must have open children for the search to continue.\n   - Each child should address the remaining bottleneck (reduction tail sync) or explore orthogonal improvements\n   - Assign realistic difficulty (1-5) and score (0-1)\n4. **Reflect**: Add a note with CURRENT observation, FOLLOW_THROUGH items, and UPDATE_BELIEF adjustments\n\nReturn the updated tree. The solved node MUST have at least one open child action node.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "updated_tree": {
+          "type": "object"
+        },
+        "new_actions_added": {
+          "type": "number"
+        },
+        "score_updates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reflection": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "updated_tree",
+        "new_actions_added"
+      ]
+    },
+    "seq": 7
+  },
+  {
+    "label": "propose-1",
+    "phase": "Select",
+    "prompt": "You are a world model manager. Ensure the decision tree has enough high-quality open action nodes on the frontier.\n\n# Current Decision Tree:\n{\n  \"root\": {\n    \"node_id\": \"root\",\n    \"parent_id\": null,\n    \"status\": \"solved\",\n    \"children\": [\n      \"n1\",\n      \"n2\"\n    ]\n  },\n  \"n1\": {\n    \"node_id\": \"n1\",\n    \"parent_id\": \"root\",\n    \"status\": \"solved\",\n    \"metric\": 1.18,\n    \"children\": [\n      \"n1c1\",\n      \"n1c2\"\n    ]\n  },\n  \"n2\": {\n    \"node_id\": \"n2\",\n    \"parent_id\": \"root\",\n    \"status\": \"open\"\n  },\n  \"n1c1\": {\n    \"node_id\": \"n1c1\",\n    \"parent_id\": \"n1\",\n    \"action\": {\n      \"title\": \"warp_shuffle_reduce\",\n      \"difficulty_1_to_5\": 3,\n      \"score_0_to_1\": 0.65\n    },\n    \"status\": \"open\"\n  },\n  \"n1c2\": {\n    \"node_id\": \"n1c2\",\n    \"parent_id\": \"n1\",\n    \"action\": {\n      \"title\": \"double_buffer\",\n      \"difficulty_1_to_5\": 3,\n      \"score_0_to_1\": 0.55\n    },\n    \"status\": \"open\"\n  }\n}\n\n# Frontier Requirements:\n- There must be at least 3 open frontier action nodes (status=\"open\", action.title non-empty)\n- At least one must have score_0_to_1 > 0.5\n- A frontier node is \"executable\" only if its parent has a solution attached OR it is a direct child of root\n- If requirements are already met, return the tree unchanged\n\n# If requirements NOT met:\n- Add 2-3 new open action nodes in under-explored design dimensions\n- Each new node needs: node_id, parent_id, action.title, action.description, difficulty_1_to_5, score_0_to_1, expected_vs_baseline_factor\n- Prefer attaching new actions as children of the best-performing solved nodes (builds on success)\n\n# Current best metric: 1.18\n\nReturn the (possibly updated) tree and a count of open frontier nodes.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "updated_tree": {
+          "type": "object"
+        },
+        "open_frontier_count": {
+          "type": "number"
+        },
+        "nodes_added": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "updated_tree",
+        "open_frontier_count"
+      ]
+    },
+    "seq": 8
+  },
+  {
+    "label": "select-1",
+    "phase": "Select",
+    "prompt": "You are a search strategy expert implementing the K-Search action selection algorithm.\n\n# Decision Tree (current state):\n{\n  \"root\": {\n    \"node_id\": \"root\",\n    \"parent_id\": null,\n    \"status\": \"solved\",\n    \"children\": [\n      \"n1\",\n      \"n2\"\n    ]\n  },\n  \"n1\": {\n    \"node_id\": \"n1\",\n    \"parent_id\": \"root\",\n    \"status\": \"solved\",\n    \"metric\": 1.18,\n    \"children\": [\n      \"n1c1\",\n      \"n1c2\"\n    ]\n  },\n  \"n2\": {\n    \"node_id\": \"n2\",\n    \"parent_id\": \"root\",\n    \"status\": \"open\"\n  },\n  \"n1c1\": {\n    \"node_id\": \"n1c1\",\n    \"parent_id\": \"n1\",\n    \"action\": {\n      \"title\": \"warp_shuffle_reduce\",\n      \"difficulty_1_to_5\": 3,\n      \"score_0_to_1\": 0.65\n    },\n    \"status\": \"open\"\n  },\n  \"n1c2\": {\n    \"node_id\": \"n1c2\",\n    \"parent_id\": \"n1\",\n    \"action\": {\n      \"title\": \"double_buffer\",\n      \"difficulty_1_to_5\": 3,\n      \"score_0_to_1\": 0.55\n    },\n    \"status\": \"open\"\n  }\n}\n\n# Selection Algorithm (DETERMINISTIC — follow exactly):\n1. Identify all \"open frontier\" nodes: status=\"open\" AND action.title is non-empty AND (parent has solution_id OR parent is root)\n2. Filter: only keep nodes with difficulty_1_to_5 <= 4\n3. Sort remaining by: (-score_0_to_1, +difficulty_1_to_5, -overall_rating_0_to_10, +node_id alphabetically)\n4. Select the FIRST node after sorting (highest utility)\n\nIf no nodes pass the filter, relax difficulty constraint and try again with all candidates.\nIf still no candidates, return selected_node_id = null (search exhausted).\n\n# Current State:\n- Best metric: 1.18\n- Solutions: 1\n- Cycle: 2/2\n\n# Also provide:\n- parent_solution_code: code from the parent node's attached solution (or baseline code if parent is root)\n- parent_metric: the score of the parent node's solution\n- context_for_generation: ancestor path decisions + sibling outcomes (compact)\n\nReturn selection result.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "selected_node_id": {
+          "type": "string"
+        },
+        "action_title": {
+          "type": "string"
+        },
+        "action_description": {
+          "type": "string"
+        },
+        "action_score": {
+          "type": "number"
+        },
+        "action_difficulty": {
+          "type": "number"
+        },
+        "parent_solution_code": {
+          "type": "string"
+        },
+        "parent_metric": {
+          "type": "number"
+        },
+        "parent_is_root": {
+          "type": "boolean"
+        },
+        "context_for_generation": {
+          "type": "object"
+        },
+        "reasoning": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "selected_node_id",
+        "action_title"
+      ]
+    },
+    "seq": 9
+  },
+  {
+    "label": "gen-1-0",
+    "phase": "Generate",
+    "prompt": "You are an expert triton kernel developer. Generate a high-performance kernel implementing a SPECIFIC optimization action.\n\n# Operation: rmsnorm (rmsnorm)\n# Target: H100\n# Language: triton\n\n# Kernel Specification:\nRMSNorm: y = x * rsqrt(mean(x^2) + eps) * w; shapes [B,H], fp16.\n\n# Action to implement: \"warp_shuffle_reduce\"\nReplace shared-memory reduction with __shfl\n\n# Base code (from parent node — start from this and apply the action):\n```triton\n@triton.jit\ndef rmsnorm_kernel_v1(x, w, y, N): pass  # tile=64\n\n```\n\n# Tree context (ancestor decisions):\n{\"ancestor_decisions\":[\"root\",\"n1\"],\"siblings\":[\"n1c2\"]}\n\n\n# World Model (persistent decision tree — use it to guide design):\n{\n  \"root\": {\n    \"node_id\": \"root\",\n    \"parent_id\": null,\n    \"status\": \"solved\",\n    \"children\": [\n      \"n1\",\n      \"n2\"\n    ]\n  },\n  \"n1\": {\n    \"node_id\": \"n1\",\n    \"parent_id\": \"root\",\n    \"status\": \"solved\",\n    \"metric\": 1.18,\n    \"children\": [\n      \"n1c1\",\n      \"n1c2\"\n    ]\n  },\n  \"n2\": {\n    \"node_id\": \"n2\",\n    \"parent_id\": \"root\",\n    \"status\": \"open\"\n  },\n  \"n1c1\": {\n    \"node_id\": \"n1c1\",\n    \"parent_id\": \"n1\",\n    \"action\": {\n      \"title\": \"warp_shuffle_reduce\",\n      \"difficulty_1_to_5\": 3,\n      \"score_0_to_1\": 0.65\n    },\n    \"status\": \"open\"\n  },\n  \"n1c2\": {\n    \"node_id\": \"n1c2\",\n    \"parent_id\": \"n1\",\n    \"action\": {\n      \"title\": \"double_buffer\",\n      \"difficulty_1_to_5\": 3,\n      \"score_0_to_1\": 0.55\n    },\n    \"status\": \"open\"\n  }\n}\n\n# Requirements:\n1. Output COMPLETE, COMPILABLE triton code\n2. Implement ONLY the specified action — keep everything else close to base\n3. Must be functionally correct (outputs within rtol=0.01, atol=0.01)\n4. Target H100 architecture\n5. Include all necessary imports/headers\n\nReturn the complete kernel code.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "implementation_notes": {
+          "type": "string"
+        },
+        "design_choices": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "code"
+      ]
+    },
+    "seq": 10
+  },
+  {
+    "label": "eval-1-0",
+    "phase": "Evaluate",
+    "prompt": "You are a kernel evaluation expert. Evaluate this triton kernel for correctness and performance.\n\n# Kernel Code:\n```triton\n@triton.jit\ndef rmsnorm_kernel_v2(x, w, y, N): pass  # tile=64 + warp_shfl\n\n```\n\n# Kernel Specification (for correctness reference):\nRMSNorm: y = x * rsqrt(mean(x^2) + eps) * w; shapes [B,H], fp16.\n\n# Evaluation Steps:\n\n## 1. Compilation Check\n- Is the code syntactically valid triton?\n- All imports/includes present?\n\n## 2. Correctness Check\n- Implements specification correctly?\n- No race conditions, out-of-bounds, precision issues?\n- Outputs match reference within rtol=0.01, atol=0.01?\n\n## 3. Performance Measurement\nRun benchmark: python /tmp/ksearch-fixture/bench.py {kernel_path} {result_path}\n- Latency (ms)\n- metric_value = mean_vs_baseline_factor (higher = better, baseline=1)\n\n## 4. Performance Analysis\n- Primary bottleneck?\n- Underutilized hardware resources?\n\n# Context:\n- Baseline: 1, Parent: 1.18, Global best: 1.18\n- Action: \"warp_shuffle_reduce\"\n\nReturn evaluation.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "is_valid": {
+          "type": "boolean"
+        },
+        "metric_value": {
+          "type": "number"
+        },
+        "latency_ms": {
+          "type": "number"
+        },
+        "speedup_vs_baseline": {
+          "type": "number"
+        },
+        "pass_rate": {
+          "type": "string"
+        },
+        "error_log": {
+          "type": "string"
+        },
+        "performance_analysis": {
+          "type": "string"
+        },
+        "remaining_bottleneck": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "is_valid",
+        "metric_value"
+      ]
+    },
+    "seq": 11
+  },
+  {
+    "label": "refine-1",
+    "phase": "Refine",
+    "prompt": "You are a world model manager. The search cycle SUCCEEDED. Update the decision tree.\n\n# Outcome:\n- Node: n1c1\n- Action: \"warp_shuffle_reduce\"\n- Achieved metric: 1.32 (vs baseline 1, vs parent 1.18)\n- Speedup vs baseline: 1.32x\n- Performance analysis: Sync tail eliminated\n- Remaining bottleneck: register pressure\n- Global best: 1.32\n\n# Current Decision Tree:\n{\n  \"root\": {\n    \"node_id\": \"root\",\n    \"parent_id\": null,\n    \"status\": \"solved\",\n    \"children\": [\n      \"n1\",\n      \"n2\"\n    ]\n  },\n  \"n1\": {\n    \"node_id\": \"n1\",\n    \"parent_id\": \"root\",\n    \"status\": \"solved\",\n    \"metric\": 1.18,\n    \"children\": [\n      \"n1c1\",\n      \"n1c2\"\n    ]\n  },\n  \"n2\": {\n    \"node_id\": \"n2\",\n    \"parent_id\": \"root\",\n    \"status\": \"open\"\n  },\n  \"n1c1\": {\n    \"node_id\": \"n1c1\",\n    \"parent_id\": \"n1\",\n    \"action\": {\n      \"title\": \"warp_shuffle_reduce\",\n      \"difficulty_1_to_5\": 3,\n      \"score_0_to_1\": 0.65\n    },\n    \"status\": \"open\"\n  },\n  \"n1c2\": {\n    \"node_id\": \"n1c2\",\n    \"parent_id\": \"n1\",\n    \"action\": {\n      \"title\": \"double_buffer\",\n      \"difficulty_1_to_5\": 3,\n      \"score_0_to_1\": 0.55\n    },\n    \"status\": \"open\"\n  }\n}\n\n# Tasks (ALL REQUIRED):\n1. **Attach solution**: Mark node n1c1 as status=\"solved\", record metric=1.32\n2. **Update ancestor scores**: Increase scores of ancestors if result exceeded expected_vs_baseline_factor; decrease slightly if below\n3. **MANDATORY — Add continuation children**: You MUST add at least 2 NEW open action nodes as children of n1c1. This is a HARD REQUIREMENT — the solved node must have open children for the search to continue.\n   - Each child should address the remaining bottleneck (register pressure) or explore orthogonal improvements\n   - Assign realistic difficulty (1-5) and score (0-1)\n4. **Reflect**: Add a note with CURRENT observation, FOLLOW_THROUGH items, and UPDATE_BELIEF adjustments\n\nReturn the updated tree. The solved node MUST have at least one open child action node.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "updated_tree": {
+          "type": "object"
+        },
+        "new_actions_added": {
+          "type": "number"
+        },
+        "score_updates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reflection": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "updated_tree",
+        "new_actions_added"
+      ]
+    },
+    "seq": 12
+  },
+  {
+    "label": "final-report",
+    "phase": "Report",
+    "prompt": "Write a concise technical report on this K-Search kernel optimization campaign.\n\n# K-Search Optimization Results\n- Operation: rmsnorm (rmsnorm)\n- Language: triton, Target: H100\n- Baseline metric: 1\n- Best metric achieved: 1.32\n- Overall speedup: 1.32x\n- Cycles completed: 2/2\n- Total solutions evaluated: 2\n- Valid solutions: 2\n\n# Best Solution (node: n1c1):\n```triton\n@triton.jit\ndef rmsnorm_kernel_v2(x, w, y, N): pass  # tile=64 + warp_shfl\n\n```\n\n# Top 5 Solutions:\n1. cycle_1_attempt_0 (node=n1c1, metric=1.32)\n2. cycle_0_attempt_0 (node=n1, metric=1.18)\n\n# Final Decision Tree State:\n{\n  \"root\": {\n    \"node_id\": \"root\",\n    \"parent_id\": null,\n    \"status\": \"solved\",\n    \"children\": [\n      \"n1\",\n      \"n2\"\n    ]\n  },\n  \"n1\": {\n    \"node_id\": \"n1\",\n    \"parent_id\": \"root\",\n    \"status\": \"solved\",\n    \"metric\": 1.18,\n    \"children\": [\n      \"n1c1\",\n      \"n1c2\"\n    ]\n  },\n  \"n1c1\": {\n    \"node_id\": \"n1c1\",\n    \"parent_id\": \"n1\",\n    \"status\": \"solved\",\n    \"metric\": 1.32,\n    \"children\": [\n      \"n1c1g1\",\n      \"n1c1g2\"\n    ]\n  },\n  \"n1c2\": {\n    \"node_id\": \"n1c2\",\n    \"parent_id\": \"n1\",\n    \"status\": \"open\"\n  },\n  \"n2\": {\n    \"node_id\": \"n2\",\n    \"parent_id\": \"root\",\n    \"status\": \"open\"\n  },\n  \"n1c1g1\": {\n    \"node_id\": \"n1c1g1\",\n    \"parent_id\": \"n1c1\",\n    \"action\": {\n      \"title\": \"register_block\",\n      \"difficulty_1_to_5\": 3,\n      \"score_0_to_1\": 0.6\n    },\n    \"status\": \"open\"\n  },\n  \"n1c1g2\": {\n    \"node_id\": \"n1c1g2\",\n    \"parent_id\": \"n1c1\",\n    \"action\": {\n      \"title\": \"fuse_residual\",\n      \"difficulty_1_to_5\": 4,\n      \"score_0_to_1\": 0.5\n    },\n    \"status\": \"open\"\n  }\n}\n\n# Write:\n1. Search trajectory: which actions were attempted in what order, success/failure pattern\n2. Key insights: what design decisions yielded the most improvement?\n3. World model evolution: how did the tree structure change over time?\n4. Failed strategies: what was tried and abandoned, and why?\n5. Remaining opportunities: what open actions in the tree look promising for future exploration?",
+    "seq": 13
+  }
+]
