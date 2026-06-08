@@ -71,7 +71,23 @@ function assertWorkflowSuitability() {
   }
 }
 
-assertWorkflowSuitability()
+function resolveBackendAxis() {
+  const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
+  const l = args.language ? normalizeSuitabilityValue(args.language) : null
+  if (b && l && b !== l) {
+    throw new Error(`Conflicting args: backend="${args.backend}" vs language="${args.language}". Pass only one.`)
+  }
+  if (args.backend && !args.backend_dir) {
+    throw new Error(`args.backend="${args.backend}" requires args.backend_dir; driver dispatch has no implicit-resolve path.`)
+  }
+  return b || l || null
+}
+const RESOLVED_BACKEND = resolveBackendAxis()
+const USE_DRIVER = !!args.backend_dir
+
+if (!USE_DRIVER) {
+  assertWorkflowSuitability()
+}
 
 // =============================================================================
 // KernelBand: Steering LLM-based Kernel Optimization via Hardware-Aware
@@ -163,7 +179,8 @@ const ITERATIONS = args.iterations || 20
 const NUM_CLUSTERS = args.num_clusters || 3
 const RECLUSTER_PERIOD = args.recluster_period || 10
 const UCB_C = args.ucb_exploration || 2.0
-const SATURATION_THRESHOLD = args.saturation_threshold || 0.75
+LEGACY_SATURATION_THRESHOLD = 0.75
+let SATURATION_THRESHOLD = args.saturation_threshold || LEGACY_SATURATION_THRESHOLD
 const EXP_DIR = args.exp_dir || '/tmp/kernelband_exp'
 const EVIDENCE_MODE = (COMPILE_CMD && BENCHMARK_CMD && (NCU_CMD || NCU_BINARY))
   ? 'measured'
@@ -178,6 +195,33 @@ const SEED_CANDIDATES = args.seed_candidates || 3
 let generatedKernelPath = ''
 let initialCandidates = []
 let initialGenerationResult = null
+
+// --- Backend driver wiring (P5d Stage B; off-by-default; legacy path byte-identical) ---
+const BACKEND_DIR = args.backend_dir || ''
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const SH = args.driver_shell_prefix || ''
+const PY = args.substrate_command_prefix || ''
+const LEGACY_LANG_TOKEN = LANGUAGE
+const LEGACY_FENCE_TOKEN = LANGUAGE
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+
+function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
+function driverSh(script, cliArgs) {
+  return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
+}
+
+let DRIVER = null
+let DRIVER_LANG_FENCE = LEGACY_FENCE_TOKEN
+let DRIVER_IMPL_REQUIREMENTS = ''
+let DRIVER_SOURCE_EXT = ''
+let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
+
+function langToken(legacy) {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : legacy
+}
+function fenceToken() {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : LEGACY_FENCE_TOKEN
+}
 
 const STRATEGIES = args.strategies || [
   'tiling',
@@ -206,7 +250,7 @@ async function resolveInitialKernelFromProblem() {
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
 - problem_path: ${PROBLEM_PATH || '(not provided)'}
 - op_description: ${OP_DESCRIPTION}
-- language: ${LANGUAGE}
+- language: ${langToken(LANGUAGE)}
 - target_gpu: ${GPU_TARGET}
 - seed_candidates: ${SEED_CANDIDATES}
 
@@ -258,6 +302,28 @@ for (let i = 0; i < NUM_CLUSTERS; i++) {
 // Phase 1: Setup — Parse kernel, identify hardware, establish baseline
 // =============================================================================
 phase('Setup')
+
+if (USE_DRIVER) {
+  DRIVER = await agent(
+    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
+    `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
+    `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods, saturation_threshold}.`,
+    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (!DRIVER || DRIVER.present === false) {
+    throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
+  }
+  if (RESOLVED_BACKEND && DRIVER.backend_id && normalizeSuitabilityValue(DRIVER.backend_id) !== RESOLVED_BACKEND) {
+    throw new Error(`backend_dir manifest backend_id="${DRIVER.backend_id}" conflicts with args.backend/language="${RESOLVED_BACKEND}".`)
+  }
+  DRIVER_LANG_FENCE = DRIVER.lang_fence || DRIVER_LANG_FENCE
+  DRIVER_IMPL_REQUIREMENTS = DRIVER.impl_requirements || ''
+  DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT
+  DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID
+  // φ-gate driver resolution: driver may supply its own saturation threshold
+  SATURATION_THRESHOLD = DRIVER.saturation_threshold != null ? DRIVER.saturation_threshold : LEGACY_SATURATION_THRESHOLD
+  log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE}, θ_sat=${SATURATION_THRESHOLD})`)
+}
 
 if (INPUT_MODE === 'generate_then_optimize') {
   KERNEL_PATH = await resolveInitialKernelFromProblem()
@@ -323,6 +389,36 @@ Return the baseline metrics and hardware signature.`, {
     required: ['baseline_latency_us'],
   },
 })
+
+if (USE_DRIVER) {
+  const kPath = KERNEL_PATH || `${EXP_DIR}/baseline.kernel`
+  const buildOut = `${EXP_DIR}/baseline.artifact`
+  const profOut = `${EXP_DIR}/baseline.prof.native`
+  await agent(
+    `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+    `Return its stdout JSON verbatim.`,
+    { label: 'driver-build-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  const runOut = await agent(
+    `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+    `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+    { label: 'driver-run-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agent(
+    `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+    `Return {ok, native_path}.`,
+    { label: 'driver-profile-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  const evidenceOut = await agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+    `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+    { label: 'driver-to-evidence-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+    `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+    { label: 'driver-diagnose-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/baseline.result.json\`.\n` +
+    `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+    { label: 'driver-anti-cheat-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+}
 
 baselineLatency = setupResult?.baseline_latency_us || 1000
 const initialCode = setupResult?.kernel_code || ''
@@ -549,7 +645,7 @@ Return updated hardware signatures and masks.`, {
 # Operation: ${OP_DESCRIPTION}
 
 # Source Kernel (ID ${selectedKernel.id}, current speedup: ${selectedKernel.speedup.toFixed(2)}x):
-\`\`\`
+\`\`\`${fenceToken()}
 ${(selectedKernel.code || '').substring(0, 6000)}
 \`\`\`
 
@@ -616,7 +712,7 @@ Return the optimized kernel code.`, {
   const evalResult = await agent(`You are the KernelBand Evaluation module. Verify correctness and measure performance.
 
 # Generated Kernel:
-\`\`\`
+\`\`\`${fenceToken()}
 ${generatedCode.substring(0, 6000)}
 \`\`\`
 
@@ -670,6 +766,37 @@ Return evaluation results.`, {
       required: ['compiled', 'correct'],
     },
   })
+
+  if (USE_DRIVER) {
+    const suffix = `t${t}`
+    const kPath = `${EXP_DIR}/iter_${t}.kernel`
+    const buildOut = `${EXP_DIR}/iter_${t}.artifact`
+    const profOut = `${EXP_DIR}/iter_${t}.prof.native`
+    await agent(
+      `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+      `Return its stdout JSON verbatim.`,
+      { label: `driver-build-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const runOut = await agent(
+      `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+      `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+      { label: `driver-run-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    await agent(
+      `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+      `Return {ok, native_path}.`,
+      { label: `driver-profile-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const evidenceOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+      { label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+      `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+      { label: `driver-diagnose-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/iter_${t}.result.json\`.\n` +
+      `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+      { label: `driver-anti-cheat-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+  }
 
   // ===========================================================================
   // Bandit Update (Algorithm 1, lines 20-23)
