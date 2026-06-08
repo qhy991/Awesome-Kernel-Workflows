@@ -5,6 +5,20 @@
 #         Performance Optimization"
 # =============================================================================
 
+schema_version: "1.1"
+name: astra-kernel-optimization
+entrypoint: astra-kernel-optimization.js
+
+backend:
+  portability: clean
+  matrix_eligible: true
+  method_supported_backends: any
+  supported: [cuda, triton]
+  default: cuda
+  # Note: integration_mode='sglang' is vendor-locked (NVIDIA + sglang);
+  # driver path throws if integration_mode='sglang' combined with non-cuda
+  # backend_dir. Matrix-smoke (P5e) exercises integration_mode='standalone'.
+
 source:
   paper_title: "Astra: A Multi-Agent System for GPU Kernel Performance Optimization"
   paper_url: "https://arxiv.org/abs/2509.07506"
