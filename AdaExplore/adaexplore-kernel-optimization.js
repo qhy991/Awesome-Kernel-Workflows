@@ -205,6 +205,27 @@ let DRIVER_IMPL_REQUIREMENTS = ''
 let DRIVER_SOURCE_EXT = '.py'
 let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
 
+function setupLangToken() {
+  return USE_DRIVER ? `${DRIVER_LANG_FENCE} kernel` : `${LEGACY_SETUP_LANG_TOKEN} kernel`
+}
+function largeStepInterfaceLang() {
+  return USE_DRIVER && DRIVER_IMPL_REQUIREMENTS
+    ? DRIVER_IMPL_REQUIREMENTS
+    : `Preserve the ${LEGACY_LARGE_STEP_INTERFACE_LANG} expected by the evaluator.`
+}
+function reviserDefaultHint() {
+  if (!USE_DRIVER) return LEGACY_REVISER_PERF_HINT
+  const m = (DRIVER && DRIVER.methods) || {}
+  const guidance = (m.vectorized_load_store && m.vectorized_load_store.prompt_guidance) ||
+                   (m.memory_coalescing && m.memory_coalescing.prompt_guidance) ||
+                   ''
+  return guidance || LEGACY_REVISER_PERF_HINT
+}
+function evaluateRunInstruction() {
+  if (!USE_DRIVER) return LEGACY_EVALUATE_RUN_INSTRUCTION
+  return `${driverSh('run.sh', '--kernel {kernel_path} --result {result_path}')} If the driver run.sh exits non-zero, mark compiled=false, correct=false, speedup=0 and capture stderr.`
+}
+
 if (!KERNEL_PATH && !OPERATOR_SPEC && !PROBLEM_PATH) {
   throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
 }
@@ -409,7 +430,7 @@ if (USE_DRIVER) {
   log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
 }
 
-const setupResult = await agent(`Set up a standalone AdaExplore-style Triton kernel optimization run.
+const setupResult = await agent(`Set up a standalone AdaExplore-style ${setupLangToken()} optimization run.
 
 # Hard boundary
 Do not call the AdaExplore repository or any AdaExplore Python entrypoint. This workflow must run from the operator spec, local files, and the evaluator command provided here.
@@ -522,7 +543,7 @@ for (let searchStep = 0; searchStep < STEPS; searchStep++) {
     const proposerResult = await agent(`You are the AdaExplore Large-Step Proposer.
 
 # Goal
-Generate a structurally new Triton implementation for the PyTorch operator. This is a broad exploration step, not a local patch.
+Generate a structurally new ${USE_DRIVER ? `${DRIVER_LANG_FENCE} implementation` : 'Triton implementation'} for the PyTorch operator. This is a broad exploration step, not a local patch.
 
 # PyTorch reference
 \`\`\`python
@@ -543,8 +564,8 @@ Use these only as inspiration. Avoid copying their structure.
 ${poolContext}
 
 # Requirements
-1. Return complete Python code containing Triton kernel(s) and a callable wrapper.
-2. Preserve the PyTorch operator interface expected by the evaluator.
+1. Return complete ${USE_DRIVER ? `${DRIVER_LANG_FENCE} code containing ${DRIVER_BACKEND_ID || 'backend'} kernel(s)` : 'Python code containing Triton kernel(s)'} and a callable wrapper.
+2. ${USE_DRIVER && DRIVER_IMPL_REQUIREMENTS ? DRIVER_IMPL_REQUIREMENTS : `Preserve the ${LEGACY_LARGE_STEP_INTERFACE_LANG} expected by the evaluator.`}
 3. Respect atol=${CORRECTNESS_ATOL}, rtol=${CORRECTNESS_RTOL}.
 4. Prefer structural diversity: different tiling, decomposition, fusion, mapping, or memory strategy from the pool.
 5. Do not call any AdaExplore repository code.
@@ -606,7 +627,7 @@ Return specific, surgical suggestions only.`, {
       },
     })
 
-    const suggestions = reviserResult?.suggestions || ['Apply a small, local performance or correctness fix based on the evaluator logs.']
+    const suggestions = reviserResult?.suggestions || [reviserDefaultHint()]
 
     const tunerResult = await agent(`You are the AdaExplore Tuner.
 
@@ -665,8 +686,8 @@ Return the edited candidate kernel code.`, {
 # Hard rules
 1. Write the candidate code exactly to: ${kernelPath}
 2. Do not judge correctness or speedup by inspection.
-3. Run the evaluator command if provided. If not provided, do not create one; mark compiled=false, correct=false, speedup=0, and explain missing evidence.
-4. The evaluator must compile the Triton code, compare against PyTorch reference with atol=${CORRECTNESS_ATOL}, rtol=${CORRECTNESS_RTOL}, and measure speed if possible.
+3. ${evaluateRunInstruction()}
+4. The evaluator must compile the ${USE_DRIVER ? DRIVER_LANG_FENCE : 'Triton'} code, compare against PyTorch reference with atol=${CORRECTNESS_ATOL}, rtol=${CORRECTNESS_RTOL}, and measure speed if possible.
 5. Write or read JSON result at: ${resultPath}
 6. Do not call any AdaExplore repository code.
 
@@ -674,7 +695,7 @@ Return the edited candidate kernel code.`, {
 ${evaluatorCommand || '(No benchmark_command provided; measured evidence unavailable.)'}
 
 # Candidate code
-\`\`\`python
+\`\`\`${USE_DRIVER ? DRIVER_LANG_FENCE : 'python'}
 ${newKernelCode.substring(0, 9000)}
 \`\`\`
 
