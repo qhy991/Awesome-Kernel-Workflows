@@ -100,6 +100,11 @@ const LEGACY_CODE_LANG_TOKEN = 'CUDA'
 const LEGACY_VERIFY_LANG_TOKEN = 'CUDA'
 const LEGACY_SOURCE_EXT = '.cu'
 const LEGACY_FENCE_TOKEN = 'cuda'
+const LEGACY_CODE_FORMAT_HINT = `Use PyTorch load_inline compatible format:
+   - __global__ kernel function
+   - Template parameters if needed
+   - Extern "C" wrapper if needed`
+const LEGACY_VERIFY_TOOL_HINT = 'Profile with nsys/ncu if available'
 const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
 
 // Intersectional guard (P5c plan §3 + §9.1): KernelBench harness is
@@ -132,6 +137,13 @@ function fenceToken() {
 function attemptKernelPath(attempt) {
   const ext = USE_DRIVER ? DRIVER_SOURCE_EXT : LEGACY_SOURCE_EXT
   return `${WORKSPACE}/attempt_${attempt}/kernel${ext}`
+}
+function codeFormatHint() {
+  if (!USE_DRIVER) return LEGACY_CODE_FORMAT_HINT
+  return DRIVER_IMPL_REQUIREMENTS || `Follow the ${DRIVER_LANG_FENCE} driver source-format conventions and provide a host launcher.`
+}
+function verifyToolHint() {
+  return USE_DRIVER ? `Profile via the driver profile.sh envelope` : LEGACY_VERIFY_TOOL_HINT
 }
 
 // StitchCUDA: Three-agent orchestration for CUDA kernel synthesis
@@ -168,8 +180,8 @@ async function main() {
   const setupResult = await agent(
     `Set up StitchCUDA orchestration environment:
 
-1. Initialize CUDA environment:
-   - CUDA version and user-provided compiler/toolchain
+1. Initialize ${langToken(LEGACY_SETUP_LANG_TOKEN)} environment:
+   - ${langToken(LEGACY_SETUP_LANG_TOKEN)} version and user-provided compiler/toolchain
    - Target GPU architecture (sm_80, sm_89, sm_90, etc.)
    - PyTorch load_inline integration
 2. Configure KernelBench evaluation:
@@ -439,17 +451,14 @@ Return JSON:
     log('Coder: Generating CUDA kernel...');
 
     const codeResult = await agent(
-      `Generate CUDA kernel implementation (Attempt ${attempt + 1}):
+      `Generate ${langToken(LEGACY_CODE_LANG_TOKEN)} kernel implementation (Attempt ${attempt + 1}):
 
 Plan to implement:
 ${JSON.stringify(currentPlan, null, 2)}
 
 Code generation:
-1. Implement complete CUDA kernel following the plan
-2. Use PyTorch load_inline compatible format:
-   - __global__ kernel function
-   - Template parameters if needed
-   - Extern "C" wrapper if needed
+1. Implement complete ${langToken(LEGACY_CODE_LANG_TOKEN)} kernel following the plan
+2. ${codeFormatHint()}
 3. Implement all steps from the plan:
 ${currentPlan.implementation_steps.map((s, idx) => `   ${idx + 1}. ${s.description}`).join('\n')}
 4. Apply key optimizations:
@@ -459,7 +468,7 @@ ${currentPlan.key_strategies.map((s, idx) => `   - ${s}`).join('\n')}
 Return JSON:
 {
   "attempt": ${attempt + 1},
-  "kernel_code": "complete CUDA kernel code",
+  "kernel_code": "complete ${langToken(LEGACY_CODE_LANG_TOKEN)} kernel code",
   "host_code": "host launch code",
   "kernel_name": "kernel function name",
   "implementation_notes": "notes on implementation choices"
@@ -498,10 +507,10 @@ Return JSON:
     log('Verifier: Checking correctness and performance...');
 
     const verifyResult = await agent(
-      `Verify CUDA kernel (Attempt ${attempt + 1}):
+      `Verify ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel (Attempt ${attempt + 1}):
 
 Kernel to verify:
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${codeResult.kernel_code.substring(0, 2500)}${codeResult.kernel_code.length > 2500 ? '\n... (truncated)' : ''}
 \`\`\`
 
@@ -518,7 +527,7 @@ Verification process:
 3. Performance check:
    - Benchmark on ${setupResult.target_architecture}
    - Measure execution time, GFLOPS
-   - Profile with nsys/ncu if available
+   - ${verifyToolHint()}
    - Compare with baseline: ${kernelSpec.baseline_gflops || 'N/A'} GFLOPS
 4. KernelBench evaluation (if configured):
    - Run full benchmark suite
