@@ -43,8 +43,9 @@ class TestEvidenceNvidiaFull(unittest.TestCase):
         # 410000 ns / 1e6 = 0.41 ms
         self.assertAlmostEqual(self.payload['metrics']['latency_ms'], 0.41, places=9)
 
-    def test_dram_pct_is_read_plus_write_0_to_100(self):
-        # 40.0 + 22.0 = 62.0, in 0-100 (NOT 0-1)
+    def test_dram_pct_is_read_plus_write(self):
+        # 40.0 + 22.0 = 62.0; dram_pct is read%+write%, NOT 0-1 scaled
+        # (each counter is 0-100 so the sum may reach ~200; downstream must not assume [0,100])
         self.assertAlmostEqual(self.payload['metrics']['dram_pct'], 62.0, places=9)
 
     def test_sm_pct_passes_through_0_to_100(self):
@@ -125,6 +126,33 @@ class TestEvidenceNvidiaMalformed(unittest.TestCase):
         finally:
             os.unlink(path)
 
+    def test_non_utf8_file_exits_2_clean_json_no_traceback(self):
+        """Fix 1: a binary/non-UTF-8 file must yield clean JSON envelope (exit 2, ok=False)
+        with NO traceback on stdout (UnicodeDecodeError must not propagate)."""
+        import tempfile
+        with tempfile.NamedTemporaryFile('wb', suffix='.csv', delete=False) as fh:
+            fh.write(b'\xff\xfe\x00\x01bad')
+            path = fh.name
+        try:
+            proc = subprocess.run(
+                [sys.executable, MAPPER, '--native', path,
+                 '--source-backend', 'cuda'],
+                capture_output=True, text=True)
+            # exit must be non-zero (2 for parse error, not 1 from uncaught exception)
+            self.assertNotEqual(proc.returncode, 0,
+                                msg=f"expected non-zero exit; stdout={proc.stdout!r}")
+            self.assertEqual(proc.returncode, 2,
+                             msg=f"expected exit 2 (parse error); stdout={proc.stdout!r}")
+            # stdout must be valid JSON with ok=False (not a Python traceback)
+            payload = json.loads(proc.stdout)
+            self.assertIs(payload.get('ok'), False,
+                          msg=f"payload={payload}")
+            # stdout must NOT contain a Python traceback fragment
+            self.assertNotIn('Traceback', proc.stdout,
+                             msg="traceback leaked to stdout")
+        finally:
+            os.unlink(path)
+
 
 CUDA_WRAPPER = os.path.join(SUB, 'backends', 'cuda', 'to_evidence.py')
 TRITON_WRAPPER = os.path.join(SUB, 'backends', 'triton', 'to_evidence.py')
@@ -170,6 +198,30 @@ class TestVendorCollapseWrappers(unittest.TestCase):
             capture_output=True, text=True)
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         self.assertEqual(json.loads(proc.stdout)['source_backend'], 'triton')
+
+
+class TestEvidenceNvidiaMultiKernel(unittest.TestCase):
+    """Multi-kernel CSV -> first kernel wins (deterministic; documented in module docstring)."""
+
+    def setUp(self):
+        self.rc, self.payload = run_mapper('multi2.csv', source_backend='cuda')
+
+    def test_exit_zero_ok_true(self):
+        self.assertEqual(self.rc, 0, msg=f"payload={self.payload}")
+        self.assertIs(self.payload.get('ok'), True)
+
+    def test_first_kernel_wins_latency_not_second(self):
+        """kernel_A has gpu__time_duration.sum=200000 ns -> 0.2 ms;
+        kernel_B has 999999 ns -> ~0.999999 ms.
+        The mapper must return kernel_A's latency (first wins)."""
+        latency = self.payload['metrics']['latency_ms']
+        # kernel_A: 200000 ns / 1e6 = 0.2 ms
+        self.assertAlmostEqual(latency, 0.2, places=9,
+                               msg="expected kernel_A latency (first-wins); "
+                                   f"got {latency} (looks like kernel_B?)")
+        # explicitly confirm it is NOT kernel_B's value
+        self.assertNotAlmostEqual(latency, 0.999999, places=3,
+                                  msg="kernel_B latency leaked into result (first-wins broken)")
 
 
 if __name__ == '__main__':
