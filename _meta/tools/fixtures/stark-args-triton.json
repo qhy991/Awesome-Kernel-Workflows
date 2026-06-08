@@ -1,0 +1,18 @@
+{
+  "kernel_path": "/tmp/stark-fixture/reference.cu",
+  "test_harness_path": "/tmp/stark-fixture/test.py",
+  "iterations": 2,
+  "epsilon": 0.35,
+  "n_root": 5,
+  "n_child_max": 3,
+  "leaderboard_size": 5,
+  "compile_command": "nvcc {kernel_path} -o {result_path}",
+  "benchmark_command": "python /tmp/stark-fixture/bench.py {kernel_path} {result_path}",
+  "exp_dir": "/tmp/stark-fixture",
+  "language": "triton",
+  "backend": "triton",
+  "backend_dir": "_substrate/backends/triton",
+  "target_gpu": "H100",
+  "seed_candidates": 3,
+  "rng_seed": 42
+}
