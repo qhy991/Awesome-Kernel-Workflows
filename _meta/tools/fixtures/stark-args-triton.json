@@ -6,7 +6,7 @@
   "n_root": 5,
   "n_child_max": 3,
   "leaderboard_size": 5,
-  "compile_command": "nvcc {kernel_path} -o {result_path}",
+  "compile_command": "python /tmp/stark-fixture/compile.py {kernel_path} {result_path}",
   "benchmark_command": "python /tmp/stark-fixture/bench.py {kernel_path} {result_path}",
   "exp_dir": "/tmp/stark-fixture",
   "language": "triton",
