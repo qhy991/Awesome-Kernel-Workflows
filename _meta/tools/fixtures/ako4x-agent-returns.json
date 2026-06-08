@@ -1,0 +1,68 @@
+{
+  "read-baseline": {
+    "kernel_code": "import triton\n@triton.jit\ndef rmsnorm_kernel(x, y, N): pass\n",
+    "language": "triton",
+    "op_type": "rmsnorm",
+    "key_functions": ["rmsnorm_kernel"],
+    "current_approach": "single-pass triton baseline",
+    "launch_config": "grid=(M,)",
+    "shared_memory_usage": "none",
+    "memory_access_patterns": "row-major contiguous",
+    "potential_bottlenecks": "reduction tail latency",
+    "imports_used": ["triton", "torch"]
+  },
+  "create-workspace": { "ok": true },
+  "benchmark-baseline": {
+    "score": 0.085,
+    "latency_ms": 0.085,
+    "raw_output": "baseline=0.085ms"
+  },
+  "hypothesis-0-0": {
+    "title": "vec-loads",
+    "bottleneck": "global memory bandwidth",
+    "ncu_evidence": "static-analysis",
+    "hypothesis": "vectorize input loads",
+    "expected_impact": "1.2x",
+    "risk": "tail alignment"
+  },
+  "impl-0-vec-loads-v0": {
+    "code": "import triton\n@triton.jit\ndef rmsnorm_kernel(x, y, N): pass # vec\n",
+    "implementation_notes": "float4 loads"
+  },
+  "smoke-r1-iter1-vec-loads": {
+    "passed": true,
+    "error_message": "",
+    "compile_error": false,
+    "correctness_error": false
+  },
+  "bench-r1-iter1-vec-loads": {
+    "score": 0.070,
+    "latency_ms": 0.070,
+    "speedup": 1.21,
+    "passed_workloads": "2/2",
+    "ab_compare_delta": "+15%",
+    "variance_info": "noise<2%",
+    "raw_output": "candidate=0.070ms"
+  },
+  "iterations-1": { "ok": true },
+  "silent-skip-check-1": {
+    "is_legitimate": true,
+    "suspicion_level": "low",
+    "concerns": [],
+    "recommendation": "archive"
+  },
+  "lib-check-1": {
+    "is_own_kernel": true,
+    "banned_libs_found": [],
+    "concerns": ""
+  },
+  "archive-iter-1-vec-loads": { "ok": true },
+  "update-state-1": { "ok": true },
+  "driver-build-0": { "ok": true },
+  "driver-run-0": { "ok": true, "latency_ms": 0.070, "compiled": true, "correct": true },
+  "driver-profile-0": { "ok": true, "native_path": "/tmp/p.native" },
+  "driver-to-evidence-0": { "ok": true, "metrics": { "latency_ms": 0.070 }, "coverage": [] },
+  "driver-diagnose-0": { "bottleneck_class": "memory_bound", "evidence": [] },
+  "driver-anti-cheat-0": { "ok": true, "suspicious": false, "reasons": [] },
+  "final-report": { "report_md": "AKO4X campaign summary." }
+}
