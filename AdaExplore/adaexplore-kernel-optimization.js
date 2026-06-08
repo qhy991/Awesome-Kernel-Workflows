@@ -671,9 +671,13 @@ Return the edited candidate kernel code.`, {
 
   phase('Evaluate')
 
-  const kernelPath = `${EXP_DIR}/kernels/step_${searchStep + 1}_${isLargeStep ? 'large' : 'small'}.py`
+  const kernelPath = USE_DRIVER
+    ? workspaceKernelPath(searchStep, isLargeStep, DRIVER_SOURCE_EXT)
+    : `${EXP_DIR}/kernels/step_${searchStep + 1}_${isLargeStep ? 'large' : 'small'}.py`
   const resultPath = `${EXP_DIR}/eval/step_${searchStep + 1}_result.json`
-  const evaluatorCommand = renderCommand(evaluatorCommandTemplate, {
+  const evaluatorCommand = USE_DRIVER
+    ? `${SH ? SH + ' ' : ''}${BACKEND_DIR}/run.sh --kernel ${kernelPath} --result ${resultPath}`
+    : renderCommand(evaluatorCommandTemplate, {
     kernel_path: kernelPath,
     result_path: resultPath,
     reference_path: referencePath,
@@ -726,7 +730,52 @@ Return the parsed evaluation result.`, {
 
   const compiled = Boolean(evalResult.compiled)
   const correct = Boolean(evalResult.correct)
-  const speedup = Number(evalResult.speedup || 0)
+  let speedup = Number(evalResult.speedup || 0)
+
+  let driverEnvelope = null
+  if (USE_DRIVER) {
+    const buildOut = `${EXP_DIR}/eval/step_${searchStep + 1}_artifact`
+    const profOut = `${EXP_DIR}/eval/step_${searchStep + 1}_prof.native`
+    await agent(
+      `${driverSh('build.sh', `--source ${kernelPath} --out ${buildOut}`)}\n` +
+      `Return its stdout JSON verbatim.`,
+      { label: `driver-build-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const runOut = await agent(
+      `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kernelPath} --result ${resultPath}`)}\n` +
+      `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+      { label: `driver-run-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const profileOut = await agent(
+      `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kernelPath} --out ${profOut}`)}\n` +
+      `Return {ok, native_path}.`,
+      { label: `driver-profile-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const evidenceOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+      { label: `driver-to-evidence-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const diagOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+      `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+      { label: `driver-diagnose-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const antiCheatOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kernelPath} --result ${resultPath}\`.\n` +
+      `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+      { label: `driver-anti-cheat-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const measuredLatency = Number((runOut && runOut.latency_ms) || (evidenceOut && evidenceOut.metrics && evidenceOut.metrics.latency_ms) || 0)
+    const baselineLatency = Number(args.baseline_latency_ms || 0)
+    const driverSpeedup = (baselineLatency > 0 && measuredLatency > 0) ? baselineLatency / measuredLatency : 0
+    if (driverSpeedup > 0) speedup = driverSpeedup
+    driverEnvelope = {
+      anti_cheat: antiCheatOut || {},
+      metrics: (evidenceOut && evidenceOut.metrics) || {},
+      vendor: DRIVER && DRIVER.hw_vendor || '',
+      coverage: (evidenceOut && evidenceOut.coverage) || [],
+      bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',
+      latency_ms: measuredLatency,
+      baseline_latency_ms: baselineLatency,
+      backend_id: DRIVER_BACKEND_ID,
+    }
+  }
+
   const reward = computeReward(compiled, correct, speedup)
   const newScore = scoreTuple(compiled, correct, speedup)
   const newNodeId = `node-${searchStep + 1}-${isLargeStep ? 'L' : 'S'}`
@@ -749,6 +798,7 @@ Return the parsed evaluation result.`, {
     kernelPath,
     resultPath: evalResult.result_path || resultPath,
     notes: expandNotes,
+    ...(driverEnvelope ? { driver_envelope: driverEnvelope } : {}),
   }
   mctsNodes.push(newNode)
   selectedNode.children.push(newNodeId)
