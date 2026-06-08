@@ -25,12 +25,12 @@
 Migrate all 13 clean-tier workflows (§7.2: AdaExplore, KernelAgent, KDA,
 CUDALLM, Astra, StitchCUDA, STARK, KSearch, ReGraphT, KernelFoundry,
 KernelFoundryDx, KernelSkill, AKO4X, KernelBand — and Generalist as the
-substrate reference, migrated last) onto the backend-driver contract proved
-out by P4 on AccelOpt. Land the §9.2 generator/template/schema changes that
-make new clean workflows emit driver-shaped code by default. Land the §9.3
-CI tiers (substrate diff-guard, driver conformance L0–L3, matrix smoke).
-Land the §9.4 documentation pass. No GPU dependency in any exit criterion;
-GPU verification is the opt-in deferred tier (carried over from P4).
+substrate reference, last) onto the backend-driver contract proved out by
+P4 on AccelOpt. Land the §9.2 generator/template/schema changes (new clean
+workflows emit driver-shaped code by default), the §9.3 CI tiers
+(substrate diff-guard, driver conformance L0–L3, matrix smoke), the §9.4
+docs pass. No GPU dependency in any exit criterion; GPU verification is
+the opt-in deferred tier (carried from P4).
 
 > **Workflow count:** §7.2 row 1 (13) + KernelBand (`clean*`) +
 > Generalist (`clean`) = **15 clean / matrix-eligible total**, same as
@@ -593,9 +593,8 @@ inherited from P4's `DEFERRED-GPU-VERIFICATION.md`).
 | §10 risks — performance-comparable cross-backend | documented as a known limitation in P5e + P5f |
 | Appendix A "P5+" row | this entire master plan |
 
-**Workflow → sub-plan summary:** P5b={AdaExplore, KernelAgent};
-P5c={KDA, CUDALLM, Astra, StitchCUDA, STARK}; P5d={KSearch, ReGraphT,
-KernelFoundry, KernelFoundryDx, KernelSkill, AKO4X, KernelBand};
-P5e={Generalist + matrix-smoke CI}. 15 workflows total. All exit P5 with
-byte-identical legacy paths plus a working driver path validated against
-the cuda + triton P3 drivers.
+**Workflow → sub-plan summary:** P5b={AdaExplore, KernelAgent}; P5c={KDA,
+CUDALLM, Astra, StitchCUDA, STARK}; P5d={KSearch, ReGraphT, KernelFoundry,
+KernelFoundryDx, KernelSkill, AKO4X, KernelBand}; P5e={Generalist +
+matrix-smoke CI}. 15 workflows total; all exit P5 with byte-identical
+legacy paths plus a driver path validated against P3 cuda + triton drivers.
