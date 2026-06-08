@@ -12,3 +12,4 @@ gate and the live execution it does NOT yet cover.
 | Workflow | Dry-run test file | Driver path covered | Live GPU run deferred to | Notes |
 |----------|-------------------|---------------------|--------------------------|-------|
 | CUDALLM  | `cudallm-triton-dryrun.test.js` | triton (`_substrate/backends/triton`) | P5e | Asserts no CUDA-token leak, `run.sh` path, load-driver-first, `.py` source_ext in eval prompt, no LEGACY_FEATURE_CATALOG leak. Does not run @triton.jit kernels. |
+| KDA      | `kda-triton-dryrun.test.js`     | triton (`_substrate/backends/triton`) | P5e | Asserts no CUDA-token leak, `run.sh` path, load-driver-first, no cuda-kernel-development binding in Inspect, no ncu-report-skill / warp-shuffle in Validate. Does not run @triton.jit kernels; per-candidate Layer-A envelope (build/run/profile/to_evidence/diagnose/anti_cheat) is dry-run only. |
