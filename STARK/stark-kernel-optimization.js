@@ -135,6 +135,21 @@ const LANGUAGE = args.language || 'cuda'
 const TARGET_GPU = args.target_gpu || 'unknown GPU'
 const SEED_CANDIDATES = args.seed_candidates || 3
 
+// Seeded RNG (P5c STARK A0). Replaces Math.random() in selectNode() only.
+// When args.rng_seed is null/undefined, falls through to native Math.random()
+// — legacy byte-identical for callers that do not pin a seed.
+const RNG_SEED = args.rng_seed
+let _rngState = (RNG_SEED !== undefined && RNG_SEED !== null) ? (((RNG_SEED | 0) || 1) >>> 0) : null
+function rng() {
+  if (_rngState === null) return Math.random()
+  let s = _rngState | 0
+  s ^= s << 13
+  s ^= s >>> 17
+  s ^= s << 5
+  _rngState = s >>> 0
+  return (_rngState / 0x1_0000_0000)
+}
+
 if (!REF_KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
   throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
 }
@@ -209,12 +224,12 @@ function selectNode() {
       const c = getChildren(n.id)
       return c.length < N_CHILD_MAX * 2
     })
-    if (fallback.length > 0) return fallback[Math.floor(Math.random() * fallback.length)]
-    return tree[Math.floor(Math.random() * tree.length)]
+    if (fallback.length > 0) return fallback[Math.floor(rng() * fallback.length)]
+    return tree[Math.floor(rng() * tree.length)]
   }
 
   // With probability (1 - epsilon), pick the best node by score (exploitation)
-  const coin = Math.random()
+  const coin = rng()
   if (coin > EPSILON) {
     // Exploitation: pick the best-scoring expandable node
     const sorted = [...expandable].sort((a, b) => getScore(a) - getScore(b))
@@ -225,10 +240,10 @@ function selectNode() {
   // Leaf-biased: sample uniformly from expandable leaves
   const leaves = expandable.filter(n => isLeaf(n.id))
   if (leaves.length > 0) {
-    return leaves[Math.floor(Math.random() * leaves.length)]
+    return leaves[Math.floor(rng() * leaves.length)]
   }
   // Fallback to all expandable
-  return expandable[Math.floor(Math.random() * expandable.length)]
+  return expandable[Math.floor(rng() * expandable.length)]
 }
 
 // =============================================================================
