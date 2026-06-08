@@ -1,0 +1,204 @@
+# =============================================================================
+# AKO4X Manifest — Multi-Round Closed-Loop GPU Kernel Optimization
+# =============================================================================
+# Source: AKO4X methodology (templates/task.md, master/MASTER.md,
+#         templates/agent/lessons-convention.md, templates/skills/bench/,
+#         templates/retrospective.md).
+# =============================================================================
+
+schema_version: "1.1"
+name: ako4x-kernel-optimizer
+entrypoint: ako4x-kernel-optimizer.js
+
+backend:
+  portability: clean
+  matrix_eligible: true
+  method_supported_backends: any
+  supported: [triton, cuda, cute-dsl, tilelang, cpp, pytorch]
+  default: triton
+  # Notes (P5d intersectional guards encoded in the workflow body):
+  #   1. ncu_binary is NVIDIA-only; driver path throws if a non-cuda backend
+  #      is combined with args.ncu_binary (NCU is part of the CUDA toolkit).
+  #   2. mode=3 (harness co-evolution / retrospective proposals) is forbidden
+  #      under the USE_DRIVER path because the retrospective phase writes
+  #      proposals against SKILL/harness scope; under driver dispatch the
+  #      _substrate driver tree is immutable, so mode=3 must use mode=2.
+  # Matrix-smoke (P5e) exercises ncu_binary='' and mode=2 (defaults).
+
+source:
+  paper_title: "AKO4X: Multi-Round Closed-Loop GPU Kernel Optimization"
+  paper_url: ""
+  paper_venue: ""
+  repo_url: ""
+  commit_or_tag: ""
+  license: ""
+  notes: >
+    AKO4X is a two-level (round / iteration) GPU-kernel optimization loop
+    with experience accumulation, pre-archive silent-skip and
+    library-delegation gates, two-layer WHEN lessons, dead-end priors with
+    WHY, and an optional Phase-2 harness retrospective.
+
+workflow:
+  name: "ako4x-kernel-optimizer"
+  description: "Multi-round closed-loop GPU kernel optimization with experience accumulation (AKO4X methodology)"
+  when_to_use: >
+    Use when you need to iteratively optimize any GPU kernel (Triton / CUDA /
+    CuTe DSL / TileLang / C++) through plan-execute-benchmark-learn cycles
+    with cross-round memory.
+  output_filename: "ako4x-kernel-optimizer.js"
+  directory: "AKO4X/"
+
+method:
+  category: "iterative_self_improving"
+  core_insight: >
+    Pre-commit Expected hypotheses, smoke-then-bench gating, two-layer WHEN
+    lessons, dead-end priors with WHY, and pre-archive silent-skip /
+    library-delegation gates compound across rounds into evidence-grounded
+    optimization. NCU profiling is the strongest baseline signal when
+    available.
+  feedback_signal:
+    type: "speedup_delta"
+    description: "Smoke-passed benchmark speedup over rolling best with all-workloads-passed gate"
+    tool: "ncu_or_custom_bench"
+    higher_is_better: true
+
+topology:
+  type: "iterative"
+  iterative:
+    iterations_arg: "iterations"
+    convergence_condition: "iterations exhausted or 2 consecutive rounds without improvement"
+    state_variables:
+      - name: "bestScore"
+        type: "number"
+        initial_value: "null"
+        description: "Best smoke-passed benchmark score so far"
+      - name: "bestKernelCode"
+        type: "string"
+        initial_value: "baselineKernelCode"
+        description: "Best kernel code carried into the next round"
+      - name: "experienceMemory"
+        type: "array"
+        initial_value: "[]"
+        description: "Learned optimization patterns injected into planning prompts"
+      - name: "deadEnds"
+        type: "array"
+        initial_value: "[]"
+        description: "Tried-and-failed directions with WHY"
+      - name: "traps"
+        type: "array"
+        initial_value: "[]"
+        description: "Cross-variant silent-bug patterns (TRAPS.md)"
+      - name: "roundHistory"
+        type: "array"
+        initial_value: "[]"
+        description: "Per-round best variant archive"
+      - name: "consecutiveNoImprove"
+        type: "number"
+        initial_value: "0"
+        description: "Stopping-condition counter"
+
+phases:
+  - name: "Setup"
+    detail: "Read target kernel, detect language, create workspace, establish baseline"
+    position: "preamble"
+  - name: "Round-Init"
+    detail: "Select parent variant with cross-round reflection, initialize round state"
+    position: "loop_body"
+  - name: "Iterate"
+    detail: "Inner iteration loop: smoke test -> bench -> commit -> log -> repeat until plateau"
+    position: "loop_body"
+  - name: "Archive"
+    detail: "Pre-archive gates, archive variant with 5-section header, update TRAPS.md"
+    position: "loop_body"
+  - name: "Retrospect"
+    detail: "Phase-2 harness retrospective (Mode 3 only), extract lessons"
+    position: "loop_body"
+  - name: "Report"
+    detail: "Final report with best variant, lessons, dead-ends, open directions"
+    position: "epilogue"
+
+args:
+  required: []
+  optional:
+    - name: "kernel_path"
+      type: "string"
+      default: "''"
+      description: "Path to kernel file to optimize (optimize_existing mode)"
+      example: "/path/to/kernel.py"
+    - name: "problem_definition"
+      type: "string"
+      default: "''"
+      description: "Inline problem statement (generate_then_optimize mode)"
+      example: "Multi-head Latent Attention paged decode"
+    - name: "problem_path"
+      type: "string"
+      default: "''"
+      description: "Path to problem definition file (generate_then_optimize mode)"
+      example: "/path/to/problem.md"
+    - name: "language"
+      type: "string"
+      default: "'auto'"
+      description: "triton / cuda / cute-dsl / tilelang / cpp / pytorch / auto"
+      example: "triton"
+    - name: "iterations"
+      type: "number"
+      default: "5"
+      description: "Maximum optimization rounds"
+      example: "5"
+    - name: "iters_per_round"
+      type: "number"
+      default: "5"
+      description: "Maximum benched iterations per round"
+      example: "5"
+    - name: "mode"
+      type: "number"
+      default: "2"
+      description: "2 = static harness, 3 = harness co-evolution (mode=3 is forbidden under USE_DRIVER)"
+      example: "2"
+
+correctness:
+  criteria:
+    - "Variant compiles"
+    - "Smoke test passes (compile + correctness)"
+    - "Full benchmark all-workloads-passed"
+    - "Pre-archive silent-skip and library-delegation gates pass"
+  check_type: "runtime_comparison"
+  reference_output: "Baseline kernel performance and ncu profile when available"
+
+return_fields:
+  - name: "best_score"
+    type: "number"
+    description: "Best smoke-passed benchmark score"
+    required: true
+  - name: "best_kernel_code"
+    type: "string"
+    description: "Best kernel code"
+    required: true
+  - name: "overall_speedup"
+    type: "number"
+    description: "Best / baseline speedup"
+    required: false
+  - name: "round_history"
+    type: "array"
+    description: "Per-round archived variants"
+    required: true
+  - name: "dead_ends"
+    type: "array"
+    description: "Tried-and-failed directions with WHY"
+    required: true
+  - name: "traps"
+    type: "array"
+    description: "Cross-variant silent-bug patterns"
+    required: true
+  - name: "report"
+    type: "object"
+    description: "Final technical report"
+    required: true
+
+template:
+  base: "iterative-loop"
+  customizations:
+    - "two_level_iteration"
+    - "pre_archive_gates"
+    - "cross_round_memory"
+    - "harness_retrospective_mode3"
