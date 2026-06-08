@@ -538,6 +538,41 @@ Return JSON with:
   },
 })
 
+if (USE_DRIVER) {
+  const kPath = REF_KERNEL_PATH
+  const buildOut = `${EXP_DIR}/stark_root.artifact`
+  const profOut = `${EXP_DIR}/stark_root.prof.native`
+  await agent(
+    `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+    `Return its stdout JSON verbatim.`,
+    { label: 'driver-build-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  const runOut = await agent(
+    `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+    `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+    { label: 'driver-run-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agent(
+    `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+    `Return {ok, native_path}.`,
+    { label: 'driver-profile-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  const evidenceOut = await agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+    `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+    { label: 'driver-to-evidence-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+    `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+    { label: 'driver-diagnose-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/stark_root.result.json\`.\n` +
+    `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+    { label: 'driver-anti-cheat-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  rootEval.driver_envelope = {
+    latency_ms: Number((runOut && runOut.latency_ms) || 0),
+    metrics: (evidenceOut && evidenceOut.metrics) || {},
+    backend_id: DRIVER_BACKEND_ID,
+  }
+}
+
 // Initialize root node
 rootNode = {
   id: 'root',
@@ -779,6 +814,42 @@ Return JSON with:
       required: ['compile_ok', 'correct', 'runtime_ms', 'logs', 'error_category'],
     },
   })
+
+  if (USE_DRIVER) {
+    const kPath = starkNodeKernelPath(`node_${attemptCount}`)
+    const buildOut = `${EXP_DIR}/node_${attemptCount}.artifact`
+    const profOut = `${EXP_DIR}/node_${attemptCount}.prof.native`
+    await agent(
+      `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+      `Return its stdout JSON verbatim.`,
+      { label: `driver-build-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const runOut = await agent(
+      `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+      `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+      { label: `driver-run-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    await agent(
+      `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+      `Return {ok, native_path}.`,
+      { label: `driver-profile-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const evidenceOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+      { label: `driver-to-evidence-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const diagOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+      `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+      { label: `driver-diagnose-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/node_${attemptCount}.result.json\`.\n` +
+      `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+      { label: `driver-anti-cheat-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    evalResult.driver_envelope = {
+      latency_ms: Number((runOut && runOut.latency_ms) || 0),
+      metrics: (evidenceOut && evidenceOut.metrics) || {},
+      bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',
+      backend_id: DRIVER_BACKEND_ID,
+    }
+  }
 
   // ===========================================================================
   // Phase 6: Update — Append to tree, update leaderboard
