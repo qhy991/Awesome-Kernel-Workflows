@@ -65,6 +65,30 @@ workflow `.js` body cannot `require` modules or read disk. So the substrate is
               ↑ all stand on the SAME shared substrate (the 7 component axes)
 ```
 
+## Backend Driver axis -- a cross-cutting data axis
+
+The Backend Driver axis is the third design axis (alongside the universal substrate and
+the exploration topology). It extracts the `(source language) x (hardware/profiler
+vendor)` product that was previously welded into each workflow's body -- `nvcc`, `ncu`,
+`__global__`, `.cu` in prompt strings -- into a pluggable, per-backend directory under
+`_substrate/backends/<backend_id>/`. Each driver contains six files (`manifest.json`,
+`build.sh`, `run.sh`, `profile.sh`, `to_evidence.py`, `idioms.json`) that adapt native
+backend tooling to the universal substrate vocabulary. A workflow switches backends by
+setting `args.backend`; the method body never names a vendor profiler or vendor metric
+directly.
+
+The Backend Driver axis is **owned by neither the solver nor the generator**. It is a
+cross-cutting data layer that sits between the workflow body (which builds string paths
+from `args.backend`) and the substrate scripts (which consume canonical metrics). The
+driver translates native profiler output into the canonical four-key metric dict
+(`latency_ms`, `dram_pct`, `sm_pct`, `occupancy`) via `to_evidence.py`, and maps
+abstract `method_gate.TABLE` names to concrete backend idioms via `idioms.json`. This
+separation means any clean optimization method can run on any backend as a matrix:
+`method x backend`, without re-authoring prompts or shell strings.
+
+See [`BACKEND-DRIVER-SDK.md`](./BACKEND-DRIVER-SDK.md) for the full driver contract and
+[`backends/REGISTRY.md`](./backends/REGISTRY.md) for the per-driver index.
+
 ## Three concrete relationships between generalist and KerSor
 
 1. **Portfolio member.** The generalist is one solver in KerSor's pool — its
