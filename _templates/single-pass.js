@@ -1,3 +1,6 @@
+// DEPRECATED MIRROR — see _meta/templates/single-pass.js for the authoritative v1.1+ template.
+// This file is preserved for back-compat against tools still hard-coding the _templates/ path.
+// Do not edit. Spec §2.3.
 // =============================================================================
 // TEMPLATE: Single-Pass Pipeline Kernel Optimization
 // =============================================================================
