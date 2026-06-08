@@ -310,11 +310,12 @@ function selectNode() {
 // Helper: Build agent-specific context windows (Section 4.4)
 // =============================================================================
 
-function buildPlanContext(nodeId) {
+function buildPlanContext(nodeId, langFence) {
   const node = getNode(nodeId)
   if (!node) return ''
   const children = getChildren(nodeId)
   const topR = leaderboard.slice(0, LEADERBOARD_SIZE).filter(n => n.id !== nodeId)
+  const fence = langFence || LEGACY_FENCE_TOKEN
 
   let ctx = `# Context Window for PLAN Agent\n\n## Selected Node (id=${nodeId})\n`
   ctx += `- Runtime: ${node.runtime !== null ? node.runtime + ' ms' : 'N/A'}\n`
@@ -335,24 +336,25 @@ function buildPlanContext(nodeId) {
     ctx += `${i + 1}. ${l.id}: ${l.runtime}ms\n`
   }
 
-  ctx += `\n## Source Reference Kernel\n\`\`\`cuda\n${referenceKernelCode.substring(0, 3000)}\n\`\`\`\n`
+  ctx += `\n## Source Reference Kernel\n\`\`\`${fence}\n${referenceKernelCode.substring(0, 3000)}\n\`\`\`\n`
 
   return ctx
 }
 
-function buildCodeContext(nodeId) {
+function buildCodeContext(nodeId, langFence) {
   const node = getNode(nodeId)
   if (!node) return ''
   const children = getChildren(nodeId)
   const siblings = getSiblings(nodeId)
+  const fence = langFence || LEGACY_FENCE_TOKEN
 
   let ctx = `# Context Window for CODE Agent\n\n## Selected Node (id=${nodeId})\n`
-  ctx += `Selected kernel code:\n\`\`\`cuda\n${node.kernel_code.substring(0, 2500)}\n\`\`\`\n`
+  ctx += `Selected kernel code:\n\`\`\`${fence}\n${node.kernel_code.substring(0, 2500)}\n\`\`\`\n`
 
   ctx += `\n## Children of Selected Node (${children.length})\n`
   for (const c of children) {
     if (c.correct && c.runtime !== null) {
-      ctx += `- ${c.id}: SUCCESS, ${c.runtime}ms. Code snippet:\n\`\`\`cuda\n${c.kernel_code.substring(0, 800)}\n\`\`\`\n`
+      ctx += `- ${c.id}: SUCCESS, ${c.runtime}ms. Code snippet:\n\`\`\`${fence}\n${c.kernel_code.substring(0, 800)}\n\`\`\`\n`
     } else if (!c.compile_ok || !c.correct) {
       ctx += `- ${c.id}: FAILED — ${c.logs?.substring(0, 200) || 'unknown error'}\n`
     }
@@ -361,22 +363,23 @@ function buildCodeContext(nodeId) {
   ctx += `\n## Sibling Nodes (${siblings.length}) — Transferable patches\n`
   for (const s of siblings) {
     if (s.correct && s.runtime !== null) {
-      ctx += `- ${s.id}: ${s.runtime}ms. Key implementation:\n\`\`\`cuda\n${s.kernel_code.substring(0, 600)}\n\`\`\`\n`
+      ctx += `- ${s.id}: ${s.runtime}ms. Key implementation:\n\`\`\`${fence}\n${s.kernel_code.substring(0, 600)}\n\`\`\`\n`
     }
   }
 
-  ctx += `\n## Source Reference Kernel\n\`\`\`cuda\n${referenceKernelCode.substring(0, 1500)}\n\`\`\`\n`
+  ctx += `\n## Source Reference Kernel\n\`\`\`${fence}\n${referenceKernelCode.substring(0, 1500)}\n\`\`\`\n`
 
   return ctx
 }
 
-function buildDebugContext(nodeId) {
+function buildDebugContext(nodeId, langFence) {
   const node = getNode(nodeId)
   if (!node) return ''
   const siblings = getSiblings(nodeId)
+  const fence = langFence || LEGACY_FENCE_TOKEN
 
   let ctx = `# Context Window for DEBUG Agent\n\n## Failing Node (id=${nodeId})\n`
-  ctx += `Failing kernel code:\n\`\`\`cuda\n${node.kernel_code.substring(0, 2500)}\n\`\`\`\n`
+  ctx += `Failing kernel code:\n\`\`\`${fence}\n${node.kernel_code.substring(0, 2500)}\n\`\`\`\n`
   ctx += `\n## Error Logs\n\`\`\`\n${(node.logs || '').substring(0, 2000)}\n\`\`\`\n`
   ctx += `\n## Original Plan (if any)\n${node.plan || 'No plan recorded'}\n`
   ctx += `\n## Anchors (if any)\n${node.anchors || 'No anchors recorded'}\n`
@@ -385,13 +388,13 @@ function buildDebugContext(nodeId) {
   for (const s of siblings) {
     ctx += `### ${s.id}\n`
     if (s.correct) {
-      ctx += `CORRECT — ${s.runtime}ms:\n\`\`\`cuda\n${s.kernel_code.substring(0, 800)}\n\`\`\`\n`
+      ctx += `CORRECT — ${s.runtime}ms:\n\`\`\`${fence}\n${s.kernel_code.substring(0, 800)}\n\`\`\`\n`
     } else {
       ctx += `Also failing — ${s.logs?.substring(0, 200) || 'unknown'}\n`
     }
   }
 
-  ctx += `\n## Source Reference Kernel\n\`\`\`cuda\n${referenceKernelCode.substring(0, 1500)}\n\`\`\`\n`
+  ctx += `\n## Source Reference Kernel\n\`\`\`${fence}\n${referenceKernelCode.substring(0, 1500)}\n\`\`\`\n`
 
   return ctx
 }
@@ -432,7 +435,7 @@ if (USE_DRIVER) {
 }
 
 if (INPUT_MODE === 'generate_then_optimize') {
-  const generated = await agent(`No kernel_path was provided. Generate and verify an initial CUDA kernel before constructing the STARK search tree.
+  const generated = await agent(`No kernel_path was provided. Generate and verify an initial ${langToken(LEGACY_GENERATION_LANG_TOKEN)} kernel before constructing the STARK search tree.
 
 # Problem Input
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
@@ -508,7 +511,7 @@ log(`Reference loaded: ${setupResult.op_type}, ${referenceKernelCode.length} cha
 const rootEval = await agent(`Evaluate this reference kernel for correctness and performance.
 
 # Kernel Code
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${referenceKernelCode.substring(0, 4000)}
 \`\`\`
 
@@ -594,7 +597,7 @@ for (let t = 0; t < BUDGET; t++) {
     isDebugPath = true
     log(`Debug path for ${selectedId}: ${selectedNode.logs?.substring(0, 200) || 'unknown error'}`)
 
-    const debugCtx = buildDebugContext(selectedId)
+    const debugCtx = buildDebugContext(selectedId, fenceToken())
 
     const debugResult = await agent(`You are a kernel debugging expert. Fix the failing kernel using sibling patterns.
 
@@ -607,7 +610,7 @@ ${debugCtx}
 4. Return the COMPLETE fixed kernel code
 
 Return a JSON object with:
-- kernel_code: string (complete fixed CUDA kernel)
+- kernel_code: string (complete fixed ${langToken(LEGACY_DEBUG_LANG_TOKEN)} kernel)
 - fix_summary: string (brief description of what was wrong and how it was fixed)
 - confidence: 'high' | 'medium' | 'low'`, {
       label: `debug-${selectedId}-a${attemptCount}`,
@@ -632,7 +635,7 @@ Return a JSON object with:
     // Normal path: Plan + Code
     phase('Plan')
 
-    const planCtx = buildPlanContext(selectedId)
+    const planCtx = buildPlanContext(selectedId, fenceToken())
 
     const planResult = await agent(`You are a kernel optimization strategist. Propose a concrete, actionable optimization plan with grounded instruction anchors.
 
@@ -690,9 +693,9 @@ Return a JSON object with:
     // =========================================================================
     phase('Code')
 
-    const codeCtx = buildCodeContext(selectedId)
+    const codeCtx = buildCodeContext(selectedId, fenceToken())
 
-    const codeResult = await agent(`You are a kernel coding expert. Realize the grounded instructions into executable CUDA code.
+    const codeResult = await agent(`You are a kernel coding expert. Realize the grounded instructions into executable ${langToken(LEGACY_CODE_LANG_TOKEN)} code.
 
 ${codeCtx}
 
@@ -700,7 +703,7 @@ ${codeCtx}
 Plan: ${planResult.plan}
 
 Anchored Scaffold:
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${planResult.anchored_scaffold.substring(0, 4000)}
 \`\`\`
 
@@ -708,14 +711,14 @@ ${planResult.anchored_scaffold.substring(0, 4000)}
 ${planResult.anchors.map(a => `- ${a.name} (lines ${a.begin_line}-${a.end_line}): ${a.description}`).join('\n')}
 
 # Instructions
-1. Replace each <<<IMPROVE BEGINS/ENDS>>> anchor with concrete, correct CUDA code
+1. Replace each <<<IMPROVE BEGINS/ENDS>>> anchor with concrete, correct ${langToken(LEGACY_CODE_LANG_TOKEN)} code
 2. Preserve all code OUTSIDE the anchors exactly as-is
 3. Use successful patterns from sibling kernels when appropriate
 4. Ensure the resulting code is syntactically valid and compilable
 5. Do NOT use <<<IMPROVE>>> markers in the final output — they must be fully resolved
 
 Return a JSON object with:
-- kernel_code: string (complete, anchor-free CUDA kernel)
+- kernel_code: string (complete, anchor-free ${langToken(LEGACY_CODE_LANG_TOKEN)} kernel)
 - implementation_notes: string (brief notes on how anchors were resolved)
 - anchor_resolutions: array of {name, resolution_summary}`, {
       label: `code-${selectedId}-a${attemptCount}`,
@@ -743,7 +746,7 @@ Return a JSON object with:
   const evalResult = await agent(`Evaluate this kernel for correctness and performance.
 
 # Kernel Code
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${newKernelCode.substring(0, 4000)}
 \`\`\`
 
@@ -841,7 +844,7 @@ const report = await agent(`Generate a comprehensive optimization report for thi
 - Best speedup: ${bestNode?.speedup || 'N/A'}x
 
 # Best Kernel (id=${bestNode.id})
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${bestNode.kernel_code.substring(0, 4000)}
 \`\`\`
 
