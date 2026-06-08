@@ -70,7 +70,23 @@ function assertWorkflowSuitability() {
   }
 }
 
-assertWorkflowSuitability()
+function resolveBackendAxis() {
+  const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
+  const l = args.language ? normalizeSuitabilityValue(args.language) : null
+  if (b && l && b !== l) {
+    throw new Error(`Conflicting args: backend="${args.backend}" vs language="${args.language}". Pass only one.`)
+  }
+  if (args.backend && !args.backend_dir) {
+    throw new Error(`args.backend="${args.backend}" requires args.backend_dir; driver dispatch has no implicit-resolve path.`)
+  }
+  return b || l || null
+}
+const RESOLVED_BACKEND = resolveBackendAxis()
+const USE_DRIVER = !!args.backend_dir
+
+if (!USE_DRIVER) {
+  assertWorkflowSuitability()
+}
 
 // =============================================================================
 // K-Search: Co-Evolving World Model Kernel Optimization Workflow
@@ -123,6 +139,38 @@ if (!KERNEL_SPEC_PATH && !PROBLEM_DEFINITION && !BASELINE_CODE_PATH) {
   throw new Error('Provide one of problem_path, problem_definition, or kernel_path')
 }
 
+// --- Backend driver wiring (P5d Stage B; off-by-default; legacy path byte-identical) ---
+const BACKEND_DIR = args.backend_dir || ''
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const SH = args.driver_shell_prefix || ''
+const PY = args.substrate_command_prefix || ''
+const LEGACY_LANG_TOKEN = LANGUAGE
+const LEGACY_FENCE_TOKEN = LANGUAGE
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+
+function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
+function driverSh(script, cliArgs) {
+  return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
+}
+
+let DRIVER = null
+let DRIVER_LANG_FENCE = LEGACY_FENCE_TOKEN
+let DRIVER_IMPL_REQUIREMENTS = ''
+let DRIVER_SOURCE_EXT = ''
+let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
+
+function langToken(legacy) {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : legacy
+}
+function fenceToken() {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : LEGACY_FENCE_TOKEN
+}
+
+function ksearchNodeKernelPath(label) {
+  const ext = USE_DRIVER ? (DRIVER_SOURCE_EXT || '.py') : '.py'
+  return `${EXP_DIR}/${label}${ext}`
+}
+
 // State
 let decisionTree = null
 let solutionDb = []
@@ -137,6 +185,26 @@ let globalRound = 0
 // Phase 1: Setup — Read spec, evaluate baseline
 // =============================================================================
 phase('Setup')
+
+if (USE_DRIVER) {
+  DRIVER = await agent(
+    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
+    `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
+    `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
+    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (!DRIVER || DRIVER.present === false) {
+    throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
+  }
+  if (RESOLVED_BACKEND && DRIVER.backend_id && normalizeSuitabilityValue(DRIVER.backend_id) !== RESOLVED_BACKEND) {
+    throw new Error(`backend_dir manifest backend_id="${DRIVER.backend_id}" conflicts with args.backend/language="${RESOLVED_BACKEND}".`)
+  }
+  DRIVER_LANG_FENCE = DRIVER.lang_fence || DRIVER_LANG_FENCE
+  DRIVER_IMPL_REQUIREMENTS = DRIVER.impl_requirements || ''
+  DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT
+  DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID
+  log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
+}
 
 const setupResult = await agent(`You are a GPU kernel optimization expert. Read and analyze the kernel specification.
 
@@ -156,7 +224,7 @@ ${BASELINE_CODE_PATH ? `Also read the baseline kernel at: ${BASELINE_CODE_PATH}`
 7. **key_challenges**: What makes this kernel hard to optimize?
 8. **design_dimensions**: Orthogonal axes of the design space (e.g., tiling strategy, memory hierarchy usage, parallelism decomposition, algorithmic variant)
 
-Target language: ${LANGUAGE}
+Target language: ${langToken(LANGUAGE)}
 Target GPU: ${TARGET_GPU}
 Operation: ${OP_DESC}
 
@@ -189,7 +257,7 @@ const baselineEval = await agent(`You are a kernel evaluation expert. Evaluate t
 ${specText.substring(0, 2000)}
 
 # Baseline Code:
-\`\`\`${LANGUAGE}
+\`\`\`${langToken(LANGUAGE)}
 ${(setupResult.baseline_code || '').substring(0, 3000)}
 \`\`\`
 
@@ -218,6 +286,40 @@ Return evaluation results.`, {
   },
 })
 
+if (USE_DRIVER) {
+  const kPath = BASELINE_CODE_PATH || ksearchNodeKernelPath('ksearch_root')
+  const buildOut = `${EXP_DIR}/ksearch_root.artifact`
+  const profOut = `${EXP_DIR}/ksearch_root.prof.native`
+  await agent(
+    `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+    `Return its stdout JSON verbatim.`,
+    { label: 'driver-build-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  const runOut = await agent(
+    `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+    `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+    { label: 'driver-run-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agent(
+    `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+    `Return {ok, native_path}.`,
+    { label: 'driver-profile-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  const evidenceOut = await agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+    `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+    { label: 'driver-to-evidence-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+    `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+    { label: 'driver-diagnose-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/ksearch_root.result.json\`.\n` +
+    `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+    { label: 'driver-anti-cheat-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  baselineEval.driver_envelope = {
+    latency_ms: Number((runOut && runOut.latency_ms) || 0),
+    backend_id: DRIVER_BACKEND_ID,
+  }
+}
+
 baselineMetric = baselineEval.baseline_metric || 1.0
 bestMetric = baselineMetric
 log(`Baseline: metric=${baselineMetric}, latency=${baselineEval.baseline_latency_ms || 'N/A'}ms`)
@@ -234,7 +336,7 @@ const initResult = await agent(`You are a kernel optimization architect. Build a
 ${specText.substring(0, 3000)}
 
 # Operation: ${OP_DESC} (${opType})
-# Language: ${LANGUAGE}
+# Language: ${langToken(LANGUAGE)}
 # Target GPU: ${TARGET_GPU}
 # Baseline performance: metric=${baselineMetric}, latency=${baselineEval.baseline_latency_ms || 'N/A'}ms
 # Bottleneck: ${baselineEval.bottleneck_analysis || 'unknown'}
@@ -439,11 +541,11 @@ Return selection result.`, {
 
     if (isFirstAttempt) {
       // Attempt 1: generate from action (with or without base code)
-      genResult = await agent(`You are an expert ${LANGUAGE} kernel developer. Generate a high-performance kernel implementing a SPECIFIC optimization action.
+      genResult = await agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. Generate a high-performance kernel implementing a SPECIFIC optimization action.
 
 # Operation: ${OP_DESC} (${opType})
 # Target: ${TARGET_GPU}
-# Language: ${LANGUAGE}
+# Language: ${langToken(LANGUAGE)}
 
 # Kernel Specification:
 ${specText.substring(0, 2000)}
@@ -452,7 +554,7 @@ ${specText.substring(0, 2000)}
 ${selection.action_description || ''}
 
 ${parentCode ? `# Base code (from parent node — start from this and apply the action):
-\`\`\`${LANGUAGE}
+\`\`\`${langToken(LANGUAGE)}
 ${parentCode.substring(0, 4000)}
 \`\`\`` : '# No base code available — implement from specification directly.'}
 
@@ -461,7 +563,7 @@ ${JSON.stringify(selection.context_for_generation || {}).substring(0, 1500)}
 ${wmSection}
 
 # Requirements:
-1. Output COMPLETE, COMPILABLE ${LANGUAGE} code
+1. Output COMPLETE, COMPILABLE ${langToken(LANGUAGE)} code
 2. Implement ONLY the specified action — keep everything else close to base
 3. Must be functionally correct (outputs within rtol=${RTOL}, atol=${ATOL})
 4. Target ${TARGET_GPU} architecture
@@ -483,11 +585,11 @@ Return the complete kernel code.`, {
     } else if (!hasPassedInCycle) {
       // Attempts 2+, NO passing solution yet: DEBUG prompt
       // Uses currentRawCode (last attempt's code) as the buggy code to fix
-      genResult = await agent(`You are an expert ${LANGUAGE} kernel developer. The previous attempt has bugs or fails correctness. Debug and fix it.
+      genResult = await agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. The previous attempt has bugs or fails correctness. Debug and fix it.
 
 # Operation: ${OP_DESC} (${opType})
 # Target: ${TARGET_GPU}
-# Language: ${LANGUAGE}
+# Language: ${langToken(LANGUAGE)}
 
 # Kernel Specification:
 ${specText.substring(0, 1500)}
@@ -496,12 +598,12 @@ ${specText.substring(0, 1500)}
 ${selection.action_description || ''}
 
 ${parentCode ? `# Base code (known-good reference, from ${baseForDebugLabel}):
-\`\`\`${LANGUAGE}
+\`\`\`${langToken(LANGUAGE)}
 ${baseForDebug.substring(0, 3000)}
 \`\`\`` : ''}
 
 # Buggy code (last attempt — FIX THIS):
-\`\`\`${LANGUAGE}
+\`\`\`${langToken(LANGUAGE)}
 ${(currentRawCode || '').substring(0, 4000)}
 \`\`\`
 
@@ -528,22 +630,22 @@ Return the fixed kernel code.`, {
     } else {
       // Attempts 2+, HAVE a passing solution: IMPROVE prompt
       // Focus on performance, not correctness
-      genResult = await agent(`You are an expert ${LANGUAGE} kernel developer. You have a working solution — improve its performance.
+      genResult = await agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. You have a working solution — improve its performance.
 
 # Operation: ${OP_DESC} (${opType})
 # Target: ${TARGET_GPU}
-# Language: ${LANGUAGE}
+# Language: ${langToken(LANGUAGE)}
 
 # Kernel Specification:
 ${specText.substring(0, 1500)}
 
 ${parentCode ? `# Base code (reference, from ${baseForDebugLabel}):
-\`\`\`${LANGUAGE}
+\`\`\`${langToken(LANGUAGE)}
 ${baseForDebug.substring(0, 3000)}
 \`\`\`` : ''}
 
 # Current working code (improve this):
-\`\`\`${LANGUAGE}
+\`\`\`${langToken(LANGUAGE)}
 ${(currentRawCode || cycleBestCode || '').substring(0, 4000)}
 \`\`\`
 
@@ -582,10 +684,10 @@ Return improved kernel code.`, {
     // =========================================================================
     phase('Evaluate')
 
-    const evalResult = await agent(`You are a kernel evaluation expert. Evaluate this ${LANGUAGE} kernel for correctness and performance.
+    const evalResult = await agent(`You are a kernel evaluation expert. Evaluate this ${langToken(LANGUAGE)} kernel for correctness and performance.
 
 # Kernel Code:
-\`\`\`${LANGUAGE}
+\`\`\`${langToken(LANGUAGE)}
 ${genResult.code.substring(0, 4000)}
 \`\`\`
 
@@ -595,7 +697,7 @@ ${specText.substring(0, 1500)}
 # Evaluation Steps:
 
 ## 1. Compilation Check
-- Is the code syntactically valid ${LANGUAGE}?
+- Is the code syntactically valid ${langToken(LANGUAGE)}?
 - All imports/includes present?
 
 ## 2. Correctness Check
@@ -634,6 +736,42 @@ Return evaluation.`, {
         required: ['is_valid', 'metric_value'],
       },
     })
+
+    if (USE_DRIVER) {
+      const suffix = `${cycle}-${attempt}`
+      const kPath = ksearchNodeKernelPath(`cycle_${cycle}_a${attempt}`)
+      const buildOut = `${EXP_DIR}/cycle_${cycle}_a${attempt}.artifact`
+      const profOut = `${EXP_DIR}/cycle_${cycle}_a${attempt}.prof.native`
+      await agent(
+        `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+        `Return its stdout JSON verbatim.`,
+        { label: `driver-build-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      const runOut = await agent(
+        `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+        `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+        { label: `driver-run-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      await agent(
+        `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+        `Return {ok, native_path}.`,
+        { label: `driver-profile-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      const evidenceOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+        `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+        { label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      const diagOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+        `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+        { label: `driver-diagnose-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/cycle_${cycle}_a${attempt}.result.json\`.\n` +
+        `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+        { label: `driver-anti-cheat-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      evalResult.driver_envelope = {
+        latency_ms: Number((runOut && runOut.latency_ms) || 0),
+        bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',
+        backend_id: DRIVER_BACKEND_ID,
+      }
+    }
 
     if (!evalResult) continue
 
@@ -797,7 +935,7 @@ const finalReport = await agent(`Write a concise technical report on this K-Sear
 
 # K-Search Optimization Results
 - Operation: ${OP_DESC} (${opType})
-- Language: ${LANGUAGE}, Target: ${TARGET_GPU}
+- Language: ${langToken(LANGUAGE)}, Target: ${TARGET_GPU}
 - Baseline metric: ${baselineMetric}
 - Best metric achieved: ${bestMetric}
 - Overall speedup: ${bestMetric ? (bestMetric / baselineMetric).toFixed(2) : 'N/A'}x
@@ -806,7 +944,7 @@ const finalReport = await agent(`Write a concise technical report on this K-Sear
 - Valid solutions: ${solutionDb.filter(s => s.eval?.is_valid).length}
 
 # Best Solution (node: ${bestSolution?.node_id || 'none'}):
-\`\`\`${LANGUAGE}
+\`\`\`${langToken(LANGUAGE)}
 ${(bestSolution?.code || '').substring(0, 3000)}
 \`\`\`
 
