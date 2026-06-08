@@ -19,7 +19,7 @@ const schemaStub = require('./schema-stub.js')
  * @param {string} source       — raw workflow source (may start with `export `)
  * @param {object} args         — injected as the `args` global in the sandbox
  * @param {object} agentReturns — label→value map; consulted BEFORE schemaStub fallback
- * @returns {Promise<{meta: any, calls: Array<{seq,label,phase,prompt}>}>}
+ * @returns {Promise<{meta: any, calls: Array<{seq,label,phase,prompt,schema}>}>}
  */
 async function runWorkflow(source, args, agentReturns) {
   // Strip the lone leading `export ` token so `export const meta = ...` becomes
@@ -42,7 +42,13 @@ async function runWorkflow(source, args, agentReturns) {
   function agentStub(prompt, opts) {
     const label = opts && opts.label !== undefined ? opts.label : undefined
     const phase = opts && opts.phase !== undefined ? opts.phase : currentPhase
-    calls.push({ seq: seq++, label, phase, prompt })
+    // Clone schema across the vm-realm boundary so deepStrictEqual on captured calls
+    // does not trip on Object.prototype identity (schemas literal-allocated inside the
+    // sandbox have a different Object than the host runner).
+    const schema = opts && opts.schema !== undefined
+      ? JSON.parse(JSON.stringify(opts.schema))
+      : undefined
+    calls.push({ seq: seq++, label, phase, prompt, schema })
     if (agentReturns && label !== undefined && Object.prototype.hasOwnProperty.call(agentReturns, label)) {
       return agentReturns[label]
     }

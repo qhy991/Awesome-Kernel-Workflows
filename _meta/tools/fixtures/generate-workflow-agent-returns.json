@@ -1,0 +1,23 @@
+{
+  "research-paper": {},
+  "research-repo": {},
+  "model-topology": {},
+  "model-phases": {},
+  "model-args": {},
+  "model-angles": {},
+  "assemble-manifest": {
+    "manifest_yaml": "# fixture",
+    "method_name": "P5aFixture",
+    "workflow_name": "p5afixture-kernel-optimization"
+  },
+  "generate-workflow": {
+    "workflow_code": "// fixture",
+    "filename": "p5afixture.js",
+    "directory": "P5aFixture"
+  },
+  "validate-generated": {
+    "passed": true,
+    "error_count": 0,
+    "violations": []
+  }
+}
