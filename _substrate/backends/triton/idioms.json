@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "backend_id": "triton",
+  "lang_fence": "python",
+  "impl_requirements": "Provide a @triton.jit kernel plus a plain Python launcher that computes the grid and calls kernel[grid](...). No PYBIND11; the launcher returns the output tensor directly.",
+  "unsupported_methods": [],
+  "read_metric_guide": "High dram_pct with low sm_pct => memory_bound. High sm_pct with low dram_pct => compute_bound. Low occupancy with neither saturated => latency_occupancy. Many short kernels / launch-dominated wall time => overhead_bound.",
+  "methods": {
+    "vectorized_load_store": {
+      "idiom": "block-shaped tl.load / tl.store over contiguous offsets",
+      "prompt_guidance": "Load and store whole BLOCK-sized tiles with tl.arange offsets so Triton vectorizes the access into wide transactions."
+    },
+    "memory_coalescing": {
+      "idiom": "contiguous tl.load via block pointers / tl.make_block_ptr",
+      "prompt_guidance": "Lay out program_id-to-offset so the last (contiguous) axis varies fastest; use tl.make_block_ptr for clean coalesced tiles."
+    },
+    "shared_memory_tiling": {
+      "idiom": "tl.dot over BLOCK_M x BLOCK_K x BLOCK_N tiles",
+      "prompt_guidance": "Pick BLOCK_M/BLOCK_N/BLOCK_K so each program reuses an operand tile across the K loop; Triton stages it through shared memory for you."
+    },
+    "async_copy_pipeline": {
+      "idiom": "num_stages software pipelining of the K loop",
+      "prompt_guidance": "Raise num_stages (and tune num_warps) so Triton emits cp.async-backed multi-stage prefetch of the next K tile."
+    },
+    "l2_cache_reuse": {
+      "idiom": "grouped/super-grouped program ordering (GROUP_SIZE_M)",
+      "prompt_guidance": "Reorder program_id launch order (group along M) so co-scheduled programs reuse the same B columns from L2."
+    },
+    "tensor_core_mma": {
+      "idiom": "tl.dot",
+      "prompt_guidance": "Express the inner GEMM as tl.dot(a, b) on fp16/bf16 tiles so Triton lowers it to tensor-core mma."
+    },
+    "instruction_reduction": {
+      "idiom": "tl.constexpr-specialized shapes and folded ops",
+      "prompt_guidance": "Mark shapes/strides tl.constexpr so the compiler folds bounds math and unrolls the inner loop."
+    },
+    "fast_math_intrinsics": {
+      "idiom": "tl math ops with reduced-precision accumulation flags",
+      "prompt_guidance": "Use Triton's math ops and allow_tf32 / lower-precision accumulation where tolerance permits to cut transcendental cost."
+    },
+    "register_tiling": {
+      "idiom": "larger BLOCK_M x BLOCK_N register accumulator",
+      "prompt_guidance": "Grow the accumulator tile shape so each program holds more of the output in registers, raising arithmetic intensity."
+    },
+    "occupancy_increase": {
+      "idiom": "tune num_warps to raise resident warps",
+      "prompt_guidance": "Adjust num_warps (and shrink the block) so more warps stay resident per SM."
+    },
+    "block_size_tuning": {
+      "idiom": "triton.autotune over BLOCK_* / num_warps configs",
+      "prompt_guidance": "Sweep BLOCK_M/BLOCK_N/BLOCK_K and num_warps with @triton.autotune to find the best geometry for the SM."
+    },
+    "register_pressure_reduction": {
+      "idiom": "smaller BLOCK tile / fewer live tl values",
+      "prompt_guidance": "Shrink the tile shape and reuse buffers so the kernel needs fewer live registers and avoids spills."
+    },
+    "launch_config_tuning": {
+      "idiom": "grid lambda and num_warps/num_stages in the launcher",
+      "prompt_guidance": "Tune the grid lambda plus num_warps/num_stages passed at kernel[grid](...) launch to match the problem shape."
+    },
+    "kernel_fusion": {
+      "idiom": "fuse the elementwise epilogue inside the @triton.jit kernel",
+      "prompt_guidance": "Apply the activation / bias / scaling on the accumulator before tl.store so no second kernel is launched."
+    },
+    "launch_overhead_reduction": {
+      "idiom": "fewer programs per launch / persistent-style grid",
+      "prompt_guidance": "Coarsen the grid so each program does more work, cutting the number of launches and their overhead."
+    },
+    "library_fallback_hybrid": {
+      "idiom": "fall back to torch.matmul / cuBLAS for the hot op",
+      "prompt_guidance": "If a vendor GEMM beats the Triton kernel, delegate the heavy op to torch.matmul and keep Triton for fusable glue."
+    },
+    "cpu_gpu_overlap": {
+      "idiom": "non_blocking H2D copies on a side CUDA stream",
+      "prompt_guidance": "Issue host->device transfers with non_blocking=True on a separate stream so they overlap kernel launches."
+    }
+  }
+}
