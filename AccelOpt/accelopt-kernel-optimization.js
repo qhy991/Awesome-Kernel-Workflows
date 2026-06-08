@@ -225,6 +225,7 @@ let bestKernelCode = null
 let baselineLatency = null
 let baselineNcuProfile = ''
 let candidateBeam = []          // [{code, latency, speedup, ncuSummary, planTitle}]
+let bottleneckClass = 'unknown'
 
 async function resolveInitialKernelFromProblem() {
   if (INPUT_MODE !== 'generate_then_optimize') return ''
@@ -396,7 +397,8 @@ const opType = setupResult.op_type
 log(`Baseline: ${opType}, kernels: ${setupResult.key_functions.join(', ')}`)
 
 // NCU Profile the baseline
-const ncuSetup = await agent(`You are a CUDA profiling expert using Nsight Compute (ncu). Set up and run profiling for the baseline kernel only through the user-provided harness/profiler contract.
+function legacyNcuBaselinePrompt(baselineKernel) {
+  return `You are a CUDA profiling expert using Nsight Compute (ncu). Set up and run profiling for the baseline kernel only through the user-provided harness/profiler contract.
 
 # Environment
 - NCU binary: ${NCU_BINARY || '(not provided)'}
@@ -441,32 +443,76 @@ Read the details page and the report to extract:
 
 Execute only the steps backed by provided commands/artifacts. If ncu or the harness contract is unavailable, fall back to static code analysis and mark measured fields as missing.
 
-Return a structured profile result.`, {
-  label: 'ncu-baseline',
-  phase: 'Setup',
-  schema: {
-    type: 'object',
-    properties: {
-      latency_ms: { type: 'number' },
-      sm_throughput_pct: { type: 'number' },
-      dram_throughput_pct: { type: 'number' },
-      achieved_occupancy_pct: { type: 'number' },
-      theoretical_occupancy_pct: { type: 'number' },
-      waves_per_sm: { type: 'number' },
-      registers_per_thread: { type: 'number' },
-      top_stall_reason: { type: 'string' },
-      top_stall_pct: { type: 'number' },
-      sectors_per_request: { type: 'number' },
-      l1_hit_rate_pct: { type: 'number' },
-      l2_hit_rate_pct: { type: 'number' },
-      ncu_rule_suggestions: { type: 'array', items: { type: 'string' } },
-      bottleneck_diagnosis: { type: 'string' },
-      profile_summary: { type: 'string' },
-      ncu_available: { type: 'boolean' },
-    },
-    required: ['latency_ms', 'bottleneck_diagnosis', 'profile_summary'],
+Return a structured profile result.`
+}
+const LEGACY_NCU_BASELINE_SCHEMA = {
+  type: 'object',
+  properties: {
+    latency_ms: { type: 'number' },
+    sm_throughput_pct: { type: 'number' },
+    dram_throughput_pct: { type: 'number' },
+    achieved_occupancy_pct: { type: 'number' },
+    theoretical_occupancy_pct: { type: 'number' },
+    waves_per_sm: { type: 'number' },
+    registers_per_thread: { type: 'number' },
+    top_stall_reason: { type: 'string' },
+    top_stall_pct: { type: 'number' },
+    sectors_per_request: { type: 'number' },
+    l1_hit_rate_pct: { type: 'number' },
+    l2_hit_rate_pct: { type: 'number' },
+    ncu_rule_suggestions: { type: 'array', items: { type: 'string' } },
+    bottleneck_diagnosis: { type: 'string' },
+    profile_summary: { type: 'string' },
+    ncu_available: { type: 'boolean' },
   },
-})
+  required: ['latency_ms', 'bottleneck_diagnosis', 'profile_summary'],
+}
+
+let ncuSetup
+if (USE_DRIVER) {
+  const profileResult = await agent(
+    IDIOMS.profiler_name
+      ? `Profile the baseline kernel via the backend driver and normalize to canonical metrics.\n` +
+        `Kernel: ${KERNEL_PATH}. Experiment dir: ${EXP_DIR}/baseline.\n` +
+        `1. ` + driverSh('build.sh', `--source ${KERNEL_PATH} --out ${EXP_DIR}/baseline/artifact ${HARNESS_BUILD_CMD ? `--build-cmd "${HARNESS_BUILD_CMD}"` : ''}`) + `\n` +
+        `2. ` + driverSh('profile.sh', `--artifact ${EXP_DIR}/baseline/artifact --problem ${PROBLEM_PATH || PROBLEM_DEFINITION || KERNEL_PATH} --out ${EXP_DIR}/baseline/prof.native`) + `\n` +
+        `3. ` + driverPy('to_evidence.py', `--native ${EXP_DIR}/baseline/prof.native --format ${IDIOMS.profiler_format}`) + `\n` +
+        `Return its stdout JSON verbatim: {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy,...}, coverage:[...], source_backend}. ` +
+        `If the profiler exits 4 (unavailable), return {ok:true, metrics:{latency_ms:null,dram_pct:null,sm_pct:null,occupancy:null}, coverage:[], profiler_available:false}.`
+      : `Backend "${BACKEND}" declares no profiler. Do not invent one. ` +
+        `Build via ` + driverSh('build.sh', `--source ${KERNEL_PATH} --out ${EXP_DIR}/baseline/artifact`) + ` then ` +
+        driverSh('run.sh', `--artifact ${EXP_DIR}/baseline/artifact --problem ${PROBLEM_PATH || KERNEL_PATH} --out ${EXP_DIR}/baseline/result.json`) + ` for latency only. ` +
+        `Return {ok:true, metrics:{latency_ms:<from run.sh>,dram_pct:null,sm_pct:null,occupancy:null}, coverage:["latency_ms"], profiler_available:false}.`,
+    { label: 'ncu-baseline', phase: 'Setup', schema: JSON_PASSTHROUGH })
+
+  const metrics = profileResult.metrics || {}
+  const diag = await agent(
+    `Write these metrics to ${EXP_DIR}/baseline/metrics.json:\n${JSON.stringify(metrics)}\n` +
+    `${substrateInstruction('diagnose.py', `--metrics ${EXP_DIR}/baseline/metrics.json`)} Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+    { label: 'diagnose-baseline', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  bottleneckClass = diag.bottleneck_class || 'unknown'
+
+  ncuSetup = {
+    latency_ms: metrics.latency_ms,
+    sm_throughput_pct: metrics.sm_pct,
+    dram_throughput_pct: metrics.dram_pct,
+    achieved_occupancy_pct: (metrics.occupancy != null) ? metrics.occupancy * 100 : undefined,
+    bottleneck_diagnosis: `${bottleneckClass}: ${(diag.evidence || []).join('; ')}`,
+    profile_summary: profileResult.profiler_available === false
+      ? `profiler unavailable; static analysis only (class=${bottleneckClass})`
+      : `class=${bottleneckClass}, metrics=${JSON.stringify(metrics)}`,
+    profile_evidence: diag.evidence || [],
+    profiler_available: profileResult.profiler_available !== false,
+    _metrics: metrics,
+    _coverage: profileResult.coverage || [],
+  }
+} else {
+  ncuSetup = await agent(legacyNcuBaselinePrompt(baselineKernel), {
+    label: 'ncu-baseline',
+    phase: 'Setup',
+    schema: LEGACY_NCU_BASELINE_SCHEMA,
+  })
+}
 
 baselineLatency = ncuSetup.latency_ms
 bestLatency = baselineLatency
@@ -482,7 +528,8 @@ candidateBeam = [{
 }]
 
 // Build the NCU profile string
-baselineNcuProfile = `
+function legacyBaselineProfile(ncuSetup) {
+  return `
 ## NCU Profile Results (Baseline)
 - Latency: ${ncuSetup.latency_ms} ms
 - SM Throughput: ${ncuSetup.sm_throughput_pct || 'N/A'}% of peak
@@ -502,6 +549,27 @@ ${ncuSetup.bottleneck_diagnosis}
 ## NCU Rule Suggestions:
 ${(ncuSetup.ncu_rule_suggestions || []).map(s => `- ${s}`).join('\n') || 'N/A'}
 `
+}
+if (USE_DRIVER) {
+  const m = ncuSetup._metrics || {}
+  const lines = []
+  if (m.latency_ms != null) lines.push(`- Latency: ${m.latency_ms} ms`)
+  if (m.sm_pct != null) lines.push(`- SM Throughput: ${m.sm_pct}% of peak`)
+  if (m.dram_pct != null) lines.push(`- DRAM Throughput: ${m.dram_pct}% of peak`)
+  if (m.occupancy != null) lines.push(`- Achieved Occupancy: ${(m.occupancy * 100).toFixed(1)}%`)
+  baselineNcuProfile = `
+## Profile Results (Baseline, backend=${BACKEND}, class=${bottleneckClass})
+${lines.join('\n')}
+
+## Bottleneck Diagnosis:
+${ncuSetup.bottleneck_diagnosis}
+
+## Evidence:
+${(ncuSetup.profile_evidence || []).map(s => `- ${s}`).join('\n') || 'N/A'}
+`
+} else {
+  baselineNcuProfile = legacyBaselineProfile(ncuSetup)
+}
 
 log(`Baseline: ${baselineLatency}ms | ${ncuSetup.bottleneck_diagnosis}`)
 
