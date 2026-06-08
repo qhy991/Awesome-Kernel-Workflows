@@ -165,6 +165,8 @@ const LEGACY_REINFORCE_LANG_TOKEN = 'CUDA'
 const LEGACY_REPORT_LANG_TOKEN = 'CUDA-LLM FSR'
 const LEGACY_SOURCE_EXT = '.cu'
 const LEGACY_RESULT_EXT = '.json'
+const LEGACY_PURE_LANG_PHRASE = 'pure CUDA/C++ only'
+const LEGACY_FENCE_TOKEN = 'cuda'
 // L3 deferred (R2): triton driver has no `feature_catalog` idiom today; the
 // driver path falls back to LEGACY_TRITON_FEATURE_FALLBACK below. Tightening
 // is filed as a P5e/P5f L3 follow-up per P5c plan §5.2 B2 + §8 R2.
@@ -185,6 +187,12 @@ let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
 
 function langToken(legacy) {
   return USE_DRIVER ? DRIVER_LANG_FENCE : legacy
+}
+function pureLangPhrase() {
+  return USE_DRIVER ? `pure ${DRIVER_LANG_FENCE} only` : LEGACY_PURE_LANG_PHRASE
+}
+function fenceToken() {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : LEGACY_FENCE_TOKEN
 }
 function cudallmCandidatePath(iter, sample) {
   const ext = USE_DRIVER ? DRIVER_SOURCE_EXT : LEGACY_SOURCE_EXT
@@ -260,7 +268,7 @@ if (USE_DRIVER) {
   log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
 }
 
-const setup = await agent(`You are a CUDA kernel generation expert. Read and structure this CUDA-LLM task.
+const setup = await agent(`You are a ${langToken(LEGACY_SETUP_LANG_TOKEN)} kernel generation expert. Read and structure this CUDA-LLM task.
 
 # Inputs
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
@@ -274,7 +282,7 @@ const setup = await agent(`You are a CUDA kernel generation expert. Read and str
 1. Read problem_path and reference implementation when provided.
 2. Use problem_definition as the authoritative task specification when provided.
 3. Identify operation type, tensor shapes/dtypes, layout assumptions, and expected output.
-4. Identify hard constraints: pure CUDA/C++ only, no PyTorch fallback in generated kernel, preserve numerical tolerance.
+4. Identify hard constraints: ${pureLangPhrase()}, no PyTorch fallback in generated kernel, preserve numerical tolerance.
 5. State the evaluator JSON contract and how {kernel_path}/{result_path} are substituted.
 6. List baseline performance if available.
 
@@ -304,7 +312,17 @@ referenceCode = setup.reference_code || ''
 // =============================================================================
 phase('FeatureCatalog')
 
-const catalog = await agent(`Build a CUDA optimization feature catalog for Feature Search and Reinforcement.
+const LEGACY_FEATURE_CATALOG = `# Required feature families
+- tiling and block/grid decomposition
+- shared memory staging
+- vectorized/global memory access
+- warp-level primitives
+- loop unrolling and instruction scheduling
+- occupancy/register pressure tuning
+- fast math or CUDA intrinsics, only when tolerance allows
+- boundary handling / tail masking`
+
+const catalog = await agent(`Build a ${langToken(LEGACY_CATALOG_LANG_TOKEN)} optimization feature catalog for Feature Search and Reinforcement.
 
 # Task
 ${taskSpec.substring(0, 5000)}
@@ -317,15 +335,7 @@ ${referenceCode.substring(0, 5000)}
 # Target GPU
 ${TARGET_GPU}
 
-# Required feature families
-- tiling and block/grid decomposition
-- shared memory staging
-- vectorized/global memory access
-- warp-level primitives
-- loop unrolling and instruction scheduling
-- occupancy/register pressure tuning
-- fast math or CUDA intrinsics, only when tolerance allows
-- boundary handling / tail masking
+${USE_DRIVER ? (DRIVER_FEATURE_CATALOG || LEGACY_TRITON_FEATURE_FALLBACK) : LEGACY_FEATURE_CATALOG}
 
 # Tasks
 1. Produce feature entries with id, name, family, description, prerequisites, incompatibilities, and risk.
@@ -402,7 +412,7 @@ for (let iteration = 0; iteration < ITERATIONS; iteration++) {
 
     phase('SelectFeatures')
 
-    const selection = await agent(`Select a CUDA feature combination for the next candidate.
+    const selection = await agent(`Select a ${langToken(LEGACY_SELECT_LANG_TOKEN)} feature combination for the next candidate.
 
 # Feature catalog
 \`\`\`json
@@ -442,7 +452,7 @@ Return selected feature ids and rationale.`, {
 
     phase('GenerateKernel')
 
-    const generation = await agent(`Generate a CUDA kernel using the selected CUDA-LLM FSR features.
+    const generation = await agent(`Generate a ${langToken(LEGACY_GENERATE_LANG_TOKEN)} kernel using the selected CUDA-LLM FSR features.
 
 # Task specification
 ${taskSpec.substring(0, 8000)}
@@ -458,11 +468,11 @@ ${JSON.stringify(selection, null, 2)}
 \`\`\`
 
 # Hard constraints
-1. Return complete CUDA/C++ source, not a patch.
+1. Return complete ${USE_DRIVER ? `${DRIVER_LANG_FENCE} source` : 'CUDA/C++ source'}, not a patch.
 2. Do not call PyTorch or reference implementation from generated kernel.
 3. Preserve input/output contract and tolerances.
 4. Implement selected features concretely; if a feature is skipped, explain why.
-5. Keep code benchmarkable by benchmark_command.
+5. Keep code benchmarkable by benchmark_command.${USE_DRIVER && DRIVER_IMPL_REQUIREMENTS ? `\n6. ${DRIVER_IMPL_REQUIREMENTS}` : ''}
 
 Return candidate code and implemented features.`, {
       label: `generate-kernel-${iteration}-${sample}`,
@@ -481,10 +491,10 @@ Return candidate code and implemented features.`, {
 
     phase('Evaluate')
 
-    const evaluation = await agent(`Evaluate this CUDA candidate with compile, correctness, and latency evidence.
+    const evaluation = await agent(`Evaluate this ${langToken(LEGACY_EVAL_LANG_TOKEN)} candidate with compile, correctness, and latency evidence.
 
 # Candidate code
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${(generation.candidate_code || '').substring(0, 16000)}
 \`\`\`
 
@@ -542,7 +552,7 @@ Return evaluator result.`, {
 
     phase('Reinforce')
 
-    const reinforce = await agent(`Update CUDA feature scores from this measured candidate.
+    const reinforce = await agent(`Update ${langToken(LEGACY_REINFORCE_LANG_TOKEN)} feature scores from this measured candidate.
 
 # Candidate
 \`\`\`json
@@ -624,7 +634,7 @@ ${JSON.stringify(candidates.map(c => ({
 \`\`\`
 
 Cover:
-1. Which CUDA features were reinforced by measured evidence.
+1. Which ${langToken(LEGACY_REINFORCE_LANG_TOKEN)} features were reinforced by measured evidence.
 2. Which feature combinations failed and why.
 3. Whether the best kernel is trustworthy under diverse tests.
 4. Which feature sets should be tried next.
