@@ -1,12 +1,12 @@
 export const meta = {
   name: 'accelopt-kernel-optimization',
-  description: 'Self-improving CUDA kernel optimization loop with NCU profiling (AccelOpt methodology)',
-  whenToUse: 'When you need to iteratively optimize a CUDA kernel through plan-execute-profile-learn cycles. Uses Nsight Compute (ncu) for evidence-based profiling rather than guessing bottlenecks.',
+  description: 'Self-improving kernel optimization loop with profiler-driven evidence (AccelOpt methodology; NCU on the cuda backend)',
+  whenToUse: 'When you need to iteratively optimize a GPU kernel through plan-execute-profile-learn cycles. Uses the backend driver\'s profiler (e.g. Nsight Compute on cuda) for evidence-based bottleneck classification rather than guessing.',
   phases: [
-    { title: 'Setup', detail: 'Read target kernel, compile harness, NCU profile baseline' },
-    { title: 'Plan', detail: 'Generate optimization plans guided by NCU data + candidate beam context' },
+    { title: 'Setup', detail: 'Read target kernel, build via driver, profile baseline' },
+    { title: 'Plan', detail: 'Generate optimization plans guided by profiler data + candidate beam context' },
     { title: 'Execute', detail: 'Implement optimized kernels from each plan' },
-    { title: 'Evaluate', detail: 'NCU profile variants, per-branch dedup, update candidate beam' },
+    { title: 'Evaluate', detail: 'Profile variants, per-branch dedup, update candidate beam' },
     { title: 'Learn', detail: 'Threshold-filtered slow-fast pairs → reusable patterns (AccelOpt format)' },
     { title: 'Iterate', detail: 'Feed sampled experience + beam state into next optimization round' },
   ],
@@ -118,6 +118,12 @@ const BACKEND = assertWorkflowSuitability()
 //     max_threshold: 1.05,
 //     min_threshold: 1.05,
 //     topk_learn: 5,
+//     // Backend-driver wiring (optional; absent → legacy cuda inline-prompt path):
+//     backend: 'cuda',
+//     backend_dir: '_substrate/backends/cuda',
+//     substrate_dir: '_substrate',
+//     substrate_command_prefix: 'python3',
+//     driver_shell_prefix: '',
 //   }})
 //
 // =============================================================================
@@ -315,6 +321,42 @@ function buildBeamSection(candidateBeam) {
 // Phase 1: Setup — Read kernel, build harness, NCU profile baseline
 // =============================================================================
 phase('Setup')
+
+if (USE_DRIVER) {
+  const driver = await agent(
+    `Load the backend driver for backend="${BACKEND}".\n` +
+    `1. Run exactly: \`cat ${DRIVER_DIR}/manifest${DRIVER_EXT}\` and parse JSON.\n` +
+    `2. Run exactly: \`cat ${DRIVER_DIR}/idioms${DRIVER_EXT}\` and parse JSON.\n` +
+    `If either is missing, return {present:false, reason:"no driver for backend ${BACKEND}"}.\n` +
+    `Also compare manifest.capabilities against the required capability floor ` +
+    `${JSON.stringify(WORKFLOW_SUITABILITY.requires_capability)};\n` +
+    `if a required metric/class is missing return {present:true, capability_ok:false, missing:[...]}.\n` +
+    `Return {present, capability_ok, missing, backend_id, source_ext, lang_fence, hw_vendor,\n` +
+    `  profiler_name|null, profiler_format, capability_metrics, supported_classes, problem_types,\n` +
+    `  requires_tools, impl_requirements, read_metric_guide,\n` +
+    `  plan_angles:[...], unsupported_methods:[...],\n` +
+    `  idioms:{<method>:{idiom,prompt_guidance}}}.`,
+    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+
+  if (!driver.present) {
+    throw new Error(`No backend driver present for backend="${BACKEND}". Provide ${DRIVER_DIR}/ or pick a supported backend.`)
+  }
+  if (driver.capability_ok === false) {
+    throw new Error(`backend="${BACKEND}" lacks required capability: ${(driver.missing || []).join(', ')}.`)
+  }
+  IDIOMS = {
+    lang_fence: driver.lang_fence || IDIOMS.lang_fence,
+    impl_requirements: driver.impl_requirements || IDIOMS.impl_requirements,
+    plan_angles: (driver.plan_angles && driver.plan_angles.length) ? driver.plan_angles : IDIOMS.plan_angles,
+    read_metric_guide: driver.read_metric_guide || IDIOMS.read_metric_guide,
+    unsupported_methods: driver.unsupported_methods || [],
+    profiler_name: driver.profiler_name || null,
+    profiler_format: driver.profiler_format || '',
+    source_ext: driver.source_ext || '.cu',
+    ...(driver.idioms || {}),
+  }
+  log(`Driver loaded: ${BACKEND} (fence=${IDIOMS.lang_fence}, profiler=${IDIOMS.profiler_name || 'none'})`)
+}
 
 if (INPUT_MODE === 'generate_then_optimize') {
   KERNEL_PATH = await resolveInitialKernelFromProblem()
