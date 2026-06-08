@@ -265,6 +265,51 @@ Return violations found.`, {
       required: ['violations'],
     },
   }),
+
+  // --- check-backend-axis (v1.1; LLM checklist warnings — NOT a hard gate; see spec §9.2) ---
+  // Deterministic L0 backend invariants live in _substrate/backends/validate_backend.py.
+  () => agent(`You are a static validator. Surface backend-axis (v1.1) advisory warnings.
+
+# Workflow body excerpt + agent prompt bodies (search target):
+${JSON.stringify(parseResult.agent_calls || [], null, 2)}
+
+# Manifest backend block (if known to caller): see _meta/manifests/<workflow>.yaml \`backend:\` block.
+
+# Rules (all warning-level; this is an LLM checklist, not a deterministic gate):
+- **backend-axis: clean-tier vendor-token leak (warning).** If
+  manifest \`backend.portability == 'clean'\`, the workflow body
+  must not contain any of: \`nvcc\`, \`ncu\`, \`__global__\`,
+  \`PYBIND11_MODULE\`, \`cuda_runtime.h\`, \`@triton.jit\`, \`tl.load\`.
+  Each occurrence in a prompt body is one warning.
+- **backend-axis: legacy supported_languages key (warning).** If
+  manifest declares a v1.1 \`backend:\` block, the workflow body
+  should emit \`method_supported_backends\` (and may emit
+  \`supported_languages\` as a one-version-window alias). A bare
+  \`supported_languages\` with no \`method_supported_backends\` is one
+  warning, citing v1.1 schema migration.
+
+Return violations found (all severity 'warning'; emit none if the manifest's backend posture is unknown or the workflow is not clean-tier).`, {
+    label: 'check-backend-axis',
+    phase: 'Check',
+    schema: {
+      type: 'object',
+      properties: {
+        violations: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              severity: { type: 'string' },
+              message: { type: 'string' },
+              location: { type: 'string' },
+            },
+            required: ['severity', 'message'],
+          },
+        },
+      },
+      required: ['violations'],
+    },
+  }),
 ])
 
 const staticViolations = checks
