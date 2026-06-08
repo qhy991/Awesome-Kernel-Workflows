@@ -4,6 +4,23 @@
 # Based on: arXiv:2510.16996 (Meta Ranking AI Research / Duke University, 2025)
 # =============================================================================
 
+schema_version: "1.1"
+name: stark-kernel-optimization
+entrypoint: stark-kernel-optimization.js
+
+backend:
+  portability: clean
+  matrix_eligible: true
+  method_supported_backends: any
+  supported: [cuda, triton]
+  default: cuda
+  # STARK's tree-search + ε-greedy + grounded-instruction methodology is
+  # backend-agnostic verbatim; CUDA-ness lives in (i) prompt vocabulary,
+  # (ii) ```cuda code-fence in buildPlanContext/buildCodeContext/
+  # buildDebugContext, and (iii) WORKFLOW_SUITABILITY literal — all
+  # driver-gated under args.backend_dir. No vendor-bound mode args; no
+  # intersectional guard required.
+
 source:
   paper_title: "STARK: Strategic Team of Agents for Refining Kernels"
   paper_url: "https://arxiv.org/abs/2510.16996"
@@ -295,6 +312,15 @@ args:
       default: "'/tmp/stark_exp'"
       description: "Directory for experiment artifacts and logs"
       example: "/tmp/stark_exp"
+    - name: "rng_seed"
+      type: "number"
+      default: "null"
+      description: >
+        Optional integer seed for the deterministic xorshift32 PRNG used in
+        selectNode(). When unset, selectNode() falls through to native
+        Math.random() — legacy byte-identical. Pin for reproducible MCTS
+        runs and for fixture-pinned byte-identity gates.
+      example: "42"
 
 correctness:
   criteria:
