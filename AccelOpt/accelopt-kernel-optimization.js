@@ -591,14 +591,7 @@ for (let iter = 0; iter < ITERATIONS; iter++) {
   // Candidate beam context for planner
   const beamSection = buildBeamSection(candidateBeam)
 
-  // NCU-informed focus areas
-  const planAngles = [
-    'memory latency hiding: address long_scoreboard stalls via ILP, prefetching, async copies, or software pipelining',
-    'memory coalescing and vectorization: fix uncoalesced accesses (sectors/request > 4), use float4/int4 loads',
-    'occupancy and parallelism: address SM idle time, tail effects, or low achieved occupancy',
-    'compute restructuring: tensor core usage, warp-level reductions, reduced synchronization',
-    'data layout and tiling: shared memory staging, bank-conflict-free layouts, double-buffering',
-  ]
+  const planAngles = IDIOMS.plan_angles
 
   const planPromptBase = `You are a CUDA kernel optimization expert. You have REAL Nsight Compute (NCU) profiling data for this kernel. Use it to generate ONE specific, evidence-based optimization plan.
 
@@ -619,17 +612,7 @@ ${beamSection}
 ${experienceSection}
 
 # How to read NCU data for planning:
-- If top stall is "long_scoreboard" (>40%): kernel is MEMORY-LATENCY-BOUND. Add ILP, async loads, or data reuse.
-- If top stall is "short_scoreboard" (>30%): heavy shared-mem or dep chains. Shorten chains, add ILP.
-- If top stall is "barrier" (>20%): too much __syncthreads. Use warp-level primitives.
-- If top stall is "math_pipe_throttle": actually compute-bound — good! Look elsewhere.
-- If DRAM throughput > 80%: bandwidth-bound. Reduce bytes read (compression, shared-mem reuse).
-- If DRAM throughput < 10% AND long_scoreboard high: latency-bound on L1, not DRAM.
-- If sectors/request > 5: uncoalesced access — big optimization opportunity.
-- If achieved occupancy << theoretical: stalls prevent filling SM, fix stall source first.
-- If waves/SM < 1: grid too small, parallelize more or use persistent kernel.
-- If registers/thread > 128: likely register spill — add __launch_bounds__.
-- NCU rule suggestions with "Est. Speedup: X%" are surprisingly accurate — prioritize them.
+${IDIOMS.read_metric_guide}
 
 # Optimization Plan Requirements:
 1. CITE the specific NCU metric(s) that justify your plan
@@ -639,29 +622,47 @@ ${experienceSection}
 5. Estimate expected speedup based on the NCU data (e.g., "NCU reports sectors/request=8.2; fixing to 4.0 should cut load time ~2x on those lines")
 6. If candidate beam shows multiple approaches, consider COMBINING strengths from different candidates`
 
+  const planSchema = USE_DRIVER
+    ? {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          focus_area: { type: 'string' },
+          profile_evidence: { type: 'string' },
+          ncu_evidence: { type: 'string' },
+          analysis: { type: 'string' },
+          plan: { type: 'string' },
+          expected_impact: { type: 'string' },
+          risk: { type: 'string' },
+        },
+        required: ['title', 'plan', 'expected_impact'],
+      }
+    : {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          focus_area: { type: 'string' },
+          ncu_evidence: { type: 'string' },
+          analysis: { type: 'string' },
+          plan: { type: 'string' },
+          expected_impact: { type: 'string' },
+          risk: { type: 'string' },
+        },
+        required: ['title', 'ncu_evidence', 'plan', 'expected_impact'],
+      }
+
   const plans = await parallel(
     Array.from({length: BREADTH}, (_, i) => () =>
       agent(`${planPromptBase}\n\n# YOUR FOCUS AREA: ${planAngles[i % planAngles.length]}\nYou are planner #${i + 1}/${BREADTH}. Focus on: ${planAngles[i % planAngles.length]}.`, {
         label: `plan-${iter}-${i}`,
         phase: 'Plan',
-        schema: {
-          type: 'object',
-          properties: {
-            title: { type: 'string' },
-            focus_area: { type: 'string' },
-            ncu_evidence: { type: 'string' },
-            analysis: { type: 'string' },
-            plan: { type: 'string' },
-            expected_impact: { type: 'string' },
-            risk: { type: 'string' },
-          },
-          required: ['title', 'ncu_evidence', 'plan', 'expected_impact'],
-        },
+        schema: planSchema,
       })
     )
   )
 
   const validPlans = plans.filter(Boolean)
+  const planEvidence = (p) => (p.profile_evidence ?? p.ncu_evidence)
   log(`Plans: ${validPlans.map(p => `${p.title} (evidence: ${(p.ncu_evidence || '').substring(0, 50)}...)`).join(' | ')}`)
 
   // ===========================================================================
