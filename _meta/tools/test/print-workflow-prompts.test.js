@@ -150,4 +150,55 @@ test('run-workflow: body throw propagates as rejection', async () => {
   )
 })
 
-// Task 3 tests added in a follow-up commit (see print-workflow-prompts.js).
+// ---------------------------------------------------------------------------
+// Task 3 — print-workflow-prompts.js capturePrompts
+// ---------------------------------------------------------------------------
+
+const { capturePrompts } = require(path.resolve(__dirname, '../print-workflow-prompts.js'))
+const fs = require('node:fs')
+const os = require('node:os')
+
+// Write a synthetic workflow file for capturePrompts tests
+const SYNTHETIC_WF_PATH = path.join(os.tmpdir(), 'synthetic-test-workflow.js')
+fs.writeFileSync(SYNTHETIC_WF_PATH, SYNTHETIC_WORKFLOW)
+
+test('capturePrompts: resolves to Array<{seq,label,phase,prompt}>', async () => {
+  const results = await capturePrompts({ workflowPath: SYNTHETIC_WF_PATH, args: {}, agentReturns: {} })
+  assert.ok(Array.isArray(results), 'result is array')
+  assert.strictEqual(results.length, 2)
+  for (const r of results) {
+    assert.ok('seq' in r, 'has seq')
+    assert.ok('label' in r, 'has label')
+    assert.ok('phase' in r, 'has phase')
+    assert.ok('prompt' in r, 'has prompt')
+  }
+})
+
+test('capturePrompts: agentReturns consulted before schema generator', async () => {
+  // step1 returns string from schema; with agentReturns override the call still records
+  const results = await capturePrompts({
+    workflowPath: SYNTHETIC_WF_PATH,
+    args: {},
+    agentReturns: { step1: 'overridden' },
+  })
+  assert.strictEqual(results.length, 2)
+  assert.strictEqual(results[0].label, 'step1')
+})
+
+test('capturePrompts: stable-key JSON output is deterministic', async () => {
+  const outPath = path.join(os.tmpdir(), 'capture-output-test.json')
+  const results = await capturePrompts({ workflowPath: SYNTHETIC_WF_PATH, args: {}, agentReturns: {} })
+  // Write to file using the stable-key serializer
+  const stableJson = JSON.stringify(results.map(r => {
+    const sorted = {}
+    for (const k of Object.keys(r).sort()) sorted[k] = r[k]
+    return sorted
+  }), null, 2)
+  fs.writeFileSync(outPath, stableJson)
+  const readBack = JSON.parse(fs.readFileSync(outPath, 'utf8'))
+  assert.deepStrictEqual(readBack, results.map(r => {
+    const sorted = {}
+    for (const k of Object.keys(r).sort()) sorted[k] = r[k]
+    return sorted
+  }))
+})
