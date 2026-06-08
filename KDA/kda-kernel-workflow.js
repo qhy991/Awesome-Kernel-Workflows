@@ -272,7 +272,9 @@ if (INPUT_MODE === 'generate_then_optimize') {
 - benchmark_command: ${EVAL_CMD || '(not provided)'}
 
 # Contract
-Generate ${SEED_CANDIDATES} complete candidates under ./generated or the task workspace. Run available commands using {kernel_path}/{result_path}. Return the best verified generated kernel path.`, {
+${USE_DRIVER
+  ? `Generate ${SEED_CANDIDATES} complete ${DRIVER_LANG_FENCE} candidates and write the best one to ${kdaKernelPath('')}. Run available commands using {kernel_path}/{result_path}. Return the best verified generated kernel path.`
+  : `Generate ${SEED_CANDIDATES} complete candidates under ./generated or the task workspace. Run available commands using {kernel_path}/{result_path}. Return the best verified generated kernel path.`}`, {
     label: 'generate-initial-kernel',
     phase: 'Inspect',
     schema: {
@@ -596,6 +598,42 @@ Return the validation results with MEASURED values when available, estimates onl
       required: ['is_correct', 'estimated_speedup', 'validation_ran'],
     },
   })
+
+  if (USE_DRIVER) {
+    const kPath = kdaKernelPath(KERNEL_PATH)
+    const buildOut = `${EXP_DIR}/${candidateId}.artifact`
+    const profOut = `${EXP_DIR}/${candidateId}.prof.native`
+    await agent(
+      `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+      `Return its stdout JSON verbatim.`,
+      { label: `driver-build-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+    const runOut = await agent(
+      `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+      `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+      { label: `driver-run-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+    await agent(
+      `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+      `Return {ok, native_path}.`,
+      { label: `driver-profile-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+    const evidenceOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+      { label: `driver-to-evidence-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+    const diagOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+      `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+      { label: `driver-diagnose-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+    await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/${candidateId}.result.json\`.\n` +
+      `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+      { label: `driver-anti-cheat-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+    validation.driver_envelope = {
+      latency_ms: Number((runOut && runOut.latency_ms) || 0),
+      metrics: (evidenceOut && evidenceOut.metrics) || {},
+      bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',
+      backend_id: DRIVER_BACKEND_ID,
+    }
+  }
 
   // ---- Phase 5: Decide ----
   phase('Decide')
