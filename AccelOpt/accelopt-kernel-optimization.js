@@ -13,10 +13,12 @@ export const meta = {
 }
 
 const WORKFLOW_SUITABILITY = {
-  supported_languages: ['cuda'],
+  method_supported_backends: ['cuda', 'triton'],
+  default_backend: 'cuda',
+  requires_capability: { bottleneck_classes: [], metrics: ['dram_pct', 'sm_pct'] },
   supported_problem_types: ['cuda-kernel-optimization', 'cuda-kernel-generation'],
   problem_types: ['existing CUDA kernel optimization', 'CUDA generation from problem_definition with benchmark contract'],
-  reason: 'AccelOpt workflow is built around CUDA kernels, NCU metrics, CUDA harnesses, and CUDA-specific optimization patterns.',
+  reason: 'AccelOpt is intrinsic to NCU-class profiling (dram_pct/sm_pct); runs on any NVIDIA-vendor backend (cuda, triton) with a present driver.',
 }
 
 function normalizeSuitabilityValue(value) {
@@ -42,17 +44,28 @@ function supportsSuitabilityValue(supported, requested) {
   return supported.includes(requested) || supported.some(value => value.endsWith(`-${requested}`))
 }
 
+function resolveBackend() {
+  const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
+  const l = args.language ? normalizeSuitabilityValue(args.language) : null
+  if (b && l && b !== l) {
+    throw new Error(`Conflicting args: backend="${b}" vs language="${l}". Pass only one.`)
+  }
+  if (b) return b
+  if (l) return l
+  const ms = WORKFLOW_SUITABILITY.method_supported_backends
+  if (Array.isArray(ms) && ms.length === 1) return normalizeSuitabilityValue(ms[0])
+  return WORKFLOW_SUITABILITY.default_backend
+}
+
 function assertWorkflowSuitability() {
-  const requestedLanguage = normalizeSuitabilityValue(args.language)
-  if (requestedLanguage && requestedLanguage !== 'auto') {
-    const supported = WORKFLOW_SUITABILITY.supported_languages.map(normalizeSuitabilityValue)
-    if (!supported.includes(requestedLanguage)) {
-      throw new Error(
-        `${meta.name} is not suitable for language="${args.language}". ` +
-        `Supported languages/backends: ${WORKFLOW_SUITABILITY.supported_languages.join(', ')}. ` +
-        `Reason: ${WORKFLOW_SUITABILITY.reason}`
-      )
-    }
+  const backend = resolveBackend()
+
+  const ms = WORKFLOW_SUITABILITY.method_supported_backends
+  if (ms !== 'any' && !ms.map(normalizeSuitabilityValue).includes(backend)) {
+    throw new Error(
+      `${meta.name}'s method does not support backend="${backend}". ` +
+      `Method-supported: ${ms.join(', ')}. Reason: ${WORKFLOW_SUITABILITY.reason}`
+    )
   }
 
   const requestedProblemType = normalizeSuitabilityValue(args.problem_type)
@@ -67,9 +80,11 @@ function assertWorkflowSuitability() {
       )
     }
   }
+
+  return backend
 }
 
-assertWorkflowSuitability()
+const BACKEND = assertWorkflowSuitability()
 
 // =============================================================================
 // AccelOpt Self-Improving Kernel Optimization Workflow (NCU-Enhanced, v2)
@@ -145,6 +160,56 @@ const MAX_EXPERIENCE_IN_PROMPT = args.max_experience_in_prompt || 8
 const MAX_THRESHOLD = args.max_threshold || 1.05
 const MIN_THRESHOLD = args.min_threshold || 1.05
 const TOPK_LEARN = args.topk_learn || 5
+
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const PY = args.substrate_command_prefix || ''
+const SH = args.driver_shell_prefix || ''
+const BACKEND_DIR = args.backend_dir || ''
+const DRIVER_DIR = BACKEND_DIR || `${SUBSTRATE}/backends/${BACKEND}`
+const USE_DRIVER = !!args.backend_dir
+
+function substrateInstruction(script, cliArgs) {
+  const p = `${SUBSTRATE}/${script}`
+  return PY ? `Run exactly: \`${PY} ${p} ${cliArgs}\`.`
+            : `No substrate_command_prefix for ${p} ${cliArgs}; do not invent an interpreter.`
+}
+function driverPy(script, cliArgs) {
+  const p = `${DRIVER_DIR}/${script}`
+  return PY ? `Run exactly: \`${PY} ${p} ${cliArgs}\`.`
+            : `No substrate_command_prefix for ${p}; do not invent an interpreter.`
+}
+function driverSh(script, cliArgs) {
+  return `Run exactly: \`${SH ? SH + ' ' : ''}${DRIVER_DIR}/${script} ${cliArgs}\`.`
+}
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+const DRIVER_EXT = '.json'
+
+let IDIOMS = {
+  lang_fence: 'cuda',
+  impl_requirements:
+    'Output a COMPLETE .cu file: all #includes, struct definitions, __global__ kernel(s), forward() wrapper, PYBIND11_MODULE',
+  plan_angles: [
+    'memory latency hiding: address long_scoreboard stalls via ILP, prefetching, async copies, or software pipelining',
+    'memory coalescing and vectorization: fix uncoalesced accesses (sectors/request > 4), use float4/int4 loads',
+    'occupancy and parallelism: address SM idle time, tail effects, or low achieved occupancy',
+    'compute restructuring: tensor core usage, warp-level reductions, reduced synchronization',
+    'data layout and tiling: shared memory staging, bank-conflict-free layouts, double-buffering',
+  ],
+  read_metric_guide: [
+    '- If top stall is "long_scoreboard" (>40%): kernel is MEMORY-LATENCY-BOUND. Add ILP, async loads, or data reuse.',
+    '- If top stall is "short_scoreboard" (>30%): heavy shared-mem or dep chains. Shorten chains, add ILP.',
+    '- If top stall is "barrier" (>20%): too much __syncthreads. Use warp-level primitives.',
+    '- If top stall is "math_pipe_throttle": actually compute-bound — good! Look elsewhere.',
+    '- If DRAM throughput > 80%: bandwidth-bound. Reduce bytes read (compression, shared-mem reuse).',
+    '- If DRAM throughput < 10% AND long_scoreboard high: latency-bound on L1, not DRAM.',
+    '- If sectors/request > 5: uncoalesced access — big optimization opportunity.',
+    '- If achieved occupancy << theoretical: stalls prevent filling SM, fix stall source first.',
+    '- If waves/SM < 1: grid too small, parallelize more or use persistent kernel.',
+    '- If registers/thread > 128: likely register spill — add __launch_bounds__.',
+    '- NCU rule suggestions with "Est. Speedup: X%" are surprisingly accurate — prioritize them.',
+  ].join('\n'),
+  unsupported_methods: [],
+}
 
 // State
 let experienceMemory = []       // Full pool of learned patterns (grows unbounded)
