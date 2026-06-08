@@ -1,0 +1,17 @@
+{
+  "kernel_path": "/tmp/astra-fixture/baseline.cu",
+  "compare_kind": "rmsnorm",
+  "baseline_module": "sgl_kernel",
+  "baseline_func": "fused_add_rmsnorm",
+  "generated_export_func": "sgl_fused_add_rmsnorm",
+  "test_command": "python /tmp/astra-fixture/test.py {kernel_path} {result_path}",
+  "benchmark_command": "python /tmp/astra-fixture/bench.py {kernel_path} {result_path}",
+  "iterations": 2,
+  "target_gpu": "H100",
+  "exp_dir": "/tmp/astra-fixture",
+  "integration_mode": "standalone",
+  "language": "triton",
+  "backend": "triton",
+  "backend_dir": "_substrate/backends/triton",
+  "seed_candidates": 3
+}
