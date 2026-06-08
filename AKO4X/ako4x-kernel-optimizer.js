@@ -438,7 +438,15 @@ Return ONLY the JSON object.`, {
   },
 })
 
-const detectedLang = KERNEL_LANG === 'auto' ? setupResult.language : KERNEL_LANG
+const detectedLang = USE_DRIVER
+  ? (DRIVER_BACKEND_ID || (KERNEL_LANG === 'auto' ? setupResult.language : KERNEL_LANG))
+  : (KERNEL_LANG === 'auto' ? setupResult.language : KERNEL_LANG)
+// Code-fence token: under USE_DRIVER, use the driver's lang_fence (e.g.,
+// "python" for triton) so prompt fences match the source kind, not the
+// backend label. Legacy path keeps the language string as before.
+const fenceLang = USE_DRIVER
+  ? (DRIVER_LANG_FENCE || LEGACY_FENCE_BY_LANG[detectedLang] || detectedLang)
+  : detectedLang
 baselineKernelCode = setupResult.kernel_code
 bestKernelCode = baselineKernelCode
 
@@ -499,7 +507,7 @@ if (HARNESS_PATH || HARNESS_BUILD_CMD) {
 - Harness run args: ${HARNESS_RUN_ARGS}
 
 # Kernel Source:
-\`\`\`${detectedLang}
+\`\`\`${fenceLang}
 ${baselineKernelCode.substring(0, 4000)}
 \`\`\`
 
@@ -615,7 +623,7 @@ for (let round = 0; round < ROUNDS; round++) {
 # Round: ${round + 1} | Parent: ${currentParentName}
 
 # Current Best Kernel:
-\`\`\`${detectedLang}
+\`\`\`${fenceLang}
 ${bestKernelCode.substring(0, 4000)}
 \`\`\`
 
@@ -687,7 +695,7 @@ Optimization levers (pick ONE):
         agent(`Implement this optimization hypothesis as a complete, working kernel.
 
 # Original Kernel:
-\`\`\`${detectedLang}
+\`\`\`${fenceLang}
 ${bestKernelCode.substring(0, 4000)}
 \`\`\`
 
@@ -746,7 +754,7 @@ Return the complete kernel code.`, {
         const smokeResult = await agent(`Run smoke test for this kernel variant. This is a COMPILE + CORRECTNESS check only — NOT a performance verdict.
 
 # Kernel Code:
-\`\`\`${detectedLang}
+\`\`\`${fenceLang}
 ${impl.code.substring(0, 4000)}
 \`\`\`
 
@@ -793,7 +801,7 @@ Return pass/fail with error details if failed.`, {
       const benchResult = await agent(`Run the full benchmark for this kernel variant. This IS the performance verdict.
 
 # Kernel Code:
-\`\`\`${detectedLang}
+\`\`\`${fenceLang}
 ${impl.code.substring(0, 4000)}
 \`\`\`
 
@@ -953,7 +961,7 @@ Execute this step.`, {
 # Implementation: ${roundBest.notes || 'see kernel code'}
 
 # Kernel Code (excerpt):
-\`\`\`${detectedLang}
+\`\`\`${fenceLang}
 ${roundBest.code.substring(0, 3000)}
 \`\`\`
 
@@ -985,7 +993,7 @@ Return verdict: is this a legitimate improvement or suspicious?`, {
     const libDelegationCheck = await agent(`Check this kernel for library delegation (calling pre-built kernel libraries instead of writing own code).
 
 # Kernel Code:
-\`\`\`${detectedLang}
+\`\`\`${fenceLang}
 ${roundBest.code.substring(0, 5000)}
 \`\`\`
 
@@ -1041,7 +1049,7 @@ Return verdict.`, {
 # Iter: ${roundBest.iterLabel}
 
 # Kernel Code:
-\`\`\`${detectedLang}
+\`\`\`${fenceLang}
 ${roundBest.code.substring(0, 5000)}
 \`\`\`
 
@@ -1302,7 +1310,7 @@ ${deadEnds.map((d, i) => `${i + 1}. ${d}`).join('\n')}
 ${traps.map((t, i) => `${i + 1}. ${t}`).join('\n')}
 
 ## Final Kernel:
-\`\`\`${detectedLang}
+\`\`\`${fenceLang}
 ${bestKernelCode.substring(0, 3000)}
 \`\`\`
 
