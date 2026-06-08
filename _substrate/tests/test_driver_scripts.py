@@ -104,3 +104,85 @@ class TestSharedNvidiaMapper(unittest.TestCase):
             self.assertAlmostEqual(m['dram_pct'], 62.0, places=3)   # read + write (canonical)
             self.assertAlmostEqual(m['occupancy'], 0.51, places=4)  # 51.0 / 100
             self.assertIn('occupancy', payload['coverage'])
+
+
+class TestCudaBuild(unittest.TestCase):
+    SCRIPT = os.path.join(CUDA, 'build.sh')
+
+    def test_exists_executable_and_syntax(self):
+        self.assertTrue(os.path.isfile(self.SCRIPT), "cuda/build.sh missing")
+        self.assertTrue(os.access(self.SCRIPT, os.X_OK), "cuda/build.sh not executable")
+        code, _, err = _run(['bash', '-n', self.SCRIPT])
+        self.assertEqual(code, 0, msg=f"bash -n failed: {err}")
+
+    def test_build_ok_with_fake_nvcc(self):
+        with tempfile.TemporaryDirectory() as td:
+            _write_exec(os.path.join(td, 'nvcc'), FAKE_NVCC_OK)
+            src = os.path.join(td, 'kernel.cu')
+            out = os.path.join(td, 'kernel.so')
+            with open(src, 'w') as fh:
+                fh.write("// fake cuda source\n")
+            env = _path_env(td)
+            code, sout, serr = _run([self.SCRIPT, '--source', src, '--out', out,
+                                     '--arch', 'sm_80'], env=env)
+            self.assertEqual(code, 0, msg=f"out={sout} err={serr}")
+            p = _json_or_raw(sout)
+            self.assertEqual(p.get('ok'), True, p)
+            self.assertEqual(p.get('compiled'), True, p)
+            self.assertEqual(p.get('artifact'), out, p)
+            self.assertTrue(os.path.isfile(out), "artifact not produced by fake nvcc")
+            self.assertIn('build_latency_ms', p)
+            self.assertIsInstance(p['build_latency_ms'], (int, float))
+            self.assertIn('stderr_tail', p)
+
+    def test_build_passes_lineinfo_to_nvcc(self):
+        # -lineinfo is REQUIRED for ncu source attribution; assert the script emits it.
+        with tempfile.TemporaryDirectory() as td:
+            # fake nvcc that records its argv to a sidecar file
+            rec = os.path.join(td, 'argv.txt')
+            _write_exec(os.path.join(td, 'nvcc'), textwrap.dedent(f'''\
+                #!/usr/bin/env bash
+                echo "$@" > "{rec}"
+                out=""; prev=""
+                for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+                [ -n "$out" ] && : > "$out"
+                exit 0
+            '''))
+            src = os.path.join(td, 'k.cu'); out = os.path.join(td, 'k.so')
+            open(src, 'w').write("//\n")
+            code, sout, serr = _run([self.SCRIPT, '--source', src, '--out', out],
+                                    env=_path_env(td))
+            self.assertEqual(code, 0, msg=f"{sout} {serr}")
+            self.assertIn('-lineinfo', open(rec).read())
+
+    def test_build_compile_failure_exit_2(self):
+        with tempfile.TemporaryDirectory() as td:
+            _write_exec(os.path.join(td, 'nvcc'), FAKE_NVCC_FAIL)
+            src = os.path.join(td, 'kernel.cu'); out = os.path.join(td, 'kernel.so')
+            open(src, 'w').write("//\n")
+            code, sout, serr = _run([self.SCRIPT, '--source', src, '--out', out],
+                                    env=_path_env(td))
+            self.assertEqual(code, 2, msg=f"out={sout} err={serr}")
+            p = _json_or_raw(sout)
+            self.assertEqual(p.get('ok'), False, p)
+            self.assertEqual(p.get('compiled'), False, p)
+            self.assertIsNone(p.get('artifact'), p)
+            self.assertIn('error detected', p.get('stderr_tail', ''))
+
+    def test_build_missing_nvcc_exit_3(self):
+        with tempfile.TemporaryDirectory() as td:
+            src = os.path.join(td, 'kernel.cu'); out = os.path.join(td, 'kernel.so')
+            open(src, 'w').write("//\n")
+            # nvcc is genuinely absent on this macOS host, so the inherited env already exercises
+            # the script's own "nvcc not found" guard (exit 3). Do NOT wipe PATH — that would break
+            # the `#!/usr/bin/env bash` shebang itself (exit 127). On a GPU box where nvcc exists,
+            # point PATH at a stub dir that has bash+coreutils but omits nvcc.
+            env = dict(os.environ)
+            code, sout, serr = _run([self.SCRIPT, '--source', src, '--out', out], env=env)
+            self.assertEqual(code, 3, msg=f"out={sout} err={serr}")
+            self.assertEqual(_json_or_raw(sout).get('ok'), False)
+
+    def test_build_missing_args_exit_3(self):
+        code, sout, _ = _run([self.SCRIPT, '--source', '/x.cu'])  # no --out
+        self.assertEqual(code, 3)
+        self.assertEqual(_json_or_raw(sout).get('ok'), False)
