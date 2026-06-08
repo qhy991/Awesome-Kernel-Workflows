@@ -202,3 +202,90 @@ test('capturePrompts: stable-key JSON output is deterministic', async () => {
     return sorted
   }))
 })
+
+// ---------------------------------------------------------------------------
+// Task 4 — AccelOpt golden capture: determinism + coverage + byte-identity
+// ---------------------------------------------------------------------------
+
+const REPO_ROOT = path.resolve(__dirname, '../../..')
+const ACCELOPT_WF = path.join(REPO_ROOT, 'AccelOpt/accelopt-kernel-optimization.js')
+const FIX_DIR = path.join(REPO_ROOT, '_meta/tools/fixtures')
+const CUDA_ARGS = JSON.parse(fs.readFileSync(path.join(FIX_DIR, 'accelopt-cuda-args.json'), 'utf8'))
+const CUDA_RETURNS = JSON.parse(fs.readFileSync(path.join(FIX_DIR, 'accelopt-cuda-agent-returns.json'), 'utf8'))
+const GEN_ARGS = JSON.parse(fs.readFileSync(path.join(FIX_DIR, 'accelopt-generate-args.json'), 'utf8'))
+const GEN_RETURNS = JSON.parse(fs.readFileSync(path.join(FIX_DIR, 'accelopt-generate-agent-returns.json'), 'utf8'))
+
+// Same stable-key serializer used by the print-workflow-prompts CLI (--out).
+// Goldens on disk were written by that CLI; this test compares byte-for-byte.
+function stableStringify(arr) {
+  const sortedArr = arr.map((r) => {
+    const sorted = {}
+    for (const k of Object.keys(r).sort()) sorted[k] = r[k]
+    return sorted
+  })
+  return JSON.stringify(sortedArr, null, 2)
+}
+
+test('accelopt golden (optimize): determinism — two runs are deep-equal', async () => {
+  const a = await capturePrompts({ workflowPath: ACCELOPT_WF, args: CUDA_ARGS, agentReturns: CUDA_RETURNS })
+  const b = await capturePrompts({ workflowPath: ACCELOPT_WF, args: CUDA_ARGS, agentReturns: CUDA_RETURNS })
+  assert.deepStrictEqual(a, b)
+})
+
+test('accelopt golden (optimize): label set + phases match the explicit OPTIMIZE list', async () => {
+  // The count (7) is a CONSEQUENCE of the agentReturns map unlocking eval (non-empty impl.code
+  // + is_correct/is_compilable true) and learn (estimated_speedup 1.06 > MAX_THRESHOLD 1.05).
+  // With empty stubs only 5 render. Do NOT hardcode 8.
+  const EXPECTED_LABELS = [
+    'read-baseline',
+    'ncu-baseline',
+    'plan-0-0',
+    'impl-0-t-v0',
+    'eval-plan_0_sample_0',
+    'learn-t',
+    'final-report',
+  ]
+  const EXPECTED_PHASES = ['Setup', 'Setup', 'Plan', 'Execute', 'Evaluate', 'Learn', 'Iterate']
+  const calls = await capturePrompts({ workflowPath: ACCELOPT_WF, args: CUDA_ARGS, agentReturns: CUDA_RETURNS })
+  assert.deepStrictEqual(calls.map(c => c.label), EXPECTED_LABELS)
+  assert.deepStrictEqual(calls.map(c => c.phase), EXPECTED_PHASES)
+})
+
+test('accelopt golden (generate): label set matches the explicit GENERATE list', async () => {
+  const EXPECTED_LABELS = [
+    'generate-initial-kernel',
+    'read-baseline',
+    'ncu-baseline',
+    'plan-0-0',
+    'impl-0-t-v0',
+    'eval-plan_0_sample_0',
+    'learn-t',
+    'final-report',
+  ]
+  const calls = await capturePrompts({ workflowPath: ACCELOPT_WF, args: GEN_ARGS, agentReturns: GEN_RETURNS })
+  assert.deepStrictEqual(calls.map(c => c.label), EXPECTED_LABELS)
+})
+
+test('accelopt golden (optimize): byte-identical match against frozen golden file', async () => {
+  const goldenPath = path.join(FIX_DIR, 'accelopt-today.golden.json')
+  const calls = await capturePrompts({ workflowPath: ACCELOPT_WF, args: CUDA_ARGS, agentReturns: CUDA_RETURNS })
+  const captured = stableStringify(calls)
+  if (process.env.UPDATE_GOLDEN === '1') {
+    fs.writeFileSync(goldenPath, captured)
+    return
+  }
+  const golden = fs.readFileSync(goldenPath, 'utf8')
+  assert.strictEqual(captured, golden, 'pre-retrofit optimize golden drifted; re-run with UPDATE_GOLDEN=1 only if intentional')
+})
+
+test('accelopt golden (generate): byte-identical match against frozen golden file', async () => {
+  const goldenPath = path.join(FIX_DIR, 'accelopt-today-generate.golden.json')
+  const calls = await capturePrompts({ workflowPath: ACCELOPT_WF, args: GEN_ARGS, agentReturns: GEN_RETURNS })
+  const captured = stableStringify(calls)
+  if (process.env.UPDATE_GOLDEN === '1') {
+    fs.writeFileSync(goldenPath, captured)
+    return
+  }
+  const golden = fs.readFileSync(goldenPath, 'utf8')
+  assert.strictEqual(captured, golden, 'pre-retrofit generate golden drifted; re-run with UPDATE_GOLDEN=1 only if intentional')
+})

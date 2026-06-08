@@ -1,0 +1,11 @@
+{
+  "problem_path": "/tmp/fixture/problem.json",
+  "test_command": "python3 test.py",
+  "benchmark_command": "python3 bench.py",
+  "iterations": 1,
+  "breadth": 1,
+  "samples_per_plan": 1,
+  "substrate_command_prefix": "python3",
+  "ncu_binary": "ncu",
+  "harness_build_cmd": "nvcc -O3 -lineinfo"
+}
