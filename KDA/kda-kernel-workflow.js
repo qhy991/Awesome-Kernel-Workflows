@@ -308,7 +308,9 @@ const inspection = await agent(`You are in a task implementation workspace. Insp
 - KernelWiki is an external repository, not a bundled KDA skill. If it is available, use it for kernel optimization patterns, GPU architecture details, and performance techniques relevant to this task. Download or fork it from https://github.com/mit-han-lab/KernelWiki/fork.
 
 # Available Skills
-- Use \`cuda-kernel-development\` skill for hardware-aware CUDA development guidance.
+${USE_DRIVER
+  ? `- ${DRIVER_IMPL_REQUIREMENTS || `Use driver-supplied ${DRIVER_LANG_FENCE} guidance for hardware-aware kernel development.`}`
+  : `- Use \`cuda-kernel-development\` skill for hardware-aware CUDA development guidance.`}
 
 # Instructions
 1. Read the kernel file and any surrounding code (headers, utils, tests).
@@ -378,7 +380,9 @@ ${baselineCode.substring(0, 3000)}
 
 # Available Skills
 - Use \`humanize:gen-plan\` skill pattern for structured plan generation.
-- Use \`ncu-report-skill\` if NCU profiling data exists in the workspace (check profile/ directory).
+${USE_DRIVER
+  ? `- Consult driver-supplied profiling guidance for ${DRIVER_LANG_FENCE} performance evidence.`
+  : `- Use \`ncu-report-skill\` if NCU profiling data exists in the workspace (check profile/ directory).`}
 
 # Draft Requirements (from prompts/basic-flow.md)
 The draft MUST include:
@@ -504,7 +508,9 @@ ${currentBestCode.substring(0, 4000)}
 - KernelWiki is an external repository, not a bundled KDA skill. If it is available, use it for architecture-specific optimization techniques such as Hopper/Blackwell features and tensor core usage. Download or fork it from https://github.com/mit-han-lab/KernelWiki/fork.
 
 # Available Skills
-- Use \`cuda-kernel-development\` skill for hardware-aware CUDA patterns (shared memory tiling, warp primitives, occupancy tuning).
+${USE_DRIVER
+  ? `- ${DRIVER_IMPL_REQUIREMENTS || `Use driver-supplied ${DRIVER_LANG_FENCE} guidance for hardware-aware kernel patterns.`}`
+  : `- Use \`cuda-kernel-development\` skill for hardware-aware CUDA patterns (shared memory tiling, warp primitives, occupancy tuning).`}
 
 # Requirements
 1. Output a COMPLETE file — all includes, definitions, functions.
@@ -549,10 +555,15 @@ ${candidateCode.substring(0, 3000)}
 # Instructions
 1. First, write the candidate code to the kernel file at ${KERNEL_PATH}.
 2. STATIC ANALYSIS — check for:
-   - Race conditions (shared memory access, __syncthreads placement)
+${USE_DRIVER
+  ? `   - Race conditions (shared/scratch memory access, synchronization placement)
+   - Out-of-bounds (index/mask computations)
+   - Missing synchronization
+   - Correct reductions (per ${DRIVER_LANG_FENCE} idioms)`
+  : `   - Race conditions (shared memory access, __syncthreads placement)
    - Out-of-bounds (index computations)
    - Missing synchronization
-   - Correct reductions (warp shuffle logic)
+   - Correct reductions (warp shuffle logic)`}
 3. CORRECTNESS VALIDATION — If test_command is provided:
    - Run it: \`${VALIDATION_CMD || 'N/A'}\`
    - Report whether it passes or fails, and any error output.
@@ -562,7 +573,9 @@ ${candidateCode.substring(0, 3000)}
    - Extract the measured latency/throughput from the output.
    - Compare against baseline: ${currentBestMetrics.latency_ms ? currentBestMetrics.latency_ms + 'ms' : 'not yet measured'}.
    - If not provided, give your best estimate based on the optimization applied.
-5. If NCU profiling data is available or can be generated, use the \`ncu-report-skill\` to analyze bottlenecks.
+${USE_DRIVER
+  ? `5. If driver profiling evidence is available, consult the driver-supplied bottleneck guidance for ${DRIVER_LANG_FENCE}.`
+  : `5. If NCU profiling data is available or can be generated, use the \`ncu-report-skill\` to analyze bottlenecks.`}
 
 Return the validation results with MEASURED values when available, estimates only as fallback.`, {
     label: `validate-${candidateId}`,
