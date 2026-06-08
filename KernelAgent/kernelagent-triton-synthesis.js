@@ -668,6 +668,50 @@ Return a JSON object with:
     }
   }
 
+  if (USE_DRIVER) {
+    for (let i = 0; i < validCandidates.length; i++) {
+      const candidate = validCandidates[i]
+      const kPath = `${EXP_DIR}/candidates/${candidate.id}/${kernelFilename()}`
+      const tPath = `${EXP_DIR}/candidates/${candidate.id}/${testFilename()}`
+      const buildOut = `${EXP_DIR}/candidates/${candidate.id}/artifact`
+      const profOut = `${EXP_DIR}/candidates/${candidate.id}/prof.native`
+      const resultPath = `${EXP_DIR}/candidates/${candidate.id}/result.json`
+      await agent(
+        `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+        `Return its stdout JSON verbatim.`,
+        { label: `driver-build-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
+      const runOut = await agent(
+        `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath} --test ${tPath} --result ${resultPath}`)}\n` +
+        `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+        { label: `driver-run-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
+      await agent(
+        `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+        `Return {ok, native_path}.`,
+        { label: `driver-profile-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
+      const evidenceOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+        `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+        { label: `driver-to-evidence-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
+      const diagOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+        `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+        { label: `driver-diagnose-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
+      const antiCheatOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${resultPath}\`.\n` +
+        `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+        { label: `driver-anti-cheat-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
+      candidate.driver_envelope = {
+        anti_cheat: antiCheatOut || {},
+        metrics: (evidenceOut && evidenceOut.metrics) || {},
+        vendor: (DRIVER && DRIVER.hw_vendor) || '',
+        coverage: (evidenceOut && evidenceOut.coverage) || [],
+        bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',
+        latency_ms: Number((runOut && runOut.latency_ms) || 0),
+        backend_id: DRIVER_BACKEND_ID,
+      }
+    }
+  }
+
   const passedCount = validCandidates.filter(c => c.status === 'verified').length
   log(`Verification: ${passedCount}/${validCandidates.length} passed`)
 } else {
@@ -807,7 +851,7 @@ ${candidate.code.substring(0, 4000)}
 ${testCode.substring(0, 3000)}
 \`\`\`
 
-Execute the test and report results. Return JSON with:
+${USE_DRIVER ? driverSh('run.sh', `--kernel ${kernelFilename()} --test ${testFilename()}`) + '\n' : ''}Execute the test and report results. Return JSON with:
 - passed: boolean
 - exit_code: number
 - stdout: string
@@ -939,7 +983,7 @@ ${composedKernel.substring(0, 5000)}
 ${testCode.substring(0, 3000)}
 \`\`\`
 
-Execute the test and report results. Return JSON with:
+${USE_DRIVER ? driverSh('run.sh', `--kernel ${kernelFilename()} --test ${testFilename()}`) + '\n' : ''}Execute the test and report results. Return JSON with:
 - passed: boolean
 - exit_code: number
 - stdout: string
