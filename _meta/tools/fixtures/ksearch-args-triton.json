@@ -1,0 +1,17 @@
+{
+  "problem_path": "/tmp/ksearch-fixture/spec.yaml",
+  "op_description": "rmsnorm",
+  "language": "triton",
+  "backend": "triton",
+  "backend_dir": "_substrate/backends/triton",
+  "target_gpu": "H100",
+  "iterations": 2,
+  "attempts_per_cycle": 1,
+  "stagnation_window": 3,
+  "max_difficulty": 4,
+  "benchmark_command": "python /tmp/ksearch-fixture/bench.py {kernel_path} {result_path}",
+  "kernel_path": "/tmp/ksearch-fixture/baseline.py",
+  "rtol": 0.01,
+  "atol": 0.01,
+  "exp_dir": "/tmp/ksearch-fixture"
+}
