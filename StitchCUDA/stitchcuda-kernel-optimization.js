@@ -69,7 +69,70 @@ function assertWorkflowSuitability() {
   }
 }
 
-assertWorkflowSuitability()
+function resolveBackendAxis() {
+  const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
+  const l = args.language ? normalizeSuitabilityValue(args.language) : null
+  if (b && l && b !== l) {
+    throw new Error(`Conflicting args: backend="${args.backend}" vs language="${args.language}". Pass only one.`)
+  }
+  if (args.backend && !args.backend_dir) {
+    throw new Error(`args.backend="${args.backend}" requires args.backend_dir; driver dispatch has no implicit-resolve path.`)
+  }
+  return b || l || null
+}
+const RESOLVED_BACKEND = resolveBackendAxis()
+const USE_DRIVER = !!args.backend_dir
+
+if (!USE_DRIVER) {
+  assertWorkflowSuitability()
+}
+
+// --- Backend driver wiring (P5c Stage B; off-by-default; legacy path byte-identical) ---
+const BACKEND_DIR = args.backend_dir || ''
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const SH = args.driver_shell_prefix || ''
+const PY = args.substrate_command_prefix || ''
+const WORKSPACE = args.workspace || '/tmp/stitchcuda'
+const LEGACY_SETUP_LANG_TOKEN = 'CUDA'
+const LEGACY_REPLAN_LANG_TOKEN = 'CUDA'
+const LEGACY_PLAN_LANG_TOKEN = 'CUDA'
+const LEGACY_CODE_LANG_TOKEN = 'CUDA'
+const LEGACY_VERIFY_LANG_TOKEN = 'CUDA'
+const LEGACY_SOURCE_EXT = '.cu'
+const LEGACY_FENCE_TOKEN = 'cuda'
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+
+// Intersectional guard (P5c plan §3 + §9.1): KernelBench harness is
+// CUDA-only as a benchmark suite; refuse driver path when the user
+// explicitly pins a benchmark_suite combined with a non-CUDA driver.
+if (USE_DRIVER && args.kernelbench_config && args.kernelbench_config.benchmark_suite && RESOLVED_BACKEND && RESOLVED_BACKEND !== 'cuda') {
+  throw new Error(
+    `StitchCUDA kernelbench_config.benchmark_suite="${args.kernelbench_config.benchmark_suite}" requires backend_dir to be a CUDA driver; ` +
+    `got backend_dir=${args.backend_dir} (resolved backend=${RESOLVED_BACKEND}).`
+  )
+}
+
+function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
+function driverSh(script, cliArgs) {
+  return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
+}
+
+let DRIVER = null
+let DRIVER_LANG_FENCE = LEGACY_FENCE_TOKEN
+let DRIVER_IMPL_REQUIREMENTS = ''
+let DRIVER_SOURCE_EXT = LEGACY_SOURCE_EXT
+let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
+
+function langToken(legacy) {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : legacy
+}
+function fenceToken() {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : LEGACY_FENCE_TOKEN
+}
+function attemptKernelPath(attempt) {
+  const ext = USE_DRIVER ? DRIVER_SOURCE_EXT : LEGACY_SOURCE_EXT
+  return `${WORKSPACE}/attempt_${attempt}/kernel${ext}`
+}
 
 // StitchCUDA: Three-agent orchestration for CUDA kernel synthesis
 // Based on arXiv:2603.02637
@@ -80,6 +143,27 @@ async function main() {
   // Phase 1: Setup
   // ============================================================================
   phase('Setup');
+
+  if (USE_DRIVER) {
+    DRIVER = await agent(
+      `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+      `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
+      `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
+      `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
+      { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH }
+    );
+    if (!DRIVER || DRIVER.present === false) {
+      throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`);
+    }
+    if (RESOLVED_BACKEND && DRIVER.backend_id && normalizeSuitabilityValue(DRIVER.backend_id) !== RESOLVED_BACKEND) {
+      throw new Error(`backend_dir manifest backend_id="${DRIVER.backend_id}" conflicts with args.backend/language="${RESOLVED_BACKEND}".`);
+    }
+    DRIVER_LANG_FENCE = DRIVER.lang_fence || DRIVER_LANG_FENCE;
+    DRIVER_IMPL_REQUIREMENTS = DRIVER.impl_requirements || '';
+    DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT;
+    DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID;
+    log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`);
+  }
 
   const setupResult = await agent(
     `Set up StitchCUDA orchestration environment:
