@@ -78,7 +78,23 @@ function assertWorkflowSuitability() {
   }
 }
 
-assertWorkflowSuitability()
+function resolveBackendAxis() {
+  const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
+  const l = args.language ? normalizeSuitabilityValue(args.language) : null
+  if (b && l && b !== l) {
+    throw new Error(`Conflicting args: backend="${args.backend}" vs language="${args.language}". Pass only one.`)
+  }
+  if (args.backend && !args.backend_dir) {
+    throw new Error(`args.backend="${args.backend}" requires args.backend_dir; driver dispatch has no implicit-resolve path.`)
+  }
+  return b || l || null
+}
+const RESOLVED_BACKEND = resolveBackendAxis()
+const USE_DRIVER = !!args.backend_dir
+
+if (!USE_DRIVER) {
+  assertWorkflowSuitability()
+}
 
 // =============================================================================
 // AdaExplore-Style Standalone Kernel Optimization
@@ -163,6 +179,52 @@ const KERNEL_PATH = args.kernel_path || ''
 const INPUT_MODE = KERNEL_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const MAX_MEMORY_RULES = args.max_memory_rules || 40
 const EST_PER_ROUND = args.est_tokens_per_round || 60000
+
+// --- Backend driver wiring (P5b Stage B; off-by-default; legacy path byte-identical) ---
+const BACKEND_DIR = args.backend_dir || ''
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const SH = args.driver_shell_prefix || ''
+const PY = args.substrate_command_prefix || ''
+const LEGACY_SETUP_LANG_TOKEN = 'Triton'
+const LEGACY_LARGE_STEP_INTERFACE_LANG = 'PyTorch operator interface'
+const LEGACY_REVISER_PERF_HINT = 'Apply a small, local performance or correctness fix based on the evaluator logs.'
+const LEGACY_EVALUATE_RUN_INSTRUCTION = 'Run the evaluator command if provided. If not provided, do not create one; mark compiled=false, correct=false, speedup=0, and explain missing evidence.'
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+
+function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
+function driverSh(script, cliArgs) {
+  return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
+}
+function workspaceKernelPath(stepIndex, isLarge, ext) {
+  return `${EXP_DIR}/kernels/step_${stepIndex + 1}_${isLarge ? 'large' : 'small'}${ext}`
+}
+
+let DRIVER = null
+let DRIVER_LANG_FENCE = LEGACY_SETUP_LANG_TOKEN.toLowerCase()
+let DRIVER_IMPL_REQUIREMENTS = ''
+let DRIVER_SOURCE_EXT = '.py'
+let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
+
+function setupLangToken() {
+  return USE_DRIVER ? `${DRIVER_LANG_FENCE} kernel` : `${LEGACY_SETUP_LANG_TOKEN} kernel`
+}
+function largeStepInterfaceLang() {
+  return USE_DRIVER && DRIVER_IMPL_REQUIREMENTS
+    ? DRIVER_IMPL_REQUIREMENTS
+    : `Preserve the ${LEGACY_LARGE_STEP_INTERFACE_LANG} expected by the evaluator.`
+}
+function reviserDefaultHint() {
+  if (!USE_DRIVER) return LEGACY_REVISER_PERF_HINT
+  const m = (DRIVER && DRIVER.methods) || {}
+  const guidance = (m.vectorized_load_store && m.vectorized_load_store.prompt_guidance) ||
+                   (m.memory_coalescing && m.memory_coalescing.prompt_guidance) ||
+                   ''
+  return guidance || LEGACY_REVISER_PERF_HINT
+}
+function evaluateRunInstruction() {
+  if (!USE_DRIVER) return LEGACY_EVALUATE_RUN_INSTRUCTION
+  return `${driverSh('run.sh', '--kernel {kernel_path} --result {result_path}')} If the driver run.sh exits non-zero, mark compiled=false, correct=false, speedup=0 and capture stderr.`
+}
 
 if (!KERNEL_PATH && !OPERATOR_SPEC && !PROBLEM_PATH) {
   throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
@@ -348,7 +410,27 @@ function renderCommand(template, replacements) {
 // =============================================================================
 phase('Setup')
 
-const setupResult = await agent(`Set up a standalone AdaExplore-style Triton kernel optimization run.
+if (USE_DRIVER) {
+  DRIVER = await agent(
+    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
+    `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
+    `Return {present, backend_id, source_ext, lang_fence, impl_requirements, methods}.`,
+    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (!DRIVER || DRIVER.present === false) {
+    throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
+  }
+  if (RESOLVED_BACKEND && DRIVER.backend_id && normalizeSuitabilityValue(DRIVER.backend_id) !== RESOLVED_BACKEND) {
+    throw new Error(`backend_dir manifest backend_id="${DRIVER.backend_id}" conflicts with args.backend/language="${RESOLVED_BACKEND}".`)
+  }
+  DRIVER_LANG_FENCE = DRIVER.lang_fence || DRIVER_LANG_FENCE
+  DRIVER_IMPL_REQUIREMENTS = DRIVER.impl_requirements || ''
+  DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT
+  DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID
+  log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
+}
+
+const setupResult = await agent(`Set up a standalone AdaExplore-style ${setupLangToken()} optimization run.
 
 # Hard boundary
 Do not call the AdaExplore repository or any AdaExplore Python entrypoint. This workflow must run from the operator spec, local files, and the evaluator command provided here.
@@ -461,7 +543,7 @@ for (let searchStep = 0; searchStep < STEPS; searchStep++) {
     const proposerResult = await agent(`You are the AdaExplore Large-Step Proposer.
 
 # Goal
-Generate a structurally new Triton implementation for the PyTorch operator. This is a broad exploration step, not a local patch.
+Generate a structurally new ${USE_DRIVER ? `${DRIVER_LANG_FENCE} implementation` : 'Triton implementation'} for the PyTorch operator. This is a broad exploration step, not a local patch.
 
 # PyTorch reference
 \`\`\`python
@@ -482,8 +564,8 @@ Use these only as inspiration. Avoid copying their structure.
 ${poolContext}
 
 # Requirements
-1. Return complete Python code containing Triton kernel(s) and a callable wrapper.
-2. Preserve the PyTorch operator interface expected by the evaluator.
+1. Return complete ${USE_DRIVER ? `${DRIVER_LANG_FENCE} code containing ${DRIVER_BACKEND_ID || 'backend'} kernel(s)` : 'Python code containing Triton kernel(s)'} and a callable wrapper.
+2. ${USE_DRIVER && DRIVER_IMPL_REQUIREMENTS ? DRIVER_IMPL_REQUIREMENTS : `Preserve the ${LEGACY_LARGE_STEP_INTERFACE_LANG} expected by the evaluator.`}
 3. Respect atol=${CORRECTNESS_ATOL}, rtol=${CORRECTNESS_RTOL}.
 4. Prefer structural diversity: different tiling, decomposition, fusion, mapping, or memory strategy from the pool.
 5. Do not call any AdaExplore repository code.
@@ -545,7 +627,7 @@ Return specific, surgical suggestions only.`, {
       },
     })
 
-    const suggestions = reviserResult?.suggestions || ['Apply a small, local performance or correctness fix based on the evaluator logs.']
+    const suggestions = reviserResult?.suggestions || [reviserDefaultHint()]
 
     const tunerResult = await agent(`You are the AdaExplore Tuner.
 
@@ -589,9 +671,13 @@ Return the edited candidate kernel code.`, {
 
   phase('Evaluate')
 
-  const kernelPath = `${EXP_DIR}/kernels/step_${searchStep + 1}_${isLargeStep ? 'large' : 'small'}.py`
+  const kernelPath = USE_DRIVER
+    ? workspaceKernelPath(searchStep, isLargeStep, DRIVER_SOURCE_EXT)
+    : `${EXP_DIR}/kernels/step_${searchStep + 1}_${isLargeStep ? 'large' : 'small'}.py`
   const resultPath = `${EXP_DIR}/eval/step_${searchStep + 1}_result.json`
-  const evaluatorCommand = renderCommand(evaluatorCommandTemplate, {
+  const evaluatorCommand = USE_DRIVER
+    ? `${SH ? SH + ' ' : ''}${BACKEND_DIR}/run.sh --kernel ${kernelPath} --result ${resultPath}`
+    : renderCommand(evaluatorCommandTemplate, {
     kernel_path: kernelPath,
     result_path: resultPath,
     reference_path: referencePath,
@@ -604,8 +690,8 @@ Return the edited candidate kernel code.`, {
 # Hard rules
 1. Write the candidate code exactly to: ${kernelPath}
 2. Do not judge correctness or speedup by inspection.
-3. Run the evaluator command if provided. If not provided, do not create one; mark compiled=false, correct=false, speedup=0, and explain missing evidence.
-4. The evaluator must compile the Triton code, compare against PyTorch reference with atol=${CORRECTNESS_ATOL}, rtol=${CORRECTNESS_RTOL}, and measure speed if possible.
+3. ${evaluateRunInstruction()}
+4. The evaluator must compile the ${USE_DRIVER ? DRIVER_LANG_FENCE : 'Triton'} code, compare against PyTorch reference with atol=${CORRECTNESS_ATOL}, rtol=${CORRECTNESS_RTOL}, and measure speed if possible.
 5. Write or read JSON result at: ${resultPath}
 6. Do not call any AdaExplore repository code.
 
@@ -613,7 +699,7 @@ Return the edited candidate kernel code.`, {
 ${evaluatorCommand || '(No benchmark_command provided; measured evidence unavailable.)'}
 
 # Candidate code
-\`\`\`python
+\`\`\`${USE_DRIVER ? DRIVER_LANG_FENCE : 'python'}
 ${newKernelCode.substring(0, 9000)}
 \`\`\`
 
@@ -644,7 +730,52 @@ Return the parsed evaluation result.`, {
 
   const compiled = Boolean(evalResult.compiled)
   const correct = Boolean(evalResult.correct)
-  const speedup = Number(evalResult.speedup || 0)
+  let speedup = Number(evalResult.speedup || 0)
+
+  let driverEnvelope = null
+  if (USE_DRIVER) {
+    const buildOut = `${EXP_DIR}/eval/step_${searchStep + 1}_artifact`
+    const profOut = `${EXP_DIR}/eval/step_${searchStep + 1}_prof.native`
+    await agent(
+      `${driverSh('build.sh', `--source ${kernelPath} --out ${buildOut}`)}\n` +
+      `Return its stdout JSON verbatim.`,
+      { label: `driver-build-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const runOut = await agent(
+      `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kernelPath} --result ${resultPath}`)}\n` +
+      `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+      { label: `driver-run-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const profileOut = await agent(
+      `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kernelPath} --out ${profOut}`)}\n` +
+      `Return {ok, native_path}.`,
+      { label: `driver-profile-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const evidenceOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+      { label: `driver-to-evidence-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const diagOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+      `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+      { label: `driver-diagnose-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const antiCheatOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kernelPath} --result ${resultPath}\`.\n` +
+      `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+      { label: `driver-anti-cheat-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const measuredLatency = Number((runOut && runOut.latency_ms) || (evidenceOut && evidenceOut.metrics && evidenceOut.metrics.latency_ms) || 0)
+    const baselineLatency = Number(args.baseline_latency_ms || 0)
+    const driverSpeedup = (baselineLatency > 0 && measuredLatency > 0) ? baselineLatency / measuredLatency : 0
+    if (driverSpeedup > 0) speedup = driverSpeedup
+    driverEnvelope = {
+      anti_cheat: antiCheatOut || {},
+      metrics: (evidenceOut && evidenceOut.metrics) || {},
+      vendor: DRIVER && DRIVER.hw_vendor || '',
+      coverage: (evidenceOut && evidenceOut.coverage) || [],
+      bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',
+      latency_ms: measuredLatency,
+      baseline_latency_ms: baselineLatency,
+      backend_id: DRIVER_BACKEND_ID,
+    }
+  }
+
   const reward = computeReward(compiled, correct, speedup)
   const newScore = scoreTuple(compiled, correct, speedup)
   const newNodeId = `node-${searchStep + 1}-${isLargeStep ? 'L' : 'S'}`
@@ -667,6 +798,7 @@ Return the parsed evaluation result.`, {
     kernelPath,
     resultPath: evalResult.result_path || resultPath,
     notes: expandNotes,
+    ...(driverEnvelope ? { driver_envelope: driverEnvelope } : {}),
   }
   mctsNodes.push(newNode)
   selectedNode.children.push(newNodeId)
