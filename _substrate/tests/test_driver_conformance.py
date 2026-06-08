@@ -96,5 +96,44 @@ class TestRealDriversBackendId(unittest.TestCase):
                 self.assertEqual(manifest.get('status'), 'experimental', msg=f"{driver}")
 
 
+class TestRealDriversL0Extended(unittest.TestCase):
+    # Re-validation of the P3 cuda + triton drivers under the P5a Task 6 invariants
+    # (invoke fixed-names, threshold_profile required, substrate-shadow guard).
+    def test_real_drivers_pass_extended_l0(self):
+        for driver in REAL_DRIVERS:
+            with self.subTest(driver=driver):
+                code, payload = run_validator(os.path.join(BACKENDS, driver))
+                self.assertEqual(code, 0,
+                                 msg=f"{driver}: expected exit 0, got {code}; payload={payload}")
+                self.assertEqual(payload.get('ok'), True, msg=f"{driver}: payload={payload}")
+                self.assertEqual(payload.get('errors'), [], msg=f"{driver}: payload={payload}")
+
+    def test_real_drivers_use_fixed_invoke_names(self):
+        for driver in REAL_DRIVERS:
+            with self.subTest(driver=driver):
+                m = load_driver_json(driver, 'manifest.json')
+                self.assertEqual(m.get('compiler', {}).get('invoke'), 'build.sh')
+                self.assertEqual(m.get('runner', {}).get('invoke'), 'run.sh')
+                self.assertEqual(m.get('profiler', {}).get('invoke'), 'profile.sh')
+                self.assertEqual(m.get('profiler', {}).get('to_evidence'), 'to_evidence.py')
+
+    def test_real_drivers_declare_threshold_profile(self):
+        for driver in REAL_DRIVERS:
+            with self.subTest(driver=driver):
+                m = load_driver_json(driver, 'manifest.json')
+                self.assertIn('threshold_profile', m,
+                              msg=f"{driver}: threshold_profile required (§4.4)")
+
+    def test_real_drivers_do_not_shadow_substrate_scripts(self):
+        substrate_scripts = {'evidence_schema.py', 'anti_cheat.py', 'diagnose.py',
+                             'method_gate.py', 'memory_store.py', 'verify_insight.py'}
+        for driver in REAL_DRIVERS:
+            with self.subTest(driver=driver):
+                files = set(os.listdir(os.path.join(BACKENDS, driver)))
+                shadow = files & substrate_scripts
+                self.assertFalse(shadow,
+                                 msg=f"{driver}: shadows substrate scripts {sorted(shadow)}")
+
+
 if __name__ == '__main__':
     unittest.main()
