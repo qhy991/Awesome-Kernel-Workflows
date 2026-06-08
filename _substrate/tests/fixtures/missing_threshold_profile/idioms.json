@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "backend_id": "missing_threshold_profile",
+  "lang_fence": "cuda",
+  "impl_requirements": "PYBIND11_MODULE entrypoint with a forward() binding.",
+  "unsupported_methods": [
+    "library_fallback_hybrid"
+  ],
+  "read_metric_guide": "High dram_pct with low sm_pct means memory-bound.",
+  "methods": {
+    "tensor_core_mma": {
+      "idiom": "wmma / mma.sync",
+      "prompt_guidance": "Use tensor-core MMA intrinsics for the inner GEMM."
+    },
+    "memory_coalescing": {
+      "idiom": "coalesced 128-bit global loads",
+      "prompt_guidance": "Reorder thread-to-element mapping so consecutive threads read consecutive addresses."
+    },
+    "kernel_fusion": {
+      "idiom": "fuse epilogue into the main kernel",
+      "prompt_guidance": "Avoid a second launch by fusing the elementwise epilogue."
+    }
+  }
+}

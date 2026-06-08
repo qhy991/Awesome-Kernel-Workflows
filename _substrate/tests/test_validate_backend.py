@@ -55,6 +55,15 @@ class TestValidateBackendBad(unittest.TestCase):
     def test_bogus_bottleneck_class(self):
         self.assert_bad('bad_bottleneck_class', 'register_bound')
 
+    def test_invoke_field_must_be_fixed_name(self):
+        self.assert_bad('bad_invoke_compiler', 'compiler.invoke')
+
+    def test_substrate_script_not_edited(self):
+        self.assert_bad('driver_edits_substrate', 'must not contain a copy of _substrate/')
+
+    def test_threshold_profile_required(self):
+        self.assert_bad('missing_threshold_profile', 'threshold_profile')
+
 
 class TestValidateBackendBadArgs(unittest.TestCase):
     def test_nonexistent_dir_exits_3(self):

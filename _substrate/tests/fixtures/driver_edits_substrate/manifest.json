@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "backend_id": "driver_edits_substrate",
+  "display_name": "Driver edits substrate",
+  "source_ext": ".cu",
+  "aux_ext": [".cuh", ".h"],
+  "artifact_ext": ".so",
+  "hw_vendor": "nvidia",
+  "threshold_profile": "nvidia",
+  "compiler": { "name": "nvcc", "invoke": "build.sh" },
+  "runner": { "invoke": "run.sh" },
+  "profiler": {
+    "name": "ncu",
+    "invoke": "profile.sh",
+    "format": "ncu-csv",
+    "to_evidence": "to_evidence.py"
+  },
+  "capabilities": {
+    "metrics": { "dram_pct": true, "sm_pct": true, "occupancy": true, "latency_ms": true },
+    "bottleneck_classes": ["memory_bound", "compute_bound", "latency_occupancy", "overhead_bound"],
+    "problem_types": ["kernel-optimization"],
+    "precisions": ["fp32"]
+  },
+  "requires_tools": ["nvcc", "python3"],
+  "optional_tools": ["ncu"],
+  "idioms": "idioms.json",
+  "status": "stable"
+}
