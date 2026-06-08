@@ -1,0 +1,10 @@
+{
+  "backend": "triton",
+  "backend_dir": "_substrate/backends/triton",
+  "kernel_path": "_meta/tools/fixtures/triton/kernel.py",
+  "problem_path": "/tmp/fixture/problem.json",
+  "iterations": 1,
+  "breadth": 1,
+  "samples_per_plan": 1,
+  "substrate_command_prefix": "python3"
+}
