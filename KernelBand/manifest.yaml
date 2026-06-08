@@ -1,0 +1,394 @@
+# =============================================================================
+# KernelBand Manifest — Hardware-Aware Multi-Armed Bandit Kernel Optimization
+# =============================================================================
+# Based on: arXiv:2511.18868 (Ran, Xie, Ji, Liu, Wu, Cao, Guo, Yu, Li, Hu,
+#                              Yang, Xie — PKU / Tongming Lake / ECNU / Tianjin
+#                              / HKUST / SFU / UTD / Fudan, Feb 2026)
+# =============================================================================
+
+schema_version: "1.1"
+name: kernelband-kernel-optimization
+entrypoint: kernelband-kernel-optimization.js
+
+backend:
+  portability: clean
+  matrix_eligible: true
+  method_supported_backends: any
+  supported: [triton, cuda]
+  default: triton
+  # KernelBand's multi-armed bandit loop (behavioral-feature clustering +
+  # hardware-constrained Masked UCB + strategy selection) is fully
+  # backend-agnostic. Per-language surface lives in (i) the LANGUAGE arg
+  # threaded into generate/evaluate prompts, (ii) the code-fence token
+  # wrapping kernel snippets, and (iii) the SATURATION_THRESHOLD phi-gate
+  # whose value can be driver-resolved or legacy-hardcoded.  No vendor-
+  # bound mode args; no intersectional guard required.
+
+source:
+  paper_title: "KernelBand: Steering LLM-based Kernel Optimization via Hardware-Aware Multi-Armed Bandits"
+  paper_url: "https://arxiv.org/abs/2511.18868"
+  paper_venue: "arXiv preprint, Feb 2026"
+  repo_url: ""
+  commit_or_tag: ""
+  license: ""
+  notes: >
+    Core methodology from the paper. KernelBand formulates kernel optimization
+    as a contextual Multi-Armed Bandit problem. Behavioral feature vectors
+    phi(k) cluster kernels; hardware signatures h(k) prune physically
+    implausible strategies via a saturation threshold theta_sat. Masked UCB
+    selects (cluster, strategy) pairs. Strategies: tiling, vectorization,
+    fusion, pipeline, reordering, access_layout.
+
+workflow:
+  name: "kernelband-kernel-optimization"
+  description: "Multi-Armed Bandit framework for kernel optimization with hardware-aware pruning, trace-driven clustering, and Lipschitz-continuous reward estimation (KernelBand methodology)"
+  when_to_use: >
+    When optimizing GPU kernels (especially Triton) and you want principled
+    exploration-exploitation balance across multiple optimization strategies.
+    Ideal when the optimization space is large and you want to avoid wasting
+    budget on physically implausible strategies. Uses profiling-based clustering
+    to transfer knowledge between similar kernels and UCB-based action selection
+    to steer exploration.
+  output_filename: "kernelband-kernel-optimization.js"
+  directory: "KernelBand/"
+
+method:
+  category: "iterative_self_improving"
+  core_insight: >
+    Separate code generation (LLM strength) from search-space navigation
+    (bandit strength). Behavioral feature vectors phi(k) cluster similar
+    kernels for knowledge transfer; hardware signatures prune strategies
+    targeting already-saturated resources via a theta_sat gate. Masked UCB
+    balances exploration and exploitation across (cluster, strategy) pairs.
+  feedback_signal:
+    type: "throughput_delta"
+    description: "reward = max(0, (T(k_old) - T(k_new)) / T(k_old)); hardware signature throughput % for DRAM/L2/SM from NCU profiling drives strategy masking"
+    tool: "ncu"
+    higher_is_better: true
+
+backend_requirements:
+  metrics: ["latency_us", "dram_throughput_pct", "l2_throughput_pct", "sm_throughput_pct"]
+  problem_types: ["gpu-kernel-optimization", "kernel-search"]
+
+topology:
+  type: "iterative"
+  iterative:
+    iterations_arg: "iterations"
+    convergence_condition: "Fixed T iterations (paper default T=20); early-stop on token budget exhaustion"
+    state_variables:
+      - name: "candidatePool"
+        type: "array"
+        initial_value: "[]"
+        description: "Pool of candidate kernels with features, latency, cluster assignment"
+      - name: "clusters"
+        type: "array"
+        initial_value: "[]"
+        description: "K-Means cluster state: centroids, members, hardware signatures"
+      - name: "banditStats"
+        type: "object"
+        initial_value: "{}"
+        description: "Per (cluster, strategy) bandit statistics: count, mean_reward, mask"
+      - name: "bestKernel"
+        type: "object"
+        initial_value: "{ code: '', latency: Infinity, speedup: 0 }"
+        description: "Best kernel found so far"
+      - name: "baselineLatency"
+        type: "number"
+        initial_value: "0"
+        description: "Baseline latency in microseconds"
+      - name: "totalReward"
+        type: "number"
+        initial_value: "0"
+        description: "Cumulative reward across all iterations"
+      - name: "iterationLog"
+        type: "array"
+        initial_value: "[]"
+        description: "Per-iteration log: cluster, strategy, reward, speedup"
+
+phases:
+  # --- PREAMBLE ---
+  - name: "Setup"
+    detail: "Parse kernel, identify strategies, configure hardware target and profiling"
+    position: "preamble"
+    agents:
+      - label: "generate-initial-kernel"
+        description: "Generate initial kernel candidates when no kernel_path is provided (generate_then_optimize mode)"
+        parallelism: "single"
+        input_variables: ["PROBLEM_DEFINITION", "PROBLEM_PATH", "OP_DESCRIPTION", "LANGUAGE", "GPU_TARGET", "SEED_CANDIDATES"]
+        output_schema:
+          type: "object"
+          properties:
+            generated_kernel_path: { type: "string" }
+            initial_candidates: { type: "array" }
+            initial_generation_result: { type: "object" }
+          required: ["generated_kernel_path"]
+      - label: "setup"
+        description: "Read kernel, establish baseline, extract behavioral features phi(k) and hardware signature h(k)"
+        parallelism: "single"
+        input_variables: ["KERNEL_PATH", "GPU_TARGET", "STRATEGIES", "COMPILE_CMD", "BENCHMARK_CMD", "NCU_CMD"]
+        output_schema:
+          type: "object"
+          properties:
+            kernel_code: { type: "string" }
+            baseline_latency_us: { type: "number" }
+            hardware_signature: { type: "object" }
+            behavioral_features: { type: "object" }
+            platform_info: { type: "string" }
+          required: ["baseline_latency_us"]
+
+  # --- LOOP BODY ---
+  - name: "Cluster"
+    detail: "K-Means clustering on behavioral features (periodic, every tau iterations)"
+    position: "loop_body"
+    agents:
+      - label: "cluster-t{t}"
+        description: "Re-cluster candidate pool using K-Means on normalized phi vectors"
+        parallelism: "single"
+        input_variables: ["candidatePool", "NUM_CLUSTERS"]
+        output_schema:
+          type: "object"
+          properties:
+            clusters: { type: "array" }
+          required: ["clusters"]
+
+  - name: "Profile"
+    detail: "Profile cluster centroids for hardware signature updates"
+    position: "loop_body"
+    agents:
+      - label: "profile-t{t}"
+        description: "Profile representative kernels from each cluster to update hardware masks"
+        parallelism: "single"
+        input_variables: ["clusters", "NCU_CMD", "SATURATION_THRESHOLD", "STRATEGIES"]
+        output_schema:
+          type: "object"
+          properties:
+            cluster_profiles: { type: "array" }
+          required: ["cluster_profiles"]
+
+  - name: "Select"
+    detail: "Hardware-constrained Masked UCB to select (cluster, strategy) pair"
+    position: "loop_body"
+    agents: []  # selection is computed in-script via UCB formula
+
+  - name: "Generate"
+    detail: "LLM applies selected strategy to selected kernel candidate"
+    position: "loop_body"
+    agents:
+      - label: "generate-t{t}-{strategy}"
+        description: "Apply the selected optimization strategy to the kernel"
+        parallelism: "single"
+        input_variables: ["selectedKernel", "selectedStrategy", "GPU_TARGET", "OP_DESCRIPTION", "SATURATION_THRESHOLD", "banditStats"]
+        output_schema:
+          type: "object"
+          properties:
+            optimized_kernel: { type: "string" }
+            changes_description: { type: "string" }
+            expected_improvement: { type: "string" }
+          required: ["optimized_kernel"]
+
+  - name: "Evaluate"
+    detail: "Compile, verify correctness, measure latency, compute reward"
+    position: "loop_body"
+    agents:
+      - label: "eval-t{t}"
+        description: "Evaluate generated kernel: compile, verify, benchmark, extract features"
+        parallelism: "single"
+        input_variables: ["generatedCode", "COMPILE_CMD", "BENCHMARK_CMD", "NCU_CMD", "baselineLatency"]
+        output_schema:
+          type: "object"
+          properties:
+            compiled: { type: "boolean" }
+            correct: { type: "boolean" }
+            latency_us: { type: "number" }
+            speedup: { type: "number" }
+            behavioral_features: { type: "object" }
+            hw_signature: { type: "object" }
+          required: ["compiled", "correct"]
+
+  - name: "Update"
+    detail: "Update bandit statistics, cluster assignments, and candidate pool"
+    position: "loop_body"
+    agents: []  # bandit update is computed in-script
+
+  # --- EPILOGUE ---
+  - name: "Report"
+    detail: "Final results: best kernel, strategy statistics, exploration trajectory"
+    position: "epilogue"
+    agents:
+      - label: "report"
+        description: "Write KernelBand optimization report with strategy analysis"
+        parallelism: "single"
+        input_variables: ["GPU_TARGET", "OP_DESCRIPTION", "ITERATIONS", "bestKernel", "strategyStats", "banditStats", "iterationLog"]
+        output_schema:
+          type: "object"
+          properties:
+            report: { type: "string" }
+          required: ["report"]
+
+plan_angles:
+  - name: "compute_saturation"
+    description: "SM throughput ≥ theta_sat — prune tiling/pipeline strategies targeting SM"
+    trigger: "sm_throughput_pct >= SATURATION_THRESHOLD * 100"
+  - name: "memory_saturation"
+    description: "DRAM throughput ≥ theta_sat — prune vectorization/fusion/access_layout targeting DRAM"
+    trigger: "dram_throughput_pct >= SATURATION_THRESHOLD * 100"
+  - name: "cache_saturation"
+    description: "L2 throughput ≥ theta_sat — prune reordering strategies targeting L2"
+    trigger: "l2_throughput_pct >= SATURATION_THRESHOLD * 100"
+
+args:
+  required:
+    - name: "kernel_path"
+      type: "string"
+      description: "Path to the kernel file to optimize (one of kernel_path, problem_definition, or problem_path required)"
+      example: "/path/to/kernel.py"
+  optional:
+    - name: "op_description"
+      type: "string"
+      default: "'GPU kernel'"
+      description: "Human-readable description of the target operation"
+      example: "Fused attention forward pass"
+    - name: "target_gpu"
+      type: "string"
+      default: "'A100'"
+      description: "Target GPU architecture"
+      example: "A100"
+    - name: "iterations"
+      type: "number"
+      default: "20"
+      description: "Number of bandit iterations (paper default T=20)"
+      example: "20"
+    - name: "num_clusters"
+      type: "number"
+      default: "3"
+      description: "Number of K-Means clusters (paper default K=3)"
+      example: "3"
+    - name: "recluster_period"
+      type: "number"
+      default: "10"
+      description: "Re-cluster every tau iterations (paper default tau=10)"
+      example: "10"
+    - name: "ucb_exploration"
+      type: "number"
+      default: "2.0"
+      description: "UCB exploration constant c"
+      example: "2.0"
+    - name: "saturation_threshold"
+      type: "number"
+      default: "0.75"
+      description: "Theta_sat: hardware resource saturation threshold for strategy pruning (75%)"
+      example: "0.75"
+    - name: "strategies"
+      type: "array"
+      default: "['tiling','vectorization','fusion','pipeline','reordering','access_layout']"
+      description: "Optimization strategies available for the bandit"
+      example: "['tiling','vectorization','fusion','pipeline','reordering','access_layout']"
+    - name: "compile_command"
+      type: "string"
+      default: "''"
+      description: "Command to compile the kernel"
+      example: "<user-provided compile command>"
+    - name: "benchmark_command"
+      type: "string"
+      default: "''"
+      description: "Command to benchmark the kernel"
+      example: "<user-provided benchmark command>"
+    - name: "ncu_command"
+      type: "string"
+      default: "''"
+      description: "Command to profile the kernel with NCU"
+      example: "<user-provided ncu command>"
+    - name: "exp_dir"
+      type: "string"
+      default: "'/tmp/kernelband_exp'"
+      description: "Directory for experiment artifacts"
+      example: "/tmp/kernelband_exp"
+    - name: "language"
+      type: "string"
+      default: "'triton'"
+      description: "Target language (triton or cuda)"
+      example: "triton"
+    # --- v1.1 backend-axis args (P5d Stage B) ---
+    - name: "backend"
+      type: "string"
+      default: "null"
+      description: "Backend id (matches _substrate/backends/<id>); null -> use language. Must be triton or cuda for KernelBand (§6.4 + supported= gate)."
+      example: "triton"
+    - name: "backend_dir"
+      type: "string"
+      default: "''"
+      description: "Path to the driver dir; empty -> legacy inline-prompt path (back-compat, byte-identical)."
+      example: "_substrate/backends/triton"
+    - name: "substrate_dir"
+      type: "string"
+      default: "'_substrate'"
+      description: "Path to the substrate root (diagnose.py + anti_cheat.py)"
+      example: "_substrate"
+    - name: "driver_shell_prefix"
+      type: "string"
+      default: "''"
+      description: "Optional shell prefix for driver scripts (e.g. 'bash', 'env VAR=1')"
+      example: "bash"
+    - name: "substrate_command_prefix"
+      type: "string"
+      default: "''"
+      description: "Optional command prefix for substrate Python tools (e.g. 'python3')"
+      example: "python3"
+
+correctness:
+  criteria:
+    - "Generated kernel output matches the reference within tolerance"
+    - "Kernel compiles and runs without crashes"
+    - "All correctness checks pass across tested input shapes"
+  check_type: "runtime_comparison"
+  reference_output: "Run reference kernel/CPU implementation on same inputs"
+
+return_fields:
+  - name: "input_mode"
+    type: "string"
+    description: "optimize_existing or generate_then_optimize"
+    required: true
+  - name: "target_gpu"
+    type: "string"
+    description: "Target GPU"
+    required: true
+  - name: "baseline_latency_us"
+    type: "number"
+    description: "Baseline kernel latency in microseconds"
+    required: true
+  - name: "best_latency_us"
+    type: "number"
+    description: "Best kernel latency found (null if no improvement)"
+    required: false
+  - name: "best_speedup"
+    type: "number"
+    description: "Best speedup vs baseline"
+    required: true
+  - name: "cumulative_reward"
+    type: "number"
+    description: "Total reward accumulated across iterations"
+    required: true
+  - name: "candidate_pool_size"
+    type: "number"
+    description: "Number of valid candidates in the final pool"
+    required: true
+  - name: "strategy_stats"
+    type: "object"
+    description: "Per-strategy attempt/success/reward statistics"
+    required: true
+  - name: "iteration_log"
+    type: "array"
+    description: "Per-iteration log entries"
+    required: true
+  - name: "report"
+    type: "string"
+    description: "Final technical report"
+    required: true
+
+template:
+  base: "iterative-loop"
+  customizations:
+    - "bandit_statistics"
+    - "hardware_aware_pruning"
+    - "behavioral_clustering"
+    - "ncu_profiling"
