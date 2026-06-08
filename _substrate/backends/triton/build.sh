@@ -50,8 +50,7 @@ import triton  # noqa: F401  (absent on macOS -> ImportError, caught by exit cod
 spec = importlib.util.spec_from_file_location("candidate_kernel", src)
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
-# A real warmup would call mod.forward() / launch the @triton.jit kernel here to
-# force PTX materialization into TRITON_CACHE_DIR.
+# TODO (GPU tier): a real warmup MUST launch the @triton.jit kernel (mod.forward(...) with real args) to force PTX materialization; importing the module alone leaves TRITON_CACHE_DIR empty. Until then a 'successful' build may point at an empty cache dir.
 PY
 RC=$?
 END="$(python3 -c 'import time;print(int(time.time()*1000))')"

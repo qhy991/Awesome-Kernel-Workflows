@@ -4,7 +4,7 @@
   "display_name": "Triton (NVIDIA, @triton.jit)",
   "source_ext": ".py",
   "aux_ext": [],
-  "artifact_ext": ".ptx",
+  "artifact_ext": "",
   "hw_vendor": "nvidia",
   "threshold_profile": "nvidia",
   "compiler": { "name": "triton", "invoke": "build.sh" },

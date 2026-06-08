@@ -43,6 +43,9 @@ done
 [ -e "$ARTIFACT" ] || err_envelope "artifact not found: $ARTIFACT" 3   # preflight/bad-input => exit 3 (spec §4.5)
 command -v python3 >/dev/null 2>&1 || err_envelope "python3 not found" 3
 
+# Reuse warmed PTX from the build artifact dir instead of re-JITting from scratch.
+export TRITON_CACHE_DIR="$ARTIFACT"
+
 python3 - "$ARTIFACT" "$PROBLEM" "$OUT" "$REPS" "$RTOL" "$ATOL" "$BASELINE" <<'PY'
 import sys, json
 artifact, problem, out, reps, rtol, atol, baseline = sys.argv[1:8]

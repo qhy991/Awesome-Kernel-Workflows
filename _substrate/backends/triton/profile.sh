@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # triton/profile.sh — run ncu over the python launcher and write ncu --csv to --out.
-# CAVEAT (Triton kernel-name discovery): Triton mangles the kernel symbol name and stores
+# TODO (GPU tier): CAVEAT (Triton kernel-name discovery): Triton mangles the kernel symbol name and stores
 # the compiled object in TRITON_CACHE_DIR, so ncu's --kernel-name regex cannot be derived
 # statically. For now we accept an explicit --kernel-name; if omitted we profile ALL
 # kernels (--kernel-name left unset). Auto-discovery from TRITON_CACHE_DIR is deferred.
