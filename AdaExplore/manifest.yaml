@@ -1,0 +1,17 @@
+# =============================================================================
+# AdaExplore Manifest — Failure-Driven Skill Memory + MCTS Kernel Optimization
+# =============================================================================
+# Method: Adapt + Explore via failure-driven skill memory and diversity-preserving
+# MCTS that alternates large structural proposals and small reviser-guided edits.
+# =============================================================================
+
+schema_version: "1.1"
+name: adaexplore-kernel-optimization
+entrypoint: adaexplore-kernel-optimization.js
+
+backend:
+  portability: clean
+  matrix_eligible: true
+  method_supported_backends: any
+  supported: [cuda, triton]
+  default: cuda
