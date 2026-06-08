@@ -1,0 +1,4 @@
+"ID","Kernel Name","Metric Name","Metric Unit","Metric Value"
+"0","memcpy_kernel","gpu__time_duration.sum","ns","123456"
+"0","memcpy_kernel","sm__throughput.avg.pct_of_peak_sustained_elapsed","%","30.0"
+"0","memcpy_kernel","sm__warps_active.avg.pct_of_peak_sustained_active","%","88.0"
