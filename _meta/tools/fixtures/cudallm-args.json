@@ -1,0 +1,13 @@
+{
+  "problem_definition": "Implement a CUDA kernel that computes row-wise softmax over Tensor[B,N]",
+  "problem_path": "/tmp/cudallm-fixture/task.md",
+  "reference_code_path": "/tmp/cudallm-fixture/reference.py",
+  "benchmark_command": "python /tmp/cudallm-fixture/bench.py {kernel_path} {result_path}",
+  "target_gpu": "H100",
+  "iterations": 2,
+  "feature_budget": 4,
+  "samples_per_feature_set": 2,
+  "rtol": 0.01,
+  "atol": 0.01,
+  "exp_dir": "/tmp/cudallm-fixture"
+}
