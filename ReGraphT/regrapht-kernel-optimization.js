@@ -286,7 +286,7 @@ if (INPUT_MODE === 'generate_then_optimize') {
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
 - problem_path: ${PROBLEM_PATH || '(not provided)'}
 - op_description: ${OP_DESC}
-- language: ${LANGUAGE}
+- language: ${langToken(LANGUAGE)}
 - target_gpu: ${TARGET_GPU}
 - seed_candidates: ${SEED_CANDIDATES}
 
@@ -378,7 +378,7 @@ const graphResult = await agent(`Build or refresh a CUDA Reasoning Graph for ReG
 - setup optimization dimensions: ${(setupResult.optimization_dimensions || []).join(', ') || 'unknown'}
 
 # Source code excerpt
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${sourceCode.substring(0, 5000)}
 \`\`\`
 
@@ -465,7 +465,7 @@ ${OP_DESC}
 ${TARGET_GPU}
 
 # Original/source code
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${sourceCode.substring(0, 8000)}
 \`\`\`
 
@@ -508,7 +508,7 @@ Return candidate code and suitability decisions for each method.`, {
   const evaluation = await agent(`Evaluate the generated CUDA candidate with real evidence.
 
 # Candidate code
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${(generation.candidate_code || '').substring(0, 12000)}
 \`\`\`
 
@@ -643,7 +643,7 @@ ${JSON.stringify(bestCandidate ? {
 \`\`\`
 
 # Best code excerpt
-\`\`\`cuda
+\`\`\`${fenceToken()}
 ${(bestCandidate?.code || '').substring(0, 5000)}
 \`\`\`
 
