@@ -1,0 +1,412 @@
+[
+  {
+    "label": "setup-task",
+    "phase": "Setup",
+    "prompt": "Read the CUDA optimization task and evaluator contract.\n\n# Inputs\n- kernel_path: /tmp/regrapht-fixture/source.cu\n- operation: stencil\n- target_gpu: H100\n- benchmark_command: python /tmp/regrapht-fixture/bench.py {kernel_path} {result_path}\n- baseline_command: (optional baseline command not provided)\n- exp_dir: /tmp/regrapht-fixture\n\n# Tasks\n1. Read the source code or task spec from kernel_path.\n2. Identify the operation, input/output contract, and target kernel entry points.\n3. If baseline_command is present, run it or describe the exact command to run and parse its JSON result.\n4. State the required evaluator JSON contract. Evaluation evidence must come from benchmark_command; if it is missing, mark evidence as unavailable.\n5. Identify CUDA optimization dimensions relevant to this task.\n\nReturn structured setup data.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "source_code": {
+          "type": "string"
+        },
+        "operation_type": {
+          "type": "string"
+        },
+        "input_contract": {
+          "type": "string"
+        },
+        "output_contract": {
+          "type": "string"
+        },
+        "kernel_entry_points": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "baseline_metric": {
+          "type": "number"
+        },
+        "baseline_time_ms": {
+          "type": "number"
+        },
+        "evaluator_contract": {
+          "type": "string"
+        },
+        "optimization_dimensions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "source_code",
+        "operation_type",
+        "evaluator_contract"
+      ]
+    },
+    "seq": 0
+  },
+  {
+    "label": "build-regraph",
+    "phase": "BuildGraph",
+    "prompt": "Build or refresh a CUDA Reasoning Graph for ReGraphT.\n\n# Paper-derived graph contract\n- A node represents a CUDA optimization method or intermediate optimization state.\n- A directed edge represents a transition between two methods.\n- The graph may contain cycles.\n- Each node and edge should retain examples extracted from optimization trajectories.\n- Method labels must be normalized so equivalent LLM phrases map to one method.\n\n# Inputs\n- graph_path: (none; construct from trace corpus and task dimensions)\n- trace_corpus_path: (none; synthesize a minimal seed graph from task dimensions)\n- operation: stencil\n- target_gpu: H100\n- setup optimization dimensions: tiling, shared memory, register blocking\n\n# Source code excerpt\n```cuda\n__global__ void stencil_kernel() {}\n\n```\n\n# Tasks\n1. If graph_path exists, read the graph and normalize it to {nodes, edges}.\n2. If trace_corpus_path exists, extract optimization trajectories, method labels, examples, and transitions.\n3. If no corpus exists, create a conservative seed graph using standard CUDA method nodes relevant to this operation.\n4. Include v_init as the start node.\n5. For each edge, include a prior score and one or more example snippets when available.\n\nReturn a graph suitable for Monte Carlo Graph Search.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "graph": {
+          "type": "object"
+        },
+        "method_labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "trace_count": {
+          "type": "number"
+        },
+        "normalization_notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "graph",
+        "method_labels"
+      ]
+    },
+    "seq": 1
+  },
+  {
+    "label": "select-0",
+    "phase": "Select",
+    "prompt": "Select a promising CUDA optimization path with Monte Carlo Graph Search.\n\n# ReGraph state\n```json\n{\n  \"nodes\": [\n    {\n      \"id\": \"v_init\",\n      \"method\": \"initial sequential\",\n      \"visits\": 0,\n      \"reward\": 0,\n      \"examples\": []\n    },\n    {\n      \"id\": \"v_tile\",\n      \"method\": \"tile_block\",\n      \"visits\": 0,\n      \"reward\": 0,\n      \"examples\": []\n    }\n  ],\n  \"edges\": [\n    {\n      \"from\": \"v_init\",\n      \"to\": \"v_tile\",\n      \"prior\": 0.5\n    }\n  ]\n}\n```\n\n# Selection constraints\n- Start from v_init.\n- Run 4 conceptual MCGS rollouts.\n- Use UCT-style selection: average_reward + exploration + edge prior.\n- Limit path length to 4.\n- Prefer paths whose examples fit the current operation and target GPU.\n- Do not select methods contradicted by evaluator failures in prior attempts.\n\n# Prior evaluated candidates\n```json\n[]\n```\n\nReturn the selected method path and the examples that should condition generation.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "path_node_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "method_sequence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "selected_examples": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "selection_rationale": {
+          "type": "string"
+        },
+        "expected_speedup": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "path_node_ids",
+        "method_sequence",
+        "selection_rationale"
+      ]
+    },
+    "seq": 2
+  },
+  {
+    "label": "generate-0",
+    "phase": "Generate",
+    "prompt": "Generate a CUDA optimization candidate using the selected ReGraphT path.\n\n# Operation\nstencil\n\n# Target GPU\nH100\n\n# Original/source code\n```cuda\n__global__ void stencil_kernel() {}\n\n```\n\n# Selected CUDA optimization method sequence\n1. tile_block\n\n# Retrieved optimization examples\n```json\n[\n  {\n    \"method\": \"tile_block\",\n    \"snippet\": \"blockDim.x=32\"\n  }\n]\n```\n\n# Evaluator contract\nWrite JSON {compiled,correct,speedup,kernel_time_ms} to {result_path}\n\n# Hard requirements\n1. Use the selected method sequence only when it is suitable for the current code.\n2. Produce complete compilable CUDA/C++ code, not a patch fragment.\n3. Preserve correctness according to the input/output contract.\n4. If a selected method is unsuitable, explain why and apply the next suitable method in the path.\n5. Do not claim speedup without evaluator evidence.\n\nReturn candidate code and suitability decisions for each method.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "candidate_code": {
+          "type": "string"
+        },
+        "applied_methods": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skipped_methods": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "suitability_notes": {
+          "type": "string"
+        },
+        "implementation_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_code",
+        "applied_methods"
+      ]
+    },
+    "seq": 3
+  },
+  {
+    "label": "evaluate-0",
+    "phase": "Evaluate",
+    "prompt": "Evaluate the generated CUDA candidate with real evidence.\n\n# Candidate code\n```cuda\n__global__ void stencil_v1() { /* tiled */ }\n\n```\n\n# Evaluation command\npython /tmp/regrapht-fixture/bench.py {kernel_path} {result_path}\n\n# Result path convention\nUse /tmp/regrapht-fixture/regrapht_attempt_0.json as {result_path}.\nUse /tmp/regrapht-fixture/regrapht_attempt_0.cu as {kernel_path}.\n\n# Required behavior\n1. Materialize the candidate at the kernel path if command execution is available.\n2. Run benchmark_command with {kernel_path} and {result_path} substitutions if provided.\n3. Parse evaluator JSON. If no command is provided, mark correct=false and explain missing evidence.\n4. Correctness and speedup must be based on evaluator output only.\n\nReturn evaluator evidence.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compiled": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "boolean"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "kernel_time_ms": {
+          "type": "number"
+        },
+        "baseline_time_ms": {
+          "type": "number"
+        },
+        "result_path": {
+          "type": "string"
+        },
+        "error_message": {
+          "type": "string"
+        },
+        "error_type": {
+          "type": "string"
+        },
+        "evidence_summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "compiled",
+        "correct",
+        "speedup"
+      ]
+    },
+    "seq": 4
+  },
+  {
+    "label": "update-graph-0",
+    "phase": "UpdateGraph",
+    "prompt": "Update the CUDA Reasoning Graph from measured evaluator feedback.\n\n# Selected path\n```json\n{\n  \"path_node_ids\": [\n    \"v_init\",\n    \"v_tile\"\n  ],\n  \"method_sequence\": [\n    \"tile_block\"\n  ],\n  \"selected_examples\": [\n    {\n      \"method\": \"tile_block\",\n      \"snippet\": \"blockDim.x=32\"\n    }\n  ],\n  \"selection_rationale\": \"highest prior\",\n  \"expected_speedup\": 1.2\n}\n```\n\n# Generated methods\ntile_block\n\n# Evaluator result\n```json\n{\n  \"compiled\": true,\n  \"correct\": true,\n  \"speedup\": 1.18,\n  \"kernel_time_ms\": 0.17,\n  \"baseline_time_ms\": 0.2,\n  \"result_path\": \"/tmp/regrapht-fixture/regrapht_attempt_0.json\",\n  \"error_message\": \"\",\n  \"error_type\": \"\",\n  \"evidence_summary\": \"tile_block produced 1.18x\"\n}\n```\n\n# Current graph\n```json\n{\n  \"nodes\": [\n    {\n      \"id\": \"v_init\",\n      \"method\": \"initial sequential\",\n      \"visits\": 0,\n      \"reward\": 0,\n      \"examples\": []\n    },\n    {\n      \"id\": \"v_tile\",\n      \"method\": \"tile_block\",\n      \"visits\": 0,\n      \"reward\": 0,\n      \"examples\": []\n    }\n  ],\n  \"edges\": [\n    {\n      \"from\": \"v_init\",\n      \"to\": \"v_tile\",\n      \"prior\": 0.5\n    }\n  ]\n}\n```\n\n# Update rules\n1. Increment visits along selected nodes.\n2. Add reward equal to speedup for correct candidates, small positive reward for compile-only progress, and zero/negative evidence for failures.\n3. Attach the concrete optimization example to the traversed edge or final node.\n4. If the candidate used a new method label, add or relabel a node instead of duplicating equivalent methods.\n5. Add 1-3 follow-up edges from the best promising node when evidence suggests a next method.\n6. If graph_path is provided, write the updated graph there.\n\nReturn the updated graph and update summary.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "updated_graph": {
+          "type": "object"
+        },
+        "reward": {
+          "type": "number"
+        },
+        "added_nodes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "added_edges": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "relabel_notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "wrote_graph_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "updated_graph",
+        "reward"
+      ]
+    },
+    "seq": 5
+  },
+  {
+    "label": "select-1",
+    "phase": "Select",
+    "prompt": "Select a promising CUDA optimization path with Monte Carlo Graph Search.\n\n# ReGraph state\n```json\n{\n  \"nodes\": [\n    {\n      \"id\": \"v_init\",\n      \"method\": \"initial sequential\",\n      \"visits\": 1,\n      \"reward\": 0,\n      \"examples\": []\n    },\n    {\n      \"id\": \"v_tile\",\n      \"method\": \"tile_block\",\n      \"visits\": 1,\n      \"reward\": 1.18,\n      \"examples\": [\n        {\n          \"code\": \"v1\"\n        }\n      ]\n    },\n    {\n      \"id\": \"v_smem\",\n      \"method\": \"shared_memory\",\n      \"visits\": 0,\n      \"reward\": 0,\n      \"examples\": []\n    }\n  ],\n  \"edges\": [\n    {\n      \"from\": \"v_init\",\n      \"to\": \"v_tile\",\n      \"prior\": 0.5\n    },\n    {\n      \"from\": \"v_tile\",\n      \"to\": \"v_smem\",\n      \"prior\": 0.5\n    }\n  ]\n}\n```\n\n# Selection constraints\n- Start from v_init.\n- Run 4 conceptual MCGS rollouts.\n- Use UCT-style selection: average_reward + exploration + edge prior.\n- Limit path length to 4.\n- Prefer paths whose examples fit the current operation and target GPU.\n- Do not select methods contradicted by evaluator failures in prior attempts.\n\n# Prior evaluated candidates\n```json\n[\n  {\n    \"id\": \"attempt_0\",\n    \"path_node_ids\": [\n      \"v_init\",\n      \"v_tile\"\n    ],\n    \"methods\": [\n      \"tile_block\"\n    ],\n    \"code\": \"__global__ void stencil_v1() { /* tiled */ }\\n\",\n    \"eval\": {\n      \"compiled\": true,\n      \"correct\": true,\n      \"speedup\": 1.18,\n      \"kernel_time_ms\": 0.17,\n      \"baseline_time_ms\": 0.2,\n      \"result_path\": \"/tmp/regrapht-fixture/regrapht_attempt_0.json\",\n      \"error_message\": \"\",\n      \"error_type\": \"\",\n      \"evidence_summary\": \"tile_block produced 1.18x\"\n    }\n  }\n]\n```\n\nReturn the selected method path and the examples that should condition generation.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "path_node_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "method_sequence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "selected_examples": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "selection_rationale": {
+          "type": "string"
+        },
+        "expected_speedup": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "path_node_ids",
+        "method_sequence",
+        "selection_rationale"
+      ]
+    },
+    "seq": 6
+  },
+  {
+    "label": "generate-1",
+    "phase": "Generate",
+    "prompt": "Generate a CUDA optimization candidate using the selected ReGraphT path.\n\n# Operation\nstencil\n\n# Target GPU\nH100\n\n# Original/source code\n```cuda\n__global__ void stencil_kernel() {}\n\n```\n\n# Selected CUDA optimization method sequence\n1. tile_block\n2. shared_memory\n\n# Retrieved optimization examples\n```json\n[\n  {\n    \"method\": \"shared_memory\",\n    \"snippet\": \"__shared__ float tile[32]\"\n  }\n]\n```\n\n# Evaluator contract\nWrite JSON {compiled,correct,speedup,kernel_time_ms} to {result_path}\n\n# Hard requirements\n1. Use the selected method sequence only when it is suitable for the current code.\n2. Produce complete compilable CUDA/C++ code, not a patch fragment.\n3. Preserve correctness according to the input/output contract.\n4. If a selected method is unsuitable, explain why and apply the next suitable method in the path.\n5. Do not claim speedup without evaluator evidence.\n\nReturn candidate code and suitability decisions for each method.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "candidate_code": {
+          "type": "string"
+        },
+        "applied_methods": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skipped_methods": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "suitability_notes": {
+          "type": "string"
+        },
+        "implementation_notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate_code",
+        "applied_methods"
+      ]
+    },
+    "seq": 7
+  },
+  {
+    "label": "evaluate-1",
+    "phase": "Evaluate",
+    "prompt": "Evaluate the generated CUDA candidate with real evidence.\n\n# Candidate code\n```cuda\n__global__ void stencil_v2() { /* tiled + smem */ }\n\n```\n\n# Evaluation command\npython /tmp/regrapht-fixture/bench.py {kernel_path} {result_path}\n\n# Result path convention\nUse /tmp/regrapht-fixture/regrapht_attempt_1.json as {result_path}.\nUse /tmp/regrapht-fixture/regrapht_attempt_1.cu as {kernel_path}.\n\n# Required behavior\n1. Materialize the candidate at the kernel path if command execution is available.\n2. Run benchmark_command with {kernel_path} and {result_path} substitutions if provided.\n3. Parse evaluator JSON. If no command is provided, mark correct=false and explain missing evidence.\n4. Correctness and speedup must be based on evaluator output only.\n\nReturn evaluator evidence.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compiled": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "boolean"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "kernel_time_ms": {
+          "type": "number"
+        },
+        "baseline_time_ms": {
+          "type": "number"
+        },
+        "result_path": {
+          "type": "string"
+        },
+        "error_message": {
+          "type": "string"
+        },
+        "error_type": {
+          "type": "string"
+        },
+        "evidence_summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "compiled",
+        "correct",
+        "speedup"
+      ]
+    },
+    "seq": 8
+  },
+  {
+    "label": "update-graph-1",
+    "phase": "UpdateGraph",
+    "prompt": "Update the CUDA Reasoning Graph from measured evaluator feedback.\n\n# Selected path\n```json\n{\n  \"path_node_ids\": [\n    \"v_init\",\n    \"v_tile\",\n    \"v_smem\"\n  ],\n  \"method_sequence\": [\n    \"tile_block\",\n    \"shared_memory\"\n  ],\n  \"selected_examples\": [\n    {\n      \"method\": \"shared_memory\",\n      \"snippet\": \"__shared__ float tile[32]\"\n    }\n  ],\n  \"selection_rationale\": \"follow-up edge from v_tile\",\n  \"expected_speedup\": 1.4\n}\n```\n\n# Generated methods\ntile_block -> shared_memory\n\n# Evaluator result\n```json\n{\n  \"compiled\": true,\n  \"correct\": true,\n  \"speedup\": 1.32,\n  \"kernel_time_ms\": 0.15,\n  \"baseline_time_ms\": 0.2,\n  \"result_path\": \"/tmp/regrapht-fixture/regrapht_attempt_1.json\",\n  \"error_message\": \"\",\n  \"error_type\": \"\",\n  \"evidence_summary\": \"shared_memory chained on tile_block produced 1.32x\"\n}\n```\n\n# Current graph\n```json\n{\n  \"nodes\": [\n    {\n      \"id\": \"v_init\",\n      \"method\": \"initial sequential\",\n      \"visits\": 1,\n      \"reward\": 0,\n      \"examples\": []\n    },\n    {\n      \"id\": \"v_tile\",\n      \"method\": \"tile_block\",\n      \"visits\": 1,\n      \"reward\": 1.18,\n      \"examples\": [\n        {\n          \"code\": \"v1\"\n        }\n      ]\n    },\n    {\n      \"id\": \"v_smem\",\n      \"method\": \"shared_memory\",\n      \"visits\": 0,\n      \"reward\": 0,\n      \"examples\": []\n    }\n  ],\n  \"edges\": [\n    {\n      \"from\": \"v_init\",\n      \"to\": \"v_tile\",\n      \"prior\": 0.5\n    },\n    {\n      \"from\": \"v_tile\",\n      \"to\": \"v_smem\",\n      \"prior\": 0.5\n    }\n  ]\n}\n```\n\n# Update rules\n1. Increment visits along selected nodes.\n2. Add reward equal to speedup for correct candidates, small positive reward for compile-only progress, and zero/negative evidence for failures.\n3. Attach the concrete optimization example to the traversed edge or final node.\n4. If the candidate used a new method label, add or relabel a node instead of duplicating equivalent methods.\n5. Add 1-3 follow-up edges from the best promising node when evidence suggests a next method.\n6. If graph_path is provided, write the updated graph there.\n\nReturn the updated graph and update summary.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "updated_graph": {
+          "type": "object"
+        },
+        "reward": {
+          "type": "number"
+        },
+        "added_nodes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "added_edges": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "relabel_notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "wrote_graph_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "updated_graph",
+        "reward"
+      ]
+    },
+    "seq": 9
+  },
+  {
+    "label": "final-report",
+    "phase": "Report",
+    "prompt": "Write a concise technical report for this ReGraphT optimization run.\n\n# Operation\nstencil\n\n# Boundary\nThis workflow used ReGraphT as a training-free inference loop. It built or loaded a CUDA Reasoning Graph, selected paths with Monte Carlo Graph Search, generated candidates from graph-conditioned examples, and used evaluator evidence for reward.\n\n# Adaptation scope\ntraining_free_inference\n\n# Final graph stats\n```json\n{\n  \"nodes\": 3,\n  \"edges\": 2,\n  \"visited_nodes\": 3,\n  \"evaluated_candidates\": 2,\n  \"correct_candidates\": 2\n}\n```\n\n# Best candidate\n```json\n{\n  \"id\": \"attempt_1\",\n  \"methods\": [\n    \"tile_block\",\n    \"shared_memory\"\n  ],\n  \"eval\": {\n    \"compiled\": true,\n    \"correct\": true,\n    \"speedup\": 1.32,\n    \"kernel_time_ms\": 0.15,\n    \"baseline_time_ms\": 0.2,\n    \"result_path\": \"/tmp/regrapht-fixture/regrapht_attempt_1.json\",\n    \"error_message\": \"\",\n    \"error_type\": \"\",\n    \"evidence_summary\": \"shared_memory chained on tile_block produced 1.32x\"\n  }\n}\n```\n\n# Best code excerpt\n```cuda\n__global__ void stencil_v2() { /* tiled + smem */ }\n\n```\n\n# Selected paths\n```json\n[\n  {\n    \"path_node_ids\": [\n      \"v_init\",\n      \"v_tile\"\n    ],\n    \"method_sequence\": [\n      \"tile_block\"\n    ],\n    \"selected_examples\": [\n      {\n        \"method\": \"tile_block\",\n        \"snippet\": \"blockDim.x=32\"\n      }\n    ],\n    \"selection_rationale\": \"highest prior\",\n    \"expected_speedup\": 1.2\n  },\n  {\n    \"path_node_ids\": [\n      \"v_init\",\n      \"v_tile\",\n      \"v_smem\"\n    ],\n    \"method_sequence\": [\n      \"tile_block\",\n      \"shared_memory\"\n    ],\n    \"selected_examples\": [\n      {\n        \"method\": \"shared_memory\",\n        \"snippet\": \"__shared__ float tile[32]\"\n      }\n    ],\n    \"selection_rationale\": \"follow-up edge from v_tile\",\n    \"expected_speedup\": 1.4\n  }\n]\n```\n\nCover:\n1. Which reasoning-graph methods were most useful.\n2. Which methods were unsuitable or failed, based on evaluator evidence.\n3. Whether the best candidate is trustworthy.\n4. Which open graph paths should be tried next.",
+    "seq": 10
+  }
+]

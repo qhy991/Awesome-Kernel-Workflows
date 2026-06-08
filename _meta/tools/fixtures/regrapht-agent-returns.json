@@ -1,0 +1,122 @@
+{
+  "setup-task": {
+    "source_code": "__global__ void stencil_kernel() {}\n",
+    "operation_type": "stencil",
+    "input_contract": "float* in, float* out, int N",
+    "output_contract": "float* out",
+    "kernel_entry_points": ["stencil_kernel"],
+    "baseline_metric": 1.0,
+    "baseline_time_ms": 0.20,
+    "evaluator_contract": "Write JSON {compiled,correct,speedup,kernel_time_ms} to {result_path}",
+    "optimization_dimensions": ["tiling", "shared memory", "register blocking"]
+  },
+  "build-regraph": {
+    "graph": {
+      "nodes": [
+        { "id": "v_init", "method": "initial sequential", "visits": 0, "reward": 0, "examples": [] },
+        { "id": "v_tile", "method": "tile_block", "visits": 0, "reward": 0, "examples": [] }
+      ],
+      "edges": [
+        { "from": "v_init", "to": "v_tile", "prior": 0.5 }
+      ]
+    },
+    "method_labels": ["tile_block", "shared_memory"],
+    "trace_count": 0,
+    "normalization_notes": ["seed graph"]
+  },
+  "select-0": {
+    "path_node_ids": ["v_init", "v_tile"],
+    "method_sequence": ["tile_block"],
+    "selected_examples": [{ "method": "tile_block", "snippet": "blockDim.x=32" }],
+    "selection_rationale": "highest prior",
+    "expected_speedup": 1.2
+  },
+  "generate-0": {
+    "candidate_code": "__global__ void stencil_v1() { /* tiled */ }\n",
+    "applied_methods": ["tile_block"],
+    "skipped_methods": [],
+    "suitability_notes": "tile fits",
+    "implementation_notes": "32x32 tiling"
+  },
+  "evaluate-0": {
+    "compiled": true,
+    "correct": true,
+    "speedup": 1.18,
+    "kernel_time_ms": 0.17,
+    "baseline_time_ms": 0.20,
+    "result_path": "/tmp/regrapht-fixture/regrapht_attempt_0.json",
+    "error_message": "",
+    "error_type": "",
+    "evidence_summary": "tile_block produced 1.18x"
+  },
+  "update-graph-0": {
+    "updated_graph": {
+      "nodes": [
+        { "id": "v_init", "method": "initial sequential", "visits": 1, "reward": 0, "examples": [] },
+        { "id": "v_tile", "method": "tile_block", "visits": 1, "reward": 1.18, "examples": [{ "code": "v1" }] },
+        { "id": "v_smem", "method": "shared_memory", "visits": 0, "reward": 0, "examples": [] }
+      ],
+      "edges": [
+        { "from": "v_init", "to": "v_tile", "prior": 0.5 },
+        { "from": "v_tile", "to": "v_smem", "prior": 0.5 }
+      ]
+    },
+    "reward": 1.18,
+    "added_nodes": ["v_smem"],
+    "added_edges": ["v_tile->v_smem"],
+    "relabel_notes": [],
+    "wrote_graph_path": ""
+  },
+  "select-1": {
+    "path_node_ids": ["v_init", "v_tile", "v_smem"],
+    "method_sequence": ["tile_block", "shared_memory"],
+    "selected_examples": [{ "method": "shared_memory", "snippet": "__shared__ float tile[32]" }],
+    "selection_rationale": "follow-up edge from v_tile",
+    "expected_speedup": 1.4
+  },
+  "generate-1": {
+    "candidate_code": "__global__ void stencil_v2() { /* tiled + smem */ }\n",
+    "applied_methods": ["tile_block", "shared_memory"],
+    "skipped_methods": [],
+    "suitability_notes": "smem fits",
+    "implementation_notes": "32x32 tile in shared memory"
+  },
+  "evaluate-1": {
+    "compiled": true,
+    "correct": true,
+    "speedup": 1.32,
+    "kernel_time_ms": 0.15,
+    "baseline_time_ms": 0.20,
+    "result_path": "/tmp/regrapht-fixture/regrapht_attempt_1.json",
+    "error_message": "",
+    "error_type": "",
+    "evidence_summary": "shared_memory chained on tile_block produced 1.32x"
+  },
+  "update-graph-1": {
+    "updated_graph": {
+      "nodes": [
+        { "id": "v_init", "method": "initial sequential", "visits": 2, "reward": 0, "examples": [] },
+        { "id": "v_tile", "method": "tile_block", "visits": 2, "reward": 2.36, "examples": [] },
+        { "id": "v_smem", "method": "shared_memory", "visits": 1, "reward": 1.32, "examples": [] }
+      ],
+      "edges": [
+        { "from": "v_init", "to": "v_tile", "prior": 0.5 },
+        { "from": "v_tile", "to": "v_smem", "prior": 0.6 }
+      ]
+    },
+    "reward": 1.32,
+    "added_nodes": [],
+    "added_edges": [],
+    "relabel_notes": [],
+    "wrote_graph_path": ""
+  },
+  "final-report": {
+    "outcome": "success",
+    "summary": "ReGraphT chained tile_block then shared_memory.",
+    "best_speedup": 1.32,
+    "baseline_metric": 1.0,
+    "speedup": 1.32,
+    "iterations": 2,
+    "best_methods": ["tile_block", "shared_memory"]
+  }
+}
