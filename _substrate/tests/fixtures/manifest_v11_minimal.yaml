@@ -1,0 +1,42 @@
+source:
+  paper_title: "Synthetic v1.1 fixture"
+  paper_url: "https://example.invalid/v11"
+workflow:
+  name: "v11-fixture"
+  description: "minimal v1.1 manifest with populated backend block"
+  when_to_use: "test only"
+  output_filename: "v11-fixture.js"
+  directory: "V11Fixture/"
+inputs:
+  required_one_of:
+    - kernel_path
+method:
+  category: "iterative_self_improving"
+  core_insight: "fixture"
+  feedback_signal:
+    type: "profiler_metric"
+    description: "fixture"
+    tool: "ncu"
+    higher_is_better: true
+topology:
+  type: "iterative"
+backend:
+  supported: ["cuda"]
+  default: "cuda"
+  matrix_eligible: true
+  portability: "clean"
+  intrinsic_to: ""
+  requires_capability: {}
+phases:
+  - name: "Setup"
+    detail: "fixture"
+    position: "preamble"
+args:
+  required: []
+  optional: []
+correctness:
+  criteria: []
+  check_type: "runtime_comparison"
+return_fields: []
+template:
+  base: "iterative-loop"
