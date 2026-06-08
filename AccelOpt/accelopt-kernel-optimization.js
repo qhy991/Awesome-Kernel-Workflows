@@ -798,7 +798,36 @@ for (let iter = 0; iter < ITERATIONS; iter++) {
 
   const planAngles = IDIOMS.plan_angles
 
-  const planPromptBase = `You are a CUDA kernel optimization expert. You have REAL Nsight Compute (NCU) profiling data for this kernel. Use it to generate ONE specific, evidence-based optimization plan.
+  const planPromptBase = USE_DRIVER
+    ? `You are a ${BACKEND} kernel optimization expert. You have REAL ${IDIOMS.profiler_name || 'profiler'} profiling data for this kernel. Use it to generate ONE specific, evidence-based optimization plan.
+
+# Operation: ${OP_DESC} (${opType})
+
+# Current Best Implementation:
+\`\`\`${IDIOMS.lang_fence}
+${bestKernelCode.substring(0, 4000)}
+\`\`\`
+
+# PROFILING DATA (THIS IS REAL MEASURED DATA — base your plan on this):
+${baselineNcuProfile}
+
+# Current Performance:
+- Latency: ${bestLatency}ms
+- Speedup vs original baseline: ${(baselineLatency / bestLatency).toFixed(2)}x
+${beamSection}
+${experienceSection}
+
+# How to read profile data for planning:
+${IDIOMS.read_metric_guide}
+
+# Optimization Plan Requirements:
+1. CITE the specific profile metric(s) that justify your plan
+2. Name the exact code region and transformation
+3. Prefer STRUCTURAL changes over parameter tuning
+4. Don't suggest lowering precision below the baseline
+5. Estimate expected speedup based on the profile data
+6. If candidate beam shows multiple approaches, consider COMBINING strengths from different candidates`
+    : `You are a CUDA kernel optimization expert. You have REAL Nsight Compute (NCU) profiling data for this kernel. Use it to generate ONE specific, evidence-based optimization plan.
 
 # Operation: ${OP_DESC} (${opType})
 
