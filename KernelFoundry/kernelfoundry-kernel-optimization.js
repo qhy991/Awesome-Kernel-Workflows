@@ -69,7 +69,23 @@ function assertWorkflowSuitability() {
   }
 }
 
-assertWorkflowSuitability()
+function resolveBackendAxis() {
+  const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
+  const l = args.language ? normalizeSuitabilityValue(args.language) : null
+  if (b && l && b !== l) {
+    throw new Error(`Conflicting args: backend="${args.backend}" vs language="${args.language}". Pass only one.`)
+  }
+  if (args.backend && !args.backend_dir) {
+    throw new Error(`args.backend="${args.backend}" requires args.backend_dir; driver dispatch has no implicit-resolve path.`)
+  }
+  return b || l || null
+}
+const RESOLVED_BACKEND = resolveBackendAxis()
+const USE_DRIVER = !!args.backend_dir
+
+if (!USE_DRIVER) {
+  assertWorkflowSuitability()
+}
 
 // =============================================================================
 // KernelFoundry: Hardware-Aware Evolutionary GPU Kernel Optimization
@@ -138,6 +154,37 @@ const KERNEL_PATH = args.kernel_path || ''
 const INPUT_MODE = KERNEL_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const EVIDENCE_MODE = (TEST_CMD && BENCH_CMD) ? 'measured' : 'conservative_missing_evidence'
 
+// --- Backend driver wiring (P5d Stage B; off-by-default; legacy path byte-identical) ---
+const BACKEND_DIR = args.backend_dir || ''
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const SH = args.driver_shell_prefix || ''
+const PY = args.substrate_command_prefix || ''
+const LEGACY_LANG_TOKEN = TARGET_LANG
+const LEGACY_FENCE_TOKEN = TARGET_LANG
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+
+function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
+function driverSh(script, cliArgs) {
+  return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
+}
+
+let DRIVER = null
+let DRIVER_LANG_FENCE = LEGACY_FENCE_TOKEN
+let DRIVER_IMPL_REQUIREMENTS = ''
+let DRIVER_SOURCE_EXT = ''
+let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
+
+function langToken(legacy) {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : legacy
+}
+function fenceToken() {
+  return USE_DRIVER ? DRIVER_LANG_FENCE : LEGACY_FENCE_TOKEN
+}
+function kernelPathForGeneration(gen) {
+  const ext = USE_DRIVER ? (DRIVER_SOURCE_EXT || '.cu') : '.cu'
+  return `${EXP_DIR}/gen_${gen}${ext}`
+}
+
 // --- State: MAP-Elites Archive ---
 // 4x4x4 = 64 cells, indexed by (d_mem, d_algo, d_sync)
 let archive = {}           // key="d_mem,d_algo,d_sync" → {code, fitness, speedup, id}
@@ -174,6 +221,26 @@ function computeFitness(compiled, correct, speedup) {
 // =============================================================================
 phase('Setup')
 
+if (USE_DRIVER) {
+  DRIVER = await agent(
+    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
+    `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
+    `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
+    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (!DRIVER || DRIVER.present === false) {
+    throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
+  }
+  if (RESOLVED_BACKEND && DRIVER.backend_id && normalizeSuitabilityValue(DRIVER.backend_id) !== RESOLVED_BACKEND) {
+    throw new Error(`backend_dir manifest backend_id="${DRIVER.backend_id}" conflicts with args.backend/language="${RESOLVED_BACKEND}".`)
+  }
+  DRIVER_LANG_FENCE = DRIVER.lang_fence || DRIVER_LANG_FENCE
+  DRIVER_IMPL_REQUIREMENTS = DRIVER.impl_requirements || ''
+  DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT
+  DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID
+  log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
+}
+
 const setupResult = await agent(`You are a GPU kernel optimization expert setting up the KernelFoundry evolutionary search.
 
 # Task:
@@ -181,7 +248,7 @@ ${KERNEL_PATH ? `Read kernel/operator from: ${KERNEL_PATH}` : ''}
 ${TASK_SPEC ? `\`\`\`python\n${TASK_SPEC.substring(0, 3000)}\n\`\`\`` : '(Determine from op_description)'}
 
 # Operation: ${OP_DESC}
-# Target language: ${TARGET_LANG} (SYCL/CUDA/Triton)
+# Target language: ${langToken(LEGACY_LANG_TOKEN)} (SYCL/CUDA/Triton)
 # Target hardware: ${TARGET_HW}
 # Evidence contract:
 - descriptor_result_path: ${DESCRIPTOR_RESULT_PATH}
@@ -276,7 +343,7 @@ for (generation = 0; generation < GENERATIONS; generation++) {
   phase('Vary')
 
   const parentContext = selectedParent
-    ? `\n# Parent Kernel (from cell [${selectedParent.cell}], fitness=${selectedParent.fitness.toFixed(2)}, speedup=${selectedParent.speedup.toFixed(2)}x):\n\`\`\`${TARGET_LANG}\n${selectedParent.code.substring(0, 4000)}\n\`\`\``
+    ? `\n# Parent Kernel (from cell [${selectedParent.cell}], fitness=${selectedParent.fitness.toFixed(2)}, speedup=${selectedParent.speedup.toFixed(2)}x):\n\`\`\`${fenceToken()}\n${selectedParent.code.substring(0, 4000)}\n\`\`\``
     : ''
 
   const varyResult = await agent(`You are a GPU kernel generator for the KernelFoundry evolutionary framework.
@@ -288,7 +355,7 @@ ${operatorCode.substring(0, 2500)}
 \`\`\`
 
 # Operation: ${OP_DESC}
-# Target: ${TARGET_LANG} on ${TARGET_HW}
+# Target: ${langToken(LEGACY_LANG_TOKEN)} on ${TARGET_HW}
 # Baseline: ${baselineTime}ms | Speedup target: ${SPEEDUP_TARGET}x
 
 # === EVOLVED OPTIMIZATION GUIDANCE (meta-prompt) ===
@@ -311,7 +378,7 @@ ${parentContext}
 ${gradientHints ? `# Gradient Hints (from evolutionary history):\n${gradientHints}` : ''}
 
 # Generation Requirements:
-1. Produce a COMPLETE, COMPILABLE ${TARGET_LANG} kernel
+1. Produce a COMPLETE, COMPILABLE ${langToken(LEGACY_LANG_TOKEN)} kernel
 2. Include all necessary headers/imports
 3. If mutating a parent: make MEANINGFUL structural changes, not just parameter tweaks
 4. Try to explore a DIFFERENT optimization strategy than the parent (different memory pattern, algorithm, or parallelism level)
@@ -342,10 +409,10 @@ Return the kernel code and its optimization strategy description.`, {
   // ===========================================================================
   phase('Evaluate')
 
-  const evalResult = await agent(`You are a kernel evaluator for KernelFoundry. Evaluate this ${TARGET_LANG} kernel.
+  const evalResult = await agent(`You are a kernel evaluator for KernelFoundry. Evaluate this ${langToken(LEGACY_LANG_TOKEN)} kernel.
 
 # Kernel Code:
-\`\`\`${TARGET_LANG}
+\`\`\`${fenceToken()}
 ${offspringCode.substring(0, 5000)}
 \`\`\`
 
@@ -355,7 +422,7 @@ ${operatorCode.substring(0, 1500)}
 \`\`\`
 
 # Evaluation Steps:
-1. **Compile**: Can this ${TARGET_LANG} kernel compile? Check syntax, headers, type correctness.
+1. **Compile**: Can this ${langToken(LEGACY_LANG_TOKEN)} kernel compile? Check syntax, headers, type correctness.
 ${TEST_CMD ? `   Run: ${TEST_CMD}` : ''}
 2. **Correctness**: Does it produce numerically equivalent output?
    Tolerance: relative precision ν < 0.01 in 99% of outputs.
@@ -401,6 +468,43 @@ Return evaluation results.`, {
       required: ['compiled', 'correct', 'speedup', 'd_mem', 'd_algo', 'd_sync'],
     },
   })
+
+  if (USE_DRIVER) {
+    const suffix = `${generation}`
+    const kPath = kernelPathForGeneration(generation)
+    const buildOut = `${EXP_DIR}/gen_${generation}.artifact`
+    const profOut = `${EXP_DIR}/gen_${generation}.prof.native`
+    const resultPath = `${EXP_DIR}/gen_${generation}.result.json`
+    await agent(
+      `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+      `Return its stdout JSON verbatim.`,
+      { label: `driver-build-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const runOut = await agent(
+      `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath} --result ${resultPath}`)}\n` +
+      `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+      { label: `driver-run-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    await agent(
+      `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+      `Return {ok, native_path}.`,
+      { label: `driver-profile-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const evidenceOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+      { label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    const diagOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+      `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+      { label: `driver-diagnose-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${resultPath}\`.\n` +
+      `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+      { label: `driver-anti-cheat-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    evalResult.driver_envelope = {
+      latency_ms: Number((runOut && runOut.latency_ms) || 0),
+      bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',
+      backend_id: DRIVER_BACKEND_ID,
+    }
+  }
 
   const fitness = computeFitness(evalResult.compiled, evalResult.correct, evalResult.speedup || 0)
   const cellKey = `${evalResult.d_mem || 0},${evalResult.d_algo || 0},${evalResult.d_sync || 0}`
@@ -522,7 +626,7 @@ const finalReport = await agent(`Write a concise technical report on KernelFound
 
 # Results
 - Operation: ${OP_DESC}
-- Target: ${TARGET_LANG} on ${TARGET_HW}
+- Target: ${langToken(LEGACY_LANG_TOKEN)} on ${TARGET_HW}
 - Baseline: ${baselineTime}ms
 - Best speedup: ${globalBest.speedup.toFixed(2)}x (cell [${globalBest.cell}])
 - Generations: ${GENERATIONS}
@@ -537,7 +641,7 @@ const finalReport = await agent(`Write a concise technical report on KernelFound
 ${Object.entries(archive).sort((a, b) => b[1].fitness - a[1].fitness).slice(0, 10).map(([k, v]) => `[${k}] ${v.speedup.toFixed(2)}x — ${v.strategy?.substring(0, 60)}`).join('\n')}
 
 # Best Kernel:
-\`\`\`${TARGET_LANG}
+\`\`\`${fenceToken()}
 ${globalBest.code.substring(0, 3000)}
 \`\`\`
 
