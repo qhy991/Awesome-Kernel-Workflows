@@ -1,0 +1,155 @@
+{
+  "read-spec": {
+    "spec_text": "RMSNorm: y = x * rsqrt(mean(x^2) + eps) * w; shapes [B,H], fp16.",
+    "op_type": "rmsnorm",
+    "input_shapes": "x: [B,H] fp16; w: [H] fp16",
+    "output_shape": "[B,H] fp16",
+    "constraints": ["fp16 throughput", "row-major access"],
+    "baseline_code": "@triton.jit\ndef rmsnorm_kernel(x, w, y, N): pass\n",
+    "key_challenges": ["row reduction sync"],
+    "design_dimensions": ["tile size", "reduction strategy", "vector width"]
+  },
+  "eval-baseline": {
+    "baseline_metric": 1.0,
+    "baseline_latency_ms": 0.12,
+    "eval_passed": true,
+    "performance_profile": "memory-bound row reduction",
+    "bottleneck_analysis": "shared-memory reduction tail"
+  },
+  "init-tree": {
+    "decision_tree": {
+      "root": {
+        "node_id": "root",
+        "parent_id": null,
+        "status": "solved",
+        "children": ["n1", "n2"]
+      },
+      "n1": {
+        "node_id": "n1",
+        "parent_id": "root",
+        "action": { "title": "tile_64", "difficulty_1_to_5": 2, "score_0_to_1": 0.7, "expected_vs_baseline_factor": 1.2 },
+        "status": "open"
+      },
+      "n2": {
+        "node_id": "n2",
+        "parent_id": "root",
+        "action": { "title": "warp_reduce", "difficulty_1_to_5": 3, "score_0_to_1": 0.6, "expected_vs_baseline_factor": 1.3 },
+        "status": "open"
+      }
+    },
+    "node_count": 3,
+    "open_actions": 2,
+    "design_dimensions": ["tile_size", "reduction"],
+    "initial_hypotheses": ["raise tile width", "swap reduction to warp shuffle"]
+  },
+  "propose-0": {
+    "updated_tree": {
+      "root": { "node_id": "root", "parent_id": null, "status": "solved", "children": ["n1", "n2"] },
+      "n1": { "node_id": "n1", "parent_id": "root", "action": { "title": "tile_64", "difficulty_1_to_5": 2, "score_0_to_1": 0.7 }, "status": "open" },
+      "n2": { "node_id": "n2", "parent_id": "root", "action": { "title": "warp_reduce", "difficulty_1_to_5": 3, "score_0_to_1": 0.6 }, "status": "open" }
+    },
+    "open_frontier_count": 2,
+    "nodes_added": 0
+  },
+  "select-0": {
+    "selected_node_id": "n1",
+    "action_title": "tile_64",
+    "action_description": "Raise BLOCK_SIZE to 64 with vectorized loads",
+    "action_score": 0.7,
+    "action_difficulty": 2,
+    "parent_solution_code": "@triton.jit\ndef rmsnorm_kernel(x, w, y, N): pass\n",
+    "parent_metric": 1.0,
+    "parent_is_root": true,
+    "context_for_generation": { "ancestor_decisions": ["root"], "siblings": ["n2"] },
+    "reasoning": "Highest score under MAX_DIFFICULTY"
+  },
+  "gen-0-0": {
+    "code": "@triton.jit\ndef rmsnorm_kernel_v1(x, w, y, N): pass  # tile=64\n",
+    "implementation_notes": "Raised BLOCK_SIZE to 64; vectorized load width 4.",
+    "design_choices": ["BLOCK_SIZE=64", "vectorized_width=4"]
+  },
+  "eval-0-0": {
+    "is_valid": true,
+    "metric_value": 1.18,
+    "latency_ms": 0.102,
+    "speedup_vs_baseline": 1.18,
+    "pass_rate": "all",
+    "error_log": "",
+    "performance_analysis": "DRAM utilization climbed to 78%",
+    "remaining_bottleneck": "reduction tail sync"
+  },
+  "refine-0": {
+    "updated_tree": {
+      "root": { "node_id": "root", "parent_id": null, "status": "solved", "children": ["n1", "n2"] },
+      "n1": { "node_id": "n1", "parent_id": "root", "status": "solved", "metric": 1.18, "children": ["n1c1", "n1c2"] },
+      "n2": { "node_id": "n2", "parent_id": "root", "status": "open" },
+      "n1c1": { "node_id": "n1c1", "parent_id": "n1", "action": { "title": "warp_shuffle_reduce", "difficulty_1_to_5": 3, "score_0_to_1": 0.65 }, "status": "open" },
+      "n1c2": { "node_id": "n1c2", "parent_id": "n1", "action": { "title": "double_buffer", "difficulty_1_to_5": 3, "score_0_to_1": 0.55 }, "status": "open" }
+    },
+    "new_actions_added": 2,
+    "score_updates": ["n1 +0.1"],
+    "reflection": "Tile increase paid off; chase reduction next."
+  },
+  "propose-1": {
+    "updated_tree": {
+      "root": { "node_id": "root", "parent_id": null, "status": "solved", "children": ["n1", "n2"] },
+      "n1": { "node_id": "n1", "parent_id": "root", "status": "solved", "metric": 1.18, "children": ["n1c1", "n1c2"] },
+      "n2": { "node_id": "n2", "parent_id": "root", "status": "open" },
+      "n1c1": { "node_id": "n1c1", "parent_id": "n1", "action": { "title": "warp_shuffle_reduce", "difficulty_1_to_5": 3, "score_0_to_1": 0.65 }, "status": "open" },
+      "n1c2": { "node_id": "n1c2", "parent_id": "n1", "action": { "title": "double_buffer", "difficulty_1_to_5": 3, "score_0_to_1": 0.55 }, "status": "open" }
+    },
+    "open_frontier_count": 3,
+    "nodes_added": 0
+  },
+  "select-1": {
+    "selected_node_id": "n1c1",
+    "action_title": "warp_shuffle_reduce",
+    "action_description": "Replace shared-memory reduction with __shfl",
+    "action_score": 0.65,
+    "action_difficulty": 3,
+    "parent_solution_code": "@triton.jit\ndef rmsnorm_kernel_v1(x, w, y, N): pass  # tile=64\n",
+    "parent_metric": 1.18,
+    "parent_is_root": false,
+    "context_for_generation": { "ancestor_decisions": ["root", "n1"], "siblings": ["n1c2"] },
+    "reasoning": "Best remaining bottleneck-aligned action"
+  },
+  "gen-1-0": {
+    "code": "@triton.jit\ndef rmsnorm_kernel_v2(x, w, y, N): pass  # tile=64 + warp_shfl\n",
+    "implementation_notes": "Swapped reduction to warp_shfl.",
+    "design_choices": ["warp_shfl_reduce"]
+  },
+  "eval-1-0": {
+    "is_valid": true,
+    "metric_value": 1.32,
+    "latency_ms": 0.091,
+    "speedup_vs_baseline": 1.32,
+    "pass_rate": "all",
+    "error_log": "",
+    "performance_analysis": "Sync tail eliminated",
+    "remaining_bottleneck": "register pressure"
+  },
+  "refine-1": {
+    "updated_tree": {
+      "root": { "node_id": "root", "parent_id": null, "status": "solved", "children": ["n1", "n2"] },
+      "n1": { "node_id": "n1", "parent_id": "root", "status": "solved", "metric": 1.18, "children": ["n1c1", "n1c2"] },
+      "n1c1": { "node_id": "n1c1", "parent_id": "n1", "status": "solved", "metric": 1.32, "children": ["n1c1g1", "n1c1g2"] },
+      "n1c2": { "node_id": "n1c2", "parent_id": "n1", "status": "open" },
+      "n2": { "node_id": "n2", "parent_id": "root", "status": "open" },
+      "n1c1g1": { "node_id": "n1c1g1", "parent_id": "n1c1", "action": { "title": "register_block", "difficulty_1_to_5": 3, "score_0_to_1": 0.6 }, "status": "open" },
+      "n1c1g2": { "node_id": "n1c1g2", "parent_id": "n1c1", "action": { "title": "fuse_residual", "difficulty_1_to_5": 4, "score_0_to_1": 0.5 }, "status": "open" }
+    },
+    "new_actions_added": 2,
+    "score_updates": ["n1c1 +0.1"],
+    "reflection": "Reduction tail gone; chase register pressure."
+  },
+  "final-report": {
+    "outcome": "success",
+    "summary": "K-Search reduced rmsnorm runtime via tile_64 then warp_shfl.",
+    "best_metric": 1.32,
+    "baseline_metric": 1.0,
+    "speedup": 1.32,
+    "cycles_completed": 2,
+    "solutions_evaluated": 2,
+    "best_node_id": "n1c1"
+  }
+}
