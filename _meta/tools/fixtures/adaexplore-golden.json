@@ -1,0 +1,189 @@
+[
+  {
+    "label": "setup",
+    "phase": "Setup",
+    "prompt": "Set up a standalone AdaExplore-style Triton kernel optimization run.\n\n# Hard boundary\nDo not call the AdaExplore repository or any AdaExplore Python entrypoint. This workflow must run from the operator spec, local files, and the evaluator command provided here.\n\n# Operator source\n\n\n```python\nclass Model(nn.Module):\n  def forward(self, x):\n    return torch.relu(x)\n\n```\n\n# Operation\nelementwise_relu\n\n# Experiment directory\nCreate:\n- /tmp/adaexplore-fixture/kernels\n- /tmp/adaexplore-fixture/eval\n- /tmp/adaexplore-fixture/logs\n- /tmp/adaexplore-fixture/memory\n\n# Evaluator contract\nUse this evaluator command template for every candidate:\npython eval.py --kernel {kernel_path} --result {result_path}\n\n# Baseline\nIf the evaluator reports speedup directly, no separate baseline command is required. Otherwise mark baseline measurement as unavailable unless a baseline_command is provided.\n\n# Skill memory\nRead existing skill memory from /tmp/adaexplore-fixture/memory.txt. Lines may be \"You cannot ... || score\".\n\nReturn the materialized operator code, evaluator command template, optional baseline time, and loaded memory rules.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "operator_code": {
+          "type": "string"
+        },
+        "evaluator_command": {
+          "type": "string"
+        },
+        "baseline_time_ms": {
+          "type": "number"
+        },
+        "hardware_info": {
+          "type": "string"
+        },
+        "initial_skill_memory": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reference_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "operator_code"
+      ]
+    },
+    "seq": 0
+  },
+  {
+    "label": "propose-1",
+    "phase": "Expand",
+    "prompt": "You are the AdaExplore Large-Step Proposer.\n\n# Goal\nGenerate a structurally new Triton implementation for the PyTorch operator. This is a broad exploration step, not a local patch.\n\n# PyTorch reference\n```python\nimport torch\nclass Model(torch.nn.Module):\n  def forward(self, x):\n    return torch.relu(x)\n\n```\n\n# Operation\nelementwise_relu\n\n# Hardware\nNVIDIA A100\n\n# Skill memory constraints\nNo constraints yet.\n\n# Diverse context pool\nUse these only as inspiration. Avoid copying their structure.\nNo correct diverse context yet.\n\n# Requirements\n1. Return complete Python code containing Triton kernel(s) and a callable wrapper.\n2. Preserve the PyTorch operator interface expected by the evaluator.\n3. Respect atol=0.05, rtol=0.05.\n4. Prefer structural diversity: different tiling, decomposition, fusion, mapping, or memory strategy from the pool.\n5. Do not call any AdaExplore repository code.\n\nReturn the complete candidate kernel code.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "kernel_code": {
+          "type": "string"
+        },
+        "strategy": {
+          "type": "string"
+        },
+        "novelty_vs_pool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kernel_code"
+      ]
+    },
+    "seq": 1
+  },
+  {
+    "label": "eval-1",
+    "phase": "Evaluate",
+    "prompt": "Evaluate this candidate with real execution evidence.\n\n# Hard rules\n1. Write the candidate code exactly to: /tmp/adaexplore-fixture/kernels/step_1_large.py\n2. Do not judge correctness or speedup by inspection.\n3. Run the evaluator command if provided. If not provided, do not create one; mark compiled=false, correct=false, speedup=0, and explain missing evidence.\n4. The evaluator must compile the Triton code, compare against PyTorch reference with atol=0.05, rtol=0.05, and measure speed if possible.\n5. Write or read JSON result at: /tmp/adaexplore-fixture/eval/step_1_result.json\n6. Do not call any AdaExplore repository code.\n\n# Evaluator command\npython eval.py --kernel /tmp/adaexplore-fixture/kernels/step_1_large.py --result /tmp/adaexplore-fixture/eval/step_1_result.json\n\n# Candidate code\n```python\nimport triton\nimport triton.language as tl\n@triton.jit\ndef relu_kernel(x_ptr, y_ptr, n, BLOCK: tl.constexpr):\n  pid = tl.program_id(0)\n  offs = pid * BLOCK + tl.arange(0, BLOCK)\n  m = offs < n\n  x = tl.load(x_ptr + offs, mask=m)\n  tl.store(y_ptr + offs, tl.where(x > 0, x, 0.0), mask=m)\n\n```\n\n# PyTorch reference\n```python\nimport torch\nclass Model(torch.nn.Module):\n  def forward(self, x):\n    return torch.relu(x)\n\n```\n\nReturn the parsed evaluation result.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compiled": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "boolean"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "kernel_time_ms": {
+          "type": "number"
+        },
+        "baseline_time_ms": {
+          "type": "number"
+        },
+        "error_message": {
+          "type": "string"
+        },
+        "error_type": {
+          "type": "string"
+        },
+        "result_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "compiled",
+        "correct",
+        "speedup"
+      ]
+    },
+    "seq": 2
+  },
+  {
+    "label": "revise-2",
+    "phase": "Expand",
+    "prompt": "You are the AdaExplore Reviser.\n\n# Task\nInspect the selected kernel and its recent path. Produce 1-3 concrete local improvement suggestions. Do not rewrite the kernel.\n\n# Selected kernel: node node-1-L\n```python\nimport triton\nimport triton.language as tl\n@triton.jit\ndef relu_kernel(x_ptr, y_ptr, n, BLOCK: tl.constexpr):\n  pid = tl.program_id(0)\n  offs = pid * BLOCK + tl.arange(0, BLOCK)\n  m = offs < n\n  x = tl.load(x_ptr + offs, mask=m)\n  tl.store(y_ptr + offs, tl.where(x > 0, x, 0.0), mask=m)\n\n```\n\n# Recent path context\n## Node node-1-L: correct, speedup=1.200\n```python\nimport triton\nimport triton.language as tl\n@triton.jit\ndef relu_kernel(x_ptr, y_ptr, n, BLOCK: tl.constexpr):\n  pid = tl.program_id(0)\n  offs = pid * BLOCK + tl.arange(0, BLOCK)\n  m = offs < n\n  x = tl.load(x_ptr + offs, mask=m)\n  tl.store(y_ptr + offs, tl.where(x > 0, x, 0.0), mask=m)\n\n```\n\n# Selected node metrics\ncompiled=true, correct=true, speedup=1.2\nerror=\n\n# Skill memory constraints\nNo constraints yet.\n\nReturn specific, surgical suggestions only.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "suggestions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "suggestions"
+      ]
+    },
+    "seq": 3
+  },
+  {
+    "label": "tune-2",
+    "phase": "Expand",
+    "prompt": "You are the AdaExplore Tuner.\n\n# Task\nApply the reviser suggestions as surgical edits. Preserve the overall structure of the selected kernel. Do not regenerate from scratch.\n\n# Current kernel\n```python\nimport triton\nimport triton.language as tl\n@triton.jit\ndef relu_kernel(x_ptr, y_ptr, n, BLOCK: tl.constexpr):\n  pid = tl.program_id(0)\n  offs = pid * BLOCK + tl.arange(0, BLOCK)\n  m = offs < n\n  x = tl.load(x_ptr + offs, mask=m)\n  tl.store(y_ptr + offs, tl.where(x > 0, x, 0.0), mask=m)\n\n```\n\n# Suggestions\n1. Increase BLOCK from 1024 to 2048 to improve vectorization.\n2. Mark x_ptr as restrict to allow compiler aliasing optimization.\n\n# Skill memory constraints\nNo constraints yet.\n\n# Requirements\n1. Return complete Python code.\n2. Make targeted edits only.\n3. Preserve the evaluator-facing interface.\n4. Do not call any AdaExplore repository code.\n\nReturn the edited candidate kernel code.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "kernel_code": {
+          "type": "string"
+        },
+        "changes_applied": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "kernel_code"
+      ]
+    },
+    "seq": 4
+  },
+  {
+    "label": "eval-2",
+    "phase": "Evaluate",
+    "prompt": "Evaluate this candidate with real execution evidence.\n\n# Hard rules\n1. Write the candidate code exactly to: /tmp/adaexplore-fixture/kernels/step_2_small.py\n2. Do not judge correctness or speedup by inspection.\n3. Run the evaluator command if provided. If not provided, do not create one; mark compiled=false, correct=false, speedup=0, and explain missing evidence.\n4. The evaluator must compile the Triton code, compare against PyTorch reference with atol=0.05, rtol=0.05, and measure speed if possible.\n5. Write or read JSON result at: /tmp/adaexplore-fixture/eval/step_2_result.json\n6. Do not call any AdaExplore repository code.\n\n# Evaluator command\npython eval.py --kernel /tmp/adaexplore-fixture/kernels/step_2_small.py --result /tmp/adaexplore-fixture/eval/step_2_result.json\n\n# Candidate code\n```python\nimport triton\nimport triton.language as tl\n@triton.jit\ndef relu_kernel(x_ptr, y_ptr, n, BLOCK: tl.constexpr):\n  pid = tl.program_id(0)\n  offs = pid * BLOCK + tl.arange(0, BLOCK)\n  m = offs < n\n  x = tl.load(x_ptr + offs, mask=m)\n  tl.store(y_ptr + offs, tl.where(x > 0, x, 0.0), mask=m)\n# BLOCK bumped to 2048 by tuner\n\n```\n\n# PyTorch reference\n```python\nimport torch\nclass Model(torch.nn.Module):\n  def forward(self, x):\n    return torch.relu(x)\n\n```\n\nReturn the parsed evaluation result.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "compiled": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "boolean"
+        },
+        "speedup": {
+          "type": "number"
+        },
+        "kernel_time_ms": {
+          "type": "number"
+        },
+        "baseline_time_ms": {
+          "type": "number"
+        },
+        "error_message": {
+          "type": "string"
+        },
+        "error_type": {
+          "type": "string"
+        },
+        "result_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "compiled",
+        "correct",
+        "speedup"
+      ]
+    },
+    "seq": 5
+  },
+  {
+    "label": "final-report",
+    "phase": "Report",
+    "prompt": "Write a concise technical report for this standalone AdaExplore-style optimization run.\n\n# Operation\nelementwise_relu\n\n# Boundary\nThis workflow did not call the AdaExplore repository entrypoint. It implemented the method directly through agent generation, evaluator execution, MCTS bookkeeping, and optional memory adaptation.\n\n# Tree stats\n```json\n{\n  \"total_nodes\": 3,\n  \"large_steps\": 1,\n  \"small_steps\": 1,\n  \"compiled_count\": 2,\n  \"correct_count\": 2,\n  \"best_node_id\": \"node-2-S\",\n  \"best_score\": [\n    1,\n    1,\n    1.35\n  ],\n  \"best_speedup\": 1.35\n}\n```\n\n# Best kernel excerpt\n```python\nimport triton\nimport triton.language as tl\n@triton.jit\ndef relu_kernel(x_ptr, y_ptr, n, BLOCK: tl.constexpr):\n  pid = tl.program_id(0)\n  offs = pid * BLOCK + tl.arange(0, BLOCK)\n  m = offs < n\n  x = tl.load(x_ptr + offs, mask=m)\n  tl.store(y_ptr + offs, tl.where(x > 0, x, 0.0), mask=m)\n# BLOCK bumped to 2048 by tuner\n\n```\n\n# Memory update\n```json\n{\n  \"updated\": false,\n  \"new_rules\": 0,\n  \"total_rules\": 0\n}\n```\n\n# Top skill memory\nNo skill memory rules.\n\nCover:\n1. Which expansion mode was most useful.\n2. Whether the evaluator evidence is strong enough to trust the best kernel.\n3. What failure patterns should guide the next run.\n4. Any remaining optimization opportunities.",
+    "seq": 6
+  }
+]
