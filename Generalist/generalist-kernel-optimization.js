@@ -287,6 +287,37 @@ const DRY_LIMIT = 2               // P1.5 — loop-until-dry stop threshold
 const allAttempts = []
 const verifiedInsights = []       // P1.4 — verified typed insights for the Layer A envelope
 
+// --- Baseline driver envelope (Layer-A, USE_DRIVER only) ---
+if (USE_DRIVER) {
+  const kPath = KERNEL_PATH || `${EXP_DIR}/baseline.kernel`
+  const buildOut = `${EXP_DIR}/baseline.artifact`
+  const profOut = `${EXP_DIR}/baseline.prof.native`
+  await agent(
+    `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+    `Return its stdout JSON verbatim.`,
+    { label: 'driver-build-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  const runOut = await agent(
+    `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+    `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+    { label: 'driver-run-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agent(
+    `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+    `Return {ok, native_path}.`,
+    { label: 'driver-profile-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  const evidenceOut = await agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+    `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+    { label: 'driver-to-evidence-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+    `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+    { label: 'driver-diagnose-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/baseline.result.json\`.\n` +
+    `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+    { label: 'driver-anti-cheat-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+}
+
 for (let iter = 1; iter <= ITERATIONS; iter++) {
   const best = candidateBeam[0]
   log(`\n=== Iteration ${iter}/${ITERATIONS} | best ${bestSpeedup.toFixed(3)}x | beam ${candidateBeam.length} ===`)
@@ -376,6 +407,40 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
     return { plan: p, metrics: m, anticheat: ac, code_path: `${runDir}/kernel`,
              recorded_speedup: ac.valid ? ac.recorded_speedup : 0 }
   })()))).filter(Boolean)
+
+  // --- Per-iteration driver envelope (Layer-A, USE_DRIVER only) ---
+  if (USE_DRIVER) {
+    for (let ci = 0; ci < evaluated.length; ci++) {
+      const suffix = `${iter}-${ci + 1}`
+      const kPath = evaluated[ci].code_path
+      const buildOut = `${EXP_DIR}/run-${iter}/cand-${ci + 1}.artifact`
+      const profOut = `${EXP_DIR}/run-${iter}/cand-${ci + 1}.prof.native`
+      await agent(
+        `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+        `Return its stdout JSON verbatim.`,
+        { label: `driver-build-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      const runOut = await agent(
+        `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+        `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+        { label: `driver-run-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      await agent(
+        `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+        `Return {ok, native_path}.`,
+        { label: `driver-profile-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      const evidenceOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+        `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+        { label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+        `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+        { label: `driver-diagnose-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/run-${iter}/cand-${ci + 1}.result.json\`.\n` +
+        `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+        { label: `driver-anti-cheat-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    }
+  }
 
   // ---- Learn: update persistent memory (Layer D) per measured outcome ----
   phase('Learn')
