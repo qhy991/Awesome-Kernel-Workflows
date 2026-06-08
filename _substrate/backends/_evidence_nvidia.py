@@ -18,7 +18,8 @@ thousands separators / a trailing unit token; the leading float is parsed.
 
 Canonical units emitted (every backend MUST honor):
   latency_ms = gpu__time_duration.sum (ns) / 1e6
-  dram_pct   = dram_read% (+ dram_write% if present)        # 0-100, pass-through
+  dram_pct   = dram_read% + dram_write%;                     # each 0-100; SUM may reach ~200
+               #   downstream must NOT assume dram_pct is bounded by [0,100]
   sm_pct     = sm__throughput.avg.pct_of_peak…              # 0-100, pass-through
   occupancy  = sm__warps_active.avg.pct… / 100              # 0-1   <-- THE error-prone line
 
@@ -87,6 +88,7 @@ def _parse_ncu_csv(text):
     metrics = {}
     for row in reader:
         kernel = (row.get(COL_KERNEL) or "").strip()
+        # TODO: GPU tier confirm ncu never emits blank-kernel-name rows with parseable metric values
         name = (row.get(COL_METRIC) or "").strip()
         if not name:
             continue
@@ -116,7 +118,10 @@ def to_canonical(native_metrics, source_backend):
     if M_DURATION in native_metrics:
         latency_ms = native_metrics[M_DURATION] / 1e6
 
-    # dram_pct = read% (+ write% if present); null only when read is absent
+    # dram_pct = read% + write%; each counter is 0-100 so the SUM may reach ~200 —
+    # downstream must NOT assume [0,100] for this key.
+    # NOTE: read+write summation convention is a GPU-tier-to-confirm assumption (deferred risk).
+    # null only when read is absent.
     dram_pct = None
     if M_DRAM_RD in native_metrics:
         dram_pct = native_metrics[M_DRAM_RD]
@@ -157,8 +162,11 @@ def to_canonical(native_metrics, source_backend):
 def _read_native(path):
     if path == "-":
         return sys.stdin.read()
-    with open(path, encoding="utf-8") as fh:
-        return fh.read()
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except UnicodeDecodeError as exc:
+        raise NativeParseError(f"native file is not valid UTF-8: {exc}") from exc
 
 
 def main(argv=None, source_backend=None):
@@ -192,6 +200,12 @@ def main(argv=None, source_backend=None):
         print(json.dumps({"ok": False, "error": f"cannot read native file: {exc}"},
                          ensure_ascii=False))
         return 3
+    except NativeParseError as exc:
+        # non-UTF-8 / undecodable file: exit 2 (same as parse errors, not a bad-arg exit 3)
+        print(json.dumps({"ok": False, "error": f"native unparseable: {exc}"},
+                         ensure_ascii=False))
+        print(f"[_evidence_nvidia] parse error: {exc}", file=sys.stderr)
+        return 2
 
     try:
         _kernel, native_metrics = _parse_ncu_csv(text)
