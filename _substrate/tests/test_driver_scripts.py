@@ -6,6 +6,15 @@ sys.path.insert(0, SUB)
 BACKENDS = os.path.join(SUB, 'backends')
 CUDA = os.path.join(BACKENDS, 'cuda')
 TRITON = os.path.join(BACKENDS, 'triton')
+FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixtures')
+
+
+def _triton_profiler_available():
+    """True iff this box can import triton.profiler AND has a CUDA device (GPU tier)."""
+    code, _out, _err = _run([sys.executable, '-c',
+                             'import torch,triton.profiler;'
+                             'import sys;sys.exit(0 if torch.cuda.is_available() else 1)'])
+    return code == 0
 
 
 def _write_exec(path, body):
@@ -320,21 +329,52 @@ class TestTritonL0(unittest.TestCase):
         self.assertEqual(code, 0, msg=f"out={out} err={err}")
         self.assertEqual(_json_or_raw(out).get('ok'), True, out)
 
-    def test_triton_to_evidence_uses_shared_mapper_source_triton(self):
+    def test_triton_to_evidence_parses_proton_hatchet_roofline(self):
+        # Triton is profiled by Proton (triton.profiler), NOT ncu. to_evidence.py maps the
+        # proton .hatchet JSON -> canonical metrics: latency from device time, dram_pct/sm_pct
+        # as device-derived roofline estimates from the bytes/flops scope annotation.
+        fixture = os.path.join(FIXTURES, 'proton', 'add_kernel.hatchet')
+        code, out, err = _run([sys.executable,
+                               os.path.join(TRITON, 'to_evidence.py'),
+                               '--native', fixture, '--format', 'proton-hatchet'])
+        self.assertEqual(code, 0, msg=f"{out} {err}")
+        p = _json_or_raw(out)
+        self.assertEqual(p['source_backend'], 'triton', p)
+        self.assertEqual(p['metrics']['_vendor'], 'nvidia', p)
+        # latency_ms = time_ns(109985) / count(20) / 1e6
+        self.assertAlmostEqual(p['metrics']['latency_ms'], 109985 / 20 / 1e6, places=9)
+        # roofline: dram_pct exceeds 100 (memory-bound add), sm_pct ~1%, occupancy unavailable
+        self.assertGreater(p['metrics']['dram_pct'], 100.0, p)
+        self.assertLess(p['metrics']['sm_pct'], 5.0, p)
+        self.assertIsNone(p['metrics']['occupancy'], p)
+        self.assertNotIn('occupancy', p['coverage'], p)
+        for k in ('latency_ms', 'dram_pct', 'sm_pct'):
+            self.assertIn(k, p['coverage'], p)
+
+    def test_triton_to_evidence_null_rule_without_bytes_flops(self):
+        # No bytes/flops scope annotation -> dram_pct/sm_pct are null (NOT fabricated 0.0),
+        # only latency_ms is covered, so diagnose.py degrades to `unknown` honestly.
+        fixture = os.path.join(FIXTURES, 'proton', 'no_roofline.hatchet')
+        code, out, err = _run([sys.executable,
+                               os.path.join(TRITON, 'to_evidence.py'),
+                               '--native', fixture])
+        self.assertEqual(code, 0, msg=f"{out} {err}")
+        p = _json_or_raw(out)
+        self.assertIsNone(p['metrics']['dram_pct'], p)
+        self.assertIsNone(p['metrics']['sm_pct'], p)
+        self.assertIsNone(p['metrics']['occupancy'], p)
+        self.assertEqual(p['coverage'], ['latency_ms'], p)
+
+    def test_triton_to_evidence_rejects_ncu_csv_format(self):
+        # The triton driver no longer accepts ncu-csv; only proton formats.
         with tempfile.TemporaryDirectory() as td:
-            csv = os.path.join(td, 'n.csv')
-            _write_exec(os.path.join(td, '_e.sh'), FAKE_NCU_CSV)
-            with open(csv, 'w') as fh:
-                subprocess.run([os.path.join(td, '_e.sh')], stdout=fh)
-            code, out, err = _run([sys.executable,
-                                   os.path.join(TRITON, 'to_evidence.py'),
-                                   '--native', csv, '--format', 'ncu-csv'])
-            self.assertEqual(code, 0, msg=f"{out} {err}")
-            p = _json_or_raw(out)
-            self.assertEqual(p['source_backend'], 'triton', p)
-            self.assertEqual(p['metrics']['_vendor'], 'nvidia', p)
-            self.assertAlmostEqual(p['metrics']['occupancy'], 0.51, places=4)
-            self.assertAlmostEqual(p['metrics']['dram_pct'], 62.0, places=3)  # read + write
+            f = os.path.join(td, 'x.hatchet')
+            with open(f, 'w') as fh:
+                fh.write('[]')
+            code, out, _ = _run([sys.executable, os.path.join(TRITON, 'to_evidence.py'),
+                                 '--native', f, '--format', 'ncu-csv'])
+            self.assertEqual(code, 3, msg=out)
+            self.assertEqual(_json_or_raw(out).get('ok'), False)
 
 
 class TestTritonScripts(unittest.TestCase):
@@ -384,40 +424,57 @@ class TestTritonScripts(unittest.TestCase):
             self.assertEqual(p['correct'], False)
             self.assertLessEqual(p['claimed_speedup'], 1.0)
 
-    def test_profile_ok_with_fake_ncu_pointer(self):
+    def test_profile_missing_args_exit_3(self):
+        code, sout, _ = _run([self.PROFILE, '--artifact', '/x'])  # no --problem/--out
+        self.assertEqual(code, 3)
+        self.assertEqual(_json_or_raw(sout).get('ok'), False)
+
+    def test_profile_no_source_degrades_exit_4(self):
+        # Without a runnable --source launcher contract (or when proton/CUDA is absent),
+        # profile.sh degrades to "profiler unavailable" -> exit 4, pointer ok:false, name proton.
         with tempfile.TemporaryDirectory() as td:
-            _write_exec(os.path.join(td, 'ncu'), FAKE_NCU_CSV)
-            art = os.path.join(td, 'art.json')
-            with open(art, 'w') as fh:
-                fh.write("{}")
+            art = os.path.join(td, 'cache_dir')  # real dir so the -e preflight clears
+            os.makedirs(art)
             prob = os.path.join(td, 'p.json')
             with open(prob, 'w') as fh:
                 json.dump({"op": "add"}, fh)
-            out = os.path.join(td, 'n.csv')
+            out = os.path.join(td, 'prof.hatchet')
             code, sout, serr = _run([self.PROFILE, '--artifact', art, '--problem', prob,
-                                     '--out', out, '--kernel-name', 'add_kernel'],
-                                    env=_path_env(td))
+                                     '--out', out])
+            self.assertEqual(code, 4, msg=f"out={sout} err={serr}")
+            p = _json_or_raw(sout)
+            self.assertEqual(p.get('ok'), False, p)
+            self.assertEqual(p.get('profiler'), 'proton', p)
+
+    @unittest.skipUnless(_triton_profiler_available(),
+                         "GPU tier: needs CUDA device + triton.profiler (proton)")
+    def test_profile_proton_end_to_end_on_gpu(self):
+        # Real Proton run over the launcher fixture, then to_evidence on the produced hatchet.
+        launcher = os.path.join(FIXTURES, 'proton', 'launcher_add.py')
+        with tempfile.TemporaryDirectory() as td:
+            art = os.path.join(td, 'cache_dir')
+            os.makedirs(art)
+            prob = os.path.join(td, 'p.json')
+            with open(prob, 'w') as fh:
+                json.dump({"op": "add", "profile_reps": 20}, fh)
+            out = os.path.join(td, 'prof.hatchet')
+            code, sout, serr = _run([self.PROFILE, '--artifact', art, '--problem', prob,
+                                     '--out', out, '--source', launcher,
+                                     '--kernel-name', 'add_kernel'])
             self.assertEqual(code, 0, msg=f"out={sout} err={serr}")
             p = _json_or_raw(sout)
             self.assertEqual(p.get('ok'), True, p)
-            self.assertEqual(p.get('native_profile'), out, p)
-            self.assertEqual(p.get('format'), 'ncu-csv', p)
-            self.assertTrue(os.path.isfile(out))
-
-    def test_profile_ncu_absent_exit_4(self):
-        with tempfile.TemporaryDirectory() as td:
-            art = os.path.join(td, 'a.json')
-            with open(art, 'w') as fh:
-                fh.write("{}")
-            prob = os.path.join(td, 'p.json')
-            with open(prob, 'w') as fh:
-                json.dump({"op": "add"}, fh)
-            out = os.path.join(td, 'n.csv')
-            env = dict(os.environ)
-            env['PATH'] = os.path.dirname(sys.executable) + os.pathsep + '/usr/bin' + os.pathsep + '/bin'
-            code, sout, _ = _run([self.PROFILE, '--artifact', art, '--problem', prob,
-                                  '--out', out], env=env)
-            self.assertEqual(code, 4)
+            self.assertEqual(p.get('profiler'), 'proton', p)
+            self.assertEqual(p.get('format'), 'proton-hatchet', p)
+            self.assertTrue(os.path.isfile(out), "hatchet not written")
+            # to_evidence parses the real hatchet -> latency + roofline dram_pct/sm_pct.
+            code2, out2, err2 = _run([sys.executable, os.path.join(TRITON, 'to_evidence.py'),
+                                      '--native', out])
+            self.assertEqual(code2, 0, msg=f"{out2} {err2}")
+            m = _json_or_raw(out2)['metrics']
+            self.assertGreater(m['latency_ms'], 0.0)
+            self.assertIsNotNone(m['dram_pct'])  # launcher annotates BYTES -> roofline
+            self.assertIsNone(m['occupancy'])
 
     def test_run_no_cuda_or_triton_deferred_envelope(self):
         # Passes a REAL (existing) artifact dir so the bash preflight clears, then enters

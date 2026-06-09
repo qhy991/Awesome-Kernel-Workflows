@@ -81,31 +81,59 @@ Uses the substrate default `FALLBACK_PATTERNS` (no `vendor_patterns_file` in man
 | **Artifact extension** | (empty -- JIT-only, no persistent artifact) |
 | **Hardware vendor** | nvidia |
 | **Compiler** | Triton JIT (`build.sh` triggers warmup to materialize PTX) |
-| **Profiler** | `ncu` (same profiler as cuda) via `profile.sh` |
-| **Profiler format** | `ncu-csv` |
+| **Profiler** | `proton` (Triton's own `triton.profiler`, NOT ncu) via `profile.sh` |
+| **Profiler format** | `proton-hatchet` |
 | **Threshold profile** | `nvidia` |
 | **Status** | experimental |
 
+### Why Proton instead of ncu
+
+ncu mangles the Triton JIT kernel symbol as `triton_<fn>_<hash>` (so `ncu -k` can't target
+it statically) and needs elevated perf-counter access (`perf_event_paranoid` / sudo). Proton
+instruments **inside Triton**, names kernels directly, and uses CUPTI device timing — no
+kernel-name regex and no sudo. It emits a `.hatchet` JSON profile.
+
 ### Emitted metric names
 
-`to_evidence.py` delegates to the same shared `_evidence_nvidia.py` mapper as cuda
-(spec SS5.1 vendor-collapse). Canonical metrics are identical to cuda above.
+`to_evidence.py` is a **standalone** proton-hatchet parser (it does NOT delegate to
+`_evidence_nvidia.py`; that mapper is ncu-CSV-specific and stays cuda-only). It lowers the
+proton profile onto the canonical keys via a device-derived roofline:
 
-`backend_native` source-attributed fields (sectors/request, per-line stalls) may be
-**weaker or absent** under Triton because Triton's source attribution through NCU is
-less reliable than CUDA's `-lineinfo` path. The vendor-collapse is in the
-metric/diagnosis layer only; source-line evidence is not symmetric.
+| Canonical key | Proton source | Unit |
+|---|---|---|
+| `latency_ms` | leaf `time (ns)` / `count` / 1e6 (per-invocation device time) | milliseconds |
+| `dram_pct` | `bytes` ÷ latency ÷ peak_BW × 100, peak_BW = `memory_clock_rate`·2·(`bus_width`/8) | 0–~ (MAY exceed 100) |
+| `sm_pct` | `flops` ÷ latency ÷ peak_FLOP × 100, peak_FLOP = `num_sms`·fp32_cores·2·`clock_rate` | 0–~ |
+| `occupancy` | **always null** — CUPTI/proton does not report achieved occupancy | — |
+
+`dram_pct` / `sm_pct` are produced ONLY when the launcher annotates the proton scope with
+`bytes` / `flops` (the Triton-idiomatic roofline annotation); otherwise they are null and
+omitted from `coverage` (null rule), so `diagnose.py` yields `unknown` rather than a wrong
+label. Because `occupancy` is never measured, triton declares no `latency_occupancy`
+capability (`capabilities.metrics` = `{latency_ms, dram_pct, sm_pct}`).
+
+These are **device-derived roofline estimates**, not hardware counters (marked
+`backend_native.estimated`); they are weaker than CUDA's ncu counters but require no sudo and
+correctly target the JIT kernel.
+
+### profile.sh launcher contract
+
+Because proton must actually run the kernel, `profile.sh --source <launcher.py>` expects a
+plain Python module exposing `make_inputs()` (or `make_inputs_from_problem(problem)`) and
+`forward(*inputs)` / `launch(*inputs)`, with optional `BYTES` / `FLOPS` module attributes (or
+`problem["bytes"]` / `problem["flops"]`) for the roofline annotation. Absent that contract
+(or absent a CUDA device / triton runtime), `profile.sh` degrades to exit 4
+(profiler unavailable → `unknown`).
 
 ### Fallback patterns
 
 Uses the substrate default `FALLBACK_PATTERNS` (no `vendor_patterns_file` in manifest).
 
-### Profiler caveat: kernel-name auto-discovery
+### No ncu kernel-name problem
 
-Triton mangles kernel names as `triton_<fn>_<hash>`. The `profile.sh` script discovers
-the kernel name by globbing `TRITON_CACHE_DIR` after JIT warmup, rather than relying on
-a user-supplied `KERNEL_NAME_REGEX` as cuda does with `ncu -k`. Correctness of this
-auto-discovery on real hardware is deferred to the GPU CI tier.
+Because Proton instruments inside Triton, it attributes timing to the kernel by its Python
+name directly — there is no `triton_<fn>_<hash>` mangling to discover and no `ncu -k`
+regex. The optional `--kernel-name` arg only labels the proton scope.
 
 ### Lang fence and idiom highlights
 
@@ -123,6 +151,8 @@ auto-discovery on real hardware is deferred to the GPU CI tier.
 | Source language | C++ (`.cu`) | Python (`.py`) |
 | Build model | `nvcc` explicit compilation -> `.so` | JIT warmup, PTX cached in `TRITON_CACHE_DIR` |
 | ABI requirement | `PYBIND11_MODULE` + `forward()` | Plain Python launcher, returns tensor |
-| Kernel targeting for ncu | `ncu -k <KERNEL_NAME_REGEX>` | Auto-discovery from JIT cache |
-| Source-line attribution | Full with `-lineinfo` | Partial/weaker |
+| Profiler | `ncu` (hardware counters) | `proton` (CUPTI timing + roofline) |
+| Kernel targeting | `ncu -k <KERNEL_NAME_REGEX>` | Proton names the kernel directly (no regex) |
+| dram_pct / sm_pct | direct ncu counters | device-derived roofline estimate (needs bytes/flops) |
+| occupancy | ncu `sm__warps_active` | not available (always null) |
 | Shared memory | Explicit `__shared__` double-buffering | Compiler-managed via `num_stages` |
