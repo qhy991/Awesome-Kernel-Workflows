@@ -1,0 +1,38 @@
+[
+  {
+    "children": [
+      {
+        "children": [],
+        "frame": {
+          "name": "relu_kernel",
+          "type": "function"
+        },
+        "metrics": {
+          "count": 10,
+          "device_id": "0",
+          "device_type": "CUDA",
+          "time (ns)": 50000
+        }
+      }
+    ],
+    "frame": {
+      "name": "ROOT",
+      "type": "function"
+    },
+    "metrics": {
+      "count": 0,
+      "time (ns)": 0
+    }
+  },
+  {
+    "CUDA": {
+      "0": {
+        "arch": "80",
+        "bus_width": 5120,
+        "clock_rate": 1410000,
+        "memory_clock_rate": 1512000,
+        "num_sms": 108
+      }
+    }
+  }
+]

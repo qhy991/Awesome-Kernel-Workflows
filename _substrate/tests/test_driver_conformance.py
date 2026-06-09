@@ -10,8 +10,10 @@ BACKENDS = os.path.join(SUB, 'backends')
 # All real method_gate method names, sourced live (can never drift from the table).
 KNOWN_METHODS = {m for methods in method_gate.TABLE.values() for m in methods}
 
-# The drivers this part introduces. Both lower to PTX and are profiled by ncu, so both
-# carry hw_vendor "nvidia" and share the nvidia evidence mapping.
+# The drivers this part introduces. Both run on NVIDIA hardware (hw_vendor "nvidia") and
+# share the nvidia diagnose.py thresholds. cuda is profiled by ncu; triton is profiled by
+# Proton (triton.profiler) — ncu can't target Triton's mangled JIT symbols without elevated
+# perf-counter access — but both lower their evidence onto the same canonical metric keys.
 REAL_DRIVERS = ['cuda', 'triton']
 
 
@@ -85,9 +87,9 @@ class TestRealDriversBackendId(unittest.TestCase):
                                  msg=f"{driver}: idioms.backend_id != dir name")
 
     def test_both_drivers_are_nvidia_vendor_and_experimental(self):
-        # cuda and triton both run on NVIDIA hardware and are profiled by the same ncu, so
-        # both share hw_vendor "nvidia"; neither is GPU-validated on this host, so both are
-        # honestly marked status "experimental".
+        # cuda and triton both run on NVIDIA hardware (cuda profiled by ncu, triton by
+        # Proton), so both share hw_vendor "nvidia" and the nvidia threshold profile; both
+        # are honestly marked status "experimental".
         for driver in REAL_DRIVERS:
             with self.subTest(driver=driver):
                 manifest = load_driver_json(driver, 'manifest.json')

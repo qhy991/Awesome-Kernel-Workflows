@@ -155,12 +155,15 @@ class TestEvidenceNvidiaMalformed(unittest.TestCase):
 
 
 CUDA_WRAPPER = os.path.join(SUB, 'backends', 'cuda', 'to_evidence.py')
-TRITON_WRAPPER = os.path.join(SUB, 'backends', 'triton', 'to_evidence.py')
 
 
-class TestVendorCollapseWrappers(unittest.TestCase):
-    """cuda/to_evidence.py and triton/to_evidence.py on the SAME csv -> identical
-    metrics, differing ONLY in source_backend (spec 5.1 vendor-collapse)."""
+class TestCudaNcuWrapper(unittest.TestCase):
+    """cuda/to_evidence.py is the thin ncu-CSV wrapper over _evidence_nvidia.py.
+
+    NOTE: triton no longer shares this mapper — it is profiled by Proton (triton.profiler),
+    not ncu, and triton/to_evidence.py is a standalone proton-hatchet parser. The triton
+    proton path is covered by test_driver_scripts.py (TestTritonL0 / TestTritonScripts);
+    feeding ncu-CSV to the triton wrapper is now an explicit error (unsupported format)."""
 
     def _run_path_invoked(self, script):
         # NO --source-backend flag: the wrapper supplies its own id. This also proves
@@ -174,21 +177,6 @@ class TestVendorCollapseWrappers(unittest.TestCase):
 
     def test_cuda_wrapper_stamps_cuda(self):
         self.assertEqual(self._run_path_invoked(CUDA_WRAPPER)['source_backend'], 'cuda')
-
-    def test_triton_wrapper_stamps_triton(self):
-        self.assertEqual(self._run_path_invoked(TRITON_WRAPPER)['source_backend'], 'triton')
-
-    def test_metrics_identical_except_source_backend(self):
-        cuda = self._run_path_invoked(CUDA_WRAPPER)
-        triton = self._run_path_invoked(TRITON_WRAPPER)
-        # metrics + coverage byte-identical (both lower to PTX, same ncu mapping)
-        self.assertEqual(cuda['metrics'], triton['metrics'])
-        self.assertEqual(cuda['coverage'], triton['coverage'])
-        # ONLY source_backend differs
-        self.assertNotEqual(cuda['source_backend'], triton['source_backend'])
-        cuda_norm = dict(cuda); triton_norm = dict(triton)
-        cuda_norm.pop('source_backend'); triton_norm.pop('source_backend')
-        self.assertEqual(cuda_norm, triton_norm)
 
     def test_explicit_flag_overrides_wrapper_default(self):
         # --source-backend, if passed, wins over the wrapper's baked-in id
