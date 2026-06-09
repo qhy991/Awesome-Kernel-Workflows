@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "backend_id": "rocm",
+  "lang_fence": "cpp",
+  "impl_requirements": "Emit a single .hip translation unit exposing a PYBIND11_MODULE with a forward() binding that launches the HIP kernel via hipLaunchKernelGGL or the chevron syntax; no host-side framework calls beyond the binding.",
+  "unsupported_methods": [],
+  "read_metric_guide": "High dram_pct (MemUnitBusy) with low sm_pct (VALUBusy) => memory_bound. High VALUBusy with low MemUnitBusy => compute_bound. Low wavefront occupancy with neither saturated => latency_occupancy. Many short kernels / launch-dominated wall time => overhead_bound. Note that CU/SIMD asymmetry across GPU generations (MI200 dual-CU vs MI300 chiplet) means the same percentage can mean different things — see omniperf for richer attribution.",
+  "methods": {
+    "vectorized_load_store": {
+      "idiom": "float4 / __builtin_amdgcn_global_load_lds vectorized global loads/stores",
+      "prompt_guidance": "Widen memory transactions to 128-bit by casting to float4/int4 (or use the AMD-specific global_load_lds intrinsics) so each thread moves 16 bytes per access."
+    },
+    "memory_coalescing": {
+      "idiom": "coalesced 128-byte (cache-line) global loads",
+      "prompt_guidance": "Reorder the thread-to-element mapping so consecutive lanes in a wavefront read consecutive addresses; AMD wavefront=64 (gfx9/CDNA) or 32 (gfx10+/RDNA) — pick the right alignment."
+    },
+    "shared_memory_tiling": {
+      "idiom": "__shared__ (LDS) tiling with __syncthreads()",
+      "prompt_guidance": "Stage reused operands into a __shared__ (LDS) tile per block, sync, then compute from LDS to cut redundant global traffic. LDS is 64KB/CU on CDNA — size tiles accordingly."
+    },
+    "async_copy_pipeline": {
+      "idiom": "buffer_load_dword global->LDS direct-to-LDS pipeline (CDNA3)",
+      "prompt_guidance": "On MI300 / gfx942 use direct global-to-LDS loads (buffer_load_dword to LDS) to overlap the next tile's global->LDS copy with current-tile compute, mirroring NVIDIA cp.async."
+    },
+    "l2_cache_reuse": {
+      "idiom": "swizzled workgroup launch / Infinity-Cache-friendly tiling",
+      "prompt_guidance": "Block the iteration so hot operands stay L2/Infinity-Cache resident; on MI300X, exploit chiplet-aware workgroup swizzling for AID (Active Interposer Die) locality."
+    },
+    "tensor_core_mma": {
+      "idiom": "MFMA (Matrix Fused Multiply-Add) intrinsics — __builtin_amdgcn_mfma_f32_*x*x*",
+      "prompt_guidance": "Use MFMA intrinsics (e.g. __builtin_amdgcn_mfma_f32_16x16x16f16) for the inner GEMM with fp16/bf16 operands. CDNA = MFMA; RDNA3 = WMMA — pick the right ISA family."
+    },
+    "instruction_reduction": {
+      "idiom": "strength reduction and #pragma unroll",
+      "prompt_guidance": "Hoist invariants, replace divides/mods with shifts where legal, and #pragma unroll the inner loop to cut issued instructions."
+    },
+    "fast_math_intrinsics": {
+      "idiom": "__expf / __frsqrt_rn HIP fast-math intrinsics (-ffast-math)",
+      "prompt_guidance": "Where precision tolerance allows, use HIP intrinsics (__expf, __frsqrt_rn) and compile with -ffast-math / -ffp-contract=fast."
+    },
+    "register_tiling": {
+      "idiom": "per-thread VGPR accumulator tiles",
+      "prompt_guidance": "Accumulate an MxN micro-tile in VGPRs per thread to raise arithmetic intensity. CDNA: 512 VGPRs/SIMD — tile size is limited by this budget."
+    },
+    "occupancy_increase": {
+      "idiom": "__launch_bounds__ / lower VGPR pressure to raise resident wavefronts",
+      "prompt_guidance": "Annotate the kernel with __launch_bounds__ and shrink live state to fit more resident wavefronts per CU/SIMD."
+    },
+    "block_size_tuning": {
+      "idiom": "sweep blockDim in multiples of wavefront size (64 on CDNA, 32 on RDNA)",
+      "prompt_guidance": "Try block sizes that are multiples of the wavefront size (64 for MI300/CDNA, 32 for RDNA3) to balance occupancy against per-thread resources."
+    },
+    "register_pressure_reduction": {
+      "idiom": "scope-narrowing / recompute to spill fewer VGPRs to scratch",
+      "prompt_guidance": "Shorten variable lifetimes and prefer recompute over caching to drop VGPR count below the spill-to-scratch threshold."
+    },
+    "launch_config_tuning": {
+      "idiom": "grid/block geometry and dynamic LDS sizing",
+      "prompt_guidance": "Tune gridDim/blockDim and dynamic __shared__ bytes so the launch geometry matches the CU count and tile shape."
+    },
+    "kernel_fusion": {
+      "idiom": "fuse the elementwise epilogue into the main kernel",
+      "prompt_guidance": "Avoid a second launch by computing the elementwise epilogue inside the producing kernel before the store."
+    },
+    "launch_overhead_reduction": {
+      "idiom": "persistent-kernel / HIP-graph capture (hipGraphLaunch)",
+      "prompt_guidance": "Collapse many tiny launches into a persistent kernel or a captured HIP graph (hipGraphLaunch) to amortize launch cost."
+    },
+    "library_fallback_hybrid": {
+      "idiom": "delegate the hot GEMM to hipBLASLt / rocBLAS",
+      "prompt_guidance": "When a vendor library kernel dominates, call hipBLASLt or rocBLAS for the heavy op and keep custom code only for the glue. ARGUS targets ~99-104% of hipBLASLt/HipKittens throughput as the ceiling."
+    },
+    "cpu_gpu_overlap": {
+      "idiom": "multi-stream H2D/compute/D2H overlap via hipStreamCreate",
+      "prompt_guidance": "Split the work across HIP streams so host<->device copies overlap kernel execution."
+    }
+  }
+}

@@ -19,6 +19,11 @@ CLASSES = ["memory_bound", "compute_bound", "latency_occupancy", "overhead_bound
 PROFILES = {
     "nvidia": dict(occ_lat=0.40, dram_mem=70, sm_mem=50, sm_comp=70, both_low=40),
     "apple": dict(occ_lat=0.30, dram_mem=65, sm_mem=55, sm_comp=65, both_low=35),
+    # AMD CDNA: MemUnitBusy/VALUBusy thresholds. Lower SM (=VALUBusy) saturation
+    # bar because VALU saturation on CDNA correlates with compute-bound earlier
+    # than NVIDIA SM-throughput does. Occupancy threshold matches NVIDIA (the
+    # wavefront vs warp distinction is absorbed by the 0-1 normalization).
+    "amd": dict(occ_lat=0.40, dram_mem=70, sm_mem=50, sm_comp=65, both_low=40),
 }
 
 

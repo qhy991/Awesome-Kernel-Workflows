@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "backend_id": "rocm",
+  "display_name": "HIP / ROCm (AMD, hipcc)",
+  "source_ext": ".hip",
+  "aux_ext": [".hip.cpp", ".hpp", ".h", ".cuh"],
+  "artifact_ext": ".so",
+  "hw_vendor": "amd",
+  "threshold_profile": "amd",
+  "compiler": { "name": "hipcc", "invoke": "build.sh" },
+  "runner": { "invoke": "run.sh" },
+  "profiler": {
+    "name": "rocprofv3",
+    "invoke": "profile.sh",
+    "format": "rocprof-csv",
+    "to_evidence": "to_evidence.py"
+  },
+  "capabilities": {
+    "metrics": { "latency_ms": true, "dram_pct": true, "sm_pct": true, "occupancy": true },
+    "bottleneck_classes": ["memory_bound", "compute_bound", "latency_occupancy", "overhead_bound"],
+    "problem_types": ["kernel-optimization", "kernel-generation"],
+    "precisions": ["fp32", "fp16", "bf16"]
+  },
+  "requires_tools": ["hipcc", "python3"],
+  "optional_tools": ["rocprofv3", "rocprof", "omniperf"],
+  "idioms": "idioms.json",
+  "status": "experimental"
+}
