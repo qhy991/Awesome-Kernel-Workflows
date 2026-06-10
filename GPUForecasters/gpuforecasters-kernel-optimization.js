@@ -72,6 +72,72 @@ function assertWorkflowSuitability() {
 
 assertWorkflowSuitability()
 
+const PROBLEM_DEFINITION = args.problem_definition || ''
+const PROBLEM_PATH = args.problem_path || ''
+const KERNEL_PATH = args.kernel_path || ''
+const OP_DESC = args.op_description || args.operation || 'CUDA kernel'
+const LANGUAGE = args.language || 'cuda'
+const TARGET_GPU = args.target_gpu || ''
+const TEST_CMD = args.test_command || ''
+const BENCHMARK_CMD = args.benchmark_command || ''
+const USER_NOTE = args.note || args.notes || ''
+const BASELINE_DESCRIPTION = args.baseline || args.baseline_description || args.baseline_notes || ''
+const BASELINE_LATENCY_MS = args.baseline_latency_ms ?? args.baseline_perf_ms ?? args.baseline_time_ms ?? args.baseline_perf ?? ''
+const BASELINE_RESULT_PATH = args.baseline_result_path || ''
+const EXP_DIR = args.exp_dir || '/tmp/gpuforecasters_exp'
+const REQUESTED_TRAINING_BUDGET = args.curriculum_size || args.training_budget || ''
+const REQUESTED_GPU_BUDGET = args.gpu_budget || args.iterations || ''
+const REQUESTED_PUCT_C = args.puct_c || args.puct_exploration_constant || ''
+const REQUESTED_TREE_DEPTH = args.tree_depth || args.tree_depth_limit || ''
+const INPUT_MODE = KERNEL_PATH ? 'optimize_existing' : (PROBLEM_DEFINITION || PROBLEM_PATH || USER_NOTE ? 'generate_then_optimize' : 'unspecified_task')
+const EVIDENCE_MODE = (TEST_CMD && BENCHMARK_CMD)
+  ? 'measured_correctness_and_performance'
+  : (TEST_CMD ? 'correctness_only' : (BENCHMARK_CMD ? 'benchmark_only' : 'conservative_missing_evidence'))
+
+function formatContractValue(value) {
+  if (value === undefined || value === null || value === '') return '(not provided)'
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
+function positiveNumber(value) {
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+const PROVIDED_BASELINE_LATENCY_MS = positiveNumber(BASELINE_LATENCY_MS)
+
+function taskContract() {
+  return `# Task Contract
+- input_mode: ${INPUT_MODE}
+- problem_definition: ${formatContractValue(PROBLEM_DEFINITION)}
+- problem_path: ${formatContractValue(PROBLEM_PATH)}
+- kernel_path: ${formatContractValue(KERNEL_PATH)}
+- op_description: ${formatContractValue(OP_DESC)}
+- language: ${formatContractValue(LANGUAGE)}
+- target_gpu: ${formatContractValue(TARGET_GPU)}
+- exp_dir: ${EXP_DIR}
+- user_note: ${formatContractValue(USER_NOTE)}
+
+# Baseline Contract
+- baseline: ${formatContractValue(BASELINE_DESCRIPTION)}
+- baseline_latency_ms: ${formatContractValue(BASELINE_LATENCY_MS)}
+- baseline_result_path: ${formatContractValue(BASELINE_RESULT_PATH)}
+
+# Evidence Commands
+- test_command: ${formatContractValue(TEST_CMD)}
+- benchmark_command: ${formatContractValue(BENCHMARK_CMD)}
+- evidence_mode: ${EVIDENCE_MODE}
+
+# Evidence Rules
+1. Treat user_note as authoritative task context. If it contains validation commands, baseline details, tolerances, or constraints, preserve and follow them.
+2. When test_command is provided, run it exactly with {kernel_path} and {result_path} substitutions for every candidate that claims correctness.
+3. When benchmark_command is provided, run it exactly with {kernel_path} and {result_path} substitutions before reporting measured latency or speedup.
+4. Compute speedup against baseline_latency_ms when provided; otherwise obtain a measured baseline through benchmark_command before claiming measured speedup.
+5. If a required command is missing or cannot run, mark measured evidence unavailable. Do not invent measured correctness, latency, or speedup.
+6. Materialize generated candidates under exp_dir so evidence artifacts can be inspected.`
+}
+
 // GPU Forecasters: Kernel optimization with learned performance prediction
 // Based on arXiv:2605.31464 (MIT)
 // Implements surrogate models with abstention + PUCT tree search
@@ -85,6 +151,8 @@ async function main() {
   const setupResult = await agent(
     `Set up GPU Forecasters optimization environment:
 
+${taskContract()}
+
 1. Identify target kernel and optimization space
 2. Configure surrogate forecasting models:
    - Model types (MLP, Transformer, etc.)
@@ -94,8 +162,9 @@ async function main() {
    - Exploration constant
    - Simulation budget
    - Tree depth limit
-4. Prepare baseline implementation
+4. Prepare baseline implementation from kernel_path or generate an initial kernel if only problem context is provided
 5. Configure execution backend (Modal, local GPU, etc.)
+6. Preserve the evidence commands and baseline contract for all later phases
 
 Return JSON:
 {
@@ -140,14 +209,19 @@ Return JSON:
     return { success: false, reason: 'setup_failed' };
   }
 
+  if (PROVIDED_BASELINE_LATENCY_MS !== null) {
+    setupResult.baseline_perf = PROVIDED_BASELINE_LATENCY_MS
+  }
+  setupResult.target_gpu = TARGET_GPU || setupResult.target_gpu || 'NVIDIA GPU'
+
   log(`Optimizing ${setupResult.kernel_name} on ${setupResult.target_gpu}`);
   log(`Search space: ${setupResult.optimization_space.search_space_size} configurations`);
   log(`Forecaster models: ${setupResult.forecaster_models.join(', ')}`);
 
-  const trainingBudget = setupResult.training_budget || 100;
-  const puctExploration = setupResult.puct_exploration_constant || 1.0;
-  const puctSimulations = setupResult.puct_simulation_budget || 500;
-  const treeDepthLimit = setupResult.tree_depth_limit || 10;
+  const trainingBudget = REQUESTED_TRAINING_BUDGET || setupResult.training_budget || 100;
+  const puctExploration = REQUESTED_PUCT_C || setupResult.puct_exploration_constant || 1.0;
+  const puctSimulations = REQUESTED_GPU_BUDGET || setupResult.puct_simulation_budget || 500;
+  const treeDepthLimit = REQUESTED_TREE_DEPTH || setupResult.tree_depth_limit || 10;
 
   // Track optimization history
   const executionLog = [];
@@ -164,21 +238,27 @@ Return JSON:
   const trainingResult = await agent(
     `Train surrogate forecasting models:
 
+${taskContract()}
+
 Target: ${setupResult.kernel_name}
 Training budget: ${trainingBudget} kernel executions
 Forecaster models: ${setupResult.forecaster_models.join(', ')}
 
 Training process:
 1. Sample initial configurations (random, LHS, Sobol)
-2. Execute each config on ${setupResult.target_gpu} and measure speedup
-3. Collect training dataset: (config, speedup) pairs
-4. Train each forecaster model:
-   - Input: configuration vector
+2. Materialize each config under ${EXP_DIR}/training/
+3. Run test_command before accepting correctness when provided
+4. Run benchmark_command on ${setupResult.target_gpu} when provided and measure speedup against the baseline contract
+5. Store evaluator JSON artifacts beside each candidate
+6. Reject or label candidates with missing/failed correctness evidence
+7. Collect training dataset: (config, speedup) pairs only from measured or explicitly labeled forecast-only evidence
+8. Train each forecaster model:
+   - Input: configuration vector plus kernel/code context
    - Output: predicted speedup + uncertainty estimate
-5. Implement abstention mechanism:
+9. Implement abstention mechanism:
    - Native abstention: model-intrinsic uncertainty (e.g., dropout variance)
    - Calibrated abstention: learned threshold based on prediction error
-6. Validate on hold-out set
+10. Validate on hold-out set
 
 Return JSON:
 {
@@ -254,6 +334,8 @@ Return JSON:
 
   const calibrationResult = await agent(
     `Calibrate abstention thresholds for forecasters:
+
+${taskContract()}
 
 Trained models: ${trainingResult.trained_models.map(m => m.model_name).join(', ')}
 
@@ -333,6 +415,8 @@ Return JSON:
   const puctResult = await agent(
     `Perform PUCT (Polynomial Upper Confidence Trees) search:
 
+${taskContract()}
+
 Search parameters:
 - Exploration constant (c_puct): ${puctExploration}
 - Simulation budget: ${puctSimulations}
@@ -355,8 +439,10 @@ PUCT algorithm:
       - N(s,a) = visit count of (s,a)
    b. Expansion: expand node with forecaster-predicted actions
    c. Simulation:
-      - If forecaster abstains: execute config on GPU (ground truth)
+      - If forecaster abstains: materialize the config under ${EXP_DIR}/puct/ and execute user-provided evidence commands for ground truth
       - Else: use forecaster prediction
+      - If test_command fails, treat the candidate as invalid regardless of predicted speedup
+      - If benchmark_command is available, use its evaluator JSON as the authoritative measured speedup
    d. Backpropagation: update Q values along path
 3. Return best config from tree (highest Q value)
 
@@ -435,6 +521,8 @@ Return JSON:
   const refinementResult = await agent(
     `Refine best configuration found:
 
+${taskContract()}
+
 Best config from PUCT: ${puctResult.best_config}
 Best speedup: ${puctResult.best_speedup.toFixed(3)}x
 
@@ -449,6 +537,8 @@ Refinement strategies:
 4. Fine-grained parameter tuning
 
 Execute promising refinements on GPU (use forecasters to filter).
+Materialize each refinement under ${EXP_DIR}/refinement/ and use the evidence commands exactly when provided.
+Only promote a refinement as measured if correctness passes and benchmark evidence is available.
 
 Return JSON:
 {
@@ -500,22 +590,28 @@ Return JSON:
   const validationResult = await agent(
     `Validate best configuration:
 
+${taskContract()}
+
 Best config: ${bestConfig}
 Best speedup: ${bestSpeedup.toFixed(3)}x
 
 Validation:
-1. Execute on target hardware (${setupResult.target_gpu}) multiple times
-2. Measure performance statistics:
+1. Materialize the final candidate under ${EXP_DIR}/final/
+2. Run test_command exactly if provided and fail validation if correctness fails
+3. Run benchmark_command exactly if provided; parse its JSON artifact as authoritative measured performance
+4. Execute on target hardware (${setupResult.target_gpu}) multiple times when benchmark_command supports repeated runs
+5. Measure performance statistics:
    - Mean speedup
    - Std dev
    - Min/max
-3. Verify correctness (output matches baseline)
-4. Profile hardware utilization:
+6. Verify correctness (output matches baseline)
+7. Profile hardware utilization:
    - SM occupancy
    - Memory bandwidth
    - Compute throughput
-5. Test on different input sizes (if applicable)
-6. Compare with baseline and other methods
+8. Test on different input sizes (if applicable)
+9. Compare with baseline and other methods
+10. If evidence_mode is conservative_missing_evidence, return validation_passed=false unless the user note explicitly authorizes static-only validation
 
 Return JSON:
 {
@@ -561,6 +657,12 @@ Return JSON:
       reason: 'validation_failed',
       best_config: bestConfig,
       best_speedup: bestSpeedup,
+      input_mode: INPUT_MODE,
+      evidence_mode: EVIDENCE_MODE,
+      test_command: TEST_CMD,
+      benchmark_command: BENCHMARK_CMD,
+      baseline_latency_ms: setupResult.baseline_perf,
+      exp_dir: EXP_DIR,
     };
   }
 
@@ -573,6 +675,8 @@ Return JSON:
 
   const report = await agent(
     `Generate GPU Forecasters optimization report:
+
+${taskContract()}
 
 Summary:
 - Kernel: ${setupResult.kernel_name}
@@ -635,8 +739,14 @@ Return JSON:
     success: true,
     method: 'GPU Forecasters',
     approach: 'Learned speedup forecasting + PUCT search',
+    input_mode: INPUT_MODE,
+    evidence_mode: EVIDENCE_MODE,
     kernel: setupResult.kernel_name,
     target_gpu: setupResult.target_gpu,
+    exp_dir: EXP_DIR,
+    test_command: TEST_CMD,
+    benchmark_command: BENCHMARK_CMD,
+    user_note_present: !!USER_NOTE,
     search_space_size: setupResult.optimization_space.search_space_size,
     training_budget: trainingResult.training_samples,
     forecaster_models: trainingResult.trained_models.map(m => m.model_name),

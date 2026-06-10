@@ -126,21 +126,34 @@ REPORT:
 ## Example Usage
 
 ```javascript
-// In Claude Code:
-/workflow gpuforecasters-kernel-optimization
-
-// The workflow will:
-// 1. Train speedup forecaster on initial kernels (curriculum phase)
-// 2. PUCT search with forecaster guidance:
-//    - Select promising nodes (high PUCT score)
-//    - Forecast speedup or abstain
-//    - Use GPU iterations selectively
-// 3. Evaluate top candidates
-// 4. Return best kernel with analysis
+Workflow({
+  name: 'gpuforecasters-kernel-optimization',
+  args: {
+    kernel_path: '/path/to/baseline.cu',
+    problem_definition: 'Optimize a CUDA row-wise reduction kernel',
+    language: 'cuda',
+    problem_type: 'cuda-kernel-optimization',
+    target_gpu: 'H100',
+    note: 'Use the provided baseline and validation tolerance exactly.',
+    test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
+    benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+    baseline_latency_ms: 0.42,
+    curriculum_size: 100,
+    gpu_budget: 200,
+    exp_dir: '/tmp/gpuforecasters_exp',
+  },
+})
 ```
 
 ## Key Parameters
 
+- **kernel_path**: Existing baseline kernel to optimize. If omitted, provide `problem_definition`, `problem_path`, or `note` so the workflow can generate initial candidates.
+- **problem_definition** / **problem_path**: Task specification for generation or optimization.
+- **note**: User-supplied authoritative context. Validation commands, baseline details, tolerances, and constraints written here are threaded into every workflow phase.
+- **test_command**: Correctness command. It should support `{kernel_path}` and `{result_path}` substitutions.
+- **benchmark_command**: Performance command. It should support `{kernel_path}` and `{result_path}` substitutions and write measured latency/speedup JSON.
+- **baseline_latency_ms**: Optional measured baseline latency used as the speedup denominator.
+- **exp_dir**: Directory for generated candidates and evaluator artifacts (default: `/tmp/gpuforecasters_exp`).
 - **curriculum_size**: Number of initial kernels for forecaster training (default: 100)
 - **gpu_budget**: Fixed GPU evaluation iterations (default: 200)
 - **puct_c**: Exploration constant (default: 2.0)
@@ -154,6 +167,7 @@ REPORT:
 - **PUCT search**: Balances exploration (uncertainty) and exploitation (predicted speedup)
 - **Ordinal bins**: Speedup is discretized into 8 categories for classification
 - **Fixed GPU iterations**: M evaluations across entire search (not per-generation)
+- **Evidence contract**: Provided `note`, `test_command`, `benchmark_command`, and baseline fields are injected into setup, training, PUCT search, refinement, validation, and reporting prompts.
 - **Curriculum training**: Train forecaster on initial data, apply in later search
 - **Abstain rate**: Key metric for forecaster quality
   - Too high → wastes iterations (frequent GPU evals)
