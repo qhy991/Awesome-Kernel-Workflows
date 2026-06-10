@@ -308,13 +308,44 @@ class TestCudaProfile(unittest.TestCase):
                 fh.write("")
             prob = self._problem(td); out = os.path.join(td, 'n.csv')
             # Use a curated PATH that has python3 + coreutils/bash but excludes the CUDA
-            # bin dir — so the script's "ncu not available" guard fires on both macOS and GPU boxes.
+            # bin dir — so neither ncu nor nsys resolve on macOS and GPU boxes.
             env = dict(os.environ)
             env['PATH'] = os.path.dirname(sys.executable) + os.pathsep + '/usr/bin' + os.pathsep + '/bin'
             code, sout, serr = _run([self.SCRIPT, '--artifact', art,
                                      '--problem', prob, '--out', out], env=env)
             self.assertEqual(code, 4, msg=f"out={sout} err={serr}")
             self.assertEqual(_json_or_raw(sout).get('ok'), False)
+
+    def test_nsys_fallback_when_ncu_absent(self):
+        fixture_sqlite = os.path.join(FIXTURES, 'nsys', 'vector_add.sqlite')
+        with tempfile.TemporaryDirectory() as td:
+            _write_exec(os.path.join(td, 'nsys'), textwrap.dedent(f'''\
+                #!/usr/bin/env bash
+                base=""
+                while [ $# -gt 0 ]; do
+                  case "$1" in
+                    -o) base="$2"; shift 2 ;;
+                    *) shift ;;
+                  esac
+                done
+                cp "{fixture_sqlite}" "${{base}}.sqlite"
+                exit 0
+            '''))
+            art = os.path.join(td, 'k.bin')
+            _write_exec(art, '#!/usr/bin/env bash\nexit 0\n')
+            prob = self._problem(td)
+            out = os.path.join(td, 'native.sqlite')
+            env = dict(os.environ)
+            env['PATH'] = td + os.pathsep + os.path.dirname(sys.executable) + os.pathsep + '/usr/bin'
+            code, sout, serr = _run([self.SCRIPT, '--artifact', art,
+                                     '--problem', prob, '--out', out], env=env)
+            self.assertEqual(code, 0, msg=f"out={sout} err={serr}")
+            p = _json_or_raw(sout)
+            self.assertEqual(p.get('ok'), True, p)
+            self.assertEqual(p.get('profiler'), 'nsys', p)
+            self.assertEqual(p.get('format'), 'nsys-sqlite', p)
+            self.assertEqual(p.get('native_profile'), out, p)
+            self.assertTrue(os.path.isfile(out))
 
     def test_missing_args_exit_3(self):
         code, sout, _ = _run([self.SCRIPT, '--artifact', '/x.so'])

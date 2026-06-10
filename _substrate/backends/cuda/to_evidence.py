@@ -8,7 +8,7 @@ standalone script (no package context), so we sys.path-insert the backends dir a
 import the shared mapper explicitly.
 
 Invoked WITH a python prefix:
-  to_evidence.py --native <ncu.csv|-> [--source-backend <id>] [--format ncu-csv] [--run <result.json>]
+  to_evidence.py --native <ncu.csv|prof.sqlite> [--source-backend <id>] [--format ncu-csv|nsys-sqlite] [--run <result.json>]
 """
 import os, sys
 

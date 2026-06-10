@@ -15,7 +15,12 @@ function ds(label) {
   return {
     [`driver-build-${label}`]: { ok: true },
     [`driver-run-${label}`]: { ok: true, latency_ms: 1, compiled: true, correct: true },
-    [`driver-profile-${label}`]: { ok: true, native_path: '/tmp/p.native' },
+    [`driver-profile-${label}`]: {
+      ok: true,
+      profiler: 'proton',
+      native_profile: '/tmp/p.native',
+      format: 'proton-hatchet',
+    },
     [`driver-to-evidence-${label}`]: { ok: true, metrics: { latency_ms: 1 }, coverage: [] },
     [`driver-diagnose-${label}`]: { bottleneck_class: 'memory_bound' },
     [`driver-anti-cheat-${label}`]: { ok: true, suspicious: false },
@@ -117,6 +122,16 @@ test('triton dry-run: evaluate prompt references workspace path with driver sour
     `evaluate prompt should reference .py kernel filename under triton driver: ${evalCall.prompt.slice(0, 400)}`)
   assert.doesNotMatch(evalCall.prompt, /cudallm_iter_0_sample_0\.cu/,
     'evaluate prompt must not retain .cu kernel filename under triton driver')
+})
+
+test('triton dry-run: to_evidence uses format from profile pointer (proton-hatchet)', async () => {
+  const caps = await capturePrompts({ workflowPath: WORKFLOW, args: ARGS, agentReturns: RETURNS })
+  const evidenceCall = caps.find(c => c.label === 'driver-to-evidence-0-0')
+  assert.ok(evidenceCall, 'driver-to-evidence-0-0 call must be present')
+  assert.match(evidenceCall.prompt, /--format proton-hatchet/,
+    `to_evidence prompt must pass profile pointer format: ${evidenceCall.prompt.slice(0, 300)}`)
+  assert.match(evidenceCall.prompt, /--native \/tmp\/p\.native/,
+    `to_evidence prompt must use native_profile from profile pointer`)
 })
 
 test('triton dry-run: feature-catalog prompt uses driver-supplied feature_catalog (or fallback), not legacy CUDA list', async () => {
