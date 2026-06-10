@@ -126,21 +126,34 @@ GPU Forecasters 实现了 **带学习加速预测器和原生弃权机制的 PUC
 ## 使用示例
 
 ```javascript
-// 在 Claude Code 中：
-/workflow gpuforecasters-kernel-optimization
-
-// 工作流将：
-// 1. 在初始内核上训练加速比预测器（课程阶段）
-// 2. 带预测器引导的 PUCT 搜索：
-//    - 选择有希望的节点（高 PUCT 分数）
-//    - 预测加速比或弃权
-//    - 选择性使用 GPU 预算
-// 3. 评估 top 候选
-// 4. 返回最佳内核及分析
+Workflow({
+  name: 'gpuforecasters-kernel-optimization',
+  args: {
+    kernel_path: '/path/to/baseline.cu',
+    problem_definition: 'Optimize a CUDA row-wise reduction kernel',
+    language: 'cuda',
+    problem_type: 'cuda-kernel-optimization',
+    target_gpu: 'H100',
+    note: 'Use the provided baseline and validation tolerance exactly.',
+    test_command: '<user-provided correctness command with {kernel_path}/{result_path}>',
+    benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+    baseline_latency_ms: 0.42,
+    curriculum_size: 100,
+    gpu_budget: 200,
+    exp_dir: '/tmp/gpuforecasters_exp',
+  },
+})
 ```
 
 ## 关键参数
 
+- **kernel_path**: 要优化的已有 baseline kernel。若省略，应提供 `problem_definition`、`problem_path` 或 `note`，让 workflow 生成初始候选。
+- **problem_definition** / **problem_path**: 生成或优化使用的任务规格。
+- **note**: 用户提供的权威上下文。写在这里的验证命令、baseline 细节、容差和约束会传入每个阶段。
+- **test_command**: 正确性命令，应支持 `{kernel_path}` 和 `{result_path}` 占位符。
+- **benchmark_command**: 性能命令，应支持 `{kernel_path}` 和 `{result_path}` 占位符，并写出 latency/speedup JSON。
+- **baseline_latency_ms**: 可选的已测 baseline 延迟，用作 speedup 分母。
+- **exp_dir**: 生成候选和评测 artifact 的目录（默认: `/tmp/gpuforecasters_exp`）。
 - **curriculum_size**: 预测器训练的初始内核数（默认: 100）
 - **gpu_budget**: 固定 GPU 评估预算（默认: 200）
 - **puct_c**: 探索常数（默认: 2.0）
@@ -154,6 +167,7 @@ GPU Forecasters 实现了 **带学习加速预测器和原生弃权机制的 PUC
 - **PUCT 搜索**: 平衡探索（不确定性）和利用（预测加速比）
 - **序数区间**: 加速比被离散化为 8 个类别用于分类
 - **固定 GPU 预算**: 整个搜索中 M 次评估（非每代）
+- **证据契约**: 传入的 `note`、`test_command`、`benchmark_command` 和 baseline 字段会注入 setup、training、PUCT search、refinement、validation 和 report 阶段。
 - **课程训练**: 在初始数据上训练预测器，在后续搜索中应用
 - **弃权率**: 预测器质量的关键指标
   - 太高 → 浪费预算（频繁 GPU 评估）
