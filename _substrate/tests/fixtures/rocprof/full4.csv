@@ -1,0 +1,7 @@
+"KernelName","Counter Name","Counter Value"
+"fused_gemm_hip","KernelDuration","410000"
+"fused_gemm_hip","VALUBusy","48.0"
+"fused_gemm_hip","MemUnitBusy","62.0"
+"fused_gemm_hip","Wavefronts","51"
+"fused_gemm_hip","MaxWavefronts","100"
+"fused_gemm_hip","L2CacheHit","73.0"

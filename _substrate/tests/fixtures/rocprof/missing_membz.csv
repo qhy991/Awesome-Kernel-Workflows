@@ -1,0 +1,5 @@
+"KernelName","Counter Name","Counter Value"
+"memcpy_hip","KernelDuration","123456"
+"memcpy_hip","VALUBusy","30.0"
+"memcpy_hip","Wavefronts","88"
+"memcpy_hip","MaxWavefronts","100"

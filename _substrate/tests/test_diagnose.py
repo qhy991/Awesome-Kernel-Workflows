@@ -135,5 +135,40 @@ class TestDiagnoseVendorProfile(unittest.TestCase):
         )
 
 
+class TestDiagnoseAmdProfile(unittest.TestCase):
+    """The amd profile lowers sm_comp to 65 (vs nvidia's 70) because VALUBusy on
+    CDNA saturates into compute-bound earlier than NVIDIA SM throughput. sm_pct=67
+    straddles the two profiles and exercises the vendor switch live."""
+
+    def test_nvidia_default_sm_67_is_not_compute_bound(self):
+        # nvidia sm_comp=70: 67 < 70 -> compute_bound branch does NOT fire.
+        # dram unmeasured -> two-sided branch cannot fire -> unknown.
+        self.assertEqual(
+            diagnose.classify({"sm_pct": 67}),
+            ("unknown", ["no dominant signal (insufficient measured metrics)"]),
+        )
+
+    def test_amd_vendor_sm_67_is_compute_bound(self):
+        # amd sm_comp=65: 67 >= 65 -> compute_bound fires on the sm-alone branch.
+        self.assertEqual(
+            diagnose.classify({"_vendor": "amd", "sm_pct": 67}),
+            ("compute_bound", ["sm 67% high"]),
+        )
+
+    def test_amd_memory_bound_both_measured(self):
+        # amd dram_mem=70, sm_mem=50: dram 80 high, sm 30 low -> memory_bound.
+        self.assertEqual(
+            diagnose.classify({"_vendor": "amd", "dram_pct": 80, "sm_pct": 30}),
+            ("memory_bound", ["dram 80% high, sm 30% low"]),
+        )
+
+    def test_amd_occupancy_matches_nvidia_threshold(self):
+        # amd occ_lat=0.40 (same as nvidia): 0.35 < 0.40 -> latency_occupancy.
+        self.assertEqual(
+            diagnose.classify({"_vendor": "amd", "occupancy": 0.35}),
+            ("latency_occupancy", ["occupancy 0.35 < 0.40 (launch/occupancy limited)"]),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
