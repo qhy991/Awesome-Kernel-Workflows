@@ -147,6 +147,8 @@ const SAMPLES_PER_FEATURE_SET = args.samples_per_feature_set || 2
 const RTOL = args.rtol ?? 0.01
 const ATOL = args.atol ?? 0.01
 const EXP_DIR = args.exp_dir || '/tmp/cudallm_fsr_exp'
+const DRIVER_PROBLEM_PATH = args.problem_json_path || `${EXP_DIR}/driver_problem.json`
+const PROFILE_SOURCE_PATH = args.profile_source_path || REFERENCE_CODE_PATH || ''
 const ADAPTATION_SCOPE = 'workflow_adaptation'
 const INPUT_MODE = 'generate_then_optimize'
 
@@ -176,6 +178,36 @@ const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
 function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
 function driverSh(script, cliArgs) {
   return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
+}
+function driverPy(script, cliArgs) {
+  return `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
+}
+function driverProfileOutPath(iter, sample) {
+  // .sqlite suffix satisfies cuda/profile.sh nsys fallback; ncu still writes CSV bytes here.
+  return `${EXP_DIR}/cudallm_iter_${iter}_sample_${sample}.prof.sqlite`
+}
+function buildProfileShArgs(buildOut, iter, sample) {
+  let cli = `--artifact ${buildOut} --problem ${DRIVER_PROBLEM_PATH} --out ${driverProfileOutPath(iter, sample)}`
+  if (PROFILE_SOURCE_PATH) cli += ` --source ${PROFILE_SOURCE_PATH}`
+  return cli
+}
+function profileStepFooter() {
+  if (DRIVER_BACKEND_ID === 'cuda') {
+    return 'The cuda driver profile.sh may return format ncu-csv or nsys-sqlite depending on which profiler is available.\n'
+  }
+  return 'Pass the format field from profile.sh stdout through to to_evidence.py.\n'
+}
+function buildToEvidencePrompt(profilePointer) {
+  if (!profilePointer || profilePointer.ok === false) {
+    const why = profilePointer?.error || profilePointer?.profiler || 'profiler unavailable'
+    return `Profiler unavailable (${why}). ` +
+      `Return {ok:true, metrics:{latency_ms:null,dram_pct:null,sm_pct:null,occupancy:null,_vendor:"nvidia"}, ` +
+      `coverage:[], source_backend:"${DRIVER_BACKEND_ID}"}.`
+  }
+  const native = profilePointer.native_profile
+  const format = profilePointer.format || (DRIVER && DRIVER.profiler_format) || 'ncu-csv'
+  return `${driverPy('to_evidence.py', `--native ${native} --format ${format}`)}\n` +
+    `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`
 }
 
 let DRIVER = null
@@ -252,7 +284,9 @@ if (USE_DRIVER) {
     `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
-    `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods, feature_catalog}.`,
+    `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods, feature_catalog, ` +
+    `hw_vendor, profiler_name, profiler_format}. ` +
+    `Set profiler_name/profiler_format from manifest.profiler when present.`,
     { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
   if (!DRIVER || DRIVER.present === false) {
     throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
@@ -265,7 +299,9 @@ if (USE_DRIVER) {
   DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT
   DRIVER_FEATURE_CATALOG = DRIVER.feature_catalog || ''
   DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID
-  log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
+  DRIVER.profiler_name = DRIVER.profiler_name || (DRIVER.profiler && DRIVER.profiler.name) || null
+  DRIVER.profiler_format = DRIVER.profiler_format || (DRIVER.profiler && DRIVER.profiler.format) || 'ncu-csv'
+  log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE}, profiler=${DRIVER.profiler_name || 'none'})`)
 }
 
 const setup = await agent(`You are a ${langToken(LEGACY_SETUP_LANG_TOKEN)} kernel generation expert. Read and structure this CUDA-LLM task.
@@ -549,7 +585,6 @@ Return evaluator result.`, {
       const kPath = cudallmCandidatePath(iteration, sample)
       const rPath = cudallmResultPath(iteration, sample)
       const buildOut = `${EXP_DIR}/cudallm_iter_${iteration}_sample_${sample}.artifact`
-      const profOut = `${EXP_DIR}/cudallm_iter_${iteration}_sample_${sample}.prof.native`
       await agent(
         `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
         `Return its stdout JSON verbatim.`,
@@ -558,13 +593,13 @@ Return evaluator result.`, {
         `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath} --result ${rPath}`)}\n` +
         `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
         { label: `driver-run-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
-      await agent(
-        `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
-        `Return {ok, native_path}.`,
+      const profilePointer = await agent(
+        `${driverSh('profile.sh', buildProfileShArgs(buildOut, iteration, sample))}\n` +
+        profileStepFooter() +
+        `Return stdout JSON verbatim {ok, profiler, native_profile, format, error}.`,
         { label: `driver-profile-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
       const evidenceOut = await agent(
-        `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
-        `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+        buildToEvidencePrompt(profilePointer),
         { label: `driver-to-evidence-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
       const diagOut = await agent(
         `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
@@ -582,6 +617,9 @@ Return evaluator result.`, {
         bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',
         latency_ms: Number((runOut && runOut.latency_ms) || 0),
         backend_id: DRIVER_BACKEND_ID,
+        profiler: (profilePointer && profilePointer.profiler) || null,
+        profiler_format: (profilePointer && profilePointer.format) || null,
+        profile_ok: profilePointer ? profilePointer.ok !== false : false,
       }
     }
 

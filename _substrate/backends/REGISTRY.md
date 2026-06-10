@@ -38,8 +38,8 @@ per-manifest `status` field, which only ranges over `stub | experimental | stabl
 | **Artifact extension** | `.so` |
 | **Hardware vendor** | nvidia |
 | **Compiler** | `nvcc` (`build.sh`) |
-| **Profiler** | `ncu` (Nsight Compute) via `profile.sh` |
-| **Profiler format** | `ncu-csv` |
+| **Profiler** | `ncu` (Nsight Compute) via `profile.sh`; **`nsys` fallback** when `ncu` absent |
+| **Profiler format** | `ncu-csv` (preferred) · `nsys-sqlite` (fallback) |
 | **Threshold profile** | `nvidia` |
 | **Status** | experimental |
 
@@ -56,6 +56,21 @@ per-manifest `status` field, which only ranges over `stub | experimental | stabl
 
 `backend_native` may include `l2_hit_pct`, `sectors_per_req`, and per-line stall data
 when `-lineinfo` is passed to `nvcc`.
+
+### nsys fallback (when `ncu` unavailable)
+
+`profile.sh` tries `ncu` first; if absent, falls back to `nsys profile` when a runnable
+`--source` launcher or executable `--artifact` is provided. `--out` must end with `.sqlite`.
+
+| Canonical key | nsys source | Unit |
+|---|---|---|
+| `latency_ms` | dominant kernel `AVG(end-start)` from `CUPTI_ACTIVITY_KIND_KERNEL` (ns / 1e6) | milliseconds |
+| `dram_pct` | **always null** — nsys has no DRAM throughput counter | — |
+| `sm_pct` | **always null** — nsys has no SM throughput counter | — |
+| `occupancy` | **always null** — nsys has no achieved-occupancy counter | — |
+
+Only `latency_ms` enters `coverage`; `diagnose.py` yields `unknown` (honest degradation).
+Use nsys for kernel timing / launch-overhead triage; use `ncu` when hardware counters are needed.
 
 ### Fallback patterns
 

@@ -26,7 +26,12 @@ const minimalReturns = {
   'reinforce-0-0': { updated_scores: [] },
   'driver-build-0-0': { ok: true },
   'driver-run-0-0': { ok: true, latency_ms: 1, compiled: true, correct: true },
-  'driver-profile-0-0': { ok: true, native_path: '/tmp/p.native' },
+  'driver-profile-0-0': {
+    ok: true,
+    profiler: 'proton',
+    native_profile: '/tmp/p.native',
+    format: 'proton-hatchet',
+  },
   'driver-to-evidence-0-0': { ok: true, metrics: { latency_ms: 1 }, coverage: [] },
   'driver-diagnose-0-0': { bottleneck_class: 'memory_bound' },
   'driver-anti-cheat-0-0': { ok: true, suspicious: false },
@@ -142,6 +147,75 @@ test('alias normalization: hip -> rocm in conflict message', async () => {
       return true
     },
   )
+})
+
+test('cuda driver: to_evidence uses nsys-sqlite when profile pointer says nsys', async () => {
+  const driverReturn = {
+    present: true,
+    backend_id: 'cuda',
+    source_ext: '.cu',
+    lang_fence: 'cuda',
+    impl_requirements: 'Provide a __global__ kernel + pybind11 host launcher.',
+    methods: {},
+    hw_vendor: 'nvidia',
+    profiler_name: 'ncu',
+    profiler_format: 'ncu-csv',
+  }
+  const caps = await run(
+    {
+      backend_dir: '_substrate/backends/cuda',
+      backend: 'cuda',
+      reference_code_path: '/tmp/cudallm-guard/bench.py',
+    },
+    {
+      ...minimalReturns,
+      'load-driver': driverReturn,
+      'driver-profile-0-0': {
+        ok: true,
+        profiler: 'nsys',
+        native_profile: '/tmp/cudallm-guard/cudallm_iter_0_sample_0.prof.sqlite',
+        format: 'nsys-sqlite',
+      },
+    },
+  )
+  const profileCall = caps.find(c => c.label === 'driver-profile-0-0')
+  assert.ok(profileCall, 'driver-profile-0-0 must be present')
+  assert.match(profileCall.prompt, /--out \/tmp\/cudallm-guard\/cudallm_iter_0_sample_0\.prof\.sqlite/,
+    'profile.sh --out must use .sqlite suffix for nsys fallback compatibility')
+  assert.match(profileCall.prompt, /--source \/tmp\/cudallm-guard\/bench\.py/,
+    'profile.sh should pass reference_code_path as --source for nsys launcher')
+  const evidenceCall = caps.find(c => c.label === 'driver-to-evidence-0-0')
+  assert.ok(evidenceCall, 'driver-to-evidence-0-0 must be present')
+  assert.match(evidenceCall.prompt, /--format nsys-sqlite/,
+    `to_evidence must use format from profile pointer: ${evidenceCall.prompt.slice(0, 300)}`)
+})
+
+test('cuda driver: to_evidence degrades gracefully when profile pointer ok=false', async () => {
+  const driverReturn = {
+    present: true,
+    backend_id: 'cuda',
+    source_ext: '.cu',
+    lang_fence: 'cuda',
+    impl_requirements: 'Provide a __global__ kernel + pybind11 host launcher.',
+    methods: {},
+  }
+  const caps = await run(
+    { backend_dir: '_substrate/backends/cuda', backend: 'cuda' },
+    {
+      ...minimalReturns,
+      'load-driver': driverReturn,
+      'driver-profile-0-0': {
+        ok: false,
+        profiler: 'nsys',
+        native_profile: null,
+        error: 'neither ncu nor nsys profiler available',
+      },
+    },
+  )
+  const evidenceCall = caps.find(c => c.label === 'driver-to-evidence-0-0')
+  assert.ok(evidenceCall, 'driver-to-evidence-0-0 must be present')
+  assert.match(evidenceCall.prompt, /Profiler unavailable/,
+    'to_evidence step should skip parsing when profile.sh failed')
 })
 
 test('driver-injected substrings: driver lang_fence reaches setup-task prompt', async () => {

@@ -33,7 +33,7 @@ Prints ONE JSON object on stdout; logs to stderr.
 Exit: 0 normalized · 2 native unparseable (JSON still printed, ok:false) · 3 bad args.
 Pure function (same CSV in -> same JSON out).
 """
-import os, sys, json, csv, io, argparse
+import os, sys, json, csv, io, argparse, sqlite3
 
 # --- NCU metric name -> how it maps into canonical keys ---------------------------------
 M_DURATION = "gpu__time_duration.sum"
@@ -106,7 +106,57 @@ def _parse_ncu_csv(text):
     return first_kernel, metrics
 
 
-def to_canonical(native_metrics, source_backend):
+def _parse_nsys_sqlite(path):
+    """Parse an nsys-exported .sqlite profile into kernel timing for the dominant kernel.
+
+    nsys does NOT expose NCU-class hardware counters (dram_pct/sm_pct/occupancy). We extract
+    per-invocation device time from CUPTI_ACTIVITY_KIND_KERNEL joined to StringIds for the
+    kernel with the highest total GPU time. Raises NativeParseError if the schema is absent.
+    """
+    try:
+        con = sqlite3.connect(path)
+    except sqlite3.Error as exc:
+        raise NativeParseError(f"cannot open nsys sqlite: {exc}") from exc
+    try:
+        tables = {row[0] for row in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        if "CUPTI_ACTIVITY_KIND_KERNEL" not in tables:
+            raise NativeParseError("nsys sqlite missing CUPTI_ACTIVITY_KIND_KERNEL table")
+        has_strings = "StringIds" in tables
+        name_expr = ("COALESCE(s.value, CAST(k.demangledName AS TEXT))"
+                     if has_strings else "CAST(k.demangledName AS TEXT)")
+        join = ("LEFT JOIN StringIds s ON s.id = k.demangledName" if has_strings else "")
+        rows = con.execute(f"""
+            SELECT {name_expr} AS kernel_name,
+                   COUNT(*) AS instances,
+                   AVG(k.end - k.start) AS avg_ns,
+                   SUM(k.end - k.start) AS total_ns
+            FROM CUPTI_ACTIVITY_KIND_KERNEL k
+            {join}
+            GROUP BY kernel_name
+            ORDER BY total_ns DESC
+        """).fetchall()
+    except sqlite3.Error as exc:
+        raise NativeParseError(f"nsys sqlite query failed: {exc}") from exc
+    finally:
+        con.close()
+
+    if not rows:
+        raise NativeParseError("nsys sqlite had no CUDA kernel activity rows")
+    kernel_name, instances, avg_ns, total_ns = rows[0]
+    if avg_ns is None:
+        raise NativeParseError("nsys kernel timing rows had no parseable duration")
+    native_metrics = {
+        M_DURATION: float(total_ns),  # total device ns for the dominant kernel group
+        "_nsys_kernel_name": kernel_name,
+        "_nsys_instances": int(instances),
+        "_nsys_avg_ns": float(avg_ns),
+        "_nsys_total_ns": float(total_ns),
+    }
+    return kernel_name, native_metrics
+
+
+def to_canonical(native_metrics, source_backend, *, profiler_format="ncu-csv"):
     """Map a {ncu_metric_name: float} dict to the canonical evidence dict.
 
     Applies units (ns->ms; warps_active%/100->occupancy 0-1; dram/sm pass-through 0-100)
@@ -115,7 +165,10 @@ def to_canonical(native_metrics, source_backend):
     """
     # latency_ms
     latency_ms = None
-    if M_DURATION in native_metrics:
+    if profiler_format == "nsys-sqlite" and "_nsys_avg_ns" in native_metrics:
+        # Per-invocation device time (matches nsys cuda_gpu_kern_sum Avg column).
+        latency_ms = native_metrics["_nsys_avg_ns"] / 1e6
+    elif M_DURATION in native_metrics:
         latency_ms = native_metrics[M_DURATION] / 1e6
 
     # dram_pct = read% + write%; each counter is 0-100 so the SUM may reach ~200 —
@@ -147,6 +200,9 @@ def to_canonical(native_metrics, source_backend):
     # backend_native: every native metric not consumed by a canonical mapping.
     consumed = {M_DURATION, M_SM, M_WARPS, M_DRAM_RD, M_DRAM_WR}
     backend_native = {k: v for k, v in native_metrics.items() if k not in consumed}
+    if profiler_format == "nsys-sqlite":
+        backend_native["profiler"] = "nsys"
+        backend_native["estimated"] = False  # latency is measured; dram/sm/occ are absent
 
     metrics = dict(canonical)
     metrics["_vendor"] = "nvidia"
@@ -177,7 +233,7 @@ def main(argv=None, source_backend=None):
     ap.add_argument("--source-backend", dest="source_backend", default=None,
                     help="backend id stamped into source_backend (cuda|triton)")
     ap.add_argument("--format", default="ncu-csv",
-                    help="native profile format (only ncu-csv supported)")
+                    help="native profile format (ncu-csv | nsys-sqlite)")
     ap.add_argument("--run", default=None,
                     help="optional run.sh result.json (reserved; not consumed by the mapper)")
     a = ap.parse_args(argv)
@@ -189,26 +245,23 @@ def main(argv=None, source_backend=None):
                          ensure_ascii=False))
         return 3
 
-    if a.format != "ncu-csv":
+    if a.format not in ("ncu-csv", "nsys-sqlite"):
         print(json.dumps({"ok": False, "error": f"unsupported format {a.format}"},
                          ensure_ascii=False))
         return 3
 
     try:
-        text = _read_native(a.native)
+        if a.format == "nsys-sqlite":
+            if a.native == "-":
+                raise NativeParseError("nsys-sqlite requires a file path (not stdin)")
+            _kernel, native_metrics = _parse_nsys_sqlite(a.native)
+        else:
+            text = _read_native(a.native)
+            _kernel, native_metrics = _parse_ncu_csv(text)
     except OSError as exc:
         print(json.dumps({"ok": False, "error": f"cannot read native file: {exc}"},
                          ensure_ascii=False))
         return 3
-    except NativeParseError as exc:
-        # non-UTF-8 / undecodable file: exit 2 (same as parse errors, not a bad-arg exit 3)
-        print(json.dumps({"ok": False, "error": f"native unparseable: {exc}"},
-                         ensure_ascii=False))
-        print(f"[_evidence_nvidia] parse error: {exc}", file=sys.stderr)
-        return 2
-
-    try:
-        _kernel, native_metrics = _parse_ncu_csv(text)
     except NativeParseError as exc:
         # exit 2: native unparseable, JSON still printed (universal envelope)
         print(json.dumps({"ok": False, "error": f"native unparseable: {exc}"},
@@ -216,7 +269,7 @@ def main(argv=None, source_backend=None):
         print(f"[_evidence_nvidia] parse error: {exc}", file=sys.stderr)
         return 2
 
-    result = to_canonical(native_metrics, sb)
+    result = to_canonical(native_metrics, sb, profiler_format=a.format)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
 

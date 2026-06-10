@@ -6,6 +6,7 @@ import importlib
 _ev = importlib.import_module('backends._evidence_nvidia')
 
 FIXTURES = os.path.join(os.path.dirname(__file__), 'fixtures', 'ncu')
+NSYS_FIXTURES = os.path.join(os.path.dirname(__file__), 'fixtures', 'nsys')
 MAPPER = os.path.join(SUB, 'backends', '_evidence_nvidia.py')
 
 
@@ -155,6 +156,36 @@ class TestEvidenceNvidiaMalformed(unittest.TestCase):
 
 
 CUDA_WRAPPER = os.path.join(SUB, 'backends', 'cuda', 'to_evidence.py')
+
+
+class TestEvidenceNvidiaNsysSqlite(unittest.TestCase):
+    """nsys-sqlite -> latency_ms only; dram/sm/occupancy null (honest degradation)."""
+
+    def setUp(self):
+        native = os.path.join(NSYS_FIXTURES, 'vector_add.sqlite')
+        proc = subprocess.run(
+            [sys.executable, MAPPER, '--native', native,
+             '--source-backend', 'cuda', '--format', 'nsys-sqlite'],
+            capture_output=True, text=True)
+        self.rc = proc.returncode
+        self.payload = json.loads(proc.stdout)
+
+    def test_exit_zero_and_latency_from_avg_kernel_time(self):
+        self.assertEqual(self.rc, 0, msg=self.payload)
+        self.assertIs(self.payload.get('ok'), True)
+        # avg_ns=215192.2 from fixture -> 0.2151922 ms
+        self.assertAlmostEqual(self.payload['metrics']['latency_ms'], 215192.2 / 1e6, places=9)
+
+    def test_null_rule_counters_absent(self):
+        self.assertIsNone(self.payload['metrics']['dram_pct'])
+        self.assertIsNone(self.payload['metrics']['sm_pct'])
+        self.assertIsNone(self.payload['metrics']['occupancy'])
+        self.assertEqual(self.payload['coverage'], ['latency_ms'])
+
+    def test_backend_native_carries_nsys_metadata(self):
+        bn = self.payload['metrics']['backend_native']
+        self.assertEqual(bn.get('profiler'), 'nsys')
+        self.assertIn('vector_add', str(bn.get('_nsys_kernel_name', '')))
 
 
 class TestCudaNcuWrapper(unittest.TestCase):
