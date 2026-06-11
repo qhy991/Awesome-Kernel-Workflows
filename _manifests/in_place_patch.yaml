@@ -1,0 +1,113 @@
+source:
+  paper_title: "AKW design note: in-place patch optimization for embedded kernels"
+  paper_url: "https://github.com/anthropics/Awesome-Kernel-Workflows/blob/main/docs/akw-modification-plan.md"
+  paper_venue: "AKW design notes 2026"
+  repo_url: ""
+  commit_or_tag: ""
+  license: "MIT"
+  notes: >
+    Internal AKW workflow. Motivated by KerSor sessions on llama.cpp where the
+    kernel under optimization (ggml-cuda fattn variants, ATen ops, etc.) cannot
+    be compiled standalone: it depends on project headers, template
+    instantiation chains, and dispatch tables that are infeasible to reproduce
+    in an exp_dir/variants/<n>.cu sandbox. This workflow drops the
+    materialize-variants contract and runs the project's own build/test/bench
+    commands verbatim against in-place edits of the kernel file.
+
+workflow:
+  name: "in-place-patch-optimization"
+  description: "Iterative in-place patch -> project-native build -> test -> benchmark loop for kernels embedded in a larger codebase"
+  when_to_use: >
+    Use when the kernel under optimization cannot be compiled standalone -- it
+    depends on project headers, template instantiation, or dispatch tables
+    (e.g. llama.cpp ggml-cuda fattn-*.cuh, PyTorch ATen kernels). The workflow
+    snapshots the kernel file, then iterates: propose ONE Edit, run the project
+    build_command verbatim, run the project test_command, run the project
+    benchmark_command, keep iff correct AND faster else revert. No exp_dir
+    variants are materialized.
+  output_filename: "in-place-patch-optimization.js"
+  directory: "InPlacePatch/"
+
+inputs:
+  supports_existing_kernel: true
+  supports_problem_definition: false
+  required_one_of:
+    - kernel_path
+  generation:
+    enabled: false
+  required_args:
+    - kernel_path
+    - build_command
+    - test_command
+    - benchmark_command
+  optional_args:
+    - correctness_regex
+    - latency_regex
+    - latency_unit
+    - tolerance
+    - max_iterations
+    - target_speedup
+    - op_description
+    - handoff_context
+    - workload_axes
+    - max_proposals_per_iter
+    - backup_dir
+
+method:
+  category: "iterative_self_improving"
+  core_insight: >
+    Treat the kernel file as a live source location in a real project, not a
+    candidate to materialize into an exp_dir. The unit of measurement is the
+    project's existing build + test + benchmark pipeline, run verbatim. This
+    lets KerSor target kernels that participate in template chains and dispatch
+    tables (every realistic in-tree GPU kernel) at the cost of giving up the
+    parallel-variant fan-out the other AKW workflows assume.
+  feedback_signal:
+    type: throughput_delta
+    description: >
+      aggregate_latency parsed out of the project benchmark command's stdout
+      via latency_regex (default: first float on a line containing "us"/"ms").
+      When the benchmark prints multiple workload rows, the geomean is used as
+      the comparison aggregate so a single regression on one point cannot
+      dominate.
+    tool: "project benchmark_command (verbatim)"
+    higher_is_better: false
+
+topology:
+  type: iterative
+  iterative:
+    iterations_arg: "max_iterations"
+    convergence_condition: "bestSpeedup >= target_speedup"
+    mutable_state:
+      - bestSpeedup
+      - bestLatency
+      - bestPatchTitle
+      - history
+
+backends: ["cuda", "rocm"]
+fidelity_boundary: "strict_high_fidelity"
+
+execution:
+  parallelism: "serial per iteration"
+  proposal_strategy: "single Edit per iteration, propose -> build -> test -> bench -> decide"
+  revert_strategy: "byte-exact restore from .in_place_patch.bak on build_failed | correctness_failed | bench_unparseable | reverted_no_speedup"
+  resnapshot_on_keep: true
+
+grounding:
+  enforced: true
+  contract: "_substrate/grounding.js"
+  rationale: >
+    Every numeric the workflow reports (build duration, test PASS/FAIL,
+    aggregate_latency) is keyed to a real Bash invocation. Subagents must
+    return grounded=false rather than fabricating values when the project
+    command is missing or fails. The workflow's outer return value carries the
+    summed grounding state so KerSor's result-analyzer can distinguish "no
+    speedup found" from "could not be grounded in this environment".
+
+outputs:
+  speedup_field: "speedup"
+  best_kernel_field: "best_kernel_code"
+  history_field: "history"
+  side_effects:
+    - "Mutates <kernel_path> in-place when a patch is kept"
+    - "Writes <kernel_path>.in_place_patch.bak (or under backup_dir if provided)"
