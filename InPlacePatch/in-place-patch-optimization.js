@@ -14,13 +14,101 @@ export const meta = {
   ],
 }
 
-// --- BEGIN arg_guard (auto-inserted by scripts/patch_arg_guard.py) ---
-import { unwrapArgs as __unwrapArgs } from '../_substrate/arg_guard.js'
+// --- BEGIN inlined arg_guard (Workflow runtime parses scripts as bare scripts,
+//                              not ES modules; static imports are rejected) ---
+function __unwrapArgs(rawArgs) {
+  if (rawArgs == null) return {}
+  if (typeof rawArgs === 'object' && !Array.isArray(rawArgs)) return rawArgs
+  if (typeof rawArgs === 'string') {
+    const trimmed = rawArgs.trim()
+    if (trimmed === '') return {}
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+        throw new Error('arg_guard: parsed JSON value is not a plain object')
+      } catch (e) { throw new Error(`arg_guard: invalid JSON args: ${e.message}`) }
+    }
+    const out = {}
+    const re = /(\w[\w.-]*)=("(?:\\"|[^"])*"|'(?:\\'|[^'])*'|\S+)/g
+    let m
+    while ((m = re.exec(trimmed)) !== null) {
+      let v = m[2]
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1)
+      }
+      out[m[1]] = v
+    }
+    return out
+  }
+  return {}
+}
 // eslint-disable-next-line no-global-assign
 args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
-// --- END arg_guard ---
+// --- END inlined arg_guard ---
 
-import { GROUNDING_INSTRUCTION, withGroundingFields, classifyResult } from '../_substrate/grounding.js'
+// --- BEGIN inlined grounding contract (mirrors _substrate/grounding.js) ---
+const GROUNDING_INSTRUCTION = [
+  'GROUNDING CONTRACT (mandatory):',
+  '',
+  '1. Before reporting any numeric or categorical result, you MUST have executed',
+  '   a real Bash command (compile / test / benchmark / profile) that produced',
+  '   the value. Citing a value from imagination, prior knowledge, or analogy',
+  '   is a contract violation.',
+  '',
+  '2. If the workflow tells you to run a tool or script that does NOT exist on',
+  '   disk or on PATH, do NOT try to substitute, simulate, or rationalize. Return:',
+  '       { "grounded": false, "missing": "<exact tool or script that was absent>" }',
+  '   and stop. The schema accepts this shape.',
+  '',
+  '3. If a Bash command fails (non-zero exit), do NOT invent the value it would',
+  '   have produced. Return:',
+  '       { "grounded": false, "error": "<stderr tail or short summary>" }',
+  '   and stop.',
+  '',
+  '4. Numeric fields in the schema (latency_ms, speedup, occupancy, etc.) are',
+  '   REJECTED downstream when grounded === false. Do not work around the',
+  '   schema by filling them with placeholders, zeros, or "typical" values.',
+  '',
+  '5. The string "fabricated", "simulated", "estimated", or "placeholder" must',
+  '   never appear in a value you report as measured.',
+].join('\n')
+
+function withGroundingFields(schema) {
+  schema.properties = schema.properties || {}
+  if (!schema.properties.grounded) {
+    schema.properties.grounded = {
+      type: 'boolean',
+      description: 'true iff every reported numeric value came from a real executed command (see GROUNDING_INSTRUCTION).',
+    }
+  }
+  if (!schema.properties.missing) {
+    schema.properties.missing = {
+      type: 'string',
+      description: 'When grounded=false: the absent tool or script that prevented grounding.',
+    }
+  }
+  if (!schema.properties.error) {
+    schema.properties.error = {
+      type: 'string',
+      description: 'When grounded=false: short stderr / failure summary.',
+    }
+  }
+  return schema
+}
+
+function classifyResult(agentResult) {
+  if (agentResult == null) return { state: 'failed', error: 'agent returned null' }
+  if (agentResult.grounded === false) {
+    return {
+      state: 'not_grounded',
+      missing: agentResult.missing || null,
+      error: agentResult.error || null,
+    }
+  }
+  return { state: 'grounded', value: agentResult }
+}
+// --- END inlined grounding contract ---
 
 // =============================================================================
 // In-Place Patch Optimization
