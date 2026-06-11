@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "backend_id": "rocm",
+  "lang_fence": "hip",
+  "impl_requirements": "Emit a single .cu/.hip translation unit, OR (when --build-cmd is supplied) modify an in-codebase kernel and rely on the project build system. For standalone mode: expose a PYBIND11_MODULE with a forward() binding; hipcc compiles to .so. For in-codebase mode: the build command is run verbatim.",
+  "unsupported_methods": [],
+  "read_metric_guide": "High dram_pct with low sm_pct => DDR/HBM bandwidth bound (typical for APU with shared DDR5). High sm_pct with low dram_pct => compute_bound. Low occupancy with neither saturated => latency_occupancy. Many short kernels / launch-dominated wall time => overhead_bound. On RDNA, wave32 vs wave64 choice and LDS bank conflicts (32 banks 4B wide) are common levers.",
+  "methods": {
+    "vectorized_load_store": {
+      "idiom": "float4 / int4 / __builtin_memcpy 16B vectorized global loads",
+      "prompt_guidance": "Widen memory transactions to 128-bit so each thread moves 16 bytes per access; on RDNA wave32 this matches one DDR/HBM burst window (32 lanes * 16 B = 512 B)."
+    },
+    "memory_coalescing": {
+      "idiom": "wave-coalesced 128-bit global loads",
+      "prompt_guidance": "Reorder the thread-to-element mapping so consecutive threads in a wave read consecutive addresses; wave32 on RDNA, wave64 on CDNA."
+    },
+    "shared_memory_tiling": {
+      "idiom": "__shared__ (LDS) tiling with __syncthreads()",
+      "prompt_guidance": "Stage reused operands into LDS per block, sync, then compute from LDS to cut redundant DDR/HBM traffic. RDNA LDS is 64KB/CU with 32 banks 4B wide; pad inner strides so gcd(stride,32)==1 to avoid bank conflicts."
+    },
+    "async_copy_pipeline": {
+      "idiom": "global_load_lds (gfx11) / cp.async-equivalent pipelining",
+      "prompt_guidance": "Overlap the next tile's global->LDS copy with the current tile's compute. On gfx11 use global_load_lds; on CDNA use buffer_load_dword_lds."
+    },
+    "l2_cache_reuse": {
+      "idiom": "GQA-batched / wave-grouped reads so L1/L2 serves repeats",
+      "prompt_guidance": "When multiple Q heads share a KV head (GQA), arrange the schedule so consecutive Q reads of the same K/V token hit L1 (16KB/CU on RDNA) instead of going back to DDR."
+    },
+    "tensor_core_mma": {
+      "idiom": "MFMA (CDNA) / WMMA (RDNA3+) matrix intrinsics",
+      "prompt_guidance": "Use __builtin_amdgcn_mfma_* on CDNA, __builtin_amdgcn_wmma_* on RDNA3+ for the inner GEMM with fp16/bf16 operands. On RDNA3.5 also use v_dot2_f32_f16 for 2-element half2 dot products."
+    },
+    "instruction_reduction": {
+      "idiom": "strength reduction and loop unrolling (#pragma unroll)",
+      "prompt_guidance": "Hoist invariants, replace divides/mods with shifts where legal, and #pragma unroll the inner loop to cut issued VALU instructions."
+    },
+    "fast_math_intrinsics": {
+      "idiom": "__expf / __fdividef fast-math intrinsics",
+      "prompt_guidance": "Where precision tolerance allows, replace transcendental calls with __-prefixed device intrinsics."
+    },
+    "register_tiling": {
+      "idiom": "per-thread VGPR accumulator tiles",
+      "prompt_guidance": "Accumulate an MxN micro-tile in VGPRs (RDNA) or AGPRs (CDNA MFMA) per thread to raise arithmetic intensity. Budget against 256 VGPR/wave for 8 waves/SIMD on RDNA."
+    },
+    "occupancy_increase": {
+      "idiom": "__launch_bounds__ / lower per-thread VGPR pressure",
+      "prompt_guidance": "Annotate the kernel with __launch_bounds__(N, max_waves_per_simd) and shrink live state. RDNA target: 8 waves/SIMD at 256 VGPRs/wave (32 VGPRs/thread)."
+    },
+    "block_size_tuning": {
+      "idiom": "sweep blockDim (64/128/256/512) for the CU",
+      "prompt_guidance": "On RDNA, block sizes that are multiples of 32 (wave32) keep the SIMDs balanced; 128 or 256 is the usual sweet spot. On CDNA prefer multiples of 64."
+    },
+    "register_pressure_reduction": {
+      "idiom": "scope-narrowing / recompute to spill less",
+      "prompt_guidance": "Shorten variable lifetimes and prefer recompute over caching to keep VGPR count below the spill-to-scratch threshold."
+    },
+    "launch_config_tuning": {
+      "idiom": "grid/block geometry and dynamic LDS sizing",
+      "prompt_guidance": "Tune gridDim/blockDim and dynamic LDS bytes so the launch geometry matches the CU count and tile shape."
+    },
+    "kernel_fusion": {
+      "idiom": "fuse the elementwise epilogue into the main kernel",
+      "prompt_guidance": "Avoid a second launch by computing the elementwise epilogue inside the producing kernel before the store."
+    },
+    "launch_overhead_reduction": {
+      "idiom": "persistent-kernel / HIP graph capture",
+      "prompt_guidance": "Collapse many tiny launches into a persistent kernel or a captured HIP graph to amortize launch cost."
+    },
+    "library_fallback_hybrid": {
+      "idiom": "delegate the hot GEMM to rocBLAS / hipBLASLt",
+      "prompt_guidance": "When a vendor library kernel dominates, call rocBLAS / hipBLASLt / MIOpen for the heavy op and keep custom code only for the glue."
+    },
+    "cpu_gpu_overlap": {
+      "idiom": "multi-stream H2D/compute/D2H overlap",
+      "prompt_guidance": "Split the work across HIP streams so host<->device copies overlap kernel execution. On an APU with unified memory this is typically a no-op."
+    }
+  }
+}
