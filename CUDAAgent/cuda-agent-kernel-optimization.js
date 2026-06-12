@@ -12,6 +12,57 @@ export const meta = {
   ],
 }
 
+// --- BEGIN embedded-eval substrate (auto-inlined by scripts/patch-embedded-eval.js) ---
+const EMBEDDING_CONTRACT = [
+  'EMBEDDED-DISPATCH CONTRACT (this kernel is NOT standalone):',
+  '',
+  'You are authoring a kernel that lives INSIDE a larger project and is wired into',
+  'its dispatch table. It cannot be compiled on its own. Therefore:',
+  '',
+  '1. Emit a COMPLETE source file (e.g. a .cuh) that matches the reference',
+  '   dispatch signature exactly -- same entry-point shape, template params, and',
+  '   launch-bounds conventions as the reference file. Do NOT add a main(), a',
+  '   standalone harness, or top-level test code.',
+  '2. Use ONLY symbols/headers the project already provides (project headers,',
+  '   template instantiations, dispatch macros). Do not invent include paths.',
+  '3. Do NOT register, build, or benchmark the variant yourself, and do NOT name',
+  '   any symbol with the variant suffix -- the workflow + adapter handle wiring.',
+  '4. Return ONLY the file contents plus a short rationale citing the concrete',
+  '   design choice (tile shape, register budget, pipelining, GQA packing, etc.).',
+].join('\n')
+
+// Build the ordered evaluation commands for one candidate against a
+// contract-conforming adapter. All fields are plain strings the caller already
+// resolved from `args`. `params`/`unregParams` are opaque pass-through strings
+// (e.g. "--dkq 256 --dv 256 --cmake-build-dir /p/build") that the substrate does
+// not parse -- they belong to the project's adapter.
+function __embeddedEvalPlan(ctx) {
+  const adapter = ctx.adapter                       // e.g. 'python "/abs/llamacpp_register_variant.py"'
+  const variant = ctx.variant                       // unique variant name for this candidate
+  const source = ctx.source                         // path to the candidate source file on disk
+  const root = ctx.projectRoot                       // --project-root
+  const params = ctx.params || ''                    // opaque register params pass-through
+  const unregParams = ctx.unregParams || ''          // opaque unregister params pass-through
+  const q = (s) => `"${s}"`
+  const reg = `${adapter} register --variant ${variant} --source ${q(source)} --project-root ${q(root)}${params ? ' ' + params : ''}`.trim()
+  const unreg = `${adapter} unregister --variant ${variant} --project-root ${q(root)}${unregParams ? ' ' + unregParams : ''}`.trim()
+  const list = `${adapter} list --project-root ${q(root)}`
+  return {
+    register: reg,
+    list,
+    // Project-native build/test/benchmark, run VERBATIM with the variant's env
+    // gate set so the project binary dispatches to this candidate.
+    build: ctx.buildCmd ? `KERSOR_VARIANT=${variant} ${ctx.buildCmd}` : '',
+    test: ctx.testCmd ? `KERSOR_VARIANT=${variant} ${ctx.testCmd}` : '',
+    benchmark: ctx.benchmarkCmd ? `KERSOR_VARIANT=${variant} ${ctx.benchmarkCmd}` : '',
+    unregister: unreg,
+    // Human-orderable sequence + the non-negotiable cleanup invariant.
+    order: ['register', 'list', 'build', 'test', 'benchmark', 'unregister'],
+    cleanupInvariant: `On ANY failure or non-improvement, run the unregister command and confirm via list that ${variant} is gone, leaving the project byte-exact pristine.`,
+  }
+}
+// --- END embedded-eval substrate ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda'],
   supported_problem_types: ['cuda-kernel-generation', 'cuda-kernel-optimization'],
@@ -120,6 +171,21 @@ assertWorkflowSuitability()
 //     exp_dir: '/tmp/cuda_agent_exp',
 //   }})
 //
+// Embedded-dispatch mode (kernel is wired into a larger project, not standalone):
+//   Workflow({name: 'cuda-agent-kernel-optimization', args: {
+//     integration_pattern: 'embedded',           // 'standalone' (default) | 'embedded'
+//     register_script: '/abs/scripts/llamacpp_register_variant.py', // adapter (3 verbs)
+//     project_root: '/abs/project',              // (alias: ggml_root) --project-root
+//     reference_cuh: '/abs/project/.../fattn.cuh', // (alias: reference_file) signature to match
+//     register_params: '--dkq 256 --dv 256',     // opaque pass-through to the adapter
+//     build_command: '<project build cmd>',       // defaults to compile_command
+//     test_command: '<project correctness cmd>',
+//     profile_command: '<project benchmark cmd>',
+//   }})
+//   In embedded mode register_script, project_root, build/test/benchmark commands
+//   are required; the candidate is registered into the project, built/tested/
+//   benchmarked via the project's own commands, then ALWAYS unregistered to pristine.
+//
 // =============================================================================
 
 // --- Required Args ---
@@ -141,8 +207,30 @@ const LANGUAGE = args.language || 'cuda'
 const TARGET_GPU = args.target_gpu || 'unknown GPU'
 const SEED_CANDIDATES = args.seed_candidates || 3
 
+// --- Embedded-dispatch mode (gated; standalone path is byte-identical when off) ---
+const INTEGRATION_PATTERN = (args.integration_pattern || 'standalone')
+const EMBEDDED = INTEGRATION_PATTERN.startsWith('embedded')
+const REGISTER_SCRIPT = args.register_script || ''
+const PROJECT_ROOT = args.project_root || args.ggml_root || ''
+const REFERENCE_FILE = args.reference_cuh || args.reference_file || ''
+const REGISTER_PARAMS = args.register_params || ''
+// In embedded mode the project's own build command drives the build step.
+const BUILD_CMD = args.build_command || COMPILE_CMD
+
 if (!MODEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
   throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
+}
+
+if (EMBEDDED) {
+  const missing = []
+  if (!REGISTER_SCRIPT) missing.push('register_script')
+  if (!PROJECT_ROOT) missing.push('project_root (or ggml_root)')
+  if (!BUILD_CMD) missing.push('build_command (or compile_command)')
+  if (!VERIFY_CMD) missing.push('test_command')
+  if (!PROFILE_CMD) missing.push('benchmark/profile_command')
+  if (missing.length) {
+    throw new Error(`integration_pattern="${INTEGRATION_PATTERN}" requires non-empty: ${missing.join(', ')}`)
+  }
 }
 
 // --- State ---
@@ -307,6 +395,10 @@ for (currentAttempt = 0; currentAttempt < MAX_TURNS && !targetMet; currentAttemp
     ? `\n# Previous Attempts:\n${recentHistory.map(h => `Turn ${h.turn}: ${h.action} → ${h.outcome}${h.error ? ' (' + h.error.substring(0, 100) + ')' : ''} ${h.speedup ? h.speedup.toFixed(2) + 'x' : ''}`).join('\n')}`
     : ''
 
+  const embeddedProposalBlock = EMBEDDED
+    ? `\n\n${EMBEDDING_CONTRACT}\n\nMANDATORY: Read the reference dispatch file at ${REFERENCE_FILE} and match its dispatch signature EXACTLY (same entry-point shape, template params, launch-bounds conventions). Emit a COMPLETE dispatch-compatible \`.cuh\` (NOT a standalone translation unit, NO main()/harness). Put the full \`.cuh\` contents in kernel_code; binding_code and model_new_code are not used in embedded mode (return brief placeholders).`
+    : ''
+
   const implResult = await agent(`You are a CUDA kernel developer. Implement an optimized CUDA kernel for this PyTorch model.
 
 # Model to Optimize:
@@ -323,7 +415,7 @@ ${modelCode.substring(0, 3000)}
 - Eager: ${eagerTime}ms
 - torch.compile: ${compileTime}ms
 - Target: >${TARGET_SPEEDUP}x speedup over torch.compile (=${(compileTime / TARGET_SPEEDUP).toFixed(3)}ms)
-${historyContext}
+${historyContext}${embeddedProposalBlock}
 
 # CUDA Agent Workspace Requirements:
 Generate THREE files:
@@ -370,7 +462,42 @@ Return all three files.`, {
   // ===========================================================================
   phase('Verify')
 
-  const verifyResult = await agent(`You are a CUDA kernel validator. Compile, verify, and benchmark this kernel implementation.
+  // Embedded-dispatch evaluation: register candidate into the project, build/test/
+  // benchmark via the project's own commands, then ALWAYS unregister to pristine.
+  let embeddedEvalBlock = ''
+  if (EMBEDDED) {
+    const variantName = `cuda_agent_t${currentAttempt}`.replace(/[^A-Za-z0-9_]/g, '_')
+    const candidatePath = `${EXP_DIR}/kernels/${variantName}.cuh`
+    const plan = __embeddedEvalPlan({
+      adapter: 'python "' + REGISTER_SCRIPT + '"',
+      variant: variantName,
+      source: candidatePath,
+      projectRoot: PROJECT_ROOT,
+      params: REGISTER_PARAMS,
+      buildCmd: BUILD_CMD,
+      testCmd: VERIFY_CMD,
+      benchmarkCmd: PROFILE_CMD,
+    })
+    embeddedEvalBlock = `
+
+# EMBEDDED-DISPATCH EVALUATION (overrides the standalone steps below)
+This candidate is NOT standalone. Write the kernel_code above verbatim to ${candidatePath}, then evaluate it against the project's dispatch adapter by running these commands IN THIS EXACT ORDER:
+
+1. Register:   ${plan.register}
+2. List:       ${plan.list}   (CONFIRM ${variantName} is now listed; abort if absent)
+3. Build:      ${plan.build}
+4. Test:       ${plan.test}        (correctness)
+5. Benchmark:  ${plan.benchmark}   (latency)
+6. Unregister: ${plan.unregister}
+7. List:       ${plan.list}   (CONFIRM ${variantName} is GONE)
+
+HARD REQUIREMENT (cleanup invariant): ${plan.cleanupInvariant}
+You MUST run the unregister command and confirm removal even on compile/correctness/benchmark FAILURE or non-improvement. Never leave the project dirty.
+
+Parse correctness (pass/fail) and latency STRICTLY from the test/benchmark command output. Do NOT fabricate numbers; if a value is not present in the output, report it as unavailable rather than guessing. Map results into the schema (compiled=build succeeded, correct=test passed, kernel_time_ms=measured latency).`
+  }
+
+  const verifyResult = await agent(`You are a CUDA kernel validator. Compile, verify, and benchmark this kernel implementation.${embeddedEvalBlock}
 
 # Kernel Code (kernel.cu):
 \`\`\`cuda
