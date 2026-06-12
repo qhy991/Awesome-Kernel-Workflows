@@ -11,7 +11,68 @@ export const meta = {
     { title: 'Validation', detail: 'Validate final candidates on target hardware' },
     { title: 'Report', detail: 'Generate optimization report' },
   ],
+  // Embedded-dispatch args (optional; default behavior is standalone). When
+  // integration_pattern starts with "embedded", candidates are evaluated against
+  // a project's register adapter instead of {kernel_path}/{result_path} substitution.
+  args: [
+    { name: 'integration_pattern', detail: 'standalone (default) | embedded[-*]. "embedded" routes evaluation through a register adapter.' },
+    { name: 'register_script', detail: 'Path to a contract-conforming adapter (e.g. scripts/llamacpp_register_variant.py). Required when embedded.' },
+    { name: 'project_root', detail: 'Project root the adapter wires the variant into. Alias: ggml_root. Required when embedded.' },
+    { name: 'reference_cuh', detail: 'Reference dispatch .cuh whose signature the candidate must match exactly. Alias: reference_file.' },
+    { name: 'register_params', detail: 'Opaque pass-through to the adapter (e.g. "--dkq 256 --dv 256 --cmake-build-dir /p/build").' },
+  ],
 };
+
+// --- BEGIN embedded-eval substrate (auto-inlined by scripts/patch-embedded-eval.js) ---
+const EMBEDDING_CONTRACT = [
+  'EMBEDDED-DISPATCH CONTRACT (this kernel is NOT standalone):',
+  '',
+  'You are authoring a kernel that lives INSIDE a larger project and is wired into',
+  'its dispatch table. It cannot be compiled on its own. Therefore:',
+  '',
+  '1. Emit a COMPLETE source file (e.g. a .cuh) that matches the reference',
+  '   dispatch signature exactly -- same entry-point shape, template params, and',
+  '   launch-bounds conventions as the reference file. Do NOT add a main(), a',
+  '   standalone harness, or top-level test code.',
+  '2. Use ONLY symbols/headers the project already provides (project headers,',
+  '   template instantiations, dispatch macros). Do not invent include paths.',
+  '3. Do NOT register, build, or benchmark the variant yourself, and do NOT name',
+  '   any symbol with the variant suffix -- the workflow + adapter handle wiring.',
+  '4. Return ONLY the file contents plus a short rationale citing the concrete',
+  '   design choice (tile shape, register budget, pipelining, GQA packing, etc.).',
+].join('\n')
+
+// Build the ordered evaluation commands for one candidate against a
+// contract-conforming adapter. All fields are plain strings the caller already
+// resolved from `args`. `params`/`unregParams` are opaque pass-through strings
+// (e.g. "--dkq 256 --dv 256 --cmake-build-dir /p/build") that the substrate does
+// not parse -- they belong to the project's adapter.
+function __embeddedEvalPlan(ctx) {
+  const adapter = ctx.adapter                       // e.g. 'python "/abs/llamacpp_register_variant.py"'
+  const variant = ctx.variant                       // unique variant name for this candidate
+  const source = ctx.source                         // path to the candidate source file on disk
+  const root = ctx.projectRoot                       // --project-root
+  const params = ctx.params || ''                    // opaque register params pass-through
+  const unregParams = ctx.unregParams || ''          // opaque unregister params pass-through
+  const q = (s) => `"${s}"`
+  const reg = `${adapter} register --variant ${variant} --source ${q(source)} --project-root ${q(root)}${params ? ' ' + params : ''}`.trim()
+  const unreg = `${adapter} unregister --variant ${variant} --project-root ${q(root)}${unregParams ? ' ' + unregParams : ''}`.trim()
+  const list = `${adapter} list --project-root ${q(root)}`
+  return {
+    register: reg,
+    list,
+    // Project-native build/test/benchmark, run VERBATIM with the variant's env
+    // gate set so the project binary dispatches to this candidate.
+    build: ctx.buildCmd ? `KERSOR_VARIANT=${variant} ${ctx.buildCmd}` : '',
+    test: ctx.testCmd ? `KERSOR_VARIANT=${variant} ${ctx.testCmd}` : '',
+    benchmark: ctx.benchmarkCmd ? `KERSOR_VARIANT=${variant} ${ctx.benchmarkCmd}` : '',
+    unregister: unreg,
+    // Human-orderable sequence + the non-negotiable cleanup invariant.
+    order: ['register', 'list', 'build', 'test', 'benchmark', 'unregister'],
+    cleanupInvariant: `On ANY failure or non-improvement, run the unregister command and confirm via list that ${variant} is gone, leaving the project byte-exact pristine.`,
+  }
+}
+// --- END embedded-eval substrate ---
 
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda'],
@@ -80,7 +141,16 @@ const LANGUAGE = args.language || 'cuda'
 const TARGET_GPU = args.target_gpu || ''
 const TEST_CMD = args.test_command || ''
 const BENCHMARK_CMD = args.benchmark_command || ''
+const BUILD_CMD = args.build_command || ''
 const USER_NOTE = args.note || args.notes || ''
+// Embedded-dispatch mode: gate everything below behind EMBEDDED so the
+// standalone path is byte-identical to before when integration_pattern is absent.
+const INTEGRATION_PATTERN = (args.integration_pattern || 'standalone')
+const EMBEDDED = INTEGRATION_PATTERN.startsWith('embedded')
+const REGISTER_SCRIPT = args.register_script || ''
+const PROJECT_ROOT = args.project_root || args.ggml_root || ''
+const REFERENCE_FILE = args.reference_cuh || args.reference_file || ''
+const REGISTER_PARAMS = args.register_params || ''  // opaque pass-through e.g. "--dkq 256 --dv 256 --cmake-build-dir /p/build"
 const BASELINE_DESCRIPTION = args.baseline || args.baseline_description || args.baseline_notes || ''
 const BASELINE_LATENCY_MS = args.baseline_latency_ms ?? args.baseline_perf_ms ?? args.baseline_time_ms ?? args.baseline_perf ?? ''
 const BASELINE_RESULT_PATH = args.baseline_result_path || ''
@@ -89,6 +159,26 @@ const REQUESTED_TRAINING_BUDGET = args.curriculum_size || args.training_budget |
 const REQUESTED_GPU_BUDGET = args.gpu_budget || args.iterations || ''
 const REQUESTED_PUCT_C = args.puct_c || args.puct_exploration_constant || ''
 const REQUESTED_TREE_DEPTH = args.tree_depth || args.tree_depth_limit || ''
+function assertEmbeddedArgs() {
+  if (!EMBEDDED) return
+  const missing = []
+  if (!REGISTER_SCRIPT) missing.push('register_script')
+  if (!PROJECT_ROOT) missing.push('project_root (or ggml_root)')
+  if (!BUILD_CMD) missing.push('build_command')
+  if (!TEST_CMD) missing.push('test_command')
+  if (!BENCHMARK_CMD) missing.push('benchmark_command')
+  if (missing.length) {
+    throw new Error(
+      `${meta.name}: integration_pattern="${INTEGRATION_PATTERN}" (embedded dispatch) requires ` +
+      `the following non-empty args: ${missing.join(', ')}. ` +
+      `Provide a contract-conforming register_script and the project's build/test/benchmark commands ` +
+      `(see _substrate/embedded/ADAPTER_CONTRACT.md), or use integration_pattern="standalone".`
+    )
+  }
+}
+
+assertEmbeddedArgs()
+
 const INPUT_MODE = KERNEL_PATH ? 'optimize_existing' : (PROBLEM_DEFINITION || PROBLEM_PATH || USER_NOTE ? 'generate_then_optimize' : 'unspecified_task')
 const EVIDENCE_MODE = (TEST_CMD && BENCHMARK_CMD)
   ? 'measured_correctness_and_performance'
@@ -135,7 +225,65 @@ function taskContract() {
 3. When benchmark_command is provided, run it exactly with {kernel_path} and {result_path} substitutions before reporting measured latency or speedup.
 4. Compute speedup against baseline_latency_ms when provided; otherwise obtain a measured baseline through benchmark_command before claiming measured speedup.
 5. If a required command is missing or cannot run, mark measured evidence unavailable. Do not invent measured correctness, latency, or speedup.
-6. Materialize generated candidates under exp_dir so evidence artifacts can be inspected.`
+6. Materialize generated candidates under exp_dir so evidence artifacts can be inspected.${EMBEDDED ? '\n\n' + embeddedEvidenceContract() : ''}`
+}
+
+// Sanitize a candidate/round identity into a valid adapter variant name.
+function sanitizeVariant(name) {
+  return String(name || 'cand').replace(/[^A-Za-z0-9_]/g, '_')
+}
+
+// Proposal-prompt appendix: how to AUTHOR an embedded-dispatch candidate.
+function embeddedProposalContract() {
+  return [
+    EMBEDDING_CONTRACT,
+    '',
+    'REFERENCE DISPATCH FILE: ' + (REFERENCE_FILE || '(not provided)'),
+    REFERENCE_FILE
+      ? 'Read ' + REFERENCE_FILE + ' and match its dispatch signature EXACTLY ' +
+        '(entry-point shape, template params, launch-bounds conventions). Emit a ' +
+        'COMPLETE dispatch-compatible .cuh -- never a standalone translation unit, ' +
+        'main(), or test harness.'
+      : 'No reference file provided; still emit a COMPLETE dispatch-compatible .cuh ' +
+        'matching the project dispatch signature, not a standalone translation unit.',
+  ].join('\n')
+}
+
+// Evidence-prompt appendix: how to EVALUATE one embedded candidate via the adapter.
+function embeddedEvidenceContract() {
+  return [
+    '# Embedded-Dispatch Evidence (integration_pattern=' + INTEGRATION_PATTERN + ')',
+    'This kernel is NOT standalone. Do NOT use {kernel_path}/{result_path} substitution.',
+    'Each candidate is a complete dispatch-compatible .cuh evaluated against the project',
+    'register adapter using the workflow-provided embedded eval plan. For every candidate:',
+    '1. Derive a unique variant name from the candidate/round identity (sanitized to [A-Za-z0-9_]).',
+    '2. Build the plan via the workflow helper (adapter: python "' + REGISTER_SCRIPT + '", project-root: ' + PROJECT_ROOT + ').',
+    '3. Run IN ORDER: plan.register, plan.list (confirm the variant is registered),',
+    '   plan.build, plan.test (correctness), plan.benchmark (latency),',
+    '   then ALWAYS plan.unregister (even on failure/non-improvement) and confirm via',
+    '   plan.list that the variant is gone.',
+    '4. HARD REQUIREMENT (cleanup invariant): on ANY failure or non-improvement you MUST',
+    '   unregister and confirm removal, leaving the project byte-exact pristine.',
+    '5. Parse correctness and latency ONLY from the command stdout, under the SAME',
+    '   grounding/anti-fabrication rules above. Never invent measured correctness, latency,',
+    '   or speedup; if a command is missing or fails, mark measured evidence unavailable.',
+  ].join('\n')
+}
+
+// Build the ordered eval plan for one embedded candidate (reuses the inlined substrate).
+// Used to render concrete, copy-runnable plan commands into the eval-phase prompts so the
+// evaluating subagent runs the exact register/list/build/test/benchmark/unregister sequence.
+function embeddedPlanFor(candidatePath, variantSeed) {
+  return __embeddedEvalPlan({
+    adapter: 'python "' + REGISTER_SCRIPT + '"',
+    variant: sanitizeVariant(variantSeed),
+    source: candidatePath,
+    projectRoot: PROJECT_ROOT,
+    params: REGISTER_PARAMS,
+    buildCmd: BUILD_CMD,
+    testCmd: TEST_CMD,
+    benchmarkCmd: BENCHMARK_CMD,
+  })
 }
 
 // GPU Forecasters: Kernel optimization with learned performance prediction
@@ -164,7 +312,11 @@ ${taskContract()}
    - Tree depth limit
 4. Prepare baseline implementation from kernel_path or generate an initial kernel if only problem context is provided
 5. Configure execution backend (Modal, local GPU, etc.)
-6. Preserve the evidence commands and baseline contract for all later phases
+6. Preserve the evidence commands and baseline contract for all later phases${EMBEDDED ? `
+
+# Embedded-Dispatch Authoring Contract
+When you author or modify any kernel candidate (here or in later phases), follow this:
+${embeddedProposalContract()}` : ''}
 
 Return JSON:
 {
@@ -246,9 +398,28 @@ Forecaster models: ${setupResult.forecaster_models.join(', ')}
 
 Training process:
 1. Sample initial configurations (random, LHS, Sobol)
-2. Materialize each config under ${EXP_DIR}/training/
-3. Run test_command before accepting correctness when provided
-4. Run benchmark_command on ${setupResult.target_gpu} when provided and measure speedup against the baseline contract
+2. Materialize each config under ${EXP_DIR}/training/${EMBEDDED ? `
+   When authoring each candidate, follow the Embedded-Dispatch Authoring Contract above.` : ''}
+3. ${EMBEDDED
+    ? `For each candidate written at <candidatePath> with a unique sanitized <variantName>, build the eval plan and run, IN ORDER:
+   - plan.register, then plan.list (confirm <variantName> is registered)
+   - plan.build, then plan.test (correctness), then plan.benchmark (latency)
+   - then ALWAYS plan.unregister and confirm via plan.list that <variantName> is gone (cleanup invariant).
+   Concrete example for candidate "${EXP_DIR}/training/cand_001.cuh", variant "cand_001"
+   (these exact command strings are produced by the workflow's embedded eval plan):
+${(() => { const p = embeddedPlanFor(`${EXP_DIR}/training/cand_001.cuh`, 'cand_001'); return [
+     '     register:   ' + p.register,
+     '     list:       ' + p.list,
+     '     build:      ' + p.build,
+     '     test:       ' + p.test,
+     '     benchmark:  ' + p.benchmark,
+     '     unregister: ' + p.unregister,
+   ].join('\n'); })()}
+   Parse correctness from plan.test stdout and latency from plan.benchmark stdout, then measure speedup against the baseline contract.`
+    : 'Run test_command before accepting correctness when provided'}
+4. ${EMBEDDED
+    ? 'On ANY failure or non-improvement still run plan.unregister and confirm removal so the project stays byte-exact pristine.'
+    : `Run benchmark_command on ${setupResult.target_gpu} when provided and measure speedup against the baseline contract`}
 5. Store evaluator JSON artifacts beside each candidate
 6. Reject or label candidates with missing/failed correctness evidence
 7. Collect training dataset: (config, speedup) pairs only from measured or explicitly labeled forecast-only evidence
@@ -439,10 +610,18 @@ PUCT algorithm:
       - N(s,a) = visit count of (s,a)
    b. Expansion: expand node with forecaster-predicted actions
    c. Simulation:
-      - If forecaster abstains: materialize the config under ${EXP_DIR}/puct/ and execute user-provided evidence commands for ground truth
+${EMBEDDED
+  ? `      - If forecaster abstains: materialize the config under ${EXP_DIR}/puct/ and execute the embedded eval plan:
+        author a dispatch .cuh per the Authoring Contract, then run IN ORDER plan.register, plan.list, plan.build,
+        plan.test, plan.benchmark, then ALWAYS plan.unregister + confirm removal via plan.list (cleanup invariant).
+        Parse correctness from plan.test stdout and latency from plan.benchmark stdout.
+      - Else: use forecaster prediction
+      - If plan.test fails, treat the candidate as invalid regardless of predicted speedup
+      - Use the measured plan.benchmark latency as the authoritative measured speedup`
+  : `      - If forecaster abstains: materialize the config under ${EXP_DIR}/puct/ and execute user-provided evidence commands for ground truth
       - Else: use forecaster prediction
       - If test_command fails, treat the candidate as invalid regardless of predicted speedup
-      - If benchmark_command is available, use its evaluator JSON as the authoritative measured speedup
+      - If benchmark_command is available, use its evaluator JSON as the authoritative measured speedup`}
    d. Backpropagation: update Q values along path
 3. Return best config from tree (highest Q value)
 
@@ -537,7 +716,10 @@ Refinement strategies:
 4. Fine-grained parameter tuning
 
 Execute promising refinements on GPU (use forecasters to filter).
-Materialize each refinement under ${EXP_DIR}/refinement/ and use the evidence commands exactly when provided.
+Materialize each refinement under ${EXP_DIR}/refinement/ and use the evidence commands exactly when provided.${EMBEDDED ? `
+For each refinement, author a dispatch .cuh per the Authoring Contract and evaluate it via the embedded eval
+plan: run IN ORDER plan.register, plan.list, plan.build, plan.test, plan.benchmark, then ALWAYS plan.unregister
+and confirm removal via plan.list (cleanup invariant). Parse correctness/latency from command stdout only.` : ''}
 Only promote a refinement as measured if correctness passes and benchmark evidence is available.
 
 Return JSON:
@@ -596,7 +778,11 @@ Best config: ${bestConfig}
 Best speedup: ${bestSpeedup.toFixed(3)}x
 
 Validation:
-1. Materialize the final candidate under ${EXP_DIR}/final/
+1. Materialize the final candidate under ${EXP_DIR}/final/${EMBEDDED ? `
+   Author it as a dispatch .cuh per the Authoring Contract, then evaluate via the embedded eval plan:
+   run IN ORDER plan.register, plan.list, plan.build, plan.test, plan.benchmark, then ALWAYS plan.unregister
+   and confirm removal via plan.list (cleanup invariant). Use plan.test for correctness and plan.benchmark
+   stdout for latency; do NOT use {kernel_path}/{result_path} substitution.` : ''}
 2. Run test_command exactly if provided and fail validation if correctness fails
 3. Run benchmark_command exactly if provided; parse its JSON artifact as authoritative measured performance
 4. Execute on target hardware (${setupResult.target_gpu}) multiple times when benchmark_command supports repeated runs

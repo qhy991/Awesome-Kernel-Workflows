@@ -12,6 +12,57 @@ export const meta = {
   ],
 }
 
+// --- BEGIN embedded-eval substrate (auto-inlined by scripts/patch-embedded-eval.js) ---
+const EMBEDDING_CONTRACT = [
+  'EMBEDDED-DISPATCH CONTRACT (this kernel is NOT standalone):',
+  '',
+  'You are authoring a kernel that lives INSIDE a larger project and is wired into',
+  'its dispatch table. It cannot be compiled on its own. Therefore:',
+  '',
+  '1. Emit a COMPLETE source file (e.g. a .cuh) that matches the reference',
+  '   dispatch signature exactly -- same entry-point shape, template params, and',
+  '   launch-bounds conventions as the reference file. Do NOT add a main(), a',
+  '   standalone harness, or top-level test code.',
+  '2. Use ONLY symbols/headers the project already provides (project headers,',
+  '   template instantiations, dispatch macros). Do not invent include paths.',
+  '3. Do NOT register, build, or benchmark the variant yourself, and do NOT name',
+  '   any symbol with the variant suffix -- the workflow + adapter handle wiring.',
+  '4. Return ONLY the file contents plus a short rationale citing the concrete',
+  '   design choice (tile shape, register budget, pipelining, GQA packing, etc.).',
+].join('\n')
+
+// Build the ordered evaluation commands for one candidate against a
+// contract-conforming adapter. All fields are plain strings the caller already
+// resolved from `args`. `params`/`unregParams` are opaque pass-through strings
+// (e.g. "--dkq 256 --dv 256 --cmake-build-dir /p/build") that the substrate does
+// not parse -- they belong to the project's adapter.
+function __embeddedEvalPlan(ctx) {
+  const adapter = ctx.adapter                       // e.g. 'python "/abs/llamacpp_register_variant.py"'
+  const variant = ctx.variant                       // unique variant name for this candidate
+  const source = ctx.source                         // path to the candidate source file on disk
+  const root = ctx.projectRoot                       // --project-root
+  const params = ctx.params || ''                    // opaque register params pass-through
+  const unregParams = ctx.unregParams || ''          // opaque unregister params pass-through
+  const q = (s) => `"${s}"`
+  const reg = `${adapter} register --variant ${variant} --source ${q(source)} --project-root ${q(root)}${params ? ' ' + params : ''}`.trim()
+  const unreg = `${adapter} unregister --variant ${variant} --project-root ${q(root)}${unregParams ? ' ' + unregParams : ''}`.trim()
+  const list = `${adapter} list --project-root ${q(root)}`
+  return {
+    register: reg,
+    list,
+    // Project-native build/test/benchmark, run VERBATIM with the variant's env
+    // gate set so the project binary dispatches to this candidate.
+    build: ctx.buildCmd ? `KERSOR_VARIANT=${variant} ${ctx.buildCmd}` : '',
+    test: ctx.testCmd ? `KERSOR_VARIANT=${variant} ${ctx.testCmd}` : '',
+    benchmark: ctx.benchmarkCmd ? `KERSOR_VARIANT=${variant} ${ctx.benchmarkCmd}` : '',
+    unregister: unreg,
+    // Human-orderable sequence + the non-negotiable cleanup invariant.
+    order: ['register', 'list', 'build', 'test', 'benchmark', 'unregister'],
+    cleanupInvariant: `On ANY failure or non-improvement, run the unregister command and confirm via list that ${variant} is gone, leaving the project byte-exact pristine.`,
+  }
+}
+// --- END embedded-eval substrate ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['argus-dsl', 'cuda', 'rocm', 'triton'],
   supported_problem_types: ['invariant-guided-kernel-optimization', 'gpu-kernel-optimization'],
@@ -115,7 +166,17 @@ assertWorkflowSuitability()
 //     iterations: 10,
 //     inner_steps: 5,
 //     optimization_categories: ['global_intrusive', 'local_source', 'isa_specific'],
+//     // --- Embedded-dispatch mode (optional; default 'standalone') ---
+//     integration_pattern: 'embedded',     // 'standalone' (default) | 'embedded*'
+//     register_script: '/abs/scripts/llamacpp_register_variant.py', // adapter (3 verbs)
+//     project_root: '/abs/llama.cpp',       // or ggml_root: project root passed to adapter
+//     reference_cuh: '/abs/.../fattn-mma.cuh', // or reference_file: dispatch sig to match
+//     register_params: '--dkq 256 --dv 256 --cmake-build-dir /p/build', // opaque adapter params
+//     build_command: '<project-native build cmd>', // required in embedded mode (plan.build)
 //   }})
+//   In embedded mode, test_command/benchmark_command are run VERBATIM against the
+//   built project (no {kernel_path}/{result_path} substitution); the candidate is
+//   registered into the project's dispatch table and unregistered after each eval.
 //
 // =============================================================================
 
@@ -130,6 +191,7 @@ const KERNEL_SPEC = args.kernel_spec || ''
 const HARDWARE_TARGET = args.target_gpu || 'NVIDIA H100'
 const TEST_CMD = args.test_command || ''
 const BENCH_CMD = args.benchmark_command || ''
+const BUILD_CMD = args.build_command || ''  // project-native build (embedded mode)
 const INVARIANT_CHECK_CMD = args.invariant_check_command || ''
 const INVARIANT_RESULT_PATH = args.invariant_result_path || `${args.exp_dir || '/tmp/argus_exp'}/invariants/latest.json`
 const KNOWLEDGE_BASE_PATH = args.knowledge_base_path || ''
@@ -144,6 +206,29 @@ if (!KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH && !KERNEL_SPEC) {
 }
 
 const LANGUAGE = args.language || 'cuda'
+
+// --- Embedded-dispatch mode (fully gated; standalone path unchanged) ---
+const INTEGRATION_PATTERN = (args.integration_pattern || 'standalone')
+const EMBEDDED = INTEGRATION_PATTERN.startsWith('embedded')
+const REGISTER_SCRIPT = args.register_script || ''
+const PROJECT_ROOT = args.project_root || args.ggml_root || ''
+const REFERENCE_FILE = args.reference_cuh || args.reference_file || ''
+const REGISTER_PARAMS = args.register_params || ''
+
+if (EMBEDDED) {
+  const missing = []
+  if (!REGISTER_SCRIPT) missing.push('register_script')
+  if (!PROJECT_ROOT) missing.push('project_root (or ggml_root)')
+  if (!TEST_CMD) missing.push('test_command')
+  if (!BENCH_CMD) missing.push('benchmark_command')
+  // The project build command is reused below as plan.build; ARGUS has no
+  // dedicated build arg, so a build_command must be supplied in embedded mode.
+  if (!BUILD_CMD) missing.push('build_command')
+  if (missing.length) {
+    throw new Error(`integration_pattern="${INTEGRATION_PATTERN}" (embedded) requires non-empty: ${missing.join(', ')}`)
+  }
+}
+
 const SEED_CANDIDATES = args.seed_candidates || 3
 let generatedKernelPath = ''
 let initialCandidates = []
@@ -495,6 +580,14 @@ ${currentCode.substring(0, 6000)}
 
 # Knowledge Base Examples for "${step.optimization}":
 ${KNOWLEDGE_BASE[step.category || 'global_intrusive']?.filter(k => k.includes(step.optimization.split(':')[0].toLowerCase().replace(/\s+/g, '_')))?.join('\n') || 'Use general optimization patterns.'}
+${EMBEDDED ? `
+# EMBEDDED-DISPATCH AUTHORING REQUIREMENTS (override "standalone compilable kernel"):
+${EMBEDDING_CONTRACT}
+
+Read the reference dispatch file at ${REFERENCE_FILE} and match its dispatch
+signature EXACTLY (entry-point shape, template params, launch-bounds). Emit a
+COMPLETE dispatch-compatible .cuh (NOT a standalone translation unit, NO main(),
+no standalone harness). transformed_code must be the full .cuh file contents.` : ''}
 
 Return the transformed kernel code with invariants.`, {
       label: `lower-${outerIter}-step${stepIdx}`,
@@ -528,6 +621,36 @@ Return the transformed kernel code with invariants.`, {
   // ===========================================================================
   phase('Validate')
 
+  // Embedded mode: write the candidate to disk and build the ordered
+  // register→build→test→benchmark→unregister plan against the project adapter.
+  let embeddedPlan = null
+  let candidatePath = ''
+  let variantName = ''
+  if (EMBEDDED) {
+    variantName = `argus_i${outerIter}`.replace(/[^A-Za-z0-9_]/g, '_')
+    candidatePath = `${EXP_DIR}/candidates/${variantName}.cuh`
+    await agent(`Write the embedded-dispatch candidate file to disk verbatim (no edits, no extra files).
+
+# Target path: ${candidatePath}
+# Create parent dir first: mkdir -p ${EXP_DIR}/candidates
+# File contents (write EXACTLY, this is a complete dispatch-compatible .cuh):
+\`\`\`
+${currentCode}
+\`\`\`
+
+Return after writing the file.`, { label: `write-candidate-${outerIter}`, phase: 'Validate' })
+    embeddedPlan = __embeddedEvalPlan({
+      adapter: 'python "' + REGISTER_SCRIPT + '"',
+      variant: variantName,
+      source: candidatePath,
+      projectRoot: PROJECT_ROOT,
+      params: REGISTER_PARAMS,
+      buildCmd: BUILD_CMD,
+      testCmd: TEST_CMD,
+      benchmarkCmd: BENCH_CMD,
+    })
+  }
+
   const validateResult = await agent(`You are the ARGUS Validator Agent (Section 6).
 Validate the transformed kernel through invariant checking, unit tests, and profiling.
 
@@ -538,7 +661,56 @@ ${currentCode.substring(0, 6000)}
 
 # Invariants to Check:
 ${loweringResults.map(r => r.invariants.map(inv => `- ${inv}`).join('\n')).join('\n')}
+${EMBEDDED ? `
+# EMBEDDED-DISPATCH EVALUATION (this kernel is wired into a project; it is NOT a
+# standalone translation unit). Run these adapter commands IN THIS EXACT ORDER.
+# Run each as a Bash command verbatim; do not paraphrase or reorder.
 
+1. REGISTER the variant into the project dispatch table:
+   ${embeddedPlan.register}
+2. CONFIRM it is registered (the variant name MUST appear in the output):
+   ${embeddedPlan.list}
+3. BUILD the project (the project compiles the registered variant; this REPLACES
+   any standalone compile — ARGUS's compile-time invariant validation below runs
+   against THIS built project, not a standalone compile of the file):
+   ${embeddedPlan.build}
+
+## Step 1: Compile-Time Invariant Validation (against the built project)
+After plan.build succeeds, run the ARGUS static analysis over the candidate as it
+was compiled INTO the project (not a standalone translation unit):
+- Track tag propagation through assignments and shared memory accesses
+- Check tag assertions at all use sites
+- For any violation, produce a CONCRETE COUNTEREXAMPLE:
+  "Violation at [program point]: thread [T] holds element [E] with tag [X],
+   but assertion requires tag [Y]"
+- A build failure is a hard correctness failure (tests_pass=false).
+
+## Step 2: Functional Correctness
+4. Run correctness against the built project:
+   ${embeddedPlan.test}
+
+## Step 3: Performance Profiling
+5. Run the benchmark against the built project:
+   ${embeddedPlan.benchmark}
+- Compare against baseline: ${bestThroughput} TFLOPS; identify bottlenecks.
+
+## Step 4: Mandatory cleanup (HARD REQUIREMENT — run even on failure/non-improvement)
+6. ALWAYS unregister the variant, even if any step above failed:
+   ${embeddedPlan.unregister}
+7. CONFIRM the variant is gone (the variant name MUST NOT appear):
+   ${embeddedPlan.list}
+CLEANUP INVARIANT: ${embeddedPlan.cleanupInvariant}
+You MUST leave the project byte-exact pristine; do not skip steps 6-7.
+
+## Step 5: Compute Reward Signal (ARGUS ICRL reward)
+Reward = f(correctness, invariant_satisfaction, performance)
+- If invariants violated or build fails: negative/zero reward (dense signal).
+- If tests fail: zero reward.
+- If correct + improved: positive reward proportional to speedup.
+
+Apply the SAME grounding/anti-fabrication rules as always: report ONLY metrics
+actually emitted by the commands above. If a command did not run or produced no
+parseable result, mark it unmeasured — do not infer or invent numbers.` : `
 # Validation Steps (ARGUS Section 5 + Section 6):
 
 ## Step 1: Compile-Time Invariant Validation
@@ -567,7 +739,7 @@ ${BENCH_CMD ? `Run: ${BENCH_CMD}` : 'Estimate performance:'}
 Reward = f(correctness, invariant_satisfaction, performance)
 - If invariants violated: negative process reward (dense signal for what went wrong)
 - If tests fail: zero reward
-- If correct + improved: positive reward proportional to speedup
+- If correct + improved: positive reward proportional to speedup`}
 
 Return validation results.`, {
     label: `validate-${outerIter}`,

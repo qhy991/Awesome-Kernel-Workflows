@@ -13,6 +13,57 @@ export const meta = {
   ],
 };
 
+// --- BEGIN embedded-eval substrate (auto-inlined by scripts/patch-embedded-eval.js) ---
+const EMBEDDING_CONTRACT = [
+  'EMBEDDED-DISPATCH CONTRACT (this kernel is NOT standalone):',
+  '',
+  'You are authoring a kernel that lives INSIDE a larger project and is wired into',
+  'its dispatch table. It cannot be compiled on its own. Therefore:',
+  '',
+  '1. Emit a COMPLETE source file (e.g. a .cuh) that matches the reference',
+  '   dispatch signature exactly -- same entry-point shape, template params, and',
+  '   launch-bounds conventions as the reference file. Do NOT add a main(), a',
+  '   standalone harness, or top-level test code.',
+  '2. Use ONLY symbols/headers the project already provides (project headers,',
+  '   template instantiations, dispatch macros). Do not invent include paths.',
+  '3. Do NOT register, build, or benchmark the variant yourself, and do NOT name',
+  '   any symbol with the variant suffix -- the workflow + adapter handle wiring.',
+  '4. Return ONLY the file contents plus a short rationale citing the concrete',
+  '   design choice (tile shape, register budget, pipelining, GQA packing, etc.).',
+].join('\n')
+
+// Build the ordered evaluation commands for one candidate against a
+// contract-conforming adapter. All fields are plain strings the caller already
+// resolved from `args`. `params`/`unregParams` are opaque pass-through strings
+// (e.g. "--dkq 256 --dv 256 --cmake-build-dir /p/build") that the substrate does
+// not parse -- they belong to the project's adapter.
+function __embeddedEvalPlan(ctx) {
+  const adapter = ctx.adapter                       // e.g. 'python "/abs/llamacpp_register_variant.py"'
+  const variant = ctx.variant                       // unique variant name for this candidate
+  const source = ctx.source                         // path to the candidate source file on disk
+  const root = ctx.projectRoot                       // --project-root
+  const params = ctx.params || ''                    // opaque register params pass-through
+  const unregParams = ctx.unregParams || ''          // opaque unregister params pass-through
+  const q = (s) => `"${s}"`
+  const reg = `${adapter} register --variant ${variant} --source ${q(source)} --project-root ${q(root)}${params ? ' ' + params : ''}`.trim()
+  const unreg = `${adapter} unregister --variant ${variant} --project-root ${q(root)}${unregParams ? ' ' + unregParams : ''}`.trim()
+  const list = `${adapter} list --project-root ${q(root)}`
+  return {
+    register: reg,
+    list,
+    // Project-native build/test/benchmark, run VERBATIM with the variant's env
+    // gate set so the project binary dispatches to this candidate.
+    build: ctx.buildCmd ? `KERSOR_VARIANT=${variant} ${ctx.buildCmd}` : '',
+    test: ctx.testCmd ? `KERSOR_VARIANT=${variant} ${ctx.testCmd}` : '',
+    benchmark: ctx.benchmarkCmd ? `KERSOR_VARIANT=${variant} ${ctx.benchmarkCmd}` : '',
+    unregister: unreg,
+    // Human-orderable sequence + the non-negotiable cleanup invariant.
+    order: ['register', 'list', 'build', 'test', 'benchmark', 'unregister'],
+    cleanupInvariant: `On ANY failure or non-improvement, run the unregister command and confirm via list that ${variant} is gone, leaving the project byte-exact pristine.`,
+  }
+}
+// --- END embedded-eval substrate ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cutlass', 'cuda', 'cpp'],
   supported_problem_types: ['cutlass-pattern-synthesis', 'cutlass-gemm-optimization'],
@@ -71,6 +122,31 @@ function assertWorkflowSuitability() {
 }
 
 assertWorkflowSuitability()
+
+// --- Embedded-dispatch mode (gated; standalone path is byte-identical when off) ---
+const INTEGRATION_PATTERN = (args.integration_pattern || 'standalone')
+const EMBEDDED = INTEGRATION_PATTERN.startsWith('embedded')
+const REGISTER_SCRIPT = args.register_script || ''
+const PROJECT_ROOT = args.project_root || args.ggml_root || ''
+const REFERENCE_FILE = args.reference_cuh || args.reference_file || ''
+const REGISTER_PARAMS = args.register_params || ''
+// Standalone synthesis is fully agent-narrated; embedded mode drives the project's
+// own build/test/benchmark commands against a contract-conforming register adapter.
+const BUILD_CMD = args.build_command || ''
+const TEST_CMD = args.test_command || ''
+const BENCHMARK_CMD = args.benchmark_command || ''
+
+if (EMBEDDED) {
+  const missing = []
+  if (!REGISTER_SCRIPT) missing.push('register_script')
+  if (!PROJECT_ROOT) missing.push('project_root (or ggml_root)')
+  if (!BUILD_CMD) missing.push('build_command')
+  if (!TEST_CMD) missing.push('test_command')
+  if (!BENCHMARK_CMD) missing.push('benchmark_command')
+  if (missing.length) {
+    throw new Error(`integration_pattern="${INTEGRATION_PATTERN}" (embedded dispatch) requires non-empty: ${missing.join(', ')}`)
+  }
+}
 
 // FACT: Compositional kernel synthesis framework
 // Based on GitHub:Project-FACT/FACT (no published paper yet)
@@ -354,6 +430,12 @@ Return JSON:
 
   log(`Composing patterns to generate optimized kernels (budget: ${compositionBudget})...`);
 
+  // In embedded mode each composed kernel must be a complete dispatch-compatible
+  // .cuh that matches the project's reference dispatch signature exactly.
+  const compositionEmbeddingBlock = EMBEDDED
+    ? `\n\n${EMBEDDING_CONTRACT}\n\nMANDATORY (embedded dispatch): Read the reference dispatch file at ${REFERENCE_FILE} and match its dispatch signature EXACTLY (same entry-point shape, template params, launch-bounds conventions). Each composed candidate's kernel_code MUST be a COMPLETE dispatch-compatible \`.cuh\` (NOT a standalone translation unit, NO main()/harness/top-level test code). Use ONLY symbols/headers the project already provides; do not register, build, or benchmark the variant yourself.`
+    : '';
+
   const compositionResult = await agent(
     `Compose patterns to generate optimized CUTLASS kernels:
 
@@ -401,7 +483,7 @@ Return JSON:
     ...
   ],
   "composition_summary": "summary of composition process"
-}`,
+}${compositionEmbeddingBlock}`,
     {
       label: 'Compose patterns',
       phase: 'Pattern Composition',
@@ -524,8 +606,47 @@ Return JSON:
 
   log('Evaluating composed kernels on target hardware...');
 
+  // Embedded-dispatch evaluation: each composed kernel is registered into the
+  // project, built/tested/benchmarked via the project's own commands, then ALWAYS
+  // unregistered back to pristine. Replaces the standalone CUTLASS compile path.
+  let evaluationEmbeddingBlock = '';
+  if (EMBEDDED) {
+    const planBlocks = composedKernels.map((k, idx) => {
+      const variantName = `fact_${k.kernel_id || ('k' + idx)}`.replace(/[^A-Za-z0-9_]/g, '_');
+      const candidatePath = `${PROJECT_ROOT}/.fact_candidates/${variantName}.cuh`;
+      const plan = __embeddedEvalPlan({
+        adapter: 'python "' + REGISTER_SCRIPT + '"',
+        variant: variantName,
+        source: candidatePath,
+        projectRoot: PROJECT_ROOT,
+        params: REGISTER_PARAMS,
+        buildCmd: BUILD_CMD,
+        testCmd: TEST_CMD,
+        benchmarkCmd: BENCHMARK_CMD,
+      });
+      return `### Candidate kernel_id=${k.kernel_id || ('k' + idx)} (variant ${variantName})
+Write this candidate's kernel_code verbatim to ${candidatePath}, then run IN THIS EXACT ORDER:
+1. Register:   ${plan.register}
+2. List:       ${plan.list}   (CONFIRM ${variantName} is now listed; abort this candidate if absent)
+3. Build:      ${plan.build}
+4. Test:       ${plan.test}        (correctness)
+5. Benchmark:  ${plan.benchmark}   (latency)
+6. Unregister: ${plan.unregister}
+7. List:       ${plan.list}   (CONFIRM ${variantName} is GONE)
+HARD REQUIREMENT (cleanup invariant): ${plan.cleanupInvariant}`;
+    }).join('\n\n');
+    evaluationEmbeddingBlock = `
+
+# EMBEDDED-DISPATCH EVALUATION (overrides the standalone CUTLASS compile/execute steps below)
+These kernels are NOT standalone translation units; each is a dispatch-compatible \`.cuh\` that must be wired into the project at ${PROJECT_ROOT} via the register adapter. Do NOT attempt a standalone \`nvcc\`/CUTLASS compile. For EACH candidate below, run its commands in order, and ALWAYS run the unregister command and confirm removal via list even on build/correctness/benchmark FAILURE or non-improvement — never leave the project dirty.
+
+${planBlocks}
+
+Map per-candidate results into evaluation_results: compilation_success=build succeeded, correctness_passed=test passed, gflops/execution_time derived from the benchmark output. Parse correctness (pass/fail) and latency STRICTLY from the actual test/benchmark command output. Do NOT fabricate numbers; if a value is not present in the output, report it as unavailable rather than guessing.`;
+  }
+
   const evaluationResult = await agent(
-    `Evaluate all composed kernels:
+    `Evaluate all composed kernels:${evaluationEmbeddingBlock}
 
 Kernels to evaluate: ${composedKernels.length}
 Target: ${setupResult.target_architecture}
