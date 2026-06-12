@@ -336,8 +336,13 @@ def main():
 
     r = sub.add_parser("register")
     r.add_argument("--variant", required=True)
-    r.add_argument("--cuh-src", required=True, help="path to the new variant .cuh to copy in")
-    r.add_argument("--ggml-root", required=True, help="path to llama.cpp/ggml")
+    # `--source` / `--project-root` are the generic adapter-contract flag names
+    # (see _substrate/embedded/ADAPTER_CONTRACT.md); `--cuh-src` / `--ggml-root`
+    # are kept as backward-compatible aliases for existing callers.
+    r.add_argument("--cuh-src", "--source", dest="cuh_src", required=True,
+                   help="path to the new variant .cuh to copy in (generic alias: --source)")
+    r.add_argument("--ggml-root", "--project-root", dest="ggml_root", required=True,
+                   help="path to llama.cpp/ggml project root (generic alias: --project-root)")
     r.add_argument("--dkq", type=int, default=256)
     r.add_argument("--dv", type=int, default=256)
     r.add_argument("--cmake-build-dir", default=None,
@@ -346,13 +351,15 @@ def main():
 
     u = sub.add_parser("unregister")
     u.add_argument("--variant", required=True)
-    u.add_argument("--ggml-root", required=True)
+    u.add_argument("--ggml-root", "--project-root", dest="ggml_root", required=True,
+                   help="path to llama.cpp/ggml project root (generic alias: --project-root)")
     u.add_argument("--cmake-build-dir", default=None,
                    help="if set, run `cmake <dir>` after deleting files so the build no longer references phantoms")
     u.set_defaults(func=cmd_unregister)
 
     l = sub.add_parser("list")
-    l.add_argument("--ggml-root", required=True)
+    l.add_argument("--ggml-root", "--project-root", dest="ggml_root", required=True,
+                   help="path to llama.cpp/ggml project root (generic alias: --project-root)")
     l.set_defaults(func=cmd_list)
 
     args = ap.parse_args()
