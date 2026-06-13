@@ -14,6 +14,8 @@ Add a row when you start a driver. Move it to `stable` only after it passes L0--
 |---|---|---|---|---|
 | cuda | `cuda/` | nvidia | experimental | (unassigned) |
 | triton | `triton/` | nvidia | experimental | (unassigned) |
+| rocm | `rocm/` | amd | experimental | (unassigned) |
+| ascend | `ascend/` | huawei | experimental | (unassigned) |
 
 > **Note (P3):** the `cuda` and `triton` `build.sh`/`run.sh`/`profile.sh` are
 > **GPU-untested** -- this repo runs on macOS where `nvcc`/`ncu`/`triton` are absent. What
@@ -171,3 +173,71 @@ regex. The optional `--kernel-name` arg only labels the proton scope.
 | dram_pct / sm_pct | direct ncu counters | device-derived roofline estimate (needs bytes/flops) |
 | occupancy | ncu `sm__warps_active` | not available (always null) |
 | Shared memory | Explicit `__shared__` double-buffering | Compiler-managed via `num_stages` |
+
+---
+
+## ascend -- Ascend C (Huawei NPU, bisheng direct-launch)
+
+| Property | Value |
+|---|---|
+| **Directory** | `_substrate/backends/ascend/` |
+| **Source extension** | `.json` (a MultiKernelBench multi-file submission, NOT a single source) |
+| **Artifact extension** | (empty -- compile is coupled with run inside `eval_single`, JIT-like) |
+| **Hardware vendor** | huawei (extends the SDK vendor enum; `hw_vendor` is descriptive, not a lookup key) |
+| **Compiler** | `bisheng --npu-arch=dav-2201 -xasc -std=c++17` + cmake (`build.sh` does structural preflight; real compile in `run.sh`'s delegate) |
+| **Profiler** | `msprof` via `profile.sh`; degrades to exit 4 (`unknown`) when CANN/NPU absent |
+| **Profiler format** | `msprof-csv` |
+| **Threshold profile** | `ascend` (added to `_substrate/diagnose.py` PROFILES) |
+| **Status** | experimental |
+
+### The submission contract (why source is JSON, not a single file)
+
+The MultiKernelBench `ascendc_direct_launch` backend consumes a **JSON submission** embedding
+several files: `ModelNew.py` (a `nn.Module` whose `forward` delegates ALL compute to the
+compiled NPU op -- an AST anti-cheat scan rejects any reachable `torch`/`F`/`nn` compute op),
+one or more `__global__ __aicore__` Ascend C kernel `.cpp` files, and a `pybind11.cpp`
+exposing `PYBIND11_MODULE(benchmark_ops, ...)`. `idioms.json:impl_requirements` carries this
+contract into the solver prompt; `build.sh` validates it structurally and stages it.
+
+### Build / run / profile coupling
+
+Unlike cuda (where `build.sh` runs `nvcc` and `run.sh` runs the kernel), MultiKernelBench
+couples compile + correctness + NPU-event timing inside `eval_single`. So:
+- **`build.sh`** = structural-contract preflight + staging (artifact = the staged submission JSON).
+- **`run.sh`** = delegates to `python3 eval_single_runner.py -i <submission> -o <op> -l ascendc_direct_launch -r <result>`
+  (needs `--mkb-root`/`--eval-runner`/`$MULTIKERNELBENCH_ROOT`) and maps
+  `{compiled, correctness, performance.mean, cheating}` -> the universal envelope.
+- **`profile.sh`** = best-effort `msprof`; honest `unknown` when CANN/NPU is absent.
+
+### Emitted metric names
+
+`to_evidence.py` delegates to the shared `_evidence_ascend.py` mapper. Because exact msprof
+CSV column identifiers live in the CANN SDK (not this repo) and drift across releases, the
+mapper matches columns by normalized-name alias and applies the null rule strictly:
+
+| Canonical key | msprof source (alias-matched) | Unit |
+|---|---|---|
+| `latency_ms` | aicore/task duration (us/1e3, or ns/1e6 if the column says ns) | milliseconds |
+| `dram_pct` | GM/HBM/MTE bandwidth utilization | 0--100 |
+| `sm_pct` | `max(cube_utilization, vector_utilization)` (AI Core compute util) | 0--100 |
+| `occupancy` | **always null** -- Ascend has no warp-occupancy counter | -- |
+
+Because `occupancy` is never measured, `ascend` declares no `latency_occupancy` capability
+(`capabilities.bottleneck_classes` = `{memory_bound, compute_bound, overhead_bound}`).
+
+### Lang fence and idiom highlights
+
+- `lang_fence`: `json` (the solver wraps the whole submission in one ```json block)
+- `impl_requirements`: the multi-file MultiKernelBench submission (ModelNew.py + `__aicore__`
+  kernel + `PYBIND11_MODULE(benchmark_ops)`), `forward` delegates to the NPU op (anti-cheat)
+- All `method_gate.TABLE` methods supported (`unsupported_methods: []`)
+- Idiom examples: `async_copy_pipeline` -> `TQue<VECIN/VECOUT, PIPELINE_DEPTH>` double buffer,
+  `shared_memory_tiling` -> UB tiling via `TPipe.InitBuffer`, `tensor_core_mma` ->
+  `AscendC::Matmul` on the Cube unit (FRACTAL_NZ), `memory_coalescing` -> `DataCopyPad` +
+  `GetBlockIdx()*blockLength` GM partitioning.
+
+> **Note (P3, same as cuda/triton):** this repo runs on macOS where `bisheng`/`msprof`/
+> `torch_npu` are absent. Verified on macOS: `validate_backend.py` (L0), `build.sh`
+> structural validation on a fixture submission, and `to_evidence.py` on a synthetic msprof
+> CSV via the shared `_evidence_ascend.py` mapper. End-to-end compile/run/profile is deferred
+> to the NPU tier (a real Ascend 910B2 + CANN box).
