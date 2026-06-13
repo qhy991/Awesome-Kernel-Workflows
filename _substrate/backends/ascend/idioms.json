@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "backend_id": "ascend",
+  "lang_fence": "json",
+  "impl_requirements": "Emit ONE ```json fenced block: a single MultiKernelBench AscendC direct-launch submission object with exactly these top-level keys: (1) \"entry\": {\"model\": \"ModelNew.py::ModelNew\"}; (2) \"build\": {\"type\": \"ascendc_direct_launch\"} (optionally module_name/kernel_sources/binding_sources/include_dirs — otherwise inferred); (3) \"sources\": an array of {\"path\", \"content\"} files. The sources MUST include: a) ModelNew.py defining `class ModelNew(nn.Module)` plus `get_init_inputs()`; its `forward` MUST delegate ALL compute to the compiled NPU op (e.g. `import benchmark_ops as _ops; return _ops.<op>(...)`) and MUST NOT call any torch / torch.nn.functional / nn.Module compute op in reachable code (AST anti-cheat will reject it — reshaping/dtype glue only). b) one or more Ascend C kernel .cpp files defining `__global__ __aicore__` kernels (use AscendC::TPipe, AscendC::TQue<QuePosition::VECIN/VECOUT, PIPELINE_DEPTH> double buffering, AscendC::DataCopyPad for GM<->UB transfers, and tiling sized from platform_ascendc UB size + GetCoreNumAiv()), with `extern \"C\"` launch wrappers using the `kernel<<<numBlocks, nullptr, stream>>>` direct-launch form. c) a pybind .cpp containing `PYBIND11_MODULE(benchmark_ops, m)` that acquires the NPU stream via `c10_npu::getCurrentNPUStream()`, dispatches by dtype, and binds the op. Build is `bisheng --npu-arch=dav-2201 -xasc -std=c++17 -fPIC` + cmake into `benchmark_ops*.so`; reference the kernel via a launch header. Do not import the .so at Python import time outside the build dir.",
+  "unsupported_methods": [],
+  "read_metric_guide": "Canonical metrics are lowered from msprof. High dram_pct (MTE / HBM transfer pressure) with low sm_pct (AI Core compute utilization) => memory_bound: the kernel is UB/HBM-bandwidth limited, fix tiling and DataCopy. High sm_pct (AIV/AIC busy) with low dram_pct => compute_bound: vector/cube units are the limit. Both low => overhead_bound: too many tiny direct-launch calls or poor core occupancy (raise numBlocks toward GetCoreNumAiv). occupancy is not measured on Ascend (null) so latency_occupancy is never concluded.",
+  "methods": {
+    "vectorized_load_store": {
+      "idiom": "aligned wide DataCopyPad GM<->UB transfers",
+      "prompt_guidance": "Move full aligned tiles between GlobalTensor and the UB LocalTensor with AscendC::DataCopyPad (DataCopyExtParams) so each transfer is a wide contiguous burst rather than scalar element moves."
+    },
+    "memory_coalescing": {
+      "idiom": "GetBlockIdx()*blockLength GM partitioning + contiguous DataCopy",
+      "prompt_guidance": "Partition the global buffer by `blockLength * AscendC::GetBlockIdx()` so each core streams a contiguous span; keep per-tile offsets contiguous so HBM/MTE transfers stay aligned and coalesced."
+    },
+    "async_copy_pipeline": {
+      "idiom": "TQue<VECIN/VECOUT, PIPELINE_DEPTH> double-buffer + EnQue/DeQue overlap; independent Cube/Vector queues",
+      "prompt_guidance": "Use AscendC::TQue with PIPELINE_DEPTH>=2 and the AllocTensor->DataCopyPad->EnQue / DeQue->compute->EnQue->DataCopyPad pattern so the next tile's MTE copy overlaps the current tile's vector compute. Where both Cube and Vector work exist, give them separate queues so the AIC and AIV pipelines run concurrently."
+    },
+    "shared_memory_tiling": {
+      "idiom": "UB tiling via TPipe.InitBuffer sized from GetCoreMemSize(UB)",
+      "prompt_guidance": "Stage operands into the Unified Buffer with TPipe.InitBuffer; size tileSize from the platform UB size (GetCoreMemSize(CoreMemType::UB) / PIPELINE_DEPTH / buffers) so reused data is read once from HBM and reused from UB."
+    },
+    "l2_cache_reuse": {
+      "idiom": "block iteration to keep hot operands UB/L2 resident",
+      "prompt_guidance": "Order the tile iteration so frequently reused operands stay resident in UB (and the on-chip L2) across iterations, cutting repeated HBM fetches."
+    },
+    "tensor_core_mma": {
+      "idiom": "AscendC::Matmul high-level API on the Cube unit, FRACTAL_NZ operands",
+      "prompt_guidance": "Route the inner GEMM to the Cube unit via the AscendC Matmul high-level API with fp16/bf16 operands laid out in FRACTAL_NZ format, instead of accumulating the matmul on the Vector unit."
+    },
+    "instruction_reduction": {
+      "idiom": "fused AscendC vector ops + unrolled tile loop",
+      "prompt_guidance": "Prefer fused whole-tile vector ops (AscendC::Add/Mul/Axpy over `elementNumPerTile`) over scalar loops, hoist the tiling arithmetic out of the inner loop, and unroll the tile loop to cut issued instructions."
+    },
+    "fast_math_intrinsics": {
+      "idiom": "AscendC vector math in high-performance impl mode",
+      "prompt_guidance": "Where precision tolerance allows, use the high-performance implementation mode of AscendC vector transcendentals (Exp/Ln/Reciprocal/Sqrt) instead of the high-precision path."
+    },
+    "register_tiling": {
+      "idiom": "larger per-core UB tiles for arithmetic intensity",
+      "prompt_guidance": "Increase the per-core tile so each core amortizes the DataCopy over more compute (raise arithmetic intensity), bounded by UB capacity and PIPELINE_DEPTH buffering."
+    },
+    "occupancy_increase": {
+      "idiom": "raise numBlocks toward GetCoreNumAiv() core count",
+      "prompt_guidance": "Compute numBlocks from the live AIV/AIC core count (GetCoreNumAiv) and a minimum-work-per-core floor so every core is busy; under-subscribing the cores leaves the NPU idle."
+    },
+    "block_size_tuning": {
+      "idiom": "tune numBlocks / blockLength / tileSize for the SoC",
+      "prompt_guidance": "Sweep numBlocks (vs core count), blockLength, and tileSize so the tile shape balances UB residency against MTE transfer granularity for this SoC (e.g. Ascend910B2)."
+    },
+    "launch_config_tuning": {
+      "idiom": "tune direct-launch block geometry + tileSize",
+      "prompt_guidance": "Tune the `<<<numBlocks, nullptr, stream>>>` geometry and tileSize together so the launch matches the AI Core count and the per-tile UB budget."
+    },
+    "register_pressure_reduction": {
+      "idiom": "shrink UB buffer count / tile size to fit UB",
+      "prompt_guidance": "If tiles spill the UB, reduce PIPELINE_DEPTH buffers or tileSize, or narrow LocalTensor lifetimes, so the working set fits the Unified Buffer."
+    },
+    "kernel_fusion": {
+      "idiom": "fuse the elementwise epilogue into one __aicore__ kernel",
+      "prompt_guidance": "Compute the elementwise epilogue inside the producing __aicore__ kernel before the final DataCopyPad store, avoiding a second direct-launch over HBM."
+    },
+    "launch_overhead_reduction": {
+      "idiom": "fewer direct-launch calls; more work per block",
+      "prompt_guidance": "Collapse many tiny `<<<>>>` launches into one kernel that loops over more tiles per core, amortizing direct-launch dispatch cost."
+    },
+    "library_fallback_hybrid": {
+      "idiom": "delegate the heavy GEMM to AscendC Matmul / aclnn (NOT torch)",
+      "prompt_guidance": "When a high-level Ascend op dominates, call the AscendC Matmul high-level API (or an aclnn op) from inside the kernel/binding — never a torch op in ModelNew.py, which the anti-cheat AST scan rejects."
+    },
+    "cpu_gpu_overlap": {
+      "idiom": "multi-stream host/NPU overlap",
+      "prompt_guidance": "Split independent work across NPU streams so host-side launch and dependency setup overlap kernel execution on the device."
+    }
+  }
+}

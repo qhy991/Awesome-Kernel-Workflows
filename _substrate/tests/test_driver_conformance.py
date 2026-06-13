@@ -16,6 +16,11 @@ KNOWN_METHODS = {m for methods in method_gate.TABLE.values() for m in methods}
 # perf-counter access — but both lower their evidence onto the same canonical metric keys.
 REAL_DRIVERS = ['cuda', 'triton']
 
+# Non-NVIDIA experimental drivers. They do NOT share the nvidia hw_vendor / threshold profile,
+# so they are excluded from the nvidia-specific assertions above, but they MUST still satisfy
+# every vendor-agnostic L0/idiom invariant. rocm = AMD/HIP; ascend = Huawei NPU (Ascend C).
+NONVIDIA_DRIVERS = ['rocm', 'ascend']
+
 
 def run_validator(driver_dir_abspath):
     """Shell out to validate_backend.py <dir>; return (returncode, parsed_stdout_json)."""
@@ -135,6 +140,79 @@ class TestRealDriversL0Extended(unittest.TestCase):
                 shadow = files & substrate_scripts
                 self.assertFalse(shadow,
                                  msg=f"{driver}: shadows substrate scripts {sorted(shadow)}")
+
+
+class TestNonNvidiaDriversConform(unittest.TestCase):
+    """Vendor-agnostic conformance for the non-NVIDIA experimental drivers (rocm, ascend).
+
+    These must pass every invariant the nvidia drivers do EXCEPT the hw_vendor=='nvidia' /
+    threshold_profile=='nvidia' assertion (which is nvidia-specific by design)."""
+
+    def test_each_nonnvidia_driver_passes_l0(self):
+        for driver in NONVIDIA_DRIVERS:
+            with self.subTest(driver=driver):
+                code, payload = run_validator(os.path.join(BACKENDS, driver))
+                self.assertEqual(code, 0, msg=f"{driver}: exit {code}; payload={payload}")
+                self.assertEqual(payload.get('ok'), True, msg=f"{driver}: payload={payload}")
+                self.assertEqual(payload.get('errors'), [], msg=f"{driver}: payload={payload}")
+
+    def test_every_idiom_method_is_a_real_method_gate_name(self):
+        for driver in NONVIDIA_DRIVERS:
+            with self.subTest(driver=driver):
+                idioms = load_driver_json(driver, 'idioms.json')
+                methods = idioms.get('methods', {})
+                self.assertTrue(methods, msg=f"{driver}: methods is empty")
+                for name in methods:
+                    self.assertIn(name, KNOWN_METHODS, msg=f"{driver}: idiom '{name}' unknown")
+                for name in idioms.get('unsupported_methods', []):
+                    self.assertIn(name, KNOWN_METHODS, msg=f"{driver}: unsupported '{name}' unknown")
+
+    def test_idioms_cover_each_DECLARED_bottleneck_class(self):
+        # Unlike the nvidia drivers (which declare all 4 classes), a non-nvidia driver may
+        # declare a subset (ascend omits latency_occupancy — no occupancy counter). It must
+        # cover a gated method for each class it ACTUALLY declares.
+        for driver in NONVIDIA_DRIVERS:
+            with self.subTest(driver=driver):
+                manifest = load_driver_json(driver, 'manifest.json')
+                declared = manifest.get('capabilities', {}).get('bottleneck_classes', [])
+                self.assertTrue(declared, msg=f"{driver}: no bottleneck_classes declared")
+                named = set(load_driver_json(driver, 'idioms.json').get('methods', {}))
+                for bclass in declared:
+                    if bclass == 'unknown':
+                        continue
+                    gated = set(method_gate.TABLE.get(bclass, []))
+                    self.assertTrue(named & gated,
+                                    msg=f"{driver}: no idiom covers declared class '{bclass}'")
+
+    def test_backend_id_and_fixed_invoke_names(self):
+        for driver in NONVIDIA_DRIVERS:
+            with self.subTest(driver=driver):
+                m = load_driver_json(driver, 'manifest.json')
+                self.assertEqual(m.get('backend_id'), driver, msg=f"{driver}: backend_id != dir")
+                self.assertEqual(load_driver_json(driver, 'idioms.json').get('backend_id'), driver)
+                self.assertEqual(m.get('compiler', {}).get('invoke'), 'build.sh')
+                self.assertEqual(m.get('runner', {}).get('invoke'), 'run.sh')
+                self.assertEqual(m.get('profiler', {}).get('invoke'), 'profile.sh')
+                self.assertEqual(m.get('profiler', {}).get('to_evidence'), 'to_evidence.py')
+                self.assertIn('threshold_profile', m, msg=f"{driver}: threshold_profile required")
+
+    def test_do_not_shadow_substrate_scripts(self):
+        substrate_scripts = {'evidence_schema.py', 'anti_cheat.py', 'diagnose.py',
+                             'method_gate.py', 'memory_store.py', 'verify_insight.py'}
+        for driver in NONVIDIA_DRIVERS:
+            with self.subTest(driver=driver):
+                files = set(os.listdir(os.path.join(BACKENDS, driver)))
+                self.assertFalse(files & substrate_scripts, msg=f"{driver}: shadows substrate")
+
+    def test_ascend_threshold_profile_is_wired_into_diagnose(self):
+        # ascend declares threshold_profile 'ascend'; that key MUST exist in diagnose.PROFILES
+        # (and its to_evidence stamps _vendor='ascend'), else diagnose silently falls back to
+        # nvidia thresholds. (rocm's 'amd_rdna' is a known pre-existing fallback, not asserted.)
+        import diagnose  # noqa: E402
+        m = load_driver_json('ascend', 'manifest.json')
+        self.assertEqual(m.get('threshold_profile'), 'ascend')
+        self.assertIn('ascend', diagnose.PROFILES,
+                      msg="diagnose.PROFILES missing 'ascend' -> bottleneck thresholds fall back to nvidia")
 
 
 if __name__ == '__main__':

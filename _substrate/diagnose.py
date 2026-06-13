@@ -19,6 +19,11 @@ CLASSES = ["memory_bound", "compute_bound", "latency_occupancy", "overhead_bound
 PROFILES = {
     "nvidia": dict(occ_lat=0.40, dram_mem=70, sm_mem=50, sm_comp=70, both_low=40),
     "apple": dict(occ_lat=0.30, dram_mem=65, sm_mem=55, sm_comp=65, both_low=35),
+    # Ascend NPU (msprof): dram_pct=GM/MTE bandwidth, sm_pct=max(cube,vector) AI Core util.
+    # occupancy is never measured (always null) so occ_lat is inert here. Memory-bound when
+    # GM bandwidth is high while compute units are idle; compute-bound when cube/vector are
+    # busy; overhead-bound when both are low (tiny launches / poor core occupancy).
+    "ascend": dict(occ_lat=0.40, dram_mem=70, sm_mem=40, sm_comp=60, both_low=30),
 }
 
 
