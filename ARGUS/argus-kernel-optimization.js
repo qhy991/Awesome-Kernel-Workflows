@@ -64,9 +64,9 @@ function __embeddedEvalPlan(ctx) {
 // --- END embedded-eval substrate ---
 
 const WORKFLOW_SUITABILITY = {
-  supported_languages: ['argus-dsl', 'cuda', 'rocm', 'triton'],
+  supported_languages: ['argus-dsl', 'cuda', 'rocm', 'triton', 'metal'],
   supported_problem_types: ['invariant-guided-kernel-optimization', 'gpu-kernel-optimization'],
-  problem_types: ['invariant-guided GPU kernel optimization', 'DSL/CUDA/Triton kernels with invariant checker'],
+  problem_types: ['invariant-guided GPU kernel optimization', 'DSL/CUDA/Triton/Metal kernels with invariant checker'],
   reason: 'ARGUS depends on invariant-guided validation and GPU kernel lowering; it is unsuitable when invariant/test feedback or a supported backend is absent.',
 }
 

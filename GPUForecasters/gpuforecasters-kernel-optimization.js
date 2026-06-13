@@ -75,10 +75,10 @@ function __embeddedEvalPlan(ctx) {
 // --- END embedded-eval substrate ---
 
 const WORKFLOW_SUITABILITY = {
-  supported_languages: ['cuda'],
-  supported_problem_types: ['cuda-kernel-optimization', 'kernel-search'],
-  problem_types: ['CUDA/GPU kernel search with speedup forecaster', 'PUCT optimization with execute-or-abstain feedback'],
-  reason: 'GPU Forecasters expects GPU speedup evaluator feedback and a CUDA-oriented search/evaluation loop.',
+  supported_languages: ['cuda', 'metal'],
+  supported_problem_types: ['cuda-kernel-optimization', 'gpu-kernel-optimization', 'kernel-search'],
+  problem_types: ['CUDA/GPU/Metal kernel search with speedup forecaster', 'PUCT optimization with execute-or-abstain feedback'],
+  reason: 'GPU Forecasters expects GPU speedup evaluator feedback and a CUDA/Metal-oriented search/evaluation loop.',
 }
 
 function normalizeSuitabilityValue(value) {
