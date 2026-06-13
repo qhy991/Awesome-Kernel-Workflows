@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "backend_id": "metal",
+  "lang_fence": "metal",
+  "impl_requirements": "Emit a complete .metal file with one or more kernel functions. Kernels must use the canonical entry signature (device T* inputs/outputs, constant T& params). Do NOT add host-side Objective-C wrappers or main() — the project build system handles host dispatch.",
+  "unsupported_methods": [
+    "tensor_core_mma",
+    "async_copy_pipeline",
+    "library_fallback_hybrid",
+    "cpu_gpu_overlap",
+    "launch_overhead_reduction"
+  ],
+  "read_metric_guide": "Metal on Apple Silicon uses unified memory (UMA), so dram_pct is always null. Focus on sm_pct (GPU core utilization) when available via GPU trace, or use wall-clock timing-only comparisons. Low threadgroup occupancy on Metal often indicates insufficient threads dispatched or register pressure limiting concurrent threadgroups.",
+  "methods": {
+    "vectorized_load_store": {
+      "idiom": "packed_float4 / packed_half4 vectorized global loads and stores",
+      "prompt_guidance": "Widen memory transactions to 128-bit by using packed_float4 or packed_half4 types so each thread moves 16 bytes per access."
+    },
+    "memory_coalescing": {
+      "idiom": "coalesced 128-bit device memory reads with simdgroup-aligned addressing",
+      "prompt_guidance": "Reorder the thread-to-element mapping so consecutive threads in a simdgroup read consecutive addresses in device memory."
+    },
+    "shared_memory_tiling": {
+      "idiom": "threadgroup shared memory tiling with threadgroup_barrier(mem_flags::mem_threadgroup)",
+      "prompt_guidance": "Stage reused operands into threadgroup memory via threadgroup T* arrays, sync with threadgroup_barrier(mem_flags::mem_threadgroup), then compute from threadgroup memory to cut redundant device traffic."
+    },
+    "block_size_tuning": {
+      "idiom": "sweep threadgroup size (256/512/1024) for the GPU core count",
+      "prompt_guidance": "Try threadgroup sizes that are multiples of the simdgroup size (32) — 256/512/1024 — to balance threadgroup occupancy against per-thread register resources."
+    },
+    "register_pressure_reduction": {
+      "idiom": "scope-narrowing / recompute to reduce per-thread register usage",
+      "prompt_guidance": "Shorten variable lifetimes and prefer recompute over caching to keep per-thread register count low — Metal's threadgroup occupancy drops sharply above register limits."
+    },
+    "instruction_reduction": {
+      "idiom": "strength reduction and loop unrolling via metal::unroll",
+      "prompt_guidance": "Hoist invariants, replace divides/mods with shifts where legal, and annotate inner loops with [[clang::loop_unroll]] for the Metal compiler."
+    },
+    "fast_math_intrinsics": {
+      "idiom": "precise::fast_math / metal::fast::exp / metal::fast::rsqrt",
+      "prompt_guidance": "Where precision tolerance allows, use metal::fast or precise::fast_math namespaced intrinsics (fast::exp, fast::rsqrt) instead of the precise variants."
+    },
+    "compute_encoder_merge": {
+      "idiom": "merge sequential compute encoders into a single kernel with an epilogue",
+      "prompt_guidance": "Avoid multiple MTLComputeCommandEncoder passes by fusing the elementwise epilogue into the producing kernel before the final store."
+    },
+    "threadgroup_memory_reuse": {
+      "idiom": "reuse threadgroup memory across multiple compute stages",
+      "prompt_guidance": "Use the same threadgroup allocation for multiple phases of computation rather than allocating separate buffers per phase."
+    },
+    "simdgroup_shuffle": {
+      "idiom": "simd_shuffle / simd_shuffle_down for intra-simdgroup reductions",
+      "prompt_guidance": "Use simd_shuffle and simd_shuffle_down for warp-level reductions instead of threadgroup barriers, avoiding full-group sync overhead."
+    }
+  }
+}
