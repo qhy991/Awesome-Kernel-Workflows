@@ -1,0 +1,142 @@
+source:
+  paper_title: "AKW design note: Metal-embedded-kernel search for llama.cpp ggml-metal"
+  paper_url: ""
+  paper_venue: "AKW design notes 2026"
+  repo_url: ""
+  commit_or_tag: ""
+  license: "MIT"
+  notes: >
+    Companion to llamacpp-embedded-search (CUDA). Where the CUDA variant targets
+    ggml-cuda dispatches, this workflow targets ggml-metal on Apple Silicon.
+    Each variant is written as a new kernel function, wired into llama.cpp's
+    ggml-metal-ops.cpp dispatch + ggml-metal.metal kernels via the Metal register
+    script, and evaluated by the project's own build/test/bench commands -- gated
+    by an ENV var (KERSOR_VARIANT) so default dispatch is unaffected. After
+    ranking, losing variants are unregistered byte-exact and only the winner is
+    reported.
+
+    Apple Silicon's unified memory (UMA) architecture means profiling is
+    limited to timing-only by default (dram_pct, sm_pct, occupancy are null
+    without MTLCaptureManager), so the optimization loop is primarily
+    latency-driven. The metal backend driver provides honest degradation
+    (diagnose.py yields unknown without measured metrics).
+
+    Two kernel families are supported:
+    - mul_matvec: quantized GEMM (kernel_mul_mv_q4_0/q4_1/q8_0/...), the #1
+      bottleneck in single-batch decode (~57% of time). For batch=1, the GPU
+      achieves only 0.004-0.05 TFLOPS vs ~3 TFLOPS at batch=512 -- a 60-750x gap.
+      Optimization targets: wider per-thread work, threadgroup memory dequant
+      caching, simdgroup reduction, packed vectorized loads.
+    - flash_attn: flash attention (kernel_flash_attn_ext_blk/pad), the #2
+      bottleneck (~25% of decode time). Typical GQA: 8 Q heads / 2 KV heads.
+      Optimization targets: KV head sharing, threadgroup memory tiling, online
+      softmax, simdgroup shuffle, metal::fast::exp.
+
+workflow:
+  name: "llamacpp-metal-embedded-search"
+  description: "Fan-out search across complete new Metal kernel variants embedded in llama.cpp ggml-metal dispatch"
+  when_to_use: >
+    Use when (a) the kernel lives in llama.cpp ggml-metal and cannot be compiled
+    standalone (depends on project headers / MTLComputePipelineState dispatch),
+    AND (b) the bottleneck is structural enough that small in-place patches
+    cannot bridge it -- you need to try genuinely different Metal kernel designs
+    (different threadgroup sizes, threadgroup memory layouts, simdgroup reduction
+    strategies, vectorization widths) and pick the best. Each subagent writes a
+    complete new kernel function; the workflow handles dispatch registration,
+    project build, correctness, benchmark, unregister.
+  output_filename: "llamacpp-metal-embedded-search.js"
+  directory: "LlamacppEmbeddedSearch/"
+
+inputs:
+  supports_existing_kernel: true
+  supports_problem_definition: false
+  required_one_of:
+    - reference_metal
+  generation:
+    enabled: false
+  required_args:
+    - ggml_root
+    - register_script
+    - build_command
+    - test_command
+    - benchmark_command
+    - reference_metal
+    - kernel_family
+  optional_args:
+    - n_variants
+    - max_rounds
+    - target_speedup
+    - correctness_regex
+    - latency_regex
+    - latency_unit
+    - tolerance
+    - op_description
+    - handoff_context
+    - workload_axes
+    - variants_dir
+    - exp_dir
+    - backend_dir
+
+method:
+  category: "fan_out_search"
+  core_insight: >
+    Same fan-out structure as the CUDA variant: each candidate kernel is a brand
+    new kernel function. N proposals are drafted in parallel by N subagents, then
+    evaluated serially (register -> build -> test -> bench -> unregister). The
+    key difference on Metal is that the kernel function is appended to
+    ggml-metal.metal and the ENV gate is inserted into ggml-metal-ops.cpp.
+    Supports two kernel families: mul_matvec (quantized GEMM, bottleneck #1) and
+    flash_attn (bottleneck #2), each with family-specific optimization guidance.
+  feedback_signal:
+    type: throughput_delta
+    description: >
+      aggregate_latency parsed out of the project benchmark stdout (geomean
+      across workload rows when multiple are reported), compared to baseline
+      latency measured with all variants unregistered. Profiling is timing-only
+      on Metal (no NCU equivalent).
+    tool: "project benchmark_command (verbatim, with KERSOR_VARIANT=<name> prefix)"
+    higher_is_better: false
+
+topology:
+  type: fan_out_then_serial_eval
+  iterative:
+    iterations_arg: "max_rounds"
+    convergence_condition: "bestSpeedup >= target_speedup"
+    mutable_state:
+      - bestSpeedup
+      - bestLatency
+      - bestVariantName
+      - bestMetalPath
+      - history
+
+backends: ["metal"]
+fidelity_boundary: "strict_high_fidelity"
+
+execution:
+  parallelism: "N parallel proposals per round; SERIAL register/build/test/bench/unregister per variant"
+  proposal_strategy: "N independent subagents each author a complete new kernel function"
+  revert_strategy: >
+    Per-variant: unregister on any failure (build/correctness/bench) and on
+    non-improving variants. Final winner is also unregistered before report --
+    the caller (KerSor session) decides whether to re-register the kept variant.
+    ggml-metal-ops.cpp and ggml-metal.metal always return to byte-exact pristine
+    when the run ends.
+
+grounding:
+  enforced: true
+  contract: "inlined GROUNDING_INSTRUCTION (mirrors _substrate/grounding.js)"
+  rationale: >
+    Every numeric (build duration, correctness PASS/FAIL, aggregate_latency) is
+    keyed to a real Bash invocation. Subagents return grounded=false when a
+    command fails or a tool is missing, instead of fabricating a value.
+
+outputs:
+  speedup_field: "speedup"
+  best_kernel_field: "best_kernel_code"
+  history_field: "history"
+  side_effects:
+    - "Writes one .metal per drafted variant into variants_dir (or exp_dir/variants/)"
+    - "Temporarily mutates ggml/src/ggml-metal/ggml-metal-ops.cpp during evaluation (markered ENV gate insertions)"
+    - "Temporarily appends variant kernel functions to ggml/src/ggml-metal/ggml-metal.metal (markered insertions)"
+    - "Copies variant .metal files into ggml/src/ggml-metal/; deletes them on unregister"
+    - "Restores both ggml-metal-ops.cpp and ggml-metal.metal to byte-exact pristine state at run end"

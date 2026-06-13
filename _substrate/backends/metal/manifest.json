@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "backend_id": "metal",
+  "display_name": "Metal Shading Language (Apple, xcrun)",
+  "source_ext": ".metal",
+  "aux_ext": [".h", ".mm"],
+  "artifact_ext": ".metallib",
+  "hw_vendor": "apple",
+  "threshold_profile": "apple",
+  "compiler": { "name": "xcrun metal", "invoke": "build.sh" },
+  "runner": { "invoke": "run.sh" },
+  "profiler": {
+    "name": "metal-capture",
+    "invoke": "profile.sh",
+    "format": "metal-csv",
+    "to_evidence": "to_evidence.py"
+  },
+  "capabilities": {
+    "metrics": { "latency_ms": true, "dram_pct": false, "sm_pct": false, "occupancy": false },
+    "bottleneck_classes": ["memory_bound", "compute_bound", "latency_occupancy", "overhead_bound"],
+    "problem_types": ["kernel-optimization", "kernel-generation"],
+    "precisions": ["fp32", "fp16"]
+  },
+  "requires_tools": ["xcrun", "python3"],
+  "optional_tools": ["metallib", "xcodebuild"],
+  "idioms": "idioms.json",
+  "status": "experimental"
+}
