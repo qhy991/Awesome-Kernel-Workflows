@@ -64,9 +64,9 @@ function __embeddedEvalPlan(ctx) {
 // --- END embedded-eval substrate ---
 
 const WORKFLOW_SUITABILITY = {
-  supported_languages: ['cuda'],
-  supported_problem_types: ['cuda-kernel-generation', 'cuda-kernel-optimization'],
-  problem_types: ['PyTorch model/operator to custom CUDA ops', 'CUDA inference-time profile/implement/verify/refine loop'],
+  supported_languages: ['cuda', 'metal'],
+  supported_problem_types: ['cuda-kernel-generation', 'cuda-kernel-optimization', 'gpu-kernel-optimization'],
+  problem_types: ['PyTorch model/operator to custom CUDA/Metal ops', 'GPU inference-time profile/implement/verify/refine loop'],
   reason: 'CUDA Agent in this repo targets CUDA custom operators and CUDA profiling/evaluation feedback.',
 }
 

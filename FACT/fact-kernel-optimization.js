@@ -65,9 +65,9 @@ function __embeddedEvalPlan(ctx) {
 // --- END embedded-eval substrate ---
 
 const WORKFLOW_SUITABILITY = {
-  supported_languages: ['cutlass', 'cuda', 'cpp'],
-  supported_problem_types: ['cutlass-pattern-synthesis', 'cutlass-gemm-optimization'],
-  problem_types: ['CUTLASS compositional pattern synthesis', 'pattern discovery/realization/composition for CUDA C++ kernels'],
+  supported_languages: ['cutlass', 'cuda', 'cpp', 'metal'],
+  supported_problem_types: ['cutlass-pattern-synthesis', 'cutlass-gemm-optimization', 'gpu-kernel-optimization'],
+  problem_types: ['CUTLASS compositional pattern synthesis', 'pattern discovery/realization/composition for CUDA C++/Metal kernels'],
   reason: 'FACT is tied to CUTLASS CUDA C++ pattern synthesis and ablation feedback.',
 }
 
