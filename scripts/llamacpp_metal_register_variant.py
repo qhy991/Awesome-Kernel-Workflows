@@ -52,24 +52,31 @@ MARKER_END   = "// <<< KERSOR_VARIANT_END {name} >>>"
 # gate right after the opening brace and local variable declarations.
 ANCHOR_MUL_MAT_FN = "int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {"
 
-# Anchor: inside the final else block that dispatches to kernel_mul_mv_q4_0_f32.
-# This is the path for ne11=1 (batch-1 decode) — the primary bottleneck.
-# We insert the ENV gate right after the pipeline is retrieved but before encoding.
+# Anchor: right before the "// find the break-even point" comment that starts the dispatch logic.
+# We insert the KERSOR_VARIANT gate here, before the ext-mv/mm/mv chain.
+# When the variant is active, we compile the variant pipeline, set up mul_mv args,
+# and dispatch directly — returning 1 to skip the normal if-else chain.
 ANCHOR_MUL_MAT_GATE = (
-    'auto pipeline = ggml_metal_library_get_pipeline_mul_mv(lib, op);'
+    "// find the break-even point where the matrix-matrix kernel becomes more efficient compared"
 )
 
-# Second anchor: for variants that replace the ext-mv path (small-batch mat-mv).
+# Ext-mv pipeline anchor (used as fallback for gate placement)
 ANCHOR_MUL_MAT_EXT_GATE = (
-    "// find the break-even point where the matrix-matrix kernel becomes more efficient compared"
+    'auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op, nsg, nxpsg, r1ptg);'
+)
+
+# Fallback mv pipeline anchor
+ANCHOR_MUL_MAT_MV_GATE = (
+    'auto pipeline = ggml_metal_library_get_pipeline_mul_mv(lib, op);'
 )
 
 # --- flash_attn anchors ---
 ANCHOR_FLASH_ATTN_FN = "int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {"
 
-# Anchor: right before the "if (ggml_metal_op_flash_attn_ext_use_vec(op))" check
+# Anchor: right before the actual dispatch branch for non-vec flash attn path.
+# The "if (!...)" line is unique (4 matches for "if (...)", 1 for "if (!...)")
 ANCHOR_FLASH_ATTN_GATE = (
-    "if (ggml_metal_op_flash_attn_ext_use_vec(op))"
+    "if (!ggml_metal_op_flash_attn_ext_use_vec(op))"
 )
 
 # ==============================================================================
@@ -124,6 +131,7 @@ def _get_anchors(kernel_family: str) -> dict:
             "fn_anchor": ANCHOR_MUL_MAT_FN,
             "gate_anchor": ANCHOR_MUL_MAT_GATE,
             "gate_anchor_ext": ANCHOR_MUL_MAT_EXT_GATE,
+            "gate_anchor_ext_fallback": ANCHOR_MUL_MAT_MV_GATE,
             "dispatch_fn": "ggml_metal_op_mul_mat",
             "kernel_prefix": "kernel_mul_mv",
             "pipeline_func": "ggml_metal_library_get_pipeline_mul_mv_ext",
@@ -185,29 +193,54 @@ def cmd_register(args):
     #
     # For flash_attn: the variant kernel replaces kernel_flash_attn_ext_*.
 
-    # Gate for the final else block (batch=1 path). Inserted after pipeline is retrieved,
-    # the gate overrides the pipeline when KERSOR_VARIANT is set.
-    # The generic compile_pipeline returns nr0/nsg=0, so we must set these explicitly
-    # to match what the original pipeline would have had.
+    # Gate inserted BEFORE the comment anchor (top of dispatch chain).
+    # When KERSOR_VARIANT is set, we compile the variant pipeline, set up mul_mv args,
+    # and dispatch directly — returning 1 to skip the normal ext-mv/mm/mv chain.
+    # The variant kernel uses ggml_metal_kargs_mul_mv (same as the fallback mv path).
     gate_block = (
         MARKER_BEGIN.format(name=name) + "\n"
-        f"        const char * kersor_variant = getenv(\"KERSOR_VARIANT\");\n"
-        f"        if (kersor_variant && strcmp(kersor_variant, \"{name}\") == 0) {{\n"
-        f"            pipeline = ggml_metal_library_compile_pipeline(lib, \"kernel_{name}\", \"kernel_{name}\", ggml_metal_cv_init());\n"
-        f"            // compile_pipeline does not set nr0/nsg — set them explicitly\n"
-        f"            pipeline.nr0 = 4;\n"
-        f"            pipeline.nsg = 2;\n"
-        f"            pipeline.nr1 = 4;\n"
-        f"            pipeline.smem = 0;\n"
+        f"    const char * kersor_variant = getenv(\"KERSOR_VARIANT\");\n"
+        f"    if (kersor_variant && strcmp(kersor_variant, \"{name}\") == 0) {{\n"
+        f"        auto pipeline = ggml_metal_library_compile_pipeline(lib, \"kernel_{name}\", \"kernel_{name}\", ggml_metal_cv_init());\n"
+        f"        pipeline.nr0 = 4;\n"
+        f"        pipeline.nsg = 2;\n"
+        f"        pipeline.nr1 = 4;\n"
+        f"        pipeline.smem = 0;\n"
+        f"        const int nr0 = pipeline.nr0;\n"
+        f"        const int nr1 = pipeline.nr1;\n"
+        f"        const int nsg = pipeline.nsg;\n"
+        f"        const size_t smem = pipeline.smem;\n"
+        f"        ggml_metal_kargs_mul_mv args = {{\n"
+        f"            ne00, ne01, ne02, nb00, nb01, nb02, nb03,\n"
+        f"            ne10, ne11, ne12, nb10, nb11, nb12, nb13,\n"
+        f"            ne0, ne1, nr0, r2, r3,\n"
+        f"        }};\n"
+        f"        ggml_metal_encoder_set_pipeline(enc, pipeline);\n"
+        f"        ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);\n"
+        f"        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);\n"
+        f"        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);\n"
+        f"        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);\n"
+        f"        ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);\n"
+        f"        if (op->src[0]->type == GGML_TYPE_F32 ||\n"
+        f"            op->src[0]->type == GGML_TYPE_F16 ||\n"
+        f"            op->src[0]->type == GGML_TYPE_BF16 ||\n"
+        f"            op->src[0]->type == GGML_TYPE_Q8_0) {{\n"
+        f"            ggml_metal_encoder_dispatch_threadgroups(enc, ((ne01 + nr0 - 1)/(nr0)), ((ne11 + nr1 - 1)/nr1), ne12*ne13, 32, nsg, 1);\n"
+        f"        }} else {{\n"
+        f"            ggml_metal_encoder_dispatch_threadgroups(enc, ((ne01 + nr0*nsg - 1)/(nr0*nsg)), ((ne11 + nr1 - 1)/nr1), ne12*ne13, 32, nsg, 1);\n"
         f"        }}\n"
+        f"        return 1;\n"
+        f"    }}\n"
         + MARKER_END.format(name=name) + "\n"
     )
 
-    # Insert the gate block right before the gate_anchor line
+    # Insert the gate block right before the gate_anchor line.
+    # Try primary anchor first, then ext-mv anchor, then ext-mv fallback.
     if anchors["gate_anchor"] not in dispatch_text:
-        # Try the ext-mv gate anchor as fallback
         if anchors.get("gate_anchor_ext") and anchors["gate_anchor_ext"] in dispatch_text:
             anchors["gate_anchor"] = anchors["gate_anchor_ext"]
+        elif anchors.get("gate_anchor_ext_fallback") and anchors["gate_anchor_ext_fallback"] in dispatch_text:
+            anchors["gate_anchor"] = anchors["gate_anchor_ext_fallback"]
         else:
             sys.exit(
                 f"ERROR: gate anchor not found in {dispatch_file}.\n"
