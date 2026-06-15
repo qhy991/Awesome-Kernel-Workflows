@@ -1,0 +1,30 @@
+schema_version: "1.1"
+name: kernelfoundry-kernel-optimization
+entrypoint: kernelfoundry-kernel-optimization.js
+
+backend:
+  portability: clean
+  matrix_eligible: true
+  method_supported_backends: any
+  supported: [cuda, triton]
+  default: cuda
+  notes: >
+    Tier per spec §7.2 (clean, matrix-eligible). Legacy WORKFLOW_SUITABILITY
+    =['sycl','cuda','triton']; SYCL is an output language with no registered
+    driver — supported lists only backends with registered drivers under
+    _substrate/backends/. SYCL path requires args.backend_dir pointing to a
+    user-provided driver. kernelfoundry-triton-dryrun.test.js contract-tests
+    the triton driver path.
+
+source:
+  paper_title: "Kernel Foundry: Evolutionary MAP-Elites Quality-Diversity Search for GPU Kernels"
+  paper_url: "https://arxiv.org/abs/2603.12440"
+  paper_venue: "arXiv 2026 (Intel)"
+  notes: "clean; full phase spec deferred."
+
+workflow:
+  name: kernelfoundry-kernel-optimization
+  description: "Evolutionary MAP-Elites quality-diversity search with meta-prompt evolution and templated parameter tuning (KernelFoundry methodology)"
+  when_to_use: "When generating GPU kernels (SYCL/CUDA/Triton) from PyTorch operator specs and you need diverse, high-quality solutions across multiple optimization strategies. Prevents mode collapse via behavioral-descriptor archive. Best for KernelBench-style tasks, custom operators, and cross-platform (Intel/NVIDIA) kernel generation."
+  output_filename: "kernelfoundry-kernel-optimization.js"
+  directory: "KernelFoundry/"
