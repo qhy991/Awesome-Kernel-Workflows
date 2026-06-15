@@ -1,0 +1,32 @@
+schema_version: "1.1"
+name: accelopt-kernel-optimization
+entrypoint: accelopt-kernel-optimization.js
+
+backend:
+  portability: vendor_locked
+  matrix_eligible: partial
+  intrinsic_to: NVIDIA NCU
+  method_supported_backends: [cuda, triton]
+  supported: [cuda, triton]
+  default: cuda
+  requires_capability:
+    metrics: [dram_pct, sm_pct]
+  notes: >
+    Tier per spec §7.2 (vendor_locked, intrinsic to NCU). User review 6/15
+    argues method is clean (CUDA-idiom residue is an implementation issue,
+    not a method constraint) — see tier-revision-proposal.md. Legacy
+    WORKFLOW_SUITABILITY=['cuda','triton']; accelopt-triton-dryrun.test.js
+    contract-tests the driver path.
+
+source:
+  paper_title: "AccelOpt: Accelerating Kernel Optimization via Self-Improving LLM Agents"
+  paper_url: "https://arxiv.org/abs/2511.15915"
+  paper_venue: "MLSys 2026"
+  notes: "vendor_locked; full phase spec deferred."
+
+workflow:
+  name: accelopt-kernel-optimization
+  description: "Self-improving kernel optimization loop with profiler-driven evidence (AccelOpt methodology; NCU on the cuda backend)"
+  when_to_use: "When you need to iteratively optimize a GPU kernel through plan-execute-profile-learn cycles. Uses the backend driver"
+  output_filename: "accelopt-kernel-optimization.js"
+  directory: "AccelOpt/"

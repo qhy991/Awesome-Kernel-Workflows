@@ -1,0 +1,28 @@
+schema_version: "1.1"
+name: gpuforecasters-kernel-optimization
+entrypoint: gpuforecasters-kernel-optimization.js
+
+backend:
+  portability: vendor_locked
+  matrix_eligible: partial
+  intrinsic_to: NVIDIA NCU
+  method_supported_backends: [cuda]
+  supported: [cuda]
+  default: cuda
+  requires_capability:
+    metrics: [dram_pct, sm_pct]
+  notes: >
+    Tier per spec §7.2 (vendor_locked, intrinsic to NCU). Legacy
+    WORKFLOW_SUITABILITY=['cuda'].
+
+source:
+  paper_title: "GPU Forecasters: Learned Speedup Forecasting for Kernel Optimization"
+  paper_url: ""
+  notes: "vendor_locked; full phase spec deferred."
+
+workflow:
+  name: gpuforecasters-kernel-optimization
+  description: "Kernel optimization with learned speedup forecasting and PUCT search"
+  when_to_use: "Use for kernel optimization guided by learned performance forecasting models"
+  output_filename: "gpuforecasters-kernel-optimization.js"
+  directory: "GPUForecasters/"

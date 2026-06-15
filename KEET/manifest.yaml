@@ -1,0 +1,30 @@
+schema_version: "1.1"
+name: keet-performance-explanation
+entrypoint: keet-performance-explanation.js
+
+backend:
+  portability: vendor_locked
+  matrix_eligible: partial
+  intrinsic_to: NVIDIA NCU
+  method_supported_backends: [cuda]
+  supported: [cuda]
+  default: cuda
+  requires_capability:
+    metrics: [dram_pct, sm_pct]
+  notes: >
+    Tier per spec §7.2 (vendor_locked, intrinsic to NCU). Method is a
+    single-pass explanation pipeline, not an optimization loop. Legacy
+    WORKFLOW_SUITABILITY=['cuda'].
+
+source:
+  paper_title: "KEET: Kernel Performance Explanation via LLM-Agent Pipeline"
+  paper_url: "https://arxiv.org/abs/2605.04467"
+  paper_venue: "arXiv 2026 (UMD/NVIDIA/LLNL)"
+  notes: "vendor_locked; full phase spec deferred."
+
+workflow:
+  name: keet-performance-explanation
+  description: "LLM-agent pipeline for interpreting NCU profiles into actionable kernel performance explanations (KEET methodology)"
+  when_to_use: "When you need to understand WHY a CUDA kernel performs the way it does. Produces a natural language explanation report from NCU profiles + source code, identifying bottlenecks and suggesting specific code changes. Use as a standalone analysis tool, or as a pre-step to feed optimization context into downstream tasks."
+  output_filename: "keet-performance-explanation.js"
+  directory: "KEET/"
