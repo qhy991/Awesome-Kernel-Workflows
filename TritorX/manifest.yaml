@@ -1,0 +1,29 @@
+schema_version: "1.1"
+name: tritorx-operator-generation
+entrypoint: tritorx-operator-generation.js
+
+backend:
+  portability: vendor_locked
+  matrix_eligible: false
+  intrinsic_to: Triton dialect + custom linter
+  method_supported_backends: [triton]
+  supported: [triton]
+  default: triton
+  notes: >
+    Tier per spec §7.2 (vendor_locked-single, Triton dialect + custom
+    linter). Method targets ASIC/NPU platforms via Triton as a compilation
+    frontend; correctness-first, not performance. Legacy
+    WORKFLOW_SUITABILITY=['triton'].
+
+source:
+  paper_title: "TritorX: FSM-based Agentic Generation of Triton ATen Kernels for Emerging Accelerators"
+  paper_url: "https://arxiv.org/abs/2512.10977"
+  paper_venue: "arXiv 2025 (Meta)"
+  notes: "vendor_locked; full phase spec deferred."
+
+workflow:
+  name: tritorx-operator-generation
+  description: "FSM-based agentic generation of Triton ATen kernels for emerging accelerator platforms with linter-driven feedback (TritorX methodology)"
+  when_to_use: "When generating functionally correct Triton kernel + wrapper pairs for an entire PyTorch ATen operator set on a new accelerator platform (ASIC/NPU). Prioritizes correctness and coverage over performance. Uses a finite state machine with custom linter, JIT compilation, and OpInfo test harness for iterative refinement."
+  output_filename: "tritorx-operator-generation.js"
+  directory: "TritorX/"

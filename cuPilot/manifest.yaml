@@ -1,0 +1,29 @@
+schema_version: "1.1"
+name: cupilot-kernel-optimization
+entrypoint: cupilot-kernel-optimization.js
+
+backend:
+  portability: vendor_locked
+  matrix_eligible: partial
+  intrinsic_to: NVIDIA NCU
+  method_supported_backends: [cuda]
+  supported: [cuda]
+  default: cuda
+  requires_capability:
+    metrics: [dram_pct, sm_pct]
+  notes: >
+    Tier per spec §7.2 (vendor_locked, intrinsic to NCU). Legacy
+    WORKFLOW_SUITABILITY=['cuda'].
+
+source:
+  paper_title: "cuPilot: Evolutionary Multi-Agent GPU Kernel Optimization via Roofline-Guided Strategies"
+  paper_url: "https://arxiv.org/abs/2512.16465"
+  paper_venue: "arXiv 2025 (SEU/Tsinghua)"
+  notes: "vendor_locked; full phase spec deferred."
+
+workflow:
+  name: cupilot-kernel-optimization
+  description: "Strategy-coordinated evolutionary multi-agent CUDA kernel optimization with roofline-guided prompting (cuPilot methodology)"
+  when_to_use: "When evolving CUDA kernels through multi-generation optimization that requires sophisticated strategies (tensor cores, tiling, pipelining, memory swizzling). Uses strategy as an intermediate semantic representation to decouple evolutionary crossover from low-level code, with roofline model guidance and RAG-based strategy initialization."
+  output_filename: "cupilot-kernel-optimization.js"
+  directory: "cuPilot/"
