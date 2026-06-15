@@ -20,6 +20,9 @@ backend:
   # buildDebugContext, and (iii) WORKFLOW_SUITABILITY literal — all
   # driver-gated under args.backend_dir. No vendor-bound mode args; no
   # intersectional guard required.
+  notes: >
+    Legacy WORKFLOW_SUITABILITY=['cuda']. Driver-path supported=[cuda, triton].
+    triton-dryrun.test.js contract-tests the driver path.
 
 source:
   paper_title: "STARK: Strategic Team of Agents for Refining Kernels"

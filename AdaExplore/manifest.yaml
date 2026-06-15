@@ -15,3 +15,11 @@ backend:
   method_supported_backends: any
   supported: [cuda, triton]
   default: cuda
+  # Legacy path (no backend_dir): .js WORKFLOW_SUITABILITY accepts only
+  # ['triton'] with default triton. Manifest default cuda reflects driver
+  # capability; the default mismatch (cuda vs triton) is a known divergence
+  # between driver and legacy paths — see B2 in design spec.
+  notes: >
+    Legacy WORKFLOW_SUITABILITY=['triton'] (default triton). Driver-path
+    supported=[cuda, triton] (default cuda). The default mismatch is a
+    known divergence; triton-dryrun.test.js contract-tests the driver path.

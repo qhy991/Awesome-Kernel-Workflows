@@ -13,6 +13,11 @@ backend:
   method_supported_backends: any
   supported: [cuda, triton]
   default: triton
+  # Legacy path (no backend_dir): .js WORKFLOW_SUITABILITY accepts only
+  # ['triton']. cuda-dryrun.test.js contract-tests the cuda driver path.
+  notes: >
+    Legacy WORKFLOW_SUITABILITY=['triton']. Driver-path supported=[cuda, triton].
+    cuda-dryrun.test.js contract-tests the cuda driver path.
 
 source:
   paper_title: "KernelAgent: Multi-Agent GPU Kernel Synthesis with Deep Agents"

@@ -18,6 +18,11 @@ backend:
   # Note: integration_mode='sglang' is vendor-locked (NVIDIA + sglang);
   # driver path throws if integration_mode='sglang' combined with non-cuda
   # backend_dir. Matrix-smoke (P5e) exercises integration_mode='standalone'.
+  # Notes: legacy WORKFLOW_SUITABILITY=['cuda']; driver-path supported=
+  # [cuda, triton]. triton-dryrun.test.js contract-tests the driver path.
+  notes: >
+    Legacy WORKFLOW_SUITABILITY=['cuda']. Driver-path supported=[cuda, triton].
+    integration_mode='sglang' is NVIDIA-only (guard throws on non-cuda).
 
 source:
   paper_title: "Astra: A Multi-Agent System for GPU Kernel Performance Optimization"
