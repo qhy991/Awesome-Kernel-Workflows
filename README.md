@@ -136,37 +136,39 @@ Workflow files follow Claude Code conventions: export `meta` (name, description,
 
 ## Workflow suitability
 
-Every top-level workflow declares `WORKFLOW_SUITABILITY` after `meta`. If you explicitly pass an unsupported `args.language` or `args.problem_type`, the workflow fails before doing any work and reports the supported values plus the reason. The check is deliberately conservative: workflows do not infer language or problem type from natural-language `problem_definition`.
+Every top-level workflow declares its backend capability in `<Workflow>/manifest.yaml` (the source of truth). The table below shows the **driver-path capability** — the backend(s) the workflow supports when invoked with `args.backend` + `args.backend_dir`. When invoked without a driver directory (legacy path), the `.js` `WORKFLOW_SUITABILITY` guard may accept a narrower subset; see each workflow's `manifest.yaml` `notes` field for legacy/driver differences. The check is deliberately conservative: workflows do not infer language or problem type from natural-language `problem_definition`.
 
 | Workflow | Supported language/backend | Supported `problem_type` values | Good fit | Avoid when |
 |----------|----------------------------|---------------------------------|----------|------------|
-| [AccelOpt](AccelOpt/) | CUDA | `cuda-kernel-optimization`, `cuda-kernel-generation` | Existing CUDA kernels, or CUDA seed generation followed by NCU/benchmark-driven optimization | Triton/SYCL/XPU tasks or missing benchmark/profile contract |
-| [KEET](KEET/) | CUDA | `performance-explanation` | Explaining CUDA source plus Nsight Compute profile evidence | Kernel generation or optimization without profile artifacts |
-| [ARGUS](ARGUS/) | Argus DSL, CUDA, ROCm, Triton | `invariant-guided-kernel-optimization`, `gpu-kernel-optimization` | GPU kernel optimization with invariant checker/test feedback | Tasks without invariant or validation evidence |
-| [AKO4X](AKO4X/) | Triton, CUDA, CuTe DSL, TileLang, C++, PyTorch | `gpu-kernel-optimization`, `kernel-generation` | Multi-round benchmark-driven GPU kernel optimization across supported DSLs | Non-kernel application code or unsupported backend toolchains |
-| [KDA](KDA/) | CUDA | `cuda-kernel-optimization`, `cuda-kernel-generation` | Evidence-driven CUDA implementation, validation, and optimization loops | Non-CUDA backends until the KDA skill flow is generalized |
-| [K-Search](KSearch/) | Triton, CUDA, Python | `gpu-kernel-optimization`, `kernel-search` | World-model tree search with an evaluator/benchmark contract | Tasks without executable evaluator feedback |
-| [AdaExplore](AdaExplore/) | Triton | `triton-kernel-optimization`, `triton-kernel-generation` | PyTorch operator spec to Triton using MCTS and failure memory | Direct CUDA/CUTLASS/SYCL optimization |
-| [KernelFoundry](KernelFoundry/) | SYCL, CUDA, Triton | `gpu-kernel-optimization`, `kernel-generation`, `kernel-search` | MAP-Elites quality-diversity search with descriptor/archive feedback | Single deterministic patch workflows without archive state |
-| [CUDA Agent](CUDAAgent/) | CUDA | `cuda-kernel-generation`, `cuda-kernel-optimization` | PyTorch model/operator to custom CUDA ops and bindings | Triton/SYCL/CUTLASS-only tasks |
-| [cuPilot](cuPilot/) | CUDA | `cuda-kernel-optimization` | Strategy-level CUDA evolution with roofline/profiler evidence | Non-CUDA kernels |
-| [TritorX](TritorX/) | Triton | `aten-triton-operator-generation`, `operator-generation` | ATen/Triton operator coverage generation and compile/lint/test loops | Performance-first CUDA tuning |
-| [KernelBand](KernelBand/) | Triton, CUDA | `gpu-kernel-optimization`, `kernel-search` | Bandit-guided search using hardware signatures and profiling | Backends without comparable profiling/evaluator evidence |
-| [KernelAgent](KernelAgent/) | Triton | `triton-kernel-generation`, `operator-generation` | Triton synthesis with PyTorch-style verification harnesses | CUDA/C++/CUTLASS kernels |
-| [STARK](STARK/) | CUDA | `cuda-kernel-optimization`, `kernel-search` | CUDA tree-search refinement with multi-agent planning/debugging | Non-CUDA backends until code-context adapters exist |
-| [ReGraphT](ReGraphT/) | CUDA | `cuda-kernel-optimization`, `kernel-search` | CUDA reasoning graph search and Monte Carlo graph search | Non-CUDA optimization traces |
-| [Astra](Astra/) | CUDA | `cuda-kernel-optimization` | Existing production CUDA/PyBind kernels with tests and profiling | From-scratch Triton/SYCL generation |
-| [CUDA-LLM](CUDALLM/) | CUDA | `cuda-kernel-generation`, `cuda-kernel-optimization` | CUDA feature search/reinforcement from task specs | Non-CUDA output languages |
-| [CutlassGEMM](CutlassGEMM/) | CUTLASS, CUDA, C++ | `cutlass-gemm-optimization` | CUTLASS GEMM/SOL-ExecBench dispatch tuning | General elementwise/attention kernels outside CUTLASS GEMM |
-| [ArchAgent](ArchAgent/) | C++ | `cache-policy-search` | ChampSim-style CPU cache replacement policy search | GPU kernel optimization |
-| [FACT](FACT/) | CUTLASS, CUDA, C++ | `cutlass-pattern-synthesis`, `cutlass-gemm-optimization` | CUTLASS pattern discovery, realization, composition, and ablation | Standalone Triton/SYCL kernels |
-| [GPU Forecasters](GPUForecasters/) | CUDA | `cuda-kernel-optimization`, `kernel-search` | CUDA/GPU search with speedup forecaster and execute/abstain feedback | Tasks without GPU execution or forecast calibration |
-| [KernelBlaster](KernelBlaster/) | CUDA | `cuda-kernel-optimization` | NCU elapsed-cycle CUDA optimization with persistent memory | Non-CUDA backends |
-| [KernelFoundryDx](KernelFoundryDx/) | Triton | `triton-kernel-optimization`, `triton-kernel-generation` | PyTorch reference to Triton multi-island evolution | CUDA/CUTLASS/SYCL kernels |
-| [KernelSkill](KernelSkill/) | CUDA | `cuda-kernel-optimization`, `cuda-kernel-generation` | CUDA custom kernels from PyTorch reference with memory/profiler guidance | Triton/SYCL/Metal tasks |
-| [StitchCUDA](StitchCUDA/) | CUDA | `cuda-kernel-generation`, `cuda-kernel-optimization` | Planner/Coder/Verifier CUDA synthesis and replanning | Non-CUDA backends |
-| [Xe-Forge](Xe-Forge/) | Triton, SYCL, Intel XPU | `xpu-kernel-optimization`, `triton-kernel-optimization` | Intel XPU CoVeR staged refinement | NVIDIA CUDA-only tuning |
-| [Generalist](Generalist/) | CUDA | `cuda-kernel-generation`, `cuda-kernel-optimization` | CUDA benchmark-driven default solver substrate | Backend-neutral solving; not generalized yet |
+| [AccelOpt](AccelOpt/) | CUDA (default) · Triton via driver (vendor-locked: ncu) | `cuda-kernel-optimization`, `cuda-kernel-generation` | Existing CUDA kernels, or CUDA seed generation followed by NCU/benchmark-driven optimization | Triton/SYCL/XPU tasks or missing benchmark/profile contract |
+| [KEET](KEET/) | CUDA (vendor-locked: ncu) | `performance-explanation` | Explaining CUDA source plus Nsight Compute profile evidence | Kernel generation or optimization without profile artifacts |
+| [ARGUS](ARGUS/) | ROCm/CUDA/Triton/ARGUS-DSL (legacy; driver pending) | `invariant-guided-kernel-optimization`, `gpu-kernel-optimization` | GPU kernel optimization with invariant checker/test feedback | Tasks without invariant or validation evidence |
+| [AKO4X](AKO4X/) | Triton (default) · CUDA/CuTe/TileLang/C++/PyTorch via driver | `gpu-kernel-optimization`, `kernel-generation` | Multi-round benchmark-driven GPU kernel optimization across supported DSLs | Non-kernel application code or unsupported backend toolchains |
+| [KDA](KDA/) | CUDA (default) · Triton via driver (experimental) | `cuda-kernel-optimization`, `cuda-kernel-generation` | Evidence-driven CUDA implementation, validation, and optimization loops | Non-CUDA backends until the KDA skill flow is generalized |
+| [K-Search](KSearch/) | Triton (default) · CUDA/Python via driver | `gpu-kernel-optimization`, `kernel-search` | World-model tree search with an evaluator/benchmark contract | Tasks without executable evaluator feedback |
+| [AdaExplore](AdaExplore/) | CUDA · Triton via driver (experimental) | `triton-kernel-optimization`, `triton-kernel-generation` | PyTorch operator spec to Triton using MCTS and failure memory | Direct CUDA/CUTLASS/SYCL optimization |
+| [KernelFoundry](KernelFoundry/) | CUDA (default) · Triton via driver (experimental) | `gpu-kernel-optimization`, `kernel-generation`, `kernel-search` | MAP-Elites quality-diversity search with descriptor/archive feedback | Single deterministic patch workflows without archive state |
+| [CUDA Agent](CUDAAgent/) | CUDA (vendor-locked: ncu) | `cuda-kernel-generation`, `cuda-kernel-optimization` | PyTorch model/operator to custom CUDA ops and bindings | Triton/SYCL/CUTLASS-only tasks |
+| [cuPilot](cuPilot/) | CUDA (vendor-locked: ncu) | `cuda-kernel-optimization` | Strategy-level CUDA evolution with roofline/profiler evidence | Non-CUDA kernels |
+| [TritorX](TritorX/) | Triton (vendor-locked: linter) | `aten-triton-operator-generation`, `operator-generation` | ATen/Triton operator coverage generation and compile/lint/test loops | Performance-first CUDA tuning |
+| [KernelBand](KernelBand/) | Triton (default) · CUDA via driver | `gpu-kernel-optimization`, `kernel-search` | Bandit-guided search using hardware signatures and profiling | Backends without comparable profiling/evaluator evidence |
+| [KernelAgent](KernelAgent/) | Triton (default) · CUDA via driver (experimental) | `triton-kernel-generation`, `operator-generation` | Triton synthesis with PyTorch-style verification harnesses | CUDA/C++/CUTLASS kernels |
+| [STARK](STARK/) | CUDA (default) · Triton via driver (experimental) | `cuda-kernel-optimization`, `kernel-search` | CUDA tree-search refinement with multi-agent planning/debugging | Non-CUDA backends until code-context adapters exist |
+| [ReGraphT](ReGraphT/) | CUDA (default) · Triton via driver (experimental) | `cuda-kernel-optimization`, `kernel-search` | CUDA reasoning graph search and Monte Carlo graph search | Non-CUDA optimization traces |
+| [Astra](Astra/) | CUDA (default) · Triton via driver (experimental) | `cuda-kernel-optimization` | Existing production CUDA/PyBind kernels with tests and profiling | From-scratch Triton/SYCL generation |
+| [CUDA-LLM](CUDALLM/) | CUDA (default) · Triton via driver (experimental) | `cuda-kernel-generation`, `cuda-kernel-optimization` | CUDA feature search/reinforcement from task specs | Non-CUDA output languages |
+| [CutlassGEMM](CutlassGEMM/) | CUTLASS / C++ (method-intrinsic) | `cutlass-gemm-optimization` | CUTLASS GEMM/SOL-ExecBench dispatch tuning | General elementwise/attention kernels outside CUTLASS GEMM |
+| [ArchAgent](ArchAgent/) | C++ / ChampSim (method-intrinsic) | `cache-policy-search` | ChampSim-style CPU cache replacement policy search | GPU kernel optimization |
+| [FACT](FACT/) | CUTLASS / C++ (method-intrinsic) | `cutlass-pattern-synthesis`, `cutlass-gemm-optimization` | CUTLASS pattern discovery, realization, composition, and ablation | Standalone Triton/SYCL kernels |
+| [GPU Forecasters](GPUForecasters/) | CUDA (vendor-locked: ncu) | `cuda-kernel-optimization`, `kernel-search` | CUDA/GPU search with speedup forecaster and execute/abstain feedback | Tasks without GPU execution or forecast calibration |
+| [InPlacePatch](InPlacePatch/) | CUDA/ROCm (vendor-locked: nvcc/hipcc) | `embedded-kernel-optimization` | Byte-exact in-place kernel patches with project-native build/test/benchmark | Standalone kernels with exp_dir-based workflows |
+| [KernelBlaster](KernelBlaster/) | CUDA (vendor-locked: ncu) | `cuda-kernel-optimization` | NCU elapsed-cycle CUDA optimization with persistent memory | Non-CUDA backends |
+| [KernelFoundryDx](KernelFoundryDx/) | Triton (method-intrinsic) | `triton-kernel-optimization`, `triton-kernel-generation` | PyTorch reference to Triton multi-island evolution | CUDA/CUTLASS/SYCL kernels |
+| [LlamacppEmbeddedSearch](LlamacppEmbeddedSearch/) | llama.cpp ggml-cuda (method-intrinsic) | `embedded-kernel-search` | Multi-variant fan-out search for kernels embedded in llama.cpp ggml-cuda | Standalone CUDA/Triton kernel optimization |
+| [KernelSkill](KernelSkill/) | CUDA (default) · Triton via driver (experimental) | `cuda-kernel-optimization`, `cuda-kernel-generation` | CUDA custom kernels from PyTorch reference with memory/profiler guidance | Triton/SYCL/Metal tasks |
+| [StitchCUDA](StitchCUDA/) | CUDA (default) · Triton via driver (experimental) | `cuda-kernel-generation`, `cuda-kernel-optimization` | Planner/Coder/Verifier CUDA synthesis and replanning | Non-CUDA backends |
+| [Xe-Forge](Xe-Forge/) | Intel XPU (vendor-locked: xpu) | `xpu-kernel-optimization`, `triton-kernel-optimization` | Intel XPU CoVeR staged refinement | NVIDIA CUDA-only tuning |
+| [Generalist](Generalist/) | CUDA (default) · Triton via driver (experimental) | `cuda-kernel-generation`, `cuda-kernel-optimization` | CUDA benchmark-driven default solver substrate | Backend-neutral solving; not generalized yet |
 | [Meta-Workflow](_meta/) | Tooling | N/A | Generating and validating workflow definitions | Direct kernel optimization |
 
 ---
