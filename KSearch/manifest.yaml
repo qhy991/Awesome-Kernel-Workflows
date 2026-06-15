@@ -1,383 +1,528 @@
-# =============================================================================
-# KSearch Manifest — World-Model-Guided Tree Search for Kernel Optimization
-# =============================================================================
-# Based on: arXiv:2602.19128 (Cao, Mao, Gonzalez, Stoica — UC Berkeley, 2025)
-# =============================================================================
-
-schema_version: "1.1"
+schema_version: '1.1'
 name: ksearch-kernel-optimization
 entrypoint: ksearch-kernel-optimization.js
-
 backend:
   portability: clean
   matrix_eligible: true
   method_supported_backends: any
-  supported: [triton, cuda, python]
+  supported:
+  - triton
+  - cuda
+  - python
+  - metax
   default: triton
-  # KSearch's co-evolving world-model tree + ε-style action selection +
-  # dual stagnation detection is backend-agnostic verbatim; per-language
-  # surface lives in (i) the LANGUAGE arg threaded into every generate/
-  # debug/improve/evaluate prompt and (ii) the ```${LANGUAGE} code-fence
-  # used to wrap baseline and candidate kernel code. All driver-gated
-  # under args.backend_dir. No vendor-bound mode args; no intersectional
-  # guard required.
-
 source:
-  paper_title: "K-Search: LLM Kernel Generation via Co-Evolving Intrinsic World Model"
-  paper_url: "https://arxiv.org/abs/2602.19128"
-  paper_venue: "arXiv 2025 (UC Berkeley)"
-  repo_url: ""
-  commit_or_tag: ""
-  license: ""
-  notes: >
-    Core methodology: maintain a JSON decision tree (world model) encoding
-    kernel design hypotheses. Each cycle selects the highest-scoring open
-    action node via deterministic sort, generates code with multiple attempts
-    (first-attempt + debug + improve), evaluates, then refines (success) or
-    backtracks (failure). The tree co-evolves with the solutions.
+  paper_title: 'K-Search: LLM Kernel Generation via Co-Evolving Intrinsic World Model'
+  paper_url: https://arxiv.org/abs/2602.19128
+  paper_venue: arXiv 2025 (UC Berkeley)
+  repo_url: ''
+  commit_or_tag: ''
+  license: ''
+  notes: 'Core methodology: maintain a JSON decision tree (world model) encoding kernel
+    design hypotheses. Each cycle selects the highest-scoring open action node via
+    deterministic sort, generates code with multiple attempts (first-attempt + debug
+    + improve), evaluates, then refines (success) or backtracks (failure). The tree
+    co-evolves with the solutions.
 
+    '
 workflow:
-  name: "ksearch-kernel-optimization"
-  description: "World-model-guided tree search for GPU kernel optimization (K-Search methodology)"
-  when_to_use: "When you need to explore a large kernel design space systematically rather than iterating on a single optimization path. Uses a co-evolving decision tree (world model) to track hypotheses, guide action selection, and backtrack from failed strategies. Best for complex kernels where multiple orthogonal design decisions interact (e.g., MLA attention, MoE routing, fused operators)."
-  output_filename: "ksearch-kernel-optimization.js"
-  directory: "KSearch/"
-
+  name: ksearch-kernel-optimization
+  description: World-model-guided tree search for GPU kernel optimization (K-Search
+    methodology)
+  when_to_use: When you need to explore a large kernel design space systematically
+    rather than iterating on a single optimization path. Uses a co-evolving decision
+    tree (world model) to track hypotheses, guide action selection, and backtrack
+    from failed strategies. Best for complex kernels where multiple orthogonal design
+    decisions interact (e.g., MLA attention, MoE routing, fused operators).
+  output_filename: ksearch-kernel-optimization.js
+  directory: KSearch/
 method:
-  category: "world_model_tree_search"
-  core_insight: >
-    Replace ad-hoc kernel iteration with a persistent world model: a JSON
-    decision tree where each node encodes a design hypothesis (action) and
-    its evaluation outcome. The tree co-evolves with the solution database:
-    successful actions spawn continuation children targeting the remaining
-    bottleneck; failed actions are downgraded and trigger recovery siblings.
-    Action selection is deterministic (sort by score, difficulty, rating,
-    id) under a hard difficulty cap.
+  category: world_model_tree_search
+  core_insight: 'Replace ad-hoc kernel iteration with a persistent world model: a
+    JSON decision tree where each node encodes a design hypothesis (action) and its
+    evaluation outcome. The tree co-evolves with the solution database: successful
+    actions spawn continuation children targeting the remaining bottleneck; failed
+    actions are downgraded and trigger recovery siblings. Action selection is deterministic
+    (sort by score, difficulty, rating, id) under a hard difficulty cap.
+
+    '
   feedback_signal:
-    type: "profiler_metric"
-    description: "metric_value = mean vs baseline factor (higher is better); paired with is_valid pass/fail"
-    tool: "user-provided benchmark_command"
+    type: profiler_metric
+    description: metric_value = mean vs baseline factor (higher is better); paired
+      with is_valid pass/fail
+    tool: user-provided benchmark_command
     higher_is_better: true
-
 topology:
-  type: "tree"
+  type: tree
   tree:
-    branching_factor_arg: ""
-    max_depth_arg: ""
-    scoring_function: "node score_0_to_1 desc, difficulty_1_to_5 asc, overall_rating_0_to_10 desc, node_id asc"
-    backtrack_condition: "cycle failed (no passing solution in ATTEMPTS_PER_CYCLE) → downgrade node + add recovery siblings"
-
+    branching_factor_arg: ''
+    max_depth_arg: ''
+    scoring_function: node score_0_to_1 desc, difficulty_1_to_5 asc, overall_rating_0_to_10
+      desc, node_id asc
+    backtrack_condition: cycle failed (no passing solution in ATTEMPTS_PER_CYCLE)
+      → downgrade node + add recovery siblings
 phases:
-  - name: "Setup"
-    detail: "Read kernel spec, evaluate baseline performance"
-    position: "preamble"
-    agents:
-      - label: "read-spec"
-        description: "Read and analyze the kernel specification"
-        parallelism: "single"
-        input_variables: ["KERNEL_SPEC_PATH", "PROBLEM_DEFINITION", "BASELINE_CODE_PATH", "LANGUAGE", "TARGET_GPU", "OP_DESC"]
-        output_schema:
-          type: "object"
-          properties:
-            spec_text: { type: "string" }
-            op_type: { type: "string" }
-            input_shapes: { type: "string" }
-            output_shape: { type: "string" }
-            constraints: { type: "array", items: { type: "string" } }
-            baseline_code: { type: "string" }
-            key_challenges: { type: "array", items: { type: "string" } }
-            design_dimensions: { type: "array", items: { type: "string" } }
-          required: ["spec_text", "op_type"]
-      - label: "eval-baseline"
-        description: "Establish baseline metric from spec + baseline code"
-        parallelism: "single"
-        input_variables: ["specText", "baseline_code", "BENCH_CMD", "baselineMetric", "LANGUAGE"]
-        output_schema:
-          type: "object"
-          properties:
-            baseline_metric: { type: "number" }
-            baseline_latency_ms: { type: "number" }
-            eval_passed: { type: "boolean" }
-            performance_profile: { type: "string" }
-            bottleneck_analysis: { type: "string" }
-          required: ["baseline_metric", "eval_passed"]
-
-  - name: "Initialize"
-    detail: "Build initial world model decision tree with design hypotheses"
-    position: "preamble"
-    agents:
-      - label: "init-tree"
-        description: "Construct the initial world-model decision tree"
-        parallelism: "single"
-        input_variables: ["specText", "OP_DESC", "opType", "LANGUAGE", "TARGET_GPU", "baselineMetric", "design_dimensions", "key_challenges"]
-        output_schema:
-          type: "object"
-          properties:
-            decision_tree: { type: "object" }
-            node_count: { type: "number" }
-            open_actions: { type: "number" }
-            design_dimensions: { type: "array", items: { type: "string" } }
-            initial_hypotheses: { type: "array", items: { type: "string" } }
-          required: ["decision_tree", "node_count", "open_actions"]
-
-  - name: "Select"
-    detail: "Propose frontier candidates; ε-style deterministic action selection"
-    position: "loop_body"
-    agents:
-      - label: "propose-{cycle}"
-        description: "Ensure the frontier has enough high-quality open action nodes"
-        parallelism: "single"
-        input_variables: ["decisionTree", "bestMetric", "baselineMetric"]
-        output_schema:
-          type: "object"
-          properties:
-            updated_tree: { type: "object" }
-            open_frontier_count: { type: "number" }
-            nodes_added: { type: "number" }
-          required: ["updated_tree", "open_frontier_count"]
-      - label: "select-{cycle}"
-        description: "Deterministically select the next frontier action node"
-        parallelism: "single"
-        input_variables: ["decisionTree", "bestMetric", "MAX_DIFFICULTY"]
-        output_schema:
-          type: "object"
-          properties:
-            selected_node_id: { type: "string" }
-            action_title: { type: "string" }
-            action_description: { type: "string" }
-            action_score: { type: "number" }
-            action_difficulty: { type: "number" }
-            parent_solution_code: { type: "string" }
-            parent_metric: { type: "number" }
-            parent_is_root: { type: "boolean" }
-            context_for_generation: { type: "object" }
-            reasoning: { type: "string" }
-          required: ["selected_node_id", "action_title"]
-
-  - name: "Generate"
-    detail: "Multi-attempt code generation: first-attempt | debug | improve"
-    position: "loop_body"
-    agents:
-      - label: "gen-{cycle}-{attempt}"
-        description: "First-attempt generation from the selected action"
-        parallelism: "single"
-        input_variables: ["selection", "parentCode", "specText", "wmSection", "LANGUAGE", "TARGET_GPU"]
-        output_schema:
-          type: "object"
-          properties:
-            code: { type: "string" }
-            implementation_notes: { type: "string" }
-            design_choices: { type: "array", items: { type: "string" } }
-          required: ["code"]
-      - label: "debug-{cycle}-{attempt}"
-        description: "Debug a failing candidate when no passing solution exists yet"
-        parallelism: "single"
-        input_variables: ["currentRawCode", "baseForDebug", "cycleBestEval", "wmSection", "LANGUAGE"]
-        output_schema:
-          type: "object"
-          properties:
-            code: { type: "string" }
-            changes_made: { type: "string" }
-            bugs_fixed: { type: "array", items: { type: "string" } }
-          required: ["code"]
-      - label: "improve-{cycle}-{attempt}"
-        description: "Improve a passing candidate for performance"
-        parallelism: "single"
-        input_variables: ["currentRawCode", "cycleBestCode", "cycleBestEval", "wmSection", "LANGUAGE"]
-        output_schema:
-          type: "object"
-          properties:
-            code: { type: "string" }
-            changes_made: { type: "string" }
-            expected_improvement: { type: "string" }
-          required: ["code"]
-
-  - name: "Evaluate"
-    detail: "Compile / correctness / performance evaluation per attempt"
-    position: "loop_body"
-    agents:
-      - label: "eval-{cycle}-{attempt}"
-        description: "Evaluate the generated candidate for validity, latency, and metric"
-        parallelism: "single"
-        input_variables: ["genResult.code", "specText", "BENCH_CMD", "baselineMetric", "baseScore", "bestMetric"]
-        output_schema:
-          type: "object"
-          properties:
-            is_valid: { type: "boolean" }
-            metric_value: { type: "number" }
-            latency_ms: { type: "number" }
-            speedup_vs_baseline: { type: "number" }
-            pass_rate: { type: "string" }
-            error_log: { type: "string" }
-            performance_analysis: { type: "string" }
-            remaining_bottleneck: { type: "string" }
-          required: ["is_valid", "metric_value"]
-
-  - name: "Refine"
-    detail: "Attach successful solution and spawn continuation children, or backtrack and add recovery siblings"
-    position: "loop_body"
-    agents:
-      - label: "refine-{cycle}"
-        description: "Cycle SUCCEEDED — attach solution + add ≥2 continuation children"
-        parallelism: "single"
-        input_variables: ["activeNodeId", "selection", "cycleBestScore", "baselineMetric", "baseScore", "cycleBestEval", "bestMetric", "decisionTree"]
-        output_schema:
-          type: "object"
-          properties:
-            updated_tree: { type: "object" }
-            new_actions_added: { type: "number" }
-            score_updates: { type: "array", items: { type: "string" } }
-            reflection: { type: "string" }
-          required: ["updated_tree", "new_actions_added"]
-      - label: "backtrack-{cycle}"
-        description: "Cycle FAILED — downgrade node and add recovery siblings"
-        parallelism: "single"
-        input_variables: ["activeNodeId", "selection", "ATTEMPTS_PER_CYCLE", "noImproveStreak", "cycleBestEval", "decisionTree"]
-        output_schema:
-          type: "object"
-          properties:
-            updated_tree: { type: "object" }
-            failure_analysis: { type: "string" }
-            recovery_actions: { type: "array", items: { type: "string" } }
-            downgraded_node: { type: "string" }
-          required: ["updated_tree"]
-
-  - name: "Report"
-    detail: "Final search-trajectory report"
-    position: "epilogue"
-    agents:
-      - label: "final-report"
-        description: "Generate the K-Search optimization report"
-        parallelism: "single"
-        input_variables: ["bestMetric", "baselineMetric", "cycleCount", "solutionDb", "bestSolution", "decisionTree"]
-
+- name: Setup
+  detail: Read kernel spec, evaluate baseline performance
+  position: preamble
+  agents:
+  - label: read-spec
+    description: Read and analyze the kernel specification
+    parallelism: single
+    input_variables:
+    - KERNEL_SPEC_PATH
+    - PROBLEM_DEFINITION
+    - BASELINE_CODE_PATH
+    - LANGUAGE
+    - TARGET_GPU
+    - OP_DESC
+    output_schema:
+      type: object
+      properties:
+        spec_text:
+          type: string
+        op_type:
+          type: string
+        input_shapes:
+          type: string
+        output_shape:
+          type: string
+        constraints:
+          type: array
+          items:
+            type: string
+        baseline_code:
+          type: string
+        key_challenges:
+          type: array
+          items:
+            type: string
+        design_dimensions:
+          type: array
+          items:
+            type: string
+      required:
+      - spec_text
+      - op_type
+  - label: eval-baseline
+    description: Establish baseline metric from spec + baseline code
+    parallelism: single
+    input_variables:
+    - specText
+    - baseline_code
+    - BENCH_CMD
+    - baselineMetric
+    - LANGUAGE
+    output_schema:
+      type: object
+      properties:
+        baseline_metric:
+          type: number
+        baseline_latency_ms:
+          type: number
+        eval_passed:
+          type: boolean
+        performance_profile:
+          type: string
+        bottleneck_analysis:
+          type: string
+      required:
+      - baseline_metric
+      - eval_passed
+- name: Initialize
+  detail: Build initial world model decision tree with design hypotheses
+  position: preamble
+  agents:
+  - label: init-tree
+    description: Construct the initial world-model decision tree
+    parallelism: single
+    input_variables:
+    - specText
+    - OP_DESC
+    - opType
+    - LANGUAGE
+    - TARGET_GPU
+    - baselineMetric
+    - design_dimensions
+    - key_challenges
+    output_schema:
+      type: object
+      properties:
+        decision_tree:
+          type: object
+        node_count:
+          type: number
+        open_actions:
+          type: number
+        design_dimensions:
+          type: array
+          items:
+            type: string
+        initial_hypotheses:
+          type: array
+          items:
+            type: string
+      required:
+      - decision_tree
+      - node_count
+      - open_actions
+- name: Select
+  detail: Propose frontier candidates; ε-style deterministic action selection
+  position: loop_body
+  agents:
+  - label: propose-{cycle}
+    description: Ensure the frontier has enough high-quality open action nodes
+    parallelism: single
+    input_variables:
+    - decisionTree
+    - bestMetric
+    - baselineMetric
+    output_schema:
+      type: object
+      properties:
+        updated_tree:
+          type: object
+        open_frontier_count:
+          type: number
+        nodes_added:
+          type: number
+      required:
+      - updated_tree
+      - open_frontier_count
+  - label: select-{cycle}
+    description: Deterministically select the next frontier action node
+    parallelism: single
+    input_variables:
+    - decisionTree
+    - bestMetric
+    - MAX_DIFFICULTY
+    output_schema:
+      type: object
+      properties:
+        selected_node_id:
+          type: string
+        action_title:
+          type: string
+        action_description:
+          type: string
+        action_score:
+          type: number
+        action_difficulty:
+          type: number
+        parent_solution_code:
+          type: string
+        parent_metric:
+          type: number
+        parent_is_root:
+          type: boolean
+        context_for_generation:
+          type: object
+        reasoning:
+          type: string
+      required:
+      - selected_node_id
+      - action_title
+- name: Generate
+  detail: 'Multi-attempt code generation: first-attempt | debug | improve'
+  position: loop_body
+  agents:
+  - label: gen-{cycle}-{attempt}
+    description: First-attempt generation from the selected action
+    parallelism: single
+    input_variables:
+    - selection
+    - parentCode
+    - specText
+    - wmSection
+    - LANGUAGE
+    - TARGET_GPU
+    output_schema:
+      type: object
+      properties:
+        code:
+          type: string
+        implementation_notes:
+          type: string
+        design_choices:
+          type: array
+          items:
+            type: string
+      required:
+      - code
+  - label: debug-{cycle}-{attempt}
+    description: Debug a failing candidate when no passing solution exists yet
+    parallelism: single
+    input_variables:
+    - currentRawCode
+    - baseForDebug
+    - cycleBestEval
+    - wmSection
+    - LANGUAGE
+    output_schema:
+      type: object
+      properties:
+        code:
+          type: string
+        changes_made:
+          type: string
+        bugs_fixed:
+          type: array
+          items:
+            type: string
+      required:
+      - code
+  - label: improve-{cycle}-{attempt}
+    description: Improve a passing candidate for performance
+    parallelism: single
+    input_variables:
+    - currentRawCode
+    - cycleBestCode
+    - cycleBestEval
+    - wmSection
+    - LANGUAGE
+    output_schema:
+      type: object
+      properties:
+        code:
+          type: string
+        changes_made:
+          type: string
+        expected_improvement:
+          type: string
+      required:
+      - code
+- name: Evaluate
+  detail: Compile / correctness / performance evaluation per attempt
+  position: loop_body
+  agents:
+  - label: eval-{cycle}-{attempt}
+    description: Evaluate the generated candidate for validity, latency, and metric
+    parallelism: single
+    input_variables:
+    - genResult.code
+    - specText
+    - BENCH_CMD
+    - baselineMetric
+    - baseScore
+    - bestMetric
+    output_schema:
+      type: object
+      properties:
+        is_valid:
+          type: boolean
+        metric_value:
+          type: number
+        latency_ms:
+          type: number
+        speedup_vs_baseline:
+          type: number
+        pass_rate:
+          type: string
+        error_log:
+          type: string
+        performance_analysis:
+          type: string
+        remaining_bottleneck:
+          type: string
+      required:
+      - is_valid
+      - metric_value
+- name: Refine
+  detail: Attach successful solution and spawn continuation children, or backtrack
+    and add recovery siblings
+  position: loop_body
+  agents:
+  - label: refine-{cycle}
+    description: Cycle SUCCEEDED — attach solution + add ≥2 continuation children
+    parallelism: single
+    input_variables:
+    - activeNodeId
+    - selection
+    - cycleBestScore
+    - baselineMetric
+    - baseScore
+    - cycleBestEval
+    - bestMetric
+    - decisionTree
+    output_schema:
+      type: object
+      properties:
+        updated_tree:
+          type: object
+        new_actions_added:
+          type: number
+        score_updates:
+          type: array
+          items:
+            type: string
+        reflection:
+          type: string
+      required:
+      - updated_tree
+      - new_actions_added
+  - label: backtrack-{cycle}
+    description: Cycle FAILED — downgrade node and add recovery siblings
+    parallelism: single
+    input_variables:
+    - activeNodeId
+    - selection
+    - ATTEMPTS_PER_CYCLE
+    - noImproveStreak
+    - cycleBestEval
+    - decisionTree
+    output_schema:
+      type: object
+      properties:
+        updated_tree:
+          type: object
+        failure_analysis:
+          type: string
+        recovery_actions:
+          type: array
+          items:
+            type: string
+        downgraded_node:
+          type: string
+      required:
+      - updated_tree
+- name: Report
+  detail: Final search-trajectory report
+  position: epilogue
+  agents:
+  - label: final-report
+    description: Generate the K-Search optimization report
+    parallelism: single
+    input_variables:
+    - bestMetric
+    - baselineMetric
+    - cycleCount
+    - solutionDb
+    - bestSolution
+    - decisionTree
 args:
   required: []
   optional:
-    - name: "problem_path"
-      type: "string"
-      default: "''"
-      description: "Path to the kernel specification YAML/JSON file"
-      example: "/path/to/spec.yaml"
-    - name: "problem_definition"
-      type: "string"
-      default: "''"
-      description: "Inline problem definition; overrides problem_path when set"
-      example: "MLA decode attention with KV cache"
-    - name: "kernel_path"
-      type: "string"
-      default: "''"
-      description: "Path to a baseline kernel implementation to seed the search"
-      example: "/path/to/baseline.py"
-    - name: "op_description"
-      type: "string"
-      default: "'GPU kernel'"
-      description: "Short human-readable operation description"
-      example: "MLA decode attention kernel"
-    - name: "language"
-      type: "string"
-      default: "'triton'"
-      description: "Kernel implementation language (triton | cuda | python)"
-      example: "triton"
-    - name: "target_gpu"
-      type: "string"
-      default: "'H100'"
-      description: "Target GPU architecture string"
-      example: "H100"
-    - name: "iterations"
-      type: "number"
-      default: "10"
-      description: "Maximum search cycles"
-      example: "10"
-    - name: "attempts_per_cycle"
-      type: "number"
-      default: "5"
-      description: "Maximum generate/improve rounds per cycle"
-      example: "5"
-    - name: "stagnation_window"
-      type: "number"
-      default: "3"
-      description: "Non-improving rounds tolerated before a cycle ends (dual counter)"
-      example: "3"
-    - name: "max_difficulty"
-      type: "number"
-      default: "4"
-      description: "Hard cap on action difficulty for selection (1-5)"
-      example: "4"
-    - name: "benchmark_command"
-      type: "string"
-      default: "''"
-      description: "Command to run the benchmark/test harness"
-      example: "<user-provided benchmark command with {kernel_path}/{result_path}>"
-    - name: "rtol"
-      type: "number"
-      default: "0.01"
-      description: "Relative tolerance for correctness checks"
-      example: "0.01"
-    - name: "atol"
-      type: "number"
-      default: "0.01"
-      description: "Absolute tolerance for correctness checks"
-      example: "0.01"
-    - name: "exp_dir"
-      type: "string"
-      default: "'/tmp/ksearch_exp'"
-      description: "Directory for experiment artifacts and logs"
-      example: "/tmp/ksearch_exp"
-
+  - name: problem_path
+    type: string
+    default: ''''''
+    description: Path to the kernel specification YAML/JSON file
+    example: /path/to/spec.yaml
+  - name: problem_definition
+    type: string
+    default: ''''''
+    description: Inline problem definition; overrides problem_path when set
+    example: MLA decode attention with KV cache
+  - name: kernel_path
+    type: string
+    default: ''''''
+    description: Path to a baseline kernel implementation to seed the search
+    example: /path/to/baseline.py
+  - name: op_description
+    type: string
+    default: '''GPU kernel'''
+    description: Short human-readable operation description
+    example: MLA decode attention kernel
+  - name: language
+    type: string
+    default: '''triton'''
+    description: Kernel implementation language (triton | cuda | python)
+    example: triton
+  - name: target_gpu
+    type: string
+    default: '''H100'''
+    description: Target GPU architecture string
+    example: H100
+  - name: iterations
+    type: number
+    default: '10'
+    description: Maximum search cycles
+    example: '10'
+  - name: attempts_per_cycle
+    type: number
+    default: '5'
+    description: Maximum generate/improve rounds per cycle
+    example: '5'
+  - name: stagnation_window
+    type: number
+    default: '3'
+    description: Non-improving rounds tolerated before a cycle ends (dual counter)
+    example: '3'
+  - name: max_difficulty
+    type: number
+    default: '4'
+    description: Hard cap on action difficulty for selection (1-5)
+    example: '4'
+  - name: benchmark_command
+    type: string
+    default: ''''''
+    description: Command to run the benchmark/test harness
+    example: <user-provided benchmark command with {kernel_path}/{result_path}>
+  - name: rtol
+    type: number
+    default: '0.01'
+    description: Relative tolerance for correctness checks
+    example: '0.01'
+  - name: atol
+    type: number
+    default: '0.01'
+    description: Absolute tolerance for correctness checks
+    example: '0.01'
+  - name: exp_dir
+    type: string
+    default: '''/tmp/ksearch_exp'''
+    description: Directory for experiment artifacts and logs
+    example: /tmp/ksearch_exp
 correctness:
   criteria:
-    - "Generated kernel is syntactically valid in the requested language"
-    - "Outputs match reference within rtol/atol when benchmark_command is provided"
-    - "World-model tree remains well-formed (every node has a parent_id and a status)"
-    - "Cycle terminates on dual stagnation (no_improve_streak OR no_improve_over_base_streak)"
-  check_type: "runtime_comparison"
-  reference_output: "User-supplied baseline kernel and benchmark harness"
-
+  - Generated kernel is syntactically valid in the requested language
+  - Outputs match reference within rtol/atol when benchmark_command is provided
+  - World-model tree remains well-formed (every node has a parent_id and a status)
+  - Cycle terminates on dual stagnation (no_improve_streak OR no_improve_over_base_streak)
+  check_type: runtime_comparison
+  reference_output: User-supplied baseline kernel and benchmark harness
 return_fields:
-  - name: "input_mode"
-    type: "string"
-    description: "'optimize_existing' or 'generate_then_optimize'"
-    required: true
-  - name: "best_metric"
-    type: "number"
-    description: "Best achieved metric_value (mean vs baseline)"
-    required: true
-  - name: "best_solution_code"
-    type: "string"
-    description: "Source code of the best-scoring solution"
-    required: true
-  - name: "cycles_completed"
-    type: "number"
-    description: "Number of search cycles executed"
-    required: true
-  - name: "solutions_evaluated"
-    type: "number"
-    description: "Total number of candidate solutions evaluated"
-    required: true
-  - name: "decision_tree"
-    type: "object"
-    description: "Final world-model decision tree"
-    required: true
-  - name: "solution_lineage"
-    type: "array"
-    description: "Top-N lineage of best solutions with node_id and metric"
-    required: true
-  - name: "baseline_metric"
-    type: "number"
-    description: "Baseline metric value (reference point)"
-    required: true
-  - name: "speedup_over_baseline"
-    type: "number"
-    description: "best_metric / baseline_metric"
-    required: true
-  - name: "report"
-    type: "object"
-    description: "Final K-Search optimization report"
-    required: false
-
+- name: input_mode
+  type: string
+  description: '''optimize_existing'' or ''generate_then_optimize'''
+  required: true
+- name: best_metric
+  type: number
+  description: Best achieved metric_value (mean vs baseline)
+  required: true
+- name: best_solution_code
+  type: string
+  description: Source code of the best-scoring solution
+  required: true
+- name: cycles_completed
+  type: number
+  description: Number of search cycles executed
+  required: true
+- name: solutions_evaluated
+  type: number
+  description: Total number of candidate solutions evaluated
+  required: true
+- name: decision_tree
+  type: object
+  description: Final world-model decision tree
+  required: true
+- name: solution_lineage
+  type: array
+  description: Top-N lineage of best solutions with node_id and metric
+  required: true
+- name: baseline_metric
+  type: number
+  description: Baseline metric value (reference point)
+  required: true
+- name: speedup_over_baseline
+  type: number
+  description: best_metric / baseline_metric
+  required: true
+- name: report
+  type: object
+  description: Final K-Search optimization report
+  required: false
 template:
-  base: "tree-exploration"
+  base: tree-exploration
   customizations:
-    - "backtracking"
-    - "early_stopping"
+  - backtracking
+  - early_stopping

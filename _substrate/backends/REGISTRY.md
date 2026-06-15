@@ -16,6 +16,7 @@ Add a row when you start a driver. Move it to `stable` only after it passes L0--
 | triton | `triton/` | nvidia | experimental | (unassigned) |
 | rocm | `rocm/` | amd | experimental | (unassigned) |
 | ascend | `ascend/` | huawei | experimental | (unassigned) |
+| metax | `metax/` | metax | stub | (unassigned) |
 
 > **Note (P3):** the `cuda` and `triton` `build.sh`/`run.sh`/`profile.sh` are
 > **GPU-untested** -- this repo runs on macOS where `nvcc`/`ncu`/`triton` are absent. What
@@ -241,3 +242,73 @@ Because `occupancy` is never measured, `ascend` declares no `latency_occupancy` 
 > structural validation on a fixture submission, and `to_evidence.py` on a synthetic msprof
 > CSV via the shared `_evidence_ascend.py` mapper. End-to-end compile/run/profile is deferred
 > to the NPU tier (a real Ascend 910B2 + CANN box).
+
+---
+
+## metax -- MetaX GPU (沐曦, MACA SDK / mxcc)
+
+| Property | Value |
+|---|---|
+| **Directory** | `_substrate/backends/metax/` |
+| **Source extension** | `.cu` |
+| **Artifact extension** | `.so` |
+| **Hardware vendor** | metax (沐曦) |
+| **Compiler** | `mxcc` (mxgpu_llvm from MACA SDK) via `build.sh` |
+| **Profiler** | `mcProfiler` via `profile.sh`; **`mcTracer` fallback** when `mcProfiler` absent |
+| **Profiler format** | `mcprof-csv` (preferred) · `mctrace-log` (fallback) |
+| **Threshold profile** | `metax` |
+| **Status** | stub |
+
+### Compilation
+
+MetaX GPUs are CUDA-compatible at the source level (`.cu` files, `__global__`/`__shared__`
+syntax). Compilation uses `mxcc`, the Clang/LLVM-based compiler from the MACA SDK
+(`mxgpu_llvm` toolchain). The build contract is identical to the `cuda` driver: `build.sh`
+accepts `--source`, `--out`, `--arch` (optional; passed as `-march=<arch>` to mxcc),
+`--build-cmd` (template override), and `--extra`.
+
+### Profiling
+
+Two-tier profiler fallback:
+
+1. **mcProfiler** (preferred) — produces `mcprof-csv` with kernel-level hardware counters
+   (elapsed cycles, DRAM bandwidth, SM utilisation). `to_evidence.py` delegates to the
+   standalone `_evidence_metax.py` mapper (does NOT reuse `_evidence_nvidia.py`; the CSV
+   schema differs from ncu output). Column names are matched by normalised alias so the
+   mapper tolerates MACA SDK version drift.
+
+2. **mcTracer** (fallback) — produces `mctrace-log` with runtime trace data. Only
+   `latency_ms` is extractable; `dram_pct`/`sm_pct` are **always null** (honest degradation,
+   null rule), so `diagnose.py` yields `unknown` rather than a wrong label.
+
+### Emitted metric names
+
+`to_evidence.py` delegates to the standalone `_evidence_metax.py` mapper. Canonical metrics:
+
+| Canonical key | mcProfiler source (alias-matched) | Unit |
+|---|---|---|
+| `latency_ms` | kernel duration (us / 1000) | milliseconds |
+| `dram_pct` | DRAM bandwidth utilisation (combined R+W or single column) | 0–~ (MAY exceed 100) |
+| `sm_pct` | SM / compute-unit utilisation | 0–100 |
+| `occupancy` | **always null** — MetaX has no warp-occupancy counter | — |
+
+Because `occupancy` is never measured, `metax` declares no `latency_occupancy` capability
+(`capabilities.bottleneck_classes` = `{memory_bound, compute_bound, overhead_bound}`).
+
+### Fallback patterns
+
+Uses the substrate default `FALLBACK_PATTERNS` (no `vendor_patterns_file` in manifest):
+`cublas`, `cudnn`, `torch.matmul`, `F.linear`, `torch.nn.functional`, `at::matmul`.
+
+### Lang fence and idiom highlights
+
+- `lang_fence`: `cuda`
+- `impl_requirements`: PYBIND11_MODULE with `forward()` binding; compiled via `mxcc`
+- All `method_gate.TABLE` methods supported (`unsupported_methods: []`)
+- Idiom examples: `vectorized_load_store` -> `float4 / int4`, `shared_memory_tiling` ->
+  `__shared__` double-buffered tiles, `tensor_core_mma` -> **N/A** (MetaX lacks tensor
+  cores; approximate via vectorized warp intrinsics)
+
+> **Note (P3):** this repo runs on macOS where `mxcc`/`mcProfiler`/`mcTracer` are absent.
+> Verified on macOS: `validate_backend.py` (L0) and `build.sh`/`profile.sh` arg-parsing
+> + envelope coverage. End-to-end compile/run/profile is deferred to the MetaX GPU tier.

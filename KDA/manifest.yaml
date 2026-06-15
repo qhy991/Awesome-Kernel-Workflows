@@ -1,20 +1,16 @@
-# =============================================================================
-# KDA Manifest — Kernel Design Agents (evidence-driven optimization loop)
-# =============================================================================
-# Method: draft -> plan -> implement -> validate -> decide -> report cycle,
-# one candidate at a time, with explicit promotion/revise/reject evidence.
-# =============================================================================
-
-schema_version: "1.1"
+schema_version: '1.1'
 name: kda-kernel-workflow
 entrypoint: kda-kernel-workflow.js
-
 backend:
   portability: clean
   matrix_eligible: true
   method_supported_backends: any
-  supported: [cuda, triton]
+  supported:
+  - cuda
+  - triton
+  - metax
   default: cuda
-  notes: >
-    Legacy WORKFLOW_SUITABILITY=['cuda']. Driver-path supported=[cuda, triton].
+  notes: 'Legacy WORKFLOW_SUITABILITY=[''cuda'']. Driver-path supported=[cuda, triton].
     triton-dryrun.test.js contract-tests the driver path.
+
+    '

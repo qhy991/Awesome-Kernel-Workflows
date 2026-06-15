@@ -24,6 +24,10 @@ PROFILES = {
     # GM bandwidth is high while compute units are idle; compute-bound when cube/vector are
     # busy; overhead-bound when both are low (tiny launches / poor core occupancy).
     "ascend": dict(occ_lat=0.40, dram_mem=70, sm_mem=40, sm_comp=60, both_low=30),
+    # MetaX GPU (mcProfiler via MACA SDK): dram_pct=DRAM bandwidth, sm_pct=SM compute util.
+    # occupancy is never measured (always null) so occ_lat is inert here. Thresholds
+    # set to mirror nvidia defaults until MetaX-specific calibration data is available.
+    "metax": dict(occ_lat=0.40, dram_mem=70, sm_mem=50, sm_comp=70, both_low=40),
 }
 
 

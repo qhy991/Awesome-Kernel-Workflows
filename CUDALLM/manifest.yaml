@@ -1,287 +1,367 @@
-# =============================================================================
-# CUDA-LLM Manifest — Feature Search and Reinforcement
-# =============================================================================
-# Source: arXiv:2506.09092 "CUDA-LLM: LLMs Can Write Efficient CUDA Kernels"
-# =============================================================================
-
-schema_version: "1.1"
-
+schema_version: '1.1'
 backend:
   portability: clean
   matrix_eligible: true
   method_supported_backends: any
-  supported: [cuda, triton]
+  supported:
+  - cuda
+  - triton
+  - metax
   default: cuda
-  notes: >
-    Legacy WORKFLOW_SUITABILITY=['cuda']. Driver-path supported=[cuda, triton].
+  notes: 'Legacy WORKFLOW_SUITABILITY=[''cuda'']. Driver-path supported=[cuda, triton].
     triton-dryrun.test.js contract-tests the driver path.
 
+    '
 source:
-  paper_title: "CUDA-LLM: LLMs Can Write Efficient CUDA Kernels"
-  paper_url: "https://arxiv.org/abs/2506.09092"
-  paper_venue: "arXiv 2025"
-  repo_url: ""
-  commit_or_tag: ""
-  license: ""
-  notes: >
-    CUDA-LLM proposes Feature Search and Reinforcement (FSR): explicit CUDA
-    optimization feature search reinforced by compilation, functional
-    correctness, and measured latency feedback.
+  paper_title: 'CUDA-LLM: LLMs Can Write Efficient CUDA Kernels'
+  paper_url: https://arxiv.org/abs/2506.09092
+  paper_venue: arXiv 2025
+  repo_url: ''
+  commit_or_tag: ''
+  license: ''
+  notes: 'CUDA-LLM proposes Feature Search and Reinforcement (FSR): explicit CUDA
+    optimization feature search reinforced by compilation, functional correctness,
+    and measured latency feedback.
 
+    '
 workflow:
-  name: "cudallm-fsr-kernel-generation"
-  description: "CUDA-LLM Feature Search and Reinforcement workflow for evaluator-guided CUDA kernel generation"
-  when_to_use: >
-    Use when generating CUDA kernels from a task specification and you want the
-    agent to search explicit CUDA optimization features instead of relying on
-    generic iterative prompting.
-  output_filename: "cudallm-fsr-kernel-generation.js"
-  directory: "CUDALLM/"
+  name: cudallm-fsr-kernel-generation
+  description: CUDA-LLM Feature Search and Reinforcement workflow for evaluator-guided
+    CUDA kernel generation
+  when_to_use: 'Use when generating CUDA kernels from a task specification and you
+    want the agent to search explicit CUDA optimization features instead of relying
+    on generic iterative prompting.
 
+    '
+  output_filename: cudallm-fsr-kernel-generation.js
+  directory: CUDALLM/
 method:
-  category: "iterative_self_improving"
-  core_insight: >
-    Kernel generation quality improves when the agent explicitly selects CUDA
-    optimization features, evaluates concrete candidates with real compile,
-    correctness, and latency evidence, then reinforces the feature choices that
-    produce correct speedups.
+  category: iterative_self_improving
+  core_insight: 'Kernel generation quality improves when the agent explicitly selects
+    CUDA optimization features, evaluates concrete candidates with real compile, correctness,
+    and latency evidence, then reinforces the feature choices that produce correct
+    speedups.
+
+    '
   feedback_signal:
-    type: "throughput_delta"
-    description: "Compiled/correct candidate speedup over baseline across diverse tests"
-    tool: "custom_bench"
+    type: throughput_delta
+    description: Compiled/correct candidate speedup over baseline across diverse tests
+    tool: custom_bench
     higher_is_better: true
-
 topology:
-  type: "iterative"
+  type: iterative
   iterative:
-    iterations_arg: "iterations"
-    convergence_condition: "Iteration iterations exhausted or feature scores converge"
+    iterations_arg: iterations
+    convergence_condition: Iteration iterations exhausted or feature scores converge
     state_variables:
-      - name: "featureCatalog"
-        type: "array"
-        initial_value: "[]"
-        description: "CUDA optimization feature entries with compatibility and risk metadata"
-      - name: "featureScores"
-        type: "object"
-        initial_value: "{}"
-        description: "Per-feature attempts, compile/correct counts, reward, failures, and best speedup"
-      - name: "candidates"
-        type: "array"
-        initial_value: "[]"
-        description: "Candidate kernels and evaluator results"
-      - name: "bestCandidate"
-        type: "object"
-        initial_value: "null"
-        description: "Best correct measured candidate"
-
+    - name: featureCatalog
+      type: array
+      initial_value: '[]'
+      description: CUDA optimization feature entries with compatibility and risk metadata
+    - name: featureScores
+      type: object
+      initial_value: '{}'
+      description: Per-feature attempts, compile/correct counts, reward, failures,
+        and best speedup
+    - name: candidates
+      type: array
+      initial_value: '[]'
+      description: Candidate kernels and evaluator results
+    - name: bestCandidate
+      type: object
+      initial_value: 'null'
+      description: Best correct measured candidate
 phases:
-  - name: "Setup"
-    detail: "Read task specification, reference implementation, target GPU, and evaluator contract"
-    position: "preamble"
-    agents:
-      - label: "setup-task"
-        description: "Parse task spec and reference implementation"
-        parallelism: "single"
-        input_variables: ["TASK_SPEC_PATH", "REFERENCE_CODE_PATH", "EVAL_CMD", "TARGET_GPU"]
-        output_schema:
-          type: "object"
-          properties:
-            problem_definition: { type: "string" }
-            reference_code: { type: "string" }
-            operation_type: { type: "string" }
-            constraints: { type: "array", items: { type: "string" } }
-          required: ["problem_definition", "operation_type", "constraints"]
-
-  - name: "FeatureCatalog"
-    detail: "Build a CUDA optimization feature space tailored to the task"
-    position: "preamble"
-    agents:
-      - label: "feature-catalog"
-        description: "Construct feature catalog and neutral feature priors"
-        parallelism: "single"
-        input_variables: ["taskSpec", "referenceCode", "TARGET_GPU", "RTOL", "ATOL"]
-        output_schema:
-          type: "object"
-          properties:
-            features: { type: "array", items: { type: "object" } }
-            baseline_feature_ids: { type: "array", items: { type: "string" } }
-            unsafe_feature_ids: { type: "array", items: { type: "string" } }
-          required: ["features", "baseline_feature_ids"]
-
-  - name: "GenerateTests"
-    detail: "Create diverse correctness and boundary tests for the task"
-    position: "preamble"
-    agents:
-      - label: "generate-tests"
-        description: "Generate diverse shape, dtype, layout, and boundary test cases"
-        parallelism: "single"
-        input_variables: ["setup.operation_type", "setup.input_contract", "setup.output_contract", "RTOL", "ATOL"]
-        output_schema:
-          type: "object"
-          properties:
-            test_cases: { type: "array", items: { type: "object" } }
-            tolerance_policy: { type: "string" }
-          required: ["test_cases", "tolerance_policy"]
-
-  - name: "SelectFeatures"
-    detail: "Choose a feature combination from scored feature history"
-    position: "loop_body"
-    agents:
-      - label: "select-features-{iteration}-{sample}"
-        description: "Select compatible feature ids with exploration/exploitation balance"
-        parallelism: "single"
-        input_variables: ["featureCatalog", "featureScores", "candidates", "FEATURE_BUDGET"]
-        output_schema:
-          type: "object"
-          properties:
-            selected_feature_ids: { type: "array", items: { type: "string" } }
-            rationale: { type: "string" }
-            expected_risks: { type: "array", items: { type: "string" } }
-          required: ["selected_feature_ids", "rationale"]
-
-  - name: "GenerateKernel"
-    detail: "Generate candidate CUDA code conditioned on selected features"
-    position: "loop_body"
-    agents:
-      - label: "generate-kernel-{iteration}-{sample}"
-        description: "Generate complete CUDA/C++ kernel source from selected features"
-        parallelism: "single"
-        input_variables: ["taskSpec", "referenceCode", "selection"]
-        output_schema:
-          type: "object"
-          properties:
-            candidate_code: { type: "string" }
-            implemented_feature_ids: { type: "array", items: { type: "string" } }
-            skipped_feature_ids: { type: "array", items: { type: "string" } }
-          required: ["candidate_code", "implemented_feature_ids"]
-
-  - name: "Evaluate"
-    detail: "Compile, correctness-test, and benchmark the candidate"
-    position: "loop_body"
-    agents:
-      - label: "evaluate-{iteration}-{sample}"
-        description: "Run evaluator and parse compile/correctness/latency evidence"
-        parallelism: "single"
-        input_variables: ["generation.candidate_code", "EVAL_CMD", "EXP_DIR", "tests"]
-        output_schema:
-          type: "object"
-          properties:
-            compiled: { type: "boolean" }
-            correct: { type: "boolean" }
-            speedup: { type: "number" }
-            latency_ms: { type: "number" }
-            reward_hacking_flags: { type: "array", items: { type: "string" } }
-          required: ["compiled", "correct", "speedup"]
-
-  - name: "Reinforce"
-    detail: "Update feature scores from measured compile/correctness/speedup reward"
-    position: "loop_body"
-    agents:
-      - label: "reinforce-{iteration}-{sample}"
-        description: "Apply FSR credit assignment to implemented feature ids"
-        parallelism: "single"
-        input_variables: ["candidate", "featureScores"]
-        output_schema:
-          type: "object"
-          properties:
-            updated_scores: { type: "array", items: { type: "object" } }
-            reinforcement_notes: { type: "array", items: { type: "string" } }
-          required: ["updated_scores"]
-
-  - name: "Report"
-    detail: "Return best kernel, feature reward table, failures, and next feature sets"
-    position: "epilogue"
-    agents:
-      - label: "final-report"
-        description: "Summarize feature rewards, best candidate, failures, and next feature sets"
-        parallelism: "single"
-        input_variables: ["bestCandidate", "featureScores", "candidates"]
-        output_schema:
-          type: "object"
-          properties: {}
-          required: []
-
+- name: Setup
+  detail: Read task specification, reference implementation, target GPU, and evaluator
+    contract
+  position: preamble
+  agents:
+  - label: setup-task
+    description: Parse task spec and reference implementation
+    parallelism: single
+    input_variables:
+    - TASK_SPEC_PATH
+    - REFERENCE_CODE_PATH
+    - EVAL_CMD
+    - TARGET_GPU
+    output_schema:
+      type: object
+      properties:
+        problem_definition:
+          type: string
+        reference_code:
+          type: string
+        operation_type:
+          type: string
+        constraints:
+          type: array
+          items:
+            type: string
+      required:
+      - problem_definition
+      - operation_type
+      - constraints
+- name: FeatureCatalog
+  detail: Build a CUDA optimization feature space tailored to the task
+  position: preamble
+  agents:
+  - label: feature-catalog
+    description: Construct feature catalog and neutral feature priors
+    parallelism: single
+    input_variables:
+    - taskSpec
+    - referenceCode
+    - TARGET_GPU
+    - RTOL
+    - ATOL
+    output_schema:
+      type: object
+      properties:
+        features:
+          type: array
+          items:
+            type: object
+        baseline_feature_ids:
+          type: array
+          items:
+            type: string
+        unsafe_feature_ids:
+          type: array
+          items:
+            type: string
+      required:
+      - features
+      - baseline_feature_ids
+- name: GenerateTests
+  detail: Create diverse correctness and boundary tests for the task
+  position: preamble
+  agents:
+  - label: generate-tests
+    description: Generate diverse shape, dtype, layout, and boundary test cases
+    parallelism: single
+    input_variables:
+    - setup.operation_type
+    - setup.input_contract
+    - setup.output_contract
+    - RTOL
+    - ATOL
+    output_schema:
+      type: object
+      properties:
+        test_cases:
+          type: array
+          items:
+            type: object
+        tolerance_policy:
+          type: string
+      required:
+      - test_cases
+      - tolerance_policy
+- name: SelectFeatures
+  detail: Choose a feature combination from scored feature history
+  position: loop_body
+  agents:
+  - label: select-features-{iteration}-{sample}
+    description: Select compatible feature ids with exploration/exploitation balance
+    parallelism: single
+    input_variables:
+    - featureCatalog
+    - featureScores
+    - candidates
+    - FEATURE_BUDGET
+    output_schema:
+      type: object
+      properties:
+        selected_feature_ids:
+          type: array
+          items:
+            type: string
+        rationale:
+          type: string
+        expected_risks:
+          type: array
+          items:
+            type: string
+      required:
+      - selected_feature_ids
+      - rationale
+- name: GenerateKernel
+  detail: Generate candidate CUDA code conditioned on selected features
+  position: loop_body
+  agents:
+  - label: generate-kernel-{iteration}-{sample}
+    description: Generate complete CUDA/C++ kernel source from selected features
+    parallelism: single
+    input_variables:
+    - taskSpec
+    - referenceCode
+    - selection
+    output_schema:
+      type: object
+      properties:
+        candidate_code:
+          type: string
+        implemented_feature_ids:
+          type: array
+          items:
+            type: string
+        skipped_feature_ids:
+          type: array
+          items:
+            type: string
+      required:
+      - candidate_code
+      - implemented_feature_ids
+- name: Evaluate
+  detail: Compile, correctness-test, and benchmark the candidate
+  position: loop_body
+  agents:
+  - label: evaluate-{iteration}-{sample}
+    description: Run evaluator and parse compile/correctness/latency evidence
+    parallelism: single
+    input_variables:
+    - generation.candidate_code
+    - EVAL_CMD
+    - EXP_DIR
+    - tests
+    output_schema:
+      type: object
+      properties:
+        compiled:
+          type: boolean
+        correct:
+          type: boolean
+        speedup:
+          type: number
+        latency_ms:
+          type: number
+        reward_hacking_flags:
+          type: array
+          items:
+            type: string
+      required:
+      - compiled
+      - correct
+      - speedup
+- name: Reinforce
+  detail: Update feature scores from measured compile/correctness/speedup reward
+  position: loop_body
+  agents:
+  - label: reinforce-{iteration}-{sample}
+    description: Apply FSR credit assignment to implemented feature ids
+    parallelism: single
+    input_variables:
+    - candidate
+    - featureScores
+    output_schema:
+      type: object
+      properties:
+        updated_scores:
+          type: array
+          items:
+            type: object
+        reinforcement_notes:
+          type: array
+          items:
+            type: string
+      required:
+      - updated_scores
+- name: Report
+  detail: Return best kernel, feature reward table, failures, and next feature sets
+  position: epilogue
+  agents:
+  - label: final-report
+    description: Summarize feature rewards, best candidate, failures, and next feature
+      sets
+    parallelism: single
+    input_variables:
+    - bestCandidate
+    - featureScores
+    - candidates
+    output_schema:
+      type: object
+      properties: {}
+      required: []
 plan_angles:
-  - name: "memory_hierarchy"
-    description: "Search shared memory, coalescing, vectorization, and cache-friendly layouts."
-    trigger: "Memory bandwidth or uncoalesced access dominates"
-  - name: "parallel_decomposition"
-    description: "Search block/grid shapes, warp decomposition, and occupancy tradeoffs."
-    trigger: "Kernel underutilizes SMs or has poor occupancy"
-  - name: "instruction_level"
-    description: "Search loop unrolling, instruction scheduling, intrinsics, and fast math."
-    trigger: "Compute-bound kernels or math-heavy operations"
-
+- name: memory_hierarchy
+  description: Search shared memory, coalescing, vectorization, and cache-friendly
+    layouts.
+  trigger: Memory bandwidth or uncoalesced access dominates
+- name: parallel_decomposition
+  description: Search block/grid shapes, warp decomposition, and occupancy tradeoffs.
+  trigger: Kernel underutilizes SMs or has poor occupancy
+- name: instruction_level
+  description: Search loop unrolling, instruction scheduling, intrinsics, and fast
+    math.
+  trigger: Compute-bound kernels or math-heavy operations
 args:
   required:
-    - name: "problem_path"
-      type: "string"
-      description: "Path to CUDA generation task specification"
-      example: "/path/to/task.md"
-    - name: "benchmark_command"
-      type: "string"
-      description: "Evaluator command with {kernel_path} and {result_path} substitutions"
-      example: "<user-provided benchmark command with {kernel_path}/{result_path}>"
+  - name: problem_path
+    type: string
+    description: Path to CUDA generation task specification
+    example: /path/to/task.md
+  - name: benchmark_command
+    type: string
+    description: Evaluator command with {kernel_path} and {result_path} substitutions
+    example: <user-provided benchmark command with {kernel_path}/{result_path}>
   optional:
-    - name: "reference_code_path"
-      type: "string"
-      default: "''"
-      description: "Optional reference implementation path"
-      example: "/path/to/reference.py"
-    - name: "target_gpu"
-      type: "string"
-      default: "'H100'"
-      description: "Target GPU architecture"
-      example: "H100"
-    - name: "iterations"
-      type: "number"
-      default: "8"
-      description: "Feature-search iterations"
-      example: "8"
-    - name: "feature_budget"
-      type: "number"
-      default: "4"
-      description: "Maximum features selected per candidate"
-      example: "4"
-    - name: "samples_per_feature_set"
-      type: "number"
-      default: "2"
-      description: "Candidate samples per feature-selection iteration"
-      example: "2"
-
+  - name: reference_code_path
+    type: string
+    default: ''''''
+    description: Optional reference implementation path
+    example: /path/to/reference.py
+  - name: target_gpu
+    type: string
+    default: '''H100'''
+    description: Target GPU architecture
+    example: H100
+  - name: iterations
+    type: number
+    default: '8'
+    description: Feature-search iterations
+    example: '8'
+  - name: feature_budget
+    type: number
+    default: '4'
+    description: Maximum features selected per candidate
+    example: '4'
+  - name: samples_per_feature_set
+    type: number
+    default: '2'
+    description: Candidate samples per feature-selection iteration
+    example: '2'
 correctness:
   criteria:
-    - "Candidate compiles"
-    - "Candidate passes diverse generated tests"
-    - "Candidate does not call PyTorch/reference fallback"
-    - "Speedup is measured by evaluator JSON"
-  check_type: "runtime_comparison"
-  reference_output: "reference_code_path or task-provided baseline"
-
+  - Candidate compiles
+  - Candidate passes diverse generated tests
+  - Candidate does not call PyTorch/reference fallback
+  - Speedup is measured by evaluator JSON
+  check_type: runtime_comparison
+  reference_output: reference_code_path or task-provided baseline
 return_fields:
-  - name: "best_speedup"
-    type: "number"
-    description: "Best measured speedup"
-    required: true
-  - name: "best_kernel_code"
-    type: "string"
-    description: "Best candidate CUDA code"
-    required: true
-  - name: "feature_scores"
-    type: "object"
-    description: "Final feature reward table"
-    required: true
-  - name: "candidates"
-    type: "array"
-    description: "Candidate summaries and evaluator evidence"
-    required: true
-  - name: "report"
-    type: "object"
-    description: "Final technical report"
-    required: true
-
+- name: best_speedup
+  type: number
+  description: Best measured speedup
+  required: true
+- name: best_kernel_code
+  type: string
+  description: Best candidate CUDA code
+  required: true
+- name: feature_scores
+  type: object
+  description: Final feature reward table
+  required: true
+- name: candidates
+  type: array
+  description: Candidate summaries and evaluator evidence
+  required: true
+- name: report
+  type: object
+  description: Final technical report
+  required: true
 template:
-  base: "iterative-loop"
+  base: iterative-loop
   customizations:
-    - "custom_profiling"
-    - "early_stopping"
+  - custom_profiling
+  - early_stopping

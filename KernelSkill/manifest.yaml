@@ -1,30 +1,36 @@
-schema_version: "1.1"
+schema_version: '1.1'
 name: kernelskill-kernel-optimization
 entrypoint: kernelskill-kernel-optimization.js
-
 backend:
   portability: clean
   matrix_eligible: true
   method_supported_backends: any
-  supported: [cuda, triton]
+  supported:
+  - cuda
+  - triton
+  - metax
   default: cuda
-  notes: >
-    Tier per spec §7.2 (clean, matrix-eligible). User review 6/15 argues
-    vendor_locked/cuda/NCU is more accurate (no triton dry-run test, CUDA
-    skill library + __global__ vocabulary throughout) — see tier-revision-
-    proposal.md. Legacy WORKFLOW_SUITABILITY=['cuda']; kernelskill-cuda-
-    dryrun.test.js contract-tests the cuda driver path. No triton dry-run
-    exists; triton driver capability is declared per spec §7.2 but not
-    yet contract-tested.
+  notes: 'Tier per spec §7.2 (clean, matrix-eligible). User review 6/15 argues vendor_locked/cuda/NCU
+    is more accurate (no triton dry-run test, CUDA skill library + __global__ vocabulary
+    throughout) — see tier-revision- proposal.md. Legacy WORKFLOW_SUITABILITY=[''cuda''];
+    kernelskill-cuda- dryrun.test.js contract-tests the cuda driver path. No triton
+    dry-run exists; triton driver capability is declared per spec §7.2 but not yet
+    contract-tested.
 
+    '
 source:
-  paper_title: "KernelSkill: Dual-Memory Multi-Agent CUDA Kernel Optimization"
-  paper_url: ""
-  notes: "clean per spec §7.2; full phase spec deferred. Tier disputed — see tier-revision-proposal.md."
-
+  paper_title: 'KernelSkill: Dual-Memory Multi-Agent CUDA Kernel Optimization'
+  paper_url: ''
+  notes: clean per spec §7.2; full phase spec deferred. Tier disputed — see tier-revision-proposal.md.
 workflow:
   name: kernelskill-kernel-optimization
-  description: "Multi-agent CUDA kernel optimization with a dual-level memory: a curated long-term expert skill library (deterministic decision policy + method knowledge) and short-term per-task optimize/repair trajectory memory. Each refinement round branches into a repair path (invalid kernel) or an optimize path (valid kernel) driven by ncu+nsys profiling (KernelSkill / KernelMem methodology)."
-  when_to_use: "When generating and optimizing custom CUDA kernels from a PyTorch reference, and you want optimization-method selection to be explicit, auditable, and grounded in profiling evidence rather than relying on the model"
-  output_filename: "kernelskill-kernel-optimization.js"
-  directory: "KernelSkill/"
+  description: 'Multi-agent CUDA kernel optimization with a dual-level memory: a curated
+    long-term expert skill library (deterministic decision policy + method knowledge)
+    and short-term per-task optimize/repair trajectory memory. Each refinement round
+    branches into a repair path (invalid kernel) or an optimize path (valid kernel)
+    driven by ncu+nsys profiling (KernelSkill / KernelMem methodology).'
+  when_to_use: When generating and optimizing custom CUDA kernels from a PyTorch reference,
+    and you want optimization-method selection to be explicit, auditable, and grounded
+    in profiling evidence rather than relying on the model
+  output_filename: kernelskill-kernel-optimization.js
+  directory: KernelSkill/

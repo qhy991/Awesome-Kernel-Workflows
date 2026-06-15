@@ -1,325 +1,409 @@
-# =============================================================================
-# Astra Manifest — Multi-Agent System for Existing CUDA Kernel Optimization
-# =============================================================================
-# Source: arXiv:2509.07506 "Astra: A Multi-Agent System for GPU Kernel
-#         Performance Optimization"
-# =============================================================================
-
-schema_version: "1.1"
+schema_version: '1.1'
 name: astra-kernel-optimization
 entrypoint: astra-kernel-optimization.js
-
 backend:
   portability: clean
   matrix_eligible: true
   method_supported_backends: any
-  supported: [cuda, triton]
+  supported:
+  - cuda
+  - triton
+  - metax
   default: cuda
-  # Note: integration_mode='sglang' is vendor-locked (NVIDIA + sglang);
-  # driver path throws if integration_mode='sglang' combined with non-cuda
-  # backend_dir. Matrix-smoke (P5e) exercises integration_mode='standalone'.
-  # Notes: legacy WORKFLOW_SUITABILITY=['cuda']; driver-path supported=
-  # [cuda, triton]. triton-dryrun.test.js contract-tests the driver path.
-  notes: >
-    Legacy WORKFLOW_SUITABILITY=['cuda']. Driver-path supported=[cuda, triton].
-    integration_mode='sglang' is NVIDIA-only (guard throws on non-cuda).
+  notes: 'Legacy WORKFLOW_SUITABILITY=[''cuda'']. Driver-path supported=[cuda, triton].
+    integration_mode=''sglang'' is NVIDIA-only (guard throws on non-cuda).
 
+    '
 source:
-  paper_title: "Astra: A Multi-Agent System for GPU Kernel Performance Optimization"
-  paper_url: "https://arxiv.org/abs/2509.07506"
-  paper_venue: "NeurIPS 2025 Fourth Workshop on Deep Learning for Code"
-  repo_url: "https://github.com/Anjiang-Wei/Astra"
-  commit_or_tag: ""
-  license: "Apache-2.0"
-  notes: >
-    Astra optimizes existing CUDA kernels extracted from production frameworks
-    such as SGLang. It coordinates Testing, Profiling, Planning, and Coding
-    agents through an iterative correctness/performance feedback loop.
+  paper_title: 'Astra: A Multi-Agent System for GPU Kernel Performance Optimization'
+  paper_url: https://arxiv.org/abs/2509.07506
+  paper_venue: NeurIPS 2025 Fourth Workshop on Deep Learning for Code
+  repo_url: https://github.com/Anjiang-Wei/Astra
+  commit_or_tag: ''
+  license: Apache-2.0
+  notes: 'Astra optimizes existing CUDA kernels extracted from production frameworks
+    such as SGLang. It coordinates Testing, Profiling, Planning, and Coding agents
+    through an iterative correctness/performance feedback loop.
 
+    '
 workflow:
-  name: "astra-kernel-optimization"
-  description: "Astra-style multi-agent optimization loop for existing CUDA kernels from production frameworks"
-  when_to_use: >
-    Use when you already have a CUDA kernel implementation and need a structured
-    multi-agent loop that generates tests, profiles baseline/candidates, plans
-    targeted optimizations, edits code, and preserves reintegration guidance.
-  output_filename: "astra-kernel-optimization.js"
-  directory: "Astra/"
+  name: astra-kernel-optimization
+  description: Astra-style multi-agent optimization loop for existing CUDA kernels
+    from production frameworks
+  when_to_use: 'Use when you already have a CUDA kernel implementation and need a
+    structured multi-agent loop that generates tests, profiles baseline/candidates,
+    plans targeted optimizations, edits code, and preserves reintegration guidance.
 
+    '
+  output_filename: astra-kernel-optimization.js
+  directory: Astra/
 method:
-  category: "iterative_self_improving"
-  core_insight: >
-    Existing production CUDA kernels can be optimized by decomposing the workflow
-    into specialized LLM agents: Testing creates shape/input suites, Profiling
-    measures runtime and bottlenecks, Planning proposes evidence-grounded edits,
-    and Coding implements complete candidate kernels. Only measured correctness
+  category: iterative_self_improving
+  core_insight: 'Existing production CUDA kernels can be optimized by decomposing
+    the workflow into specialized LLM agents: Testing creates shape/input suites,
+    Profiling measures runtime and bottlenecks, Planning proposes evidence-grounded
+    edits, and Coding implements complete candidate kernels. Only measured correctness
     and benchmark evidence updates the best candidate.
+
+    '
   feedback_signal:
-    type: "throughput_delta"
-    description: "Correctness pass plus measured speedup against baseline kernel over representative shapes"
-    tool: "custom_bench"
+    type: throughput_delta
+    description: Correctness pass plus measured speedup against baseline kernel over
+      representative shapes
+    tool: custom_bench
     higher_is_better: true
-
 topology:
-  type: "iterative"
+  type: iterative
   iterative:
-    iterations_arg: "iterations"
-    convergence_condition: "Iteration iterations exhausted or no measured improvement remains"
+    iterations_arg: iterations
+    convergence_condition: Iteration iterations exhausted or no measured improvement
+      remains
     state_variables:
-      - name: "currentBestCode"
-        type: "string"
-        initial_value: "initialKernelCode"
-        description: "Best measured kernel code carried into the next Coding step"
-      - name: "baselineProfile"
-        type: "object"
-        initial_value: "null"
-        description: "Baseline latency and bottleneck evidence"
-      - name: "bestResult"
-        type: "object"
-        initial_value: "null"
-        description: "Best correctness/performance evaluator result"
-      - name: "runLog"
-        type: "array"
-        initial_value: "[]"
-        description: "Per-iteration plan, code notes, evaluator evidence"
-      - name: "lessons"
-        type: "array"
-        initial_value: "[]"
-        description: "Evidence-backed lessons passed to later Planning iterations"
-
+    - name: currentBestCode
+      type: string
+      initial_value: initialKernelCode
+      description: Best measured kernel code carried into the next Coding step
+    - name: baselineProfile
+      type: object
+      initial_value: 'null'
+      description: Baseline latency and bottleneck evidence
+    - name: bestResult
+      type: object
+      initial_value: 'null'
+      description: Best correctness/performance evaluator result
+    - name: runLog
+      type: array
+      initial_value: '[]'
+      description: Per-iteration plan, code notes, evaluator evidence
+    - name: lessons
+      type: array
+      initial_value: '[]'
+      description: Evidence-backed lessons passed to later Planning iterations
 phases:
-  - name: "Setup"
-    detail: "Read initial CUDA kernel, baseline/export function contract, and integration mode"
-    position: "preamble"
-    agents:
-      - label: "setup-astra"
-        description: "Read kernel and summarize callable/integration contract"
-        parallelism: "single"
-        input_variables: ["INITIAL_KERNEL_PATH", "COMPARE_KIND", "BASELINE_MODULE", "BASELINE_FUNC", "GENERATED_EXPORT_FUNC"]
-        output_schema:
-          type: "object"
-          properties:
-            initial_kernel_code: { type: "string" }
-            kernel_summary: { type: "string" }
-            entry_points: { type: "array", items: { type: "string" } }
-            integration_contract: { type: "string" }
-          required: ["initial_kernel_code", "integration_contract"]
-
-  - name: "PrepareTests"
-    detail: "Generate or validate representative correctness and performance tests"
-    position: "preamble"
-    agents:
-      - label: "prepare-tests"
-        description: "Testing Agent builds shape/input suite and evaluator contract"
-        parallelism: "single"
-        input_variables: ["COMPARE_KIND", "BASELINE_MODULE", "BASELINE_FUNC", "GENERATED_EXPORT_FUNC", "TEST_CMD", "BENCH_CMD"]
-        output_schema:
-          type: "object"
-          properties:
-            test_cases: { type: "array", items: { type: "object" } }
-            correctness_tolerance: { type: "string" }
-            harness_plan: { type: "string" }
-          required: ["test_cases", "harness_plan"]
-
-  - name: "ProfileBaseline"
-    detail: "Measure baseline latency and identify kernel bottlenecks"
-    position: "preamble"
-    agents:
-      - label: "profile-baseline"
-        description: "Profiling Agent measures baseline and summarizes bottlenecks"
-        parallelism: "single"
-        input_variables: ["initialKernelCode", "TEST_CMD", "BENCH_CMD", "testSuite"]
-        output_schema:
-          type: "object"
-          properties:
-            measured: { type: "boolean" }
-            baseline_runtime_ms: { type: "number" }
-            per_shape_runtime: { type: "array", items: { type: "object" } }
-            bottlenecks: { type: "array", items: { type: "string" } }
-          required: ["measured", "bottlenecks"]
-
-  - name: "Plan"
-    detail: "Planning agent proposes the next optimization from logs and profiles"
-    position: "loop_body"
-    agents:
-      - label: "plan-{iteration}"
-        description: "Planning Agent proposes one evidence-grounded optimization"
-        parallelism: "single"
-        input_variables: ["currentBestCode", "baselineProfile", "runLog", "lessons"]
-        output_schema:
-          type: "object"
-          properties:
-            optimization_goal: { type: "string" }
-            target_regions: { type: "array", items: { type: "string" } }
-            proposed_changes: { type: "array", items: { type: "string" } }
-            correctness_risks: { type: "array", items: { type: "string" } }
-          required: ["optimization_goal", "proposed_changes"]
-
-  - name: "Code"
-    detail: "Coding agent edits the current best CUDA kernel according to the plan"
-    position: "loop_body"
-    agents:
-      - label: "code-{iteration}"
-        description: "Coding Agent implements a complete candidate kernel"
-        parallelism: "single"
-        input_variables: ["currentBestCode", "setup.integration_contract", "plan"]
-        output_schema:
-          type: "object"
-          properties:
-            candidate_code: { type: "string" }
-            changed_regions: { type: "array", items: { type: "string" } }
-            implementation_notes: { type: "string" }
-          required: ["candidate_code"]
-
-  - name: "Evaluate"
-    detail: "Testing and profiling agents validate correctness and speedup"
-    position: "loop_body"
-    agents:
-      - label: "evaluate-{iteration}"
-        description: "Run correctness and benchmark commands, parse authoritative JSON evidence"
-        parallelism: "single"
-        input_variables: ["code.candidate_code", "TEST_CMD", "BENCH_CMD", "EXP_DIR", "testSuite"]
-        output_schema:
-          type: "object"
-          properties:
-            compiled: { type: "boolean" }
-            correct: { type: "boolean" }
-            speedup: { type: "number" }
-            runtime_ms: { type: "number" }
-            baseline_runtime_ms: { type: "number" }
-            profile_summary: { type: "string" }
-          required: ["compiled", "correct", "speedup"]
-
-  - name: "Record"
-    detail: "Record candidate evidence, update best kernel, and carry forward lessons"
-    position: "loop_body"
-    agents:
-      - label: "record-{iteration}"
-        description: "Distill evidence-backed lessons for the next planning step"
-        parallelism: "single"
-        input_variables: ["record", "bestResult"]
-        output_schema:
-          type: "object"
-          properties:
-            lessons: { type: "array", items: { type: "string" } }
-          required: ["lessons"]
-
-  - name: "PostProcess"
-    detail: "Prepare reintegration notes and final drop-in patch guidance"
-    position: "epilogue"
-    agents:
-      - label: "post-process"
-        description: "Summarize SGLang/standalone reintegration guidance and rollback criteria"
-        parallelism: "single"
-        input_variables: ["INTEGRATION_MODE", "GENERATED_EXPORT_FUNC", "currentBestCode", "bestResult"]
-        output_schema:
-          type: "object"
-          properties:
-            reintegration_notes: { type: "string" }
-            manual_review_items: { type: "array", items: { type: "string" } }
-            limitations: { type: "array", items: { type: "string" } }
-          required: ["reintegration_notes"]
-
-  - name: "Report"
-    detail: "Return best kernel, measured trajectory, failures, and follow-up opportunities"
-    position: "epilogue"
-    agents:
-      - label: "final-report"
-        description: "Write final optimization report"
-        parallelism: "single"
-        input_variables: ["baselineProfile", "bestResult", "runLog", "postProcess"]
-        output_schema:
-          type: "object"
-          properties: {}
-          required: []
-
+- name: Setup
+  detail: Read initial CUDA kernel, baseline/export function contract, and integration
+    mode
+  position: preamble
+  agents:
+  - label: setup-astra
+    description: Read kernel and summarize callable/integration contract
+    parallelism: single
+    input_variables:
+    - INITIAL_KERNEL_PATH
+    - COMPARE_KIND
+    - BASELINE_MODULE
+    - BASELINE_FUNC
+    - GENERATED_EXPORT_FUNC
+    output_schema:
+      type: object
+      properties:
+        initial_kernel_code:
+          type: string
+        kernel_summary:
+          type: string
+        entry_points:
+          type: array
+          items:
+            type: string
+        integration_contract:
+          type: string
+      required:
+      - initial_kernel_code
+      - integration_contract
+- name: PrepareTests
+  detail: Generate or validate representative correctness and performance tests
+  position: preamble
+  agents:
+  - label: prepare-tests
+    description: Testing Agent builds shape/input suite and evaluator contract
+    parallelism: single
+    input_variables:
+    - COMPARE_KIND
+    - BASELINE_MODULE
+    - BASELINE_FUNC
+    - GENERATED_EXPORT_FUNC
+    - TEST_CMD
+    - BENCH_CMD
+    output_schema:
+      type: object
+      properties:
+        test_cases:
+          type: array
+          items:
+            type: object
+        correctness_tolerance:
+          type: string
+        harness_plan:
+          type: string
+      required:
+      - test_cases
+      - harness_plan
+- name: ProfileBaseline
+  detail: Measure baseline latency and identify kernel bottlenecks
+  position: preamble
+  agents:
+  - label: profile-baseline
+    description: Profiling Agent measures baseline and summarizes bottlenecks
+    parallelism: single
+    input_variables:
+    - initialKernelCode
+    - TEST_CMD
+    - BENCH_CMD
+    - testSuite
+    output_schema:
+      type: object
+      properties:
+        measured:
+          type: boolean
+        baseline_runtime_ms:
+          type: number
+        per_shape_runtime:
+          type: array
+          items:
+            type: object
+        bottlenecks:
+          type: array
+          items:
+            type: string
+      required:
+      - measured
+      - bottlenecks
+- name: Plan
+  detail: Planning agent proposes the next optimization from logs and profiles
+  position: loop_body
+  agents:
+  - label: plan-{iteration}
+    description: Planning Agent proposes one evidence-grounded optimization
+    parallelism: single
+    input_variables:
+    - currentBestCode
+    - baselineProfile
+    - runLog
+    - lessons
+    output_schema:
+      type: object
+      properties:
+        optimization_goal:
+          type: string
+        target_regions:
+          type: array
+          items:
+            type: string
+        proposed_changes:
+          type: array
+          items:
+            type: string
+        correctness_risks:
+          type: array
+          items:
+            type: string
+      required:
+      - optimization_goal
+      - proposed_changes
+- name: Code
+  detail: Coding agent edits the current best CUDA kernel according to the plan
+  position: loop_body
+  agents:
+  - label: code-{iteration}
+    description: Coding Agent implements a complete candidate kernel
+    parallelism: single
+    input_variables:
+    - currentBestCode
+    - setup.integration_contract
+    - plan
+    output_schema:
+      type: object
+      properties:
+        candidate_code:
+          type: string
+        changed_regions:
+          type: array
+          items:
+            type: string
+        implementation_notes:
+          type: string
+      required:
+      - candidate_code
+- name: Evaluate
+  detail: Testing and profiling agents validate correctness and speedup
+  position: loop_body
+  agents:
+  - label: evaluate-{iteration}
+    description: Run correctness and benchmark commands, parse authoritative JSON
+      evidence
+    parallelism: single
+    input_variables:
+    - code.candidate_code
+    - TEST_CMD
+    - BENCH_CMD
+    - EXP_DIR
+    - testSuite
+    output_schema:
+      type: object
+      properties:
+        compiled:
+          type: boolean
+        correct:
+          type: boolean
+        speedup:
+          type: number
+        runtime_ms:
+          type: number
+        baseline_runtime_ms:
+          type: number
+        profile_summary:
+          type: string
+      required:
+      - compiled
+      - correct
+      - speedup
+- name: Record
+  detail: Record candidate evidence, update best kernel, and carry forward lessons
+  position: loop_body
+  agents:
+  - label: record-{iteration}
+    description: Distill evidence-backed lessons for the next planning step
+    parallelism: single
+    input_variables:
+    - record
+    - bestResult
+    output_schema:
+      type: object
+      properties:
+        lessons:
+          type: array
+          items:
+            type: string
+      required:
+      - lessons
+- name: PostProcess
+  detail: Prepare reintegration notes and final drop-in patch guidance
+  position: epilogue
+  agents:
+  - label: post-process
+    description: Summarize SGLang/standalone reintegration guidance and rollback criteria
+    parallelism: single
+    input_variables:
+    - INTEGRATION_MODE
+    - GENERATED_EXPORT_FUNC
+    - currentBestCode
+    - bestResult
+    output_schema:
+      type: object
+      properties:
+        reintegration_notes:
+          type: string
+        manual_review_items:
+          type: array
+          items:
+            type: string
+        limitations:
+          type: array
+          items:
+            type: string
+      required:
+      - reintegration_notes
+- name: Report
+  detail: Return best kernel, measured trajectory, failures, and follow-up opportunities
+  position: epilogue
+  agents:
+  - label: final-report
+    description: Write final optimization report
+    parallelism: single
+    input_variables:
+    - baselineProfile
+    - bestResult
+    - runLog
+    - postProcess
+    output_schema:
+      type: object
+      properties: {}
+      required: []
 plan_angles:
-  - name: "loop_transform"
-    description: "Use loop restructuring, unrolling, or branch simplification where profiler evidence shows overhead."
-    trigger: "Profiler or code inspection shows high loop/control overhead"
-  - name: "memory_access"
-    description: "Improve coalescing, vectorization, cache behavior, or shared-memory use."
-    trigger: "Memory bandwidth or uncoalesced access dominates runtime"
-  - name: "intrinsics_fast_math"
-    description: "Use CUDA intrinsics and fast math only within tolerated numerical error."
-    trigger: "Compare kind and tolerance allow approximate math"
-
+- name: loop_transform
+  description: Use loop restructuring, unrolling, or branch simplification where profiler
+    evidence shows overhead.
+  trigger: Profiler or code inspection shows high loop/control overhead
+- name: memory_access
+  description: Improve coalescing, vectorization, cache behavior, or shared-memory
+    use.
+  trigger: Memory bandwidth or uncoalesced access dominates runtime
+- name: intrinsics_fast_math
+  description: Use CUDA intrinsics and fast math only within tolerated numerical error.
+  trigger: Compare kind and tolerance allow approximate math
 args:
   required:
-    - name: "kernel_path"
-      type: "string"
-      description: "Path to initial CUDA kernel file to optimize"
-      example: "/path/to/rms_v1.cu"
+  - name: kernel_path
+    type: string
+    description: Path to initial CUDA kernel file to optimize
+    example: /path/to/rms_v1.cu
   optional:
-    - name: "compare_kind"
-      type: "string"
-      default: "'generic'"
-      description: "Comparison mode tag guiding test generation"
-      example: "rmsnorm"
-    - name: "baseline_module"
-      type: "string"
-      default: "'sgl_kernel'"
-      description: "Python module containing baseline function"
-      example: "sgl_kernel"
-    - name: "baseline_func"
-      type: "string"
-      default: "'sgl_fused_add_rmsnorm'"
-      description: "Baseline function to compare against"
-      example: "fused_add_rmsnorm"
-    - name: "generated_export_func"
-      type: "string"
-      default: "BASELINE_FUNC"
-      description: "Export function name expected in generated PyBind module"
-      example: "sgl_fused_add_rmsnorm"
-    - name: "test_command"
-      type: "string"
-      default: "''"
-      description: "Correctness command with {kernel_path} and {result_path} placeholders"
-      example: "<user-provided correctness command with {kernel_path}/{result_path}>"
-    - name: "benchmark_command"
-      type: "string"
-      default: "''"
-      description: "Benchmark command with {kernel_path} and {result_path} placeholders"
-      example: "<user-provided benchmark command with {kernel_path}/{result_path}>"
-    - name: "iterations"
-      type: "number"
-      default: "5"
-      description: "Maximum optimization iterations"
-      example: "5"
-
+  - name: compare_kind
+    type: string
+    default: '''generic'''
+    description: Comparison mode tag guiding test generation
+    example: rmsnorm
+  - name: baseline_module
+    type: string
+    default: '''sgl_kernel'''
+    description: Python module containing baseline function
+    example: sgl_kernel
+  - name: baseline_func
+    type: string
+    default: '''sgl_fused_add_rmsnorm'''
+    description: Baseline function to compare against
+    example: fused_add_rmsnorm
+  - name: generated_export_func
+    type: string
+    default: BASELINE_FUNC
+    description: Export function name expected in generated PyBind module
+    example: sgl_fused_add_rmsnorm
+  - name: test_command
+    type: string
+    default: ''''''
+    description: Correctness command with {kernel_path} and {result_path} placeholders
+    example: <user-provided correctness command with {kernel_path}/{result_path}>
+  - name: benchmark_command
+    type: string
+    default: ''''''
+    description: Benchmark command with {kernel_path} and {result_path} placeholders
+    example: <user-provided benchmark command with {kernel_path}/{result_path}>
+  - name: iterations
+    type: number
+    default: '5'
+    description: Maximum optimization iterations
+    example: '5'
 correctness:
   criteria:
-    - "Candidate compiles"
-    - "Generated export function remains callable"
-    - "Candidate matches baseline function under compare_kind tolerance"
-    - "Speedup is measured by benchmark command or explicit harness"
-  check_type: "runtime_comparison"
-  reference_output: "baseline_module.baseline_func over Testing Agent shape suite"
-
+  - Candidate compiles
+  - Generated export function remains callable
+  - Candidate matches baseline function under compare_kind tolerance
+  - Speedup is measured by benchmark command or explicit harness
+  check_type: runtime_comparison
+  reference_output: baseline_module.baseline_func over Testing Agent shape suite
 return_fields:
-  - name: "best_speedup"
-    type: "number"
-    description: "Best measured speedup among correct candidates"
-    required: true
-  - name: "best_kernel_code"
-    type: "string"
-    description: "Best measured kernel code"
-    required: true
-  - name: "run_log"
-    type: "array"
-    description: "Per-iteration plan, code notes, and evaluator evidence"
-    required: true
-  - name: "post_process"
-    type: "object"
-    description: "Reintegration guidance"
-    required: true
-  - name: "report"
-    type: "object"
-    description: "Final technical report"
-    required: true
-
+- name: best_speedup
+  type: number
+  description: Best measured speedup among correct candidates
+  required: true
+- name: best_kernel_code
+  type: string
+  description: Best measured kernel code
+  required: true
+- name: run_log
+  type: array
+  description: Per-iteration plan, code notes, and evaluator evidence
+  required: true
+- name: post_process
+  type: object
+  description: Reintegration guidance
+  required: true
+- name: report
+  type: object
+  description: Final technical report
+  required: true
 template:
-  base: "iterative-loop"
+  base: iterative-loop
   customizations:
-    - "custom_profiling"
-    - "early_stopping"
+  - custom_profiling
+  - early_stopping
