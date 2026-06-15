@@ -15,16 +15,16 @@ backend:
   portability: clean
   matrix_eligible: true
   method_supported_backends: any
-  supported: [cuda]
+  supported: [cuda, triton]
   default: cuda
   # The Generalist beam loop and all seven composable axis components
   # (evidence_schema, anti_cheat, diagnose, memory_store, method_gate,
   # verify_insight, ceiling/stagnation gates) are backend-agnostic.
   # The only language surface is the LANGUAGE arg threaded into
   # plan/implement/evaluate prompts and the code-fence token wrapping
-  # kernel snippets. Currently ships with cuda as the sole supported
-  # backend; driver-axis retrofit makes it ready for multi-backend
-  # once additional drivers are registered.
+  # kernel snippets. Driver-path triton is contract-tested (generalist-
+  # triton-dryrun.test.js); legacy path (no backend_dir) is still guarded
+  # by .js WORKFLOW_SUITABILITY=['cuda'] until P5 sync.
 
 source:
   paper_title: "KerSor Solver SDK — Best-of-Breed Reference Solver"
