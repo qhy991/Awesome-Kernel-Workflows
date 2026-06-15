@@ -59,3 +59,36 @@ and no substrate code changes. That is the whole extensibility story.
 
 See `embedded_eval.js` for the shared evaluation sequence workflows run against any
 conforming adapter.
+
+## Integration modes
+
+The adapter contract covers three integration modes a framework may require.
+The KerSor `framework-integrator` agent derives the correct mode at runtime by
+reading the framework source; the modes themselves are not per-framework code.
+
+| Mode | Registration mechanism | Adapter form | Reversibility safety net |
+|---|---|---|---|
+| `embedded_dispatch` | Source-patch + rebuild (e.g. llama.cpp `fattn.cu` dispatch switch + `file(GLOB)` CMake) | Shell script implementing the three verbs above | Byte-exact file round-trip (`reversible_edit.py roundtrip`) |
+| `embedded_inplace` | In-place patch, no registration mechanism | Same as `embedded_dispatch` | Same file round-trip |
+| `registry_dispatch` | Python kernel-class registered into a runtime dispatch table (e.g. vLLM `ScaledMMLinearKernel.can_implement` + `register_linear_kernel()` — no C++ source touched) | Python snippet (register + unregister are import-side-effect, not file edits) | Namespace round-trip (`reversible_edit.py namespace-roundtrip`): register, assert presence, unregister, assert absence |
+
+## Migration from hand-written adapters
+
+The reference adapters `scripts/llamacpp_register_variant.py` and
+`scripts/sgl_register_variant.py` are **deprecated**. A general LLM agent (the
+KerSor `framework-integrator`) armed with the reversible-edit safety net and the
+integration-mode methodology can derive each framework's adapter at runtime by
+reading the framework's dispatch, build system, and harness source — and the
+result is cached in KerSor's experience bank for reuse. The hand-written
+adapters remain as **reference implementations** (showing the expected
+complexity and the env-gate + ODR-suffix patterns), but are no longer the
+intended integration path for new frameworks.
+
+Per-framework edge cases the integrator playbook must cover:
+
+- **SGLang**: kernels bind at static-init via `TORCH_LIBRARY` (no runtime
+  dispatch table). An env-gate must wrap the `m.impl` line at library load.
+- **llama.cpp**: `file(GLOB)` without `CONFIGURE_DEPENDS` requires explicit
+  `cmake <build_dir>` after adding/removing `.cu` files. Variant symbols must
+  be suffixed with `_<variant_name>` to avoid ODR violations when both
+  original and variant headers are included in the same translation unit.

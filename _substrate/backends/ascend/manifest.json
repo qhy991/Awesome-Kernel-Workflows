@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "backend_id": "ascend",
+  "display_name": "Ascend C (Huawei NPU, bisheng / direct-launch)",
+  "source_ext": ".json",
+  "aux_ext": [".cpp", ".h", ".py"],
+  "artifact_ext": "",
+  "hw_vendor": "huawei",
+  "threshold_profile": "ascend",
+  "compiler": { "name": "bisheng", "invoke": "build.sh" },
+  "runner": { "invoke": "run.sh" },
+  "profiler": {
+    "name": "msprof",
+    "invoke": "profile.sh",
+    "format": "msprof-csv",
+    "to_evidence": "to_evidence.py"
+  },
+  "capabilities": {
+    "metrics": { "latency_ms": true, "dram_pct": true, "sm_pct": true },
+    "bottleneck_classes": ["memory_bound", "compute_bound", "overhead_bound"],
+    "problem_types": ["kernel-optimization", "kernel-generation"],
+    "precisions": ["fp32", "fp16", "bf16", "int32"]
+  },
+  "requires_tools": ["python3"],
+  "optional_tools": ["cmake", "bisheng", "msprof", "npu-smi"],
+  "idioms": "idioms.json",
+  "status": "experimental",
+  "notes": "MultiKernelBench AscendC direct-launch backend. The solver emits ONE JSON submission (sources[]=ModelNew.py + __aicore__ kernel .cpp + pybind11.cpp; entry.model='ModelNew.py::ModelNew'), not a single source file. build.sh validates that contract structurally; the real bisheng+cmake compile, NPU-event timing and correctness all happen inside MultiKernelBench's eval_single_runner.py, which run.sh delegates to (compile/run are coupled there, JIT-like, so artifact_ext is empty). On a host without torch_npu/CANN (e.g. macOS dev box) run.sh and profile.sh degrade honestly (deferred NPU tier). occupancy is intentionally absent (NPU has no warp-occupancy notion) so latency_occupancy is not a declared class. threshold_profile='ascend' is added to _substrate/diagnose.py PROFILES."
+}

@@ -15,3 +15,6 @@ backend:
   method_supported_backends: any
   supported: [cuda, triton]
   default: cuda
+  notes: >
+    Legacy WORKFLOW_SUITABILITY=['cuda']. Driver-path supported=[cuda, triton].
+    triton-dryrun.test.js contract-tests the driver path.

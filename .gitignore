@@ -22,3 +22,4 @@ kernel_0.py
 fused_add_gelu_kernel.py
 Awesome-LLM-Kernel/
 ARGUS/*_kernel.py
+.DS_Store
