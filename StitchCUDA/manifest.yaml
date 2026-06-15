@@ -12,6 +12,10 @@ backend:
   method_supported_backends: any
   supported: [cuda, triton]
   default: cuda
+  notes: >
+    Legacy WORKFLOW_SUITABILITY=['cuda']. Driver-path supported=[cuda, triton].
+    triton-dry-run.test.js contract-tests the driver path. kernelbench_config.
+    benchmark_suite requires CUDA driver (intersectional guard in workflow body).
 
 source:
   paper_title: "StitchCUDA: Three-agent CUDA kernel synthesis with adaptive replanning"

@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
-"""sgl_register_variant.py
+"""sgl_register_variant.py  --  DEPRECATED
+
+2026-06-14: This hand-written per-framework adapter is deprecated in favor of the
+KerSor `framework-integrator` agent (same migration as `llamacpp_register_variant.py`).
+A general LLM agent can derive the SGLang integration at runtime by reading
+`common_extension.cc` (TORCH_LIBRARY bindings), CMakeLists.txt (explicit SOURCES
+list), and the `benchmark/kernels/` harnesses. The key inference step — the ENV
+gate at library load to handle static-init torch binding — is now part of the
+integrator playbook, not locked in this script.
+
+This script remains as a **reference implementation**. See `ADAPTER_CONTRACT.md`.
+
+Original docstring follows.
+--
 
 Reference adapter #2 for the embedded-dispatch contract
 (_substrate/embedded/ADAPTER_CONTRACT.md), targeting sglang's sgl-kernel — a

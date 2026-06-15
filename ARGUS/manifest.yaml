@@ -1,0 +1,31 @@
+schema_version: "1.1"
+name: argus-kernel-optimization
+entrypoint: argus-kernel-optimization.js
+
+backend:
+  portability: method_intrinsic
+  matrix_eligible: false
+  intrinsic_to: AMD MI300X MFMA invariants
+  method_supported_backends: [rocm]
+  supported: [rocm]
+  default: rocm
+  notes: >
+    Tier per spec §7.2 (method_intrinsic, AMD MI300X MFMA invariants).
+    Implementation currently uses legacy args.language (no backend_dir/
+    driver). .js WORKFLOW_SUITABILITY=['cuda', 'rocm', 'triton',
+    'argus-dsl'] — the four-language set is the legacy guard; manifest
+    supported=[rocm] is the spec §7.2 target. Driver migration pending —
+    do not matrix-smoke until wired.
+
+source:
+  paper_title: "ARGUS: Agentic GPU Kernel Optimization via Data-Flow Invariants and ICRL Planning"
+  paper_url: "https://arxiv.org/abs/2604.18616"
+  paper_venue: "arXiv 2026 (CausalFlow/HKUST/Stanford)"
+  notes: "method_intrinsic; full phase spec deferred. Legacy args.language, driver migration pending."
+
+workflow:
+  name: argus-kernel-optimization
+  description: "Agentic GPU kernel optimization guided by data-flow invariants with ICRL planning (ARGUS methodology)"
+  when_to_use: "When optimizing GPU kernels that require coordinated reasoning over tiling, shared-memory staging, software pipelining, and instruction scheduling. Uses compile-time data-flow invariants for dense structured feedback instead of sparse pass/fail signals. Best for performance-critical kernels (GEMM, attention, MoE) targeting near-library-level throughput."
+  output_filename: "argus-kernel-optimization.js"
+  directory: "ARGUS/"

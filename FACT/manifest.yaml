@@ -1,0 +1,27 @@
+schema_version: "1.1"
+name: fact-kernel-synthesis
+entrypoint: fact-kernel-synthesis.js
+
+backend:
+  portability: method_intrinsic
+  matrix_eligible: false
+  intrinsic_to: CUTLASS pattern registry
+  method_supported_backends: [cutlass]
+  supported: [cutlass]
+  default: cutlass
+  notes: >
+    Tier per spec §7.2 (method_intrinsic, CUTLASS). Compositional pattern
+    synthesis via discovery + realization + composition + ablation. Legacy
+    WORKFLOW_SUITABILITY=['cutlass', 'cuda', 'cpp'].
+
+source:
+  paper_title: "FACT: Compositional Kernel Synthesis with Pattern Discovery and Realization"
+  paper_url: ""
+  notes: "method_intrinsic; full phase spec deferred."
+
+workflow:
+  name: fact-kernel-synthesis
+  description: "Compositional kernel synthesis with pattern discovery and realization"
+  when_to_use: "Use for generating optimized CUTLASS kernels through compositional pattern synthesis"
+  output_filename: "fact-kernel-synthesis.js"
+  directory: "FACT/"

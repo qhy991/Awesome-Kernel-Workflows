@@ -1,5 +1,21 @@
 #!/usr/bin/env python3
-"""llamacpp_register_variant.py
+"""llamacpp_register_variant.py  --  DEPRECATED
+
+2026-06-14: This hand-written per-framework adapter is deprecated in favor of the
+KerSor `framework-integrator` agent. A general LLM agent armed with the
+reversible-edit safety net (`scripts/reversible_edit.py`) can now derive the
+llama.cpp integration at runtime by reading the dispatch switch in `fattn.cu`,
+the `file(GLOB)` in CMakeLists.txt, and the `test-backend-ops` harness — caching
+the result in the experience bank. See the `ADAPTER_CONTRACT.md` in
+`_substrate/embedded/` for the three integration modes.
+
+This script remains as a **reference implementation** demonstrating the expected
+complexity and patterns (env-gate around a dispatch switch, ODR-symbol-suffixing,
+cmake-reconfigure after GLOB edits), but is no longer the intended integration
+path for new frameworks or new variants.
+
+Original docstring follows.
+--
 
 Register a new fattn kernel variant into llama.cpp's ggml-cuda dispatch system
 so AKW fan-out workflows can compile/test/bench many candidates in parallel.
