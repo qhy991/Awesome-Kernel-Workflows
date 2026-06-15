@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "backend_id": "metax",
+  "lang_fence": "cuda",
+  "compiler": "mxcc",
+  "impl_requirements": "Emit a single .cu translation unit exposing a PYBIND11_MODULE with a forward() binding that launches the kernel; no host-side framework calls beyond the binding. Compilation via mxcc (mxgpu_llvm from MACA SDK).",
+  "unsupported_methods": [],
+  "read_metric_guide": "High dram_pct with low sm_pct => memory_bound. High sm_pct with low dram_pct => compute_bound. Low occupancy with neither saturated => latency_occupancy (occupancy is always null on MetaX; this class is declared but requires additional launch-config analysis). Many short kernels / launch-dominated wall time => overhead_bound.",
+  "methods": {
+    "vectorized_load_store": {
+      "idiom": "float4 / int4 vectorized global loads and stores",
+      "prompt_guidance": "Widen memory transactions to 128-bit by casting to float4/int4 so each thread moves 16 bytes per access. mxcc targets the MetaX SIMT ISA with 128-bit memory path."
+    },
+    "memory_coalescing": {
+      "idiom": "coalesced 128-bit global loads",
+      "prompt_guidance": "Reorder the thread-to-element mapping so consecutive threads in a warp read consecutive addresses, issuing a single 128-byte transaction per warp."
+    },
+    "shared_memory_tiling": {
+      "idiom": "__shared__ double-buffered tiles",
+      "prompt_guidance": "Stage global data in __shared__ memory, double-buffer for overlapped copy+compute, and sync with __syncthreads() between load/compute phases. MetaX shared memory is partitioned per-SM; keep tile size within per-SM limits (~48–64 KB typical)."
+    },
+    "tensor_core_mma": {
+      "idiom": "N/A on MetaX (no dedicated tensor cores); approximate via vectorized warp-level intrinsics",
+      "prompt_guidance": "MetaX GPUs lack dedicated tensor-core units. Use warp-level vector intrinsics or hand-unrolled SIMT code to approximate high-throughput matrix multiply. mxcc may auto-vectorise if loops are structured for it."
+    },
+    "async_copy_pipeline": {
+      "idiom": "Manual double-buffered async copy via __shared__ staging with warp-shuffle",
+      "prompt_guidance": "Pipeline global-to-shared copies with warp-level shuffles. Overlap the copy for tile N+1 with the compute for tile N using two __shared__ buffers and __syncthreads()."
+    },
+    "register_blocking": {
+      "idiom": "Register-blocked computation with manual unrolling",
+      "prompt_guidance": "Decompose the computation into register-sized blocks, keeping intermediate values in registers across iterations to reduce shared memory traffic."
+    },
+    "launch_config_tuning": {
+      "idiom": "Occupancy-tuned block/grid dimensions via mxcc auto-tuning flags",
+      "prompt_guidance": "Choose block size to maximise occupancy on MetaX hardware. Prefer 256–512 threads/block; use mxcc -march=<target> to target the specific MetaX GPU ISA for optimal register allocation. Sweep block sizes empirically."
+    }
+  }
+}

@@ -1,25 +1,17 @@
-# =============================================================================
-# AdaExplore Manifest — Failure-Driven Skill Memory + MCTS Kernel Optimization
-# =============================================================================
-# Method: Adapt + Explore via failure-driven skill memory and diversity-preserving
-# MCTS that alternates large structural proposals and small reviser-guided edits.
-# =============================================================================
-
-schema_version: "1.1"
+schema_version: '1.1'
 name: adaexplore-kernel-optimization
 entrypoint: adaexplore-kernel-optimization.js
-
 backend:
   portability: clean
   matrix_eligible: true
   method_supported_backends: any
-  supported: [cuda, triton]
+  supported:
+  - cuda
+  - triton
+  - metax
   default: cuda
-  # Legacy path (no backend_dir): .js WORKFLOW_SUITABILITY accepts only
-  # ['triton'] with default triton. Manifest default cuda reflects driver
-  # capability; the default mismatch (cuda vs triton) is a known divergence
-  # between driver and legacy paths — see B2 in design spec.
-  notes: >
-    Legacy WORKFLOW_SUITABILITY=['triton'] (default triton). Driver-path
-    supported=[cuda, triton] (default cuda). The default mismatch is a
-    known divergence; triton-dryrun.test.js contract-tests the driver path.
+  notes: 'Legacy WORKFLOW_SUITABILITY=[''triton''] (default triton). Driver-path supported=[cuda,
+    triton] (default cuda). The default mismatch is a known divergence; triton-dryrun.test.js
+    contract-tests the driver path.
+
+    '

@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "backend_id": "metax",
+  "display_name": "CUDA C++ (MetaX, mxcc / mcTracer + mcProfiler)",
+  "source_ext": ".cu",
+  "aux_ext": [".cuh", ".h"],
+  "artifact_ext": ".so",
+  "hw_vendor": "metax",
+  "threshold_profile": "metax",
+  "compiler": {
+    "name": "mxcc",
+    "invoke": "build.sh"
+  },
+  "runner": {
+    "invoke": "run.sh"
+  },
+  "profiler": {
+    "name": "mcProfiler",
+    "invoke": "profile.sh",
+    "format": "mcprof-csv",
+    "to_evidence": "to_evidence.py"
+  },
+  "capabilities": {
+    "metrics": {
+      "latency_ms": true,
+      "dram_pct": true,
+      "sm_pct": true,
+      "occupancy": false
+    },
+    "bottleneck_classes": [
+      "memory_bound",
+      "compute_bound",
+      "latency_occupancy",
+      "overhead_bound"
+    ],
+    "problem_types": [
+      "kernel-optimization",
+      "kernel-generation"
+    ],
+    "precisions": [
+      "fp32",
+      "fp16"
+    ]
+  },
+  "requires_tools": ["mxcc", "python3"],
+  "optional_tools": ["mcTracer", "mcProfiler"],
+  "fallback_patterns": ["cublas", "cudnn", "torch.matmul", "F.linear", "torch.nn.functional", "at::matmul"],
+  "idioms": "idioms.json",
+  "status": "stub",
+  "notes": "MetaX GPU (沐曦) CUDA-compatible backend. Uses mxcc (mxgpu_llvm from MACA SDK) for compilation instead of nvcc. Profiling via mcTracer + mcProfiler (proprietary tools); output format mcprof-csv differs from ncu-csv, so to_evidence.py uses a standalone mapper (_evidence_metax.py). occupancy is never measured (no warp-occupancy counter), so latency_occupancy bottleneck class is declared but uses the null rule in practice. End-to-end compile/run/profile is deferred to the MetaX GPU tier."
+}
