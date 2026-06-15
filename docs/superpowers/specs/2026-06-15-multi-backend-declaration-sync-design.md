@@ -48,40 +48,51 @@ manifest 格式与多份过时副本。
 |---|---|
 | `portability` tier | **上游 spec §7.2**(权威,本次不改) |
 | `intrinsic_to` | **上游 spec §7.2** |
-| `supported` 列表 | **fidelity-first 对齐 `.js` 实际**(`WORKFLOW_SUITABILITY`/`supported_languages`) |
-| `default` | `.js` 实际(`default_backend` 或 `args.language`/`args.backend` 默认值) |
+| `supported` 列表 | **spec §7.2 声明的 driver 能力集**(manifest 反映 driver 路径能力,**不是** `.js` legacy 值) |
+| `default` | **spec §7.2 / 既有 manifest default**;若与 `.js` legacy 默认不同,记入 `notes` |
 | `matrix_eligible` | spec §7.2(clean/vendor_locked-partial=true 或 partial;method_intrinsic=false) |
 
-> **legacy vs driver 双轨:** 目录 `manifest.yaml` 描述 **driver 路径下的声明能力**;`.js` 的
-> `WORKFLOW_SUITABILITY` 在 `USE_DRIVER`(有 `backend_dir`)时被跳过,仅代表 legacy 路径守卫。
-> 两者短期允许不一致;manifest 反映 driver 能力,README 标注 legacy 差异。
+> **legacy vs driver 双轨(关键):** 目录 `manifest.yaml` 描述 **driver 路径下的声明能力**;
+> `.js` 的 `WORKFLOW_SUITABILITY`/`supported_languages` 在 `USE_DRIVER`(有 `backend_dir`)时被跳过,
+> 仅代表 **legacy 路径守卫接受的子集**。对 clean workflow,manifest `supported` 是 spec §7.2 的
+> **driver 能力上集**(如 `[cuda, triton]`),`.js` legacy 往往只是其子集(如 Astra/KDA/STARK 的
+> `['cuda']`、AdaExplore/KernelAgent 的 `['triton']`)——**这是预期且允许的不一致**,不是错误。
+> `.js` legacy 值记入 `notes`/README,但**不作为 manifest `supported` 的取值来源**。
 
-## 4. 27 个 workflow 的 backend 声明(对齐 spec §7.2 + `.js` 实际)
+## 4. 27 个 workflow 的 backend 声明(spec §7.2 driver 能力集 + legacy 子集记录)
 
-> spec §7.2 原文权威分级见 `2026-06-05-backend-driver-axis-design.md:733-750`。下表 `supported`/
+> spec §7.2 原文权威分级见 `2026-06-05-backend-driver-axis-design.md:733-750`。下表 `supported` =
+> spec §7.2 **driver 能力集**;`.js legacy` 列 = `WORKFLOW_SUITABILITY`/`supported_languages` 的 legacy
+> 守卫子集(被 driver 路径跳过)。两者常不一致,属预期(见 §3)。
 > `default` 列来自本次对 `.js` 的核实。
 
 ### A 组 — clean(matrix-eligible)— 15 个
 
-| Workflow | supported(default) | manifest 现状 | 本次动作 |
-|---|---|---|---|
-| AdaExplore | `[cuda, triton]`(cuda) | ✅ 一致 | 校验 |
-| KernelAgent | `[cuda, triton]`(triton) | ✅ | 校验 |
-| AKO4X | `[triton, cuda, cute-dsl, tilelang, cpp, pytorch]`(triton) | ✅ | 校验 |
-| Astra | `[cuda, triton]`(cuda) | ✅ | 校验 |
-| CUDALLM | `[cuda, triton]`(cuda) | ✅ | 校验 |
-| KDA | `[cuda, triton]`(cuda) | ✅ | 校验 |
-| KSearch | `[triton, cuda, python]`(triton) | ✅ | 校验 |
-| ReGraphT | `[cuda, triton]`(cuda) | ✅ | 校验 |
-| STARK | `[cuda, triton]`(cuda) | ✅ | 校验 |
-| StitchCUDA | `[cuda, triton]`(cuda) | ✅ | 校验;note: KernelBench 交集守卫要求 cuda driver |
-| KernelFoundry | `[cuda, triton]`(cuda);SYCL 经 `args.backend_dir` 自带 | ❌ 缺 | **新建** |
-| KernelFoundryDx | `[triton]`(triton) · matrix `partial` | ✅ | 校验 |
-| KernelSkill | `[cuda]`(cuda) | ❌ 缺;spec=clean/any,但 `.js` 仅 cuda + 无 triton dry-run | **新建,按 spec clean/any 落盘**;分歧记 §6 |
-| KernelBand | `[triton, cuda]`(triton);φ-gate NVIDIA 利用率 | ✅ | 校验;note: 阈值 driver-resolved |
-| Generalist | `[cuda, triton]`(cuda);legacy path 仅 cuda | ⚠️ 现 manifest `[cuda]` | **改 → `[cuda, triton]`/any**;note: legacy path 守卫至 P5 同步 |
+> `supported` = spec §7.2 driver 能力集(manifest 取值);`.js legacy` = legacy 守卫子集。
+> `default` 同样取 manifest/spec 值;若与 `.js` legacy 默认冲突,标 ⚠️ 并在 `notes` 记录。
 
-### B 组 — vendor_locked(matrix partial)— 8 个
+| Workflow | supported(default) | `.js` legacy 子集 | manifest 现状 | 本次动作 |
+|---|---|---|---|---|
+| AdaExplore | `[cuda, triton]`(cuda) | `['triton']`;default legacy=triton ⚠️ | ✅(driver 集) | 校验;`notes` 记 legacy 仅 triton + default 分歧(B2) |
+| KernelAgent | `[cuda, triton]`(triton) | `['triton']` | ✅(driver 集) | 校验;`notes` 记 legacy 仅 triton |
+| AKO4X | `[triton, cuda, cute-dsl, tilelang, cpp, pytorch]`(triton) | `['triton',...]`(多) | ✅ | 校验 |
+| Astra | `[cuda, triton]`(cuda) | `['cuda']` | ✅(driver 集) | 校验;`notes` 记 legacy 仅 cuda |
+| CUDALLM | `[cuda, triton]`(cuda) | `['cuda']` | ✅(driver 集) | 校验;`notes` 记 legacy 仅 cuda |
+| KDA | `[cuda, triton]`(cuda) | `['cuda']` | ✅(driver 集) | 校验;`notes` 记 legacy 仅 cuda |
+| KSearch | `[triton, cuda, python]`(triton) | `['triton','cuda','python']` | ✅ | 校验 |
+| ReGraphT | `[cuda, triton]`(cuda) | `['cuda','triton']` | ✅ | 校验 |
+| STARK | `[cuda, triton]`(cuda) | `['cuda']` | ✅(driver 集) | 校验;`notes` 记 legacy 仅 cuda |
+| StitchCUDA | `[cuda, triton]`(cuda) | `['cuda']` | ✅(driver 集) | 校验;`notes` 记 legacy 仅 cuda + KernelBench 交集守卫要求 cuda driver |
+| KernelFoundry | `[cuda, triton]`(cuda) | `['sycl','cuda','triton']`;SYCL **无注册 driver** | ❌ 缺 | **新建**;`supported` 只列有 driver 的 `[cuda, triton]`,SYCL 记 `notes`(legacy 输出语言,经 `args.backend_dir` 自带,无 driver 故不列入 supported)— 见 M4 |
+| KernelFoundryDx | `[triton]`(triton) · matrix `partial` | `['triton']` | ✅ | 校验 |
+| KernelSkill | `[cuda, triton]`(cuda)— spec=any | `['cuda']`;无 triton dry-run | ❌ 缺 | **新建,按 spec clean/any 落盘**(`supported: [cuda, triton]`);`notes` 记 legacy 仅 cuda + 分歧记 §6 |
+| KernelBand | `[triton, cuda]`(triton) | `['triton','cuda']`;φ-gate NVIDIA 利用率 | ✅ | 校验;note: 阈值 driver-resolved |
+| Generalist | `[cuda, triton]`(cuda) | `['cuda']`;legacy path 仅 cuda | ⚠️ 现 manifest `[cuda]` | **改 → `[cuda, triton]`/any**;note: legacy path 守卫至 P5 同步 |
+
+### B 组 — vendor_locked — 8 个(6 partial + 2 single/false)
+
+> partial = AccelOpt/CUDAAgent/cuPilot/KEET/KernelBlaster/GPUForecasters(均 `['cuda','triton']` + NCU 能力);
+> single/false = TritorX(`['triton']`)、Xe-Forge(`['xpu']`)。
 
 | Workflow | intrinsic_to | supported(default) | 本次动作 |
 |---|---|---|---|
@@ -128,12 +139,20 @@ manifest 格式与多份过时副本。
 | ARGUS | `ROCm/CUDA/Triton/ARGUS-DSL (legacy; driver pending)` |
 
 - **补 2 行**(InPlacePatch、LlamacppEmbeddedSearch),矩阵从 27 → 29 行 + Meta-Workflow。
+- **同步更新 L139 prose(M3):** 现有 prose 说该列记录的是 `WORKFLOW_SUITABILITY` **legacy 守卫接受值**
+  ("unsupported args.language ... fails")。改为 driver 能力措辞后,prose 与新值会冲突(如 AdaExplore
+  新值显示 CUDA,但 legacy 守卫拒 CUDA)。**必须同步改写 L139 prose**,说明该列记录的是 manifest 声明
+  的 driver 能力,legacy 守卫是子集(见各 workflow `notes`)。中英两版同改。
 - 中英两版逐行对齐。
 
 ### 5.2 manifest 校验与新建
 
-- **A 组 13 个**:逐个核对 `backend:` 块与 `.js` 实际 + spec §7.2;修正 Generalist(`[cuda]`→`[cuda,triton]`/any)。
-- **B/C/D 组 16 个**:用最小模板新建 `<Workflow>/manifest.yaml`(见 5.3)。
+- **已有 manifest 的 13 个校验**:`{AdaExplore, AKO4X, Astra, CUDALLM, Generalist, KDA, KernelAgent,
+  KernelBand, KernelFoundryDx, KSearch, ReGraphT, STARK, StitchCUDA}`。逐个核对 `backend:` 块
+  = spec §7.2 driver 集;修正 Generalist(`[cuda]`→`[cuda,triton]`/any);对其余 6 个 legacy 子集 ≠ driver 集
+  的(AdaExplore/KernelAgent/Astra/CUDALLM/KDA/STARK)在 `notes` 补记 legacy 子集。
+- **新建 16 个**(= A 组无 manifest 的 KernelFoundry/KernelSkill 2 个 + B 组 8 + C 组 4 + D 组 2):
+  用最小模板新建 `<Workflow>/manifest.yaml`(见 5.3)。
 - 校验手段:`scripts/check-fidelity-contracts.js` 覆盖有限,**不替代**人工 backend 核对;辅以既有
   `_meta/tools/test/*-guard.test.js` / `*-dryrun.test.js` 作为 driver 能力证据。
 
@@ -200,10 +219,13 @@ workflow:
 
 ## 8. 校验与验收
 
-1. 每个 Tier① workflow:`<Workflow>/manifest.yaml` 的 `supported` ↔ `.js` 实际 ↔ spec §7.2 三方一致(或分歧入 §6)。
-2. 中英 README 矩阵逐行与 manifest `backend:` 块对齐;补齐 29 行。
+1. **backend 三方校验(分 tier):**
+   - clean: manifest `supported` = spec §7.2 driver 集;`.js` legacy 为其子集(记 `notes`;两者不一致属预期,非错误)
+   - vendor_locked / method_intrinsic: manifest `supported` ↔ `.js` 实际 ↔ spec §7.2 三方一致(或分歧入 §6)
+2. 中英 README 矩阵逐行与 manifest `backend:` 块对齐;补齐 29 行;L139 prose 与新值的 driver 口径一致。
 3. `node scripts/check-fidelity-contracts.js` 不回归(若有覆盖)。
-4. 16 个新 manifest 通过 `_substrate/backends/validate_backend.py` 的 L0 结构校验(若 manifest 校验接入)。
+4. 新 manifest 的 YAML 格式合法(syntax-only lint;`_substrate/backends/validate_backend.py` 只校验
+   driver 的 `manifest.json`,不碰 `<Workflow>/manifest.yaml`——**不可用该脚本做验收,需人工 YAML lint 替代**)。
 5. 过时副本 README 存在且指向 SoT。
 6. `scripts/count-workflows.sh` + `badges/workflows.json` 计数不变(本次不增减 workflow)。
 
