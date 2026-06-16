@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# gpu_run - WarpSpeed GPU allocator/launcher (policy layer).
+#
+#   gpu_run <role> [--timeout SEC] [--label STR] -- <command...>
+#     role pool  : devices $WARPSPEED_POOL_DEVICES (default 0-5), shuffled,
+#                  first free wins; waits (with deadline) if all busy
+#     role bench : device $WARPSPEED_BENCH_DEVICE (default 6), queued blocking
+#                  lock; locks clocks after acquiring, restores on exit/kill
+#     role ncu   : device $WARPSPEED_NCU_DEVICE (default 7), queued blocking
+#                  lock (NCU manages clocks itself)
+#     role cal   : ALL devices, ascending acquisition (calibration only)
+#
+# Mechanics (flock, timeout-kill, accounting, GPU_RUN_DEVICE on stderr) live in
+# wslock.py. Locks are machine-global under $WARPSPEED_LOCK_DIR (default
+# /tmp/warpspeed/locks) so independent searches can never double-book a GPU.
+#
+# Env knobs:
+#   WARPSPEED_LOCK_DIR, WARPSPEED_POOL_DEVICES (space-separated),
+#   WARPSPEED_BENCH_DEVICE, WARPSPEED_NCU_DEVICE, WARPSPEED_LOCK_WAIT,
+#   WARPSPEED_LOCKED_GR / WARPSPEED_LOCKED_MEM (bench clock targets; if unset,
+#     read LOCKED_GRAPHICS_CLOCK / LOCKED_MEM_CLOCK from $WARPSPEED_STATE/config.json),
+#   WARPSPEED_CLOCK_PREFIX (e.g. "sudo "), WARPSPEED_CLOCK_STRICT=1 (fail run
+#     if clock locking fails; default: warn and continue, clocks are recorded
+#     by bench_confirm.sh either way)
+
+set -u
+
+SELF_DIR=$(cd "$(dirname "$0")" && pwd)
+LOCK_DIR=${WARPSPEED_LOCK_DIR:-/tmp/warpspeed/locks}
+# Accept comma- or space-separated device lists (comma form survives `env`
+# prefixes without quoting).
+POOL_DEVICES=$(printf '%s' "${WARPSPEED_POOL_DEVICES:-0 1 2 3 4 5}" | tr ',' ' ')
+BENCH_DEVICE=${WARPSPEED_BENCH_DEVICE:-6}
+NCU_DEVICE=${WARPSPEED_NCU_DEVICE:-7}
+LOCK_WAIT=${WARPSPEED_LOCK_WAIT:-3600}
+
+usage() {
+  echo "usage: gpu_run <pool|bench|ncu|cal> [--timeout SEC] [--label STR] -- <command...>" >&2
+  exit 2
+}
+
+[ $# -ge 1 ] || usage
+ROLE=$1; shift
+case "$ROLE" in pool|bench|ncu|cal) ;; *) echo "gpu_run: unknown role '$ROLE'" >&2; usage ;; esac
+
+TIMEOUT=""
+LABEL=$ROLE
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --timeout) [ $# -ge 2 ] || usage; TIMEOUT=$2; shift 2 ;;
+    --label)   [ $# -ge 2 ] || usage; LABEL=$2; shift 2 ;;
+    --) shift; break ;;
+    *) echo "gpu_run: unexpected argument '$1' (did you forget '--'?)" >&2; usage ;;
+  esac
+done
+[ $# -gt 0 ] || usage
+
+shuffle() {
+  # $RANDOM-keyed shuffle, portable to bash 3.2
+  for d in $1; do printf '%s %s\n' "$RANDOM" "$d"; done | sort -n | awk '{printf "%s%s", sep, $2; sep=","} END {print ""}'
+}
+
+join_sorted() {
+  # sorted + DEDUPED: bench/ncu devices may overlap the pool (a duplicate
+  # device would make wslock's all-mode deadlock against itself)
+  for d in $1; do echo "$d"; done | sort -n | uniq | awk '{printf "%s%s", sep, $1; sep=","} END {print ""}'
+}
+
+config_clock() {
+  # config_clock <json_key> -> value or empty
+  [ -n "${WARPSPEED_STATE:-}" ] || { echo ""; return; }
+  [ -f "${WARPSPEED_STATE}/config.json" ] || { echo ""; return; }
+  python3 - "${WARPSPEED_STATE}/config.json" "$1" <<'PY'
+import json, sys
+try:
+    v = json.load(open(sys.argv[1])).get(sys.argv[2])
+    print("" if v in (None, "") else v)
+except Exception:
+    print("")
+PY
+}
+
+MODE=""
+DEVICES=""
+PRE=""
+POST=""
+
+case "$ROLE" in
+  pool)
+    MODE=pool
+    DEVICES=$(shuffle "$POOL_DEVICES")
+    ;;
+  bench)
+    MODE=exclusive
+    DEVICES=$BENCH_DEVICE
+    GR=${WARPSPEED_LOCKED_GR:-$(config_clock LOCKED_GRAPHICS_CLOCK)}
+    MEM=${WARPSPEED_LOCKED_MEM:-$(config_clock LOCKED_MEM_CLOCK)}
+    CP=${WARPSPEED_CLOCK_PREFIX:-}
+    if [ -n "$GR" ] || [ -n "$MEM" ]; then
+      if [ "${WARPSPEED_CLOCK_STRICT:-0}" = "1" ]; then SOFT=""; else SOFT=" || echo 'gpu_run: WARN: clock command failed (unlocked clocks)' >&2"; fi
+      PRE="${CP}nvidia-smi -i $BENCH_DEVICE -pm 1 >/dev/null 2>&1 || true"
+      [ -n "$GR" ]  && PRE="$PRE; ${CP}nvidia-smi -i $BENCH_DEVICE -lgc $GR >/dev/null$SOFT"
+      [ -n "$MEM" ] && PRE="$PRE; ${CP}nvidia-smi -i $BENCH_DEVICE -lmc $MEM >/dev/null$SOFT"
+      POST="${CP}nvidia-smi -i $BENCH_DEVICE -rgc >/dev/null 2>&1; ${CP}nvidia-smi -i $BENCH_DEVICE -rmc >/dev/null 2>&1; true"
+    else
+      echo "gpu_run: WARN: no locked-clock config (WARPSPEED_LOCKED_GR/MEM or config.json); bench runs at default clocks" >&2
+    fi
+    ;;
+  ncu)
+    MODE=exclusive
+    DEVICES=$NCU_DEVICE
+    ;;
+  cal)
+    MODE=all
+    DEVICES=$(join_sorted "$POOL_DEVICES $BENCH_DEVICE $NCU_DEVICE")
+    ;;
+esac
+
+set -- "$@"
+CMD_ARGS=""
+STRICT_FLAG=""
+[ "${WARPSPEED_CLOCK_STRICT:-0}" = "1" ] && STRICT_FLAG="--strict-hooks"
+
+if [ -n "$TIMEOUT" ]; then
+  exec python3 "$SELF_DIR/wslock.py" run \
+    --lock-dir "$LOCK_DIR" --devices "$DEVICES" --mode "$MODE" \
+    --lock-wait "$LOCK_WAIT" --timeout "$TIMEOUT" \
+    --role "$ROLE" --label "$LABEL" --pre "$PRE" --post "$POST" $STRICT_FLAG \
+    -- "$@"
+else
+  exec python3 "$SELF_DIR/wslock.py" run \
+    --lock-dir "$LOCK_DIR" --devices "$DEVICES" --mode "$MODE" \
+    --lock-wait "$LOCK_WAIT" \
+    --role "$ROLE" --label "$LABEL" --pre "$PRE" --post "$POST" $STRICT_FLAG \
+    -- "$@"
+fi

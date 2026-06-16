@@ -1,0 +1,8 @@
+{
+  "_TODO": "Replace with the canonical shapes for YOUR kernel. Every shape is used by correctness; benchmarks use --shape <name> (default: 'default'). Keep the set small and representative; the harness runs ALL of them on every correctness check.",
+  "shapes": [
+    {"name": "small",   "dtype": "fp16", "M": 512,  "N": 512,  "K": 512,  "note": "TODO example - edit me"},
+    {"name": "default", "dtype": "fp16", "M": 4096, "N": 4096, "K": 4096, "note": "TODO example - edit me"},
+    {"name": "fp8",     "dtype": "fp8",  "M": 4096, "N": 4096, "K": 4096, "note": "TODO example - edit me"}
+  ]
+}

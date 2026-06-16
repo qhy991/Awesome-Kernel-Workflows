@@ -1,0 +1,117 @@
+source:
+  paper_title: "AKW design note: WarpSpeed - rewindable parallel kernel-optimization search"
+  paper_url: "https://github.com/anthropics/Awesome-Kernel-Workflows/blob/main/WarpSpeed/README.md"
+  paper_venue: "AKW design notes 2026"
+  repo_url: ""
+  commit_or_tag: ""
+  license: "MIT"
+  notes: >
+    Original AKW engineering workflow (not a paper reproduction). Designed for
+    sustained optimization campaigns on a dedicated multi-GPU node: a
+    checkpoint tree of git commits annotated with structural-assumption tags,
+    mutex-scheduled GPUs, two-tier benchmarking, curated NCU diagnosis,
+    cross-model review, append-only BitLessons, and post-mortem ablation with
+    frontier rewind. Key decoupling rule: the workflow directory holds only
+    code and templates; the target kernel project is project_dir (any git repo
+    on disk) and ALL run state lives under the project's .warpspeed/ state
+    dir, with machine-global GPU lock files so concurrent searches on
+    different projects can never double-book a device.
+
+workflow:
+  name: "warpspeed-kernel-search"
+  description: "Rewindable parallel kernel-optimization search: SQLite checkpoint tree, flock-scheduled GPUs, A/B screen -> locked-clock confirm, NCU diagnosis, codex cross-review, BitLessons, postmortem ablation + rewind"
+  when_to_use: >
+    Use for multi-hour/multi-day CUDA optimization campaigns on a node you
+    control exclusively, where the kernel lives in its own git repo with a
+    project-owned correctness harness, and you want an experiment ledger with
+    rewind semantics rather than a single greedy patch loop. Not for one-shot
+    patches (use in-place-patch-optimization), shared GPUs, or hosts without
+    NCU/compute-sanitizer.
+  output_filename: "warpspeed-kernel-search.js"
+  directory: "WarpSpeed/"
+
+inputs:
+  supports_existing_kernel: true
+  supports_problem_definition: false
+  required_one_of:
+    - project_dir
+  generation:
+    enabled: false
+  required_args:
+    - project_dir
+    - build_command
+    - binary_path
+    - kernel_paths
+    - target_gpu
+  optional_args:
+    - warpspeed_dir
+    - state_dir
+    - harness_dir
+    - iterations
+    - budget_gpu_minutes
+    - target_latency_us
+    - parallel_agents
+    - reviewer_cmd
+    - bench_shape
+    - op_description
+    - single_spec_json
+    - config_overrides
+
+method:
+  category: "tree_exploration"
+  core_insight: >
+    Treat kernel states as an annotated checkpoint tree and optimization as
+    blame-assignable experiments: every candidate pre-registers a predicted
+    gain + mechanism, every measurement is significance-gated against
+    calibrated cross-device noise, and when a subtree stalls the orchestrator
+    runs ONE ablation before rewinding the frontier pointer - discarding code
+    but never the append-only lesson store.
+  phases:
+    - "Init: materialize config (render_config), preflight tools, scaffold/lock harness"
+    - "Calibrate: one-time cross-device sigma defining the significance margin"
+    - "Seed: baseline checkpoint with tier-2 latency + cached NCU profile"
+    - "Plan: orphan recovery, tree snapshot, exploit/explore/wildcard allocation, soft dedup"
+    - "Generate: worktree implementor <-> fresh-clone codex reviewer (<=3 iterations)"
+    - "Screen: interleaved A/B vs parent on a pool device (device-unbiased)"
+    - "Confirm: locked-clock canonical device when decision-relevant"
+    - "Profile: curated NCU sections, parents cached once ever, analyst diagnosis"
+    - "Record: hard dedup (noise + fingerprint), checkpoint promotion, blocked counting, BitLessons"
+    - "Postmortem: blame -> single ablation -> rewind + replay queue, or refutation lesson"
+    - "Maintain: worktree cleanup, lesson compaction"
+    - "Report: leaderboard, lessons, rewinds, stop reason"
+  feedback_signal:
+    type: "latency_delta_with_significance_gate"
+    tool: "project-built self-timing binary under gpu_run (interleaved A/B screen; locked-clock confirm) + curated NCU sections + compute-sanitizer"
+  carried_state:
+    - "SQLite checkpoint tree + experiment ledger + GPU-minutes ledger (per-project state dir)"
+    - "Append-only bitlessons.jsonl (+ md mirror) surviving rewinds"
+    - "NCU profile cache per checkpoint commit (profiled once, ever)"
+    - "Per-experiment git branches kept as evidence (worktrees pruned per round)"
+
+grounding:
+  enforced: true
+  contract: "_substrate/grounding.js (inlined)"
+  notes: >
+    All tool invocations come from command strings rendered at Init by
+    tools/render_config.py; the workflow file contains no literal tool
+    commands. Bench/profile scripts refuse to run outside a gpu_run session.
+    The reviewer agent relays the cross-model CLI verdict and may not
+    substitute its own judgment; reviewer-unavailable is a rejection, never a
+    silent pass.
+
+outputs:
+  primary_metric: "best_latency_us (confirmed, locked-clock) and speedup vs baseline"
+  artifacts:
+    - "results/report.md in the project state dir"
+    - "search.sqlite (checkpoint tree, experiments, ledger)"
+    - "bitlessons.jsonl / bitlessons.md"
+  side_effects:
+    - "Creates branches exp/r<round>/<exp-id>-<slug> and ckpt/* tags in the target repo"
+    - "Creates/destroys git worktrees and review clones under the state dir"
+    - "Holds machine-global GPU locks under /tmp/warpspeed/locks during measurements"
+    - "chmod -R a-w on the project harness dir at Init"
+
+testing:
+  mock_suite: "WarpSpeed/tests/mock/run_mock_tests.sh (T1-T13; PATH-injected fake GPU tools; no GPUs needed)"
+  dryrun: "node WarpSpeed/tests/workflow/dryrun.test.mjs (vm harness, fixture agents, routing/rewind logic)"
+  node_suite: "WarpSpeed/tests/node/run_node_tests.sh (real flock/calibrate/screen/confirm/NCU on the GPU node)"

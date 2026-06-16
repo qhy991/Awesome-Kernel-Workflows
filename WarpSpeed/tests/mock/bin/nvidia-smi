@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""Mock nvidia-smi for WarpSpeed acceptance tests.
+
+Records every invocation as a JSON line in $WARPSPEED_MOCK_DIR/nvidia-smi.log
+and keeps per-device clock-lock state under $WARPSPEED_MOCK_DIR/state/ so that
+`-q -d CLOCK` reflects earlier -lgc/-lmc calls. Reports
+$WARPSPEED_MOCK_GPUS (default 8) fake H100s for -L.
+"""
+import json
+import os
+import sys
+import time
+
+MOCK_DIR = os.environ.get("WARPSPEED_MOCK_DIR", "/tmp/warpspeed-mock")
+STATE = os.path.join(MOCK_DIR, "state")
+N_GPUS = int(os.environ.get("WARPSPEED_MOCK_GPUS", "8"))
+DEFAULT_GR = 1980
+DEFAULT_MEM = 2619
+
+
+def record(argv):
+    os.makedirs(MOCK_DIR, exist_ok=True)
+    with open(os.path.join(MOCK_DIR, "nvidia-smi.log"), "a") as f:
+        f.write(json.dumps({"ts": time.time(), "argv": argv}) + "\n")
+
+
+def state_path(dev, kind):
+    return os.path.join(STATE, "gpu%s_%s" % (dev, kind))
+
+
+def set_state(dev, kind, value):
+    os.makedirs(STATE, exist_ok=True)
+    with open(state_path(dev, kind), "w") as f:
+        f.write(str(value))
+
+
+def clear_state(dev, kind):
+    try:
+        os.unlink(state_path(dev, kind))
+    except OSError:
+        pass
+
+
+def get_state(dev, kind, default):
+    try:
+        with open(state_path(dev, kind)) as f:
+            return f.read().strip()
+    except OSError:
+        return str(default)
+
+
+def main(argv):
+    record(argv)
+    args = list(argv)
+    dev = "all"
+    i = 0
+    flags = {}
+    while i < len(args):
+        a = args[i]
+        if a == "-i":
+            dev = args[i + 1]
+            i += 2
+        elif a in ("-pm", "-lgc", "-lmc", "-d", "--query-gpu", "--format"):
+            flags[a] = args[i + 1] if i + 1 < len(args) else ""
+            i += 2
+        elif a.startswith("--query-gpu=") or a.startswith("--format="):
+            k, v = a.split("=", 1)
+            flags[k] = v
+            i += 1
+        else:
+            flags[a] = True
+            i += 1
+
+    if "-L" in flags:
+        for g in range(N_GPUS):
+            print("GPU %d: NVIDIA H100 80GB HBM3 (Mock) (UUID: GPU-mock-%d)" % (g, g))
+        return 0
+
+    devs = [dev] if dev != "all" else [str(g) for g in range(N_GPUS)]
+
+    if "-lgc" in flags:
+        for d in devs:
+            set_state(d, "lgc", flags["-lgc"])
+        print("GPU clocks set to \"(gpuClkMin %s, gpuClkMax %s)\" for GPU" % (flags["-lgc"], flags["-lgc"]))
+        return 0
+    if "-lmc" in flags:
+        for d in devs:
+            set_state(d, "lmc", flags["-lmc"])
+        print("Memory clocks set for GPU")
+        return 0
+    if "-rgc" in flags:
+        for d in devs:
+            clear_state(d, "lgc")
+        print("All done.")
+        return 0
+    if "-rmc" in flags:
+        for d in devs:
+            clear_state(d, "lmc")
+        print("All done.")
+        return 0
+    if "-pm" in flags:
+        print("Persistence mode is already Enabled for GPU.")
+        return 0
+    if "-q" in flags and flags.get("-d") == "CLOCK":
+        for d in devs:
+            print("GPU 00000000:%02X:00.0" % (int(d) + 1))
+            print("    Clocks")
+            print("        Graphics                          : %s MHz" % get_state(d, "lgc", DEFAULT_GR))
+            print("        SM                                : %s MHz" % get_state(d, "lgc", DEFAULT_GR))
+            print("        Memory                            : %s MHz" % get_state(d, "lmc", DEFAULT_MEM))
+            print("    Applications Clocks")
+            print("        Graphics                          : %s MHz" % get_state(d, "lgc", DEFAULT_GR))
+        return 0
+    # default summary
+    print("Mock nvidia-smi: %d GPUs" % N_GPUS)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
