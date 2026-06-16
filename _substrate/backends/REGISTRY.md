@@ -17,6 +17,7 @@ Add a row when you start a driver. Move it to `stable` only after it passes L0--
 | rocm | `rocm/` | amd | experimental | (unassigned) |
 | ascend | `ascend/` | huawei | experimental | (unassigned) |
 | metax | `metax/` | metax | stub | (unassigned) |
+| metal | `metal/` | apple | experimental | (unassigned) |
 
 > **Note (P3):** the `cuda` and `triton` `build.sh`/`run.sh`/`profile.sh` are
 > **GPU-untested** -- this repo runs on macOS where `nvcc`/`ncu`/`triton` are absent. What
@@ -312,3 +313,45 @@ Uses the substrate default `FALLBACK_PATTERNS` (no `vendor_patterns_file` in man
 > **Note (P3):** this repo runs on macOS where `mxcc`/`mcProfiler`/`mcTracer` are absent.
 > Verified on macOS: `validate_backend.py` (L0) and `build.sh`/`profile.sh` arg-parsing
 > + envelope coverage. End-to-end compile/run/profile is deferred to the MetaX GPU tier.
+
+---
+
+## metal -- Metal Shading Language (Apple, xcrun)
+
+| Property | Value |
+|---|---|
+| **Directory** | `_substrate/backends/metal/` |
+| **Source extension** | `.metal` (aux `.h`, `.mm`) |
+| **Artifact extension** | `.metallib` |
+| **Hardware vendor** | apple |
+| **Compiler** | `xcrun metal` (`build.sh`) |
+| **Profiler** | `metal-capture` (MTLCaptureManager / `.gputrace`) via `profile.sh`; **`timing-only` fallback** |
+| **Profiler format** | `metal-csv` (capture) · `timing-json` (fallback) |
+| **Threshold profile** | `apple` |
+| **Status** | experimental |
+
+### Profiling
+
+Metal has no ncu-equivalent out-of-the-box hardware-counter CLI. `profile.sh`
+tries a full GPU capture via `MTLCaptureManager` (Xcode 15+, emits a `.gputrace`),
+then falls back to `timing-only`:
+
+| Canonical key | metal-capture source | Unit |
+|---|---|---|
+| `latency_ms` | GPU command-buffer / kernel duration | milliseconds |
+| `dram_pct` | **null by default** — requires a Metal counter sample set | — |
+| `sm_pct` | **null by default** — requires a Metal counter sample set | — |
+| `occupancy` | **always null** — no warp-occupancy counter | — |
+
+When neither capture nor a Metal runtime is available, `profile.sh` exits 4
+(profiler unavailable -> `unknown`), the honest deferred-GPU signal. Metal is
+profiled with Apple tooling only; it is **never** routed through `ncu`.
+
+### Requirements
+
+`requires_tools`: `xcrun`, `python3` (`optional_tools`: `metallib`, `xcodebuild`).
+Apple Silicon (`arm64` Darwin) is required for real compile/run/profile.
+
+> **Note (P3):** verified on macOS: `validate_backend.py` (L0) and
+> `build.sh`/`profile.sh` arg-parsing + envelope coverage. Real GPU capture is
+> deferred to an Apple-Silicon device tier.
