@@ -107,6 +107,14 @@ Awesome-Kernel-Workflows/
 ├── StitchCUDA/                  # Planner/Coder/Verifier CUDA synthesis
 │   ├── stitchcuda-kernel-optimization.js
 │   └── README.md
+├── WarpSpeed/                   # Rewindable parallel kernel-search on a multi-GPU node
+│   ├── warpspeed-kernel-search.js
+│   ├── infra/                   # gpu_run mutex launcher, bench tiers, NCU profiling
+│   ├── tools/                   # wsdb CLI (SQLite tree), config renderer, NCU parse
+│   ├── wiki/                    # technique pages (tag-indexed, arch-scoped)
+│   ├── harness-template/        # project-owned correctness harness scaffold
+│   ├── tests/                   # mock GPU suite + vm dry-run + node acceptance
+│   └── README.md
 ├── Xe-Forge/                    # Multi-stage CoVeR optimization for Intel XPU
 │   ├── xe-forge-kernel-optimization.js
 │   └── README.md
@@ -167,6 +175,7 @@ Every top-level workflow declares its backend capability in `<Workflow>/manifest
 | [LlamacppEmbeddedSearch](LlamacppEmbeddedSearch/) | llama.cpp ggml-cuda (method-intrinsic) | `embedded-kernel-search` | Multi-variant fan-out search for kernels embedded in llama.cpp ggml-cuda | Standalone CUDA/Triton kernel optimization |
 | [KernelSkill](KernelSkill/) | CUDA (default) · Triton via driver (experimental) | `cuda-kernel-optimization`, `cuda-kernel-generation` | CUDA custom kernels from PyTorch reference with memory/profiler guidance | Triton/SYCL/Metal tasks |
 | [StitchCUDA](StitchCUDA/) | CUDA (default) · Triton via driver (experimental) | `cuda-kernel-generation`, `cuda-kernel-optimization` | Planner/Coder/Verifier CUDA synthesis and replanning | Non-CUDA backends |
+| [WarpSpeed](WarpSpeed/) | CUDA (vendor-locked: requires NCU/compute-sanitizer) | `cuda-kernel-optimization`, `kernel-search` | Sustained campaigns on a dedicated multi-GPU node: checkpoint tree, GPU mutex, two-tier benchmarking, rewind | One-shot patches, shared GPUs, hosts without NCU/sanitizer |
 | [Xe-Forge](Xe-Forge/) | Intel XPU (vendor-locked: xpu) | `xpu-kernel-optimization`, `triton-kernel-optimization` | Intel XPU CoVeR staged refinement | NVIDIA CUDA-only tuning |
 | [Generalist](Generalist/) | CUDA (default) · Triton via driver (experimental) | `cuda-kernel-generation`, `cuda-kernel-optimization` | CUDA benchmark-driven default solver substrate | Backend-neutral solving; not generalized yet |
 | [Meta-Workflow](_meta/) | Tooling | N/A | Generating and validating workflow definitions | Direct kernel optimization |
@@ -202,6 +211,7 @@ Every top-level workflow declares its backend capability in `<Workflow>/manifest
 | [KernelFoundryDx](KernelFoundryDx/) | ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![Evolutionary](https://img.shields.io/badge/evolutionary-darkblue?style=flat) ![MultiAgent](https://img.shields.io/badge/multi--agent-teal?style=flat) ![RAG](https://img.shields.io/badge/RAG-orange?style=flat) ![Diagnosis](https://img.shields.io/badge/diagnosis-teal?style=flat) | RAG-Seed → Evolve(Islands) → Evaluate → Diagnose → Migrate | [arXiv:2605.30359](https://arxiv.org/abs/2605.30359) (CUHK/Huawei 2026) |
 | [KernelSkill](KernelSkill/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![NCU](https://img.shields.io/badge/NCU-555?style=flat) ![MultiAgent](https://img.shields.io/badge/multi--agent-teal?style=flat) ![SkillMemory](https://img.shields.io/badge/skill--memory-orange?style=flat) ![Verification](https://img.shields.io/badge/verification-green?style=flat) | Seed → Review → Repair/Optimize → Profile → UpdateMemory | [arXiv:2603.10085](https://arxiv.org/abs/2603.10085) |
 | [StitchCUDA](StitchCUDA/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![MultiAgent](https://img.shields.io/badge/multi--agent-teal?style=flat) ![Pipeline](https://img.shields.io/badge/pipeline-purple?style=flat) ![Verification](https://img.shields.io/badge/verification-green?style=flat) ![Replanning](https://img.shields.io/badge/adaptive--replanning-orange?style=flat) | Plan → Code → Verify → Replan → Iterate | [arXiv:2603.02637](https://arxiv.org/abs/2603.02637) |
+| [WarpSpeed](WarpSpeed/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Tree](https://img.shields.io/badge/tree--search-darkblue?style=flat) ![NCU](https://img.shields.io/badge/NCU-555?style=flat) ![Experience](https://img.shields.io/badge/experience--memory-orange?style=flat) ![Rewind](https://img.shields.io/badge/rewind-red?style=flat) ![CrossReview](https://img.shields.io/badge/cross--model--review-green?style=flat) | Plan → Generate(∥) → Screen(A/B) → Confirm → Profile → Record → Postmortem/Rewind | [Design note](WarpSpeed/README.md) |
 | [Xe-Forge](Xe-Forge/) | ![XPU](https://img.shields.io/badge/Intel--XPU-0071C5?style=flat&logo=intel&logoColor=white) ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![Pipeline](https://img.shields.io/badge/pipeline-purple?style=flat) ![CoVeR](https://img.shields.io/badge/CoVeR-purple?style=flat) ![VTune](https://img.shields.io/badge/VTune-555?style=flat) | Stage → Generate → Verify → Refine → Promote | [Xe-Forge Project](https://github.com/intel/Xe-Forge) |
 | [Meta-Workflow](_meta/) | ![Tooling](https://img.shields.io/badge/tooling-gray?style=flat) | Research → Model → Assemble → Generate → Validate | — |
 
@@ -247,6 +257,7 @@ Use this matrix as the primary taxonomy when adding or reviewing workflows. Back
 | [KernelFoundryDx](KernelFoundryDx/) | `search_based` | Multi-island evolutionary Triton search with diagnosis hints | Compile/correctness/speedup plus anti-cheating checks | Island populations, elite archives, hint library | Faithful paper adaptation; no public runtime/source repo available |
 | [KernelSkill](KernelSkill/) | `iterative_self_improving` | Seed/review plus repair-or-optimize refinement loop | Compiler/verifier/profiler, speedup, NCU/nsys evidence | Long-term skill library, optimize history, repair chain | Faithful decision-process adaptation; gate is prompt/workflow mediated |
 | [StitchCUDA](StitchCUDA/) | `multi_stage_refinement` | Planner/Coder/Verifier with adaptive replanning | Compile, correctness, benchmark speedup | Plan history, failure counters, best candidate | Faithful but simplified three-agent orchestration |
+| [WarpSpeed](WarpSpeed/) | `tree_exploration` | Pre-registered experiments over an assumption-tagged checkpoint tree; postmortem ablation then frontier rewind | Significance-gated A/B screen + locked-clock confirm, curated NCU, sanitizers, codex cross-review | SQLite tree + GPU-minutes ledger, append-only BitLessons, NCU cache, evidence branches | Original AKW engineering workflow (no paper); GPU discipline is mutex-enforced |
 | [Xe-Forge](Xe-Forge/) | `multi_stage_refinement` | Hard-ordered 11-stage CoVeR loops | Intel Triton compile, correctness, speedup, optional VTune | Best-in-stage kernels, promotion history | Workflow adaptation for Intel XPU project pipeline |
 | [Meta-Workflow](_meta/) | `tooling` | Research/Model/Assemble/Generate/Validate | Manifest schema and static/semantic checks | Templates, manifests, validation reports | Repository infrastructure, not a paper method |
 

@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""Mock compute-sanitizer for WarpSpeed acceptance tests.
+
+Usage mirrors the real tool: compute-sanitizer [--tool racecheck|memcheck]
+[--error-exitcode N] <binary> [args...]. The mock declares errors iff the
+target binary file contains the marker MOCK_RACY (racecheck) or MOCK_LEAKY
+(memcheck). Invocations are logged to $WARPSPEED_MOCK_DIR/compute-sanitizer.log.
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+
+MOCK_DIR = os.environ.get("WARPSPEED_MOCK_DIR", "/tmp/warpspeed-mock")
+
+
+def main(argv):
+    os.makedirs(MOCK_DIR, exist_ok=True)
+    with open(os.path.join(MOCK_DIR, "compute-sanitizer.log"), "a") as f:
+        f.write(json.dumps({"ts": time.time(), "argv": argv}) + "\n")
+
+    tool = "memcheck"
+    error_exitcode = None
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--tool":
+            tool = argv[i + 1]; i += 2
+        elif argv[i] == "--error-exitcode":
+            error_exitcode = int(argv[i + 1]); i += 2
+        else:
+            break
+        # fallthrough handled by break above
+    target = argv[i:]
+    if not target:
+        sys.stderr.write("mock compute-sanitizer: no target\n")
+        return 2
+
+    marker = "MOCK_RACY" if tool == "racecheck" else "MOCK_LEAKY"
+    dirty = False
+    try:
+        with open(target[0], "rb") as f:
+            dirty = marker.encode() in f.read()
+    except OSError:
+        pass
+
+    rc = subprocess.call(target)
+    print("========= COMPUTE-SANITIZER (mock, tool=%s)" % tool)
+    if dirty:
+        print("========= ERROR SUMMARY: 2 errors")
+        return error_exitcode if error_exitcode is not None else rc
+    print("========= ERROR SUMMARY: 0 errors")
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
