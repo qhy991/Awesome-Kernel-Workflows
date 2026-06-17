@@ -9,6 +9,10 @@ a subagent (`agent()`), which has Bash/Write tools. This contract defines a
 lightweight **self-report** that makes a running workflow observable from the
 outside in real time, and records the ordered stages it actually performed.
 
+For the full picture of *why* this is the only option — how the `Workflow` tool
+stores state and what (little) is observable from outside a running workflow —
+see [`workflow-tool-storage-and-observability.md`](./workflow-tool-storage-and-observability.md).
+
 ## Why
 
 KerSor (the orchestrator) sees a workflow as a black box: it gets the final
