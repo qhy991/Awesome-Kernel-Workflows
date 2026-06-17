@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 project adheres to [Semantic Versioning](https://semver.org/). See `AGENTS.md`
 for the versioning policy.
 
+## [Unreleased] - feat/proactive-knowledge-fetch
+
+### Changed
+
+- **cuda-agent: proactive knowledge fetch on retries (pilot).** The Implement
+  doer now, when retrying after a failed attempt (history non-empty), is told to
+  FIRST run the search command from the `## Knowledge Tools (on-demand)` block
+  KerSor injects (e.g. `query.py` for kernel patterns, `chub search` for API/Triton
+  docs), read 1-2 pages, then implement — instead of only consuming the
+  round-start `## Retrieved Context`. Best-effort (absent/off when retrieval is
+  off; never blocks). Turns the workflow from a passive consumer of injected
+  context into an active caller of the knowledge tools. Other workflows retain
+  the passive model until similarly upgraded.
+  (`CUDAAgent/cuda-agent-kernel-optimization.js`)
+
 ## [Unreleased]
 
 ## [0.2.1] - 2026-06-17
