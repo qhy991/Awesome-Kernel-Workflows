@@ -8,6 +8,8 @@ for the versioning policy.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-17
+
 ### Added
 
 - **Real genome example** in `_meta/genome-trajectory-schema.md` — an actual
