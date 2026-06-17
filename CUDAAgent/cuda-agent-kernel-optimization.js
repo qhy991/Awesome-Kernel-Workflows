@@ -415,6 +415,15 @@ for (currentAttempt = 0; currentAttempt < MAX_TURNS && !targetMet; currentAttemp
     ? `\n# Previous Attempts:\n${recentHistory.map(h => `Turn ${h.turn}: ${h.action} → ${h.outcome}${h.error ? ' (' + h.error.substring(0, 100) + ')' : ''} ${h.speedup ? h.speedup.toFixed(2) + 'x' : ''}`).join('\n')}`
     : ''
 
+  // Proactive knowledge fetch: when retrying after a failure (history non-empty),
+  // tell the Implement doer to consult the on-demand Knowledge Tools block KerSor
+  // injected into the semantic inputs (op_description etc.) before rewriting — so a
+  // bottleneck/API it is unsure about is grounded in the local corpus rather than
+  // guessed. Best-effort; the block is absent when retrieval is off.
+  const proactiveKnowledgeHint = recentHistory.length > 0
+    ? '\n# Proactive knowledge fetch (on retries)\nIf a previous attempt FAILED (compile/correctness/speedup) or you are unsure about an API, intrinsic, or how a known bottleneck is typically resolved, FIRST run the search command from the `## Knowledge Tools (on-demand)` block in your input (e.g. `query.py` for kernel patterns, `chub search` for API/Triton docs). Read 1-2 returned pages, extract the actionable technique, then implement. This is best-effort: if no block is present or nothing relevant returns, proceed with your own knowledge. Do not block on it.'
+    : ''
+
   const embeddedProposalBlock = EMBEDDED
     ? `\n\n${EMBEDDING_CONTRACT}\n\nMANDATORY: Read the reference dispatch file at ${REFERENCE_FILE} and match its dispatch signature EXACTLY (same entry-point shape, template params, launch-bounds conventions). Emit a COMPLETE dispatch-compatible \`.cuh\` (NOT a standalone translation unit, NO main()/harness). Put the full \`.cuh\` contents in kernel_code; binding_code and model_new_code are not used in embedded mode (return brief placeholders).`
     : ''
@@ -435,7 +444,7 @@ ${modelCode.substring(0, 3000)}
 - Eager: ${eagerTime}ms
 - torch.compile: ${compileTime}ms
 - Target: >${TARGET_SPEEDUP}x speedup over torch.compile (=${(compileTime / TARGET_SPEEDUP).toFixed(3)}ms)
-${historyContext}${embeddedProposalBlock}
+${historyContext}${proactiveKnowledgeHint}${embeddedProposalBlock}
 
 # CUDA Agent Workspace Requirements:
 Generate THREE files:
