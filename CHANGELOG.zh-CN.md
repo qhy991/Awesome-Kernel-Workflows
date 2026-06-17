@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-17
+
 ### 新增（Added）
 
 - **genome / trajectory 自报告契约** —— `_meta/genome-trajectory-schema.md` 定义了

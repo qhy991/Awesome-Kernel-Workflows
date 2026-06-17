@@ -8,6 +8,8 @@ for the versioning policy.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-17
+
 ### Added
 
 - **Genome / trajectory self-report contract** — `_meta/genome-trajectory-schema.md`
