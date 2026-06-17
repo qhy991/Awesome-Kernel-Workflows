@@ -12,6 +12,22 @@ export const meta = {
   ],
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda'],
   supported_problem_types: ['cuda-kernel-optimization'],
@@ -178,7 +194,7 @@ let generation = 0
 // =============================================================================
 // Phase 1: Setup — Initial kernel, roofline classification, strategy pool
 // =============================================================================
-phase('Setup')
+phase('Setup'); await __genomeReport('Setup', meta.name)
 
 const setupResults = await parallel([
   // Agent 1: Generate initial kernel + roofline classification
@@ -328,7 +344,7 @@ for (epoch = 0; epoch < EPOCHS; epoch++) {
     // =========================================================================
     // Phase 2: Strategize — SCE Manager generates/crosses strategies
     // =========================================================================
-    phase('Strategize')
+    phase('Strategize'); await __genomeReport('Strategize', meta.name)
 
     // Select parents via tournament selection
     const sortedPop = [...population].sort((a, b) => b.fitness - a.fitness)
@@ -390,7 +406,7 @@ Return new strategies for this generation.`, {
     // =========================================================================
     // Phase 3: Translate — Apply strategies to kernel code
     // =========================================================================
-    phase('Translate')
+    phase('Translate'); await __genomeReport('Translate', meta.name)
 
     const translatedKernels = await parallel(
       newStrategies.slice(0, 5).map((strat, idx) => () =>
@@ -440,7 +456,7 @@ Return the optimized kernel.`, {
     // =========================================================================
     // Phase 4: Revise — Kernel Revisor: compile → function → profile → fix
     // =========================================================================
-    phase('Revise')
+    phase('Revise'); await __genomeReport('Revise', meta.name)
 
     const revisedResults = await parallel(
       translatedKernels.filter(Boolean).map((tk, idx) => () =>
@@ -505,7 +521,7 @@ Return the final revised kernel and its metrics.`, {
     // =========================================================================
     // Phase 5: Evolve — Tournament selection + elitism + strategy alignment
     // =========================================================================
-    phase('Evolve')
+    phase('Evolve'); await __genomeReport('Evolve', meta.name)
 
     // Compute fitness and add to population
     for (let i = 0; i < revisedResults.length; i++) {
@@ -556,7 +572,7 @@ Return the final revised kernel and its metrics.`, {
 // =============================================================================
 // Phase 6: Report
 // =============================================================================
-phase('Report')
+phase('Report'); await __genomeReport('Report', meta.name)
 
 const finalReport = await agent(`Write a concise technical report on cuPilot evolutionary optimization.
 

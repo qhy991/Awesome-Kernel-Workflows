@@ -14,6 +14,22 @@ export const meta = {
   ],
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda'],
   supported_problem_types: ['cuda-kernel-generation', 'cuda-kernel-optimization'],
@@ -277,7 +293,7 @@ function isBetterCandidate(candidate, incumbent) {
 // =============================================================================
 // Phase 1: Setup
 // =============================================================================
-phase('Setup')
+phase('Setup'); await __genomeReport('Setup', meta.name)
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -346,7 +362,7 @@ referenceCode = setup.reference_code || ''
 // =============================================================================
 // Phase 2: FeatureCatalog
 // =============================================================================
-phase('FeatureCatalog')
+phase('FeatureCatalog'); await __genomeReport('FeatureCatalog', meta.name)
 
 const LEGACY_FEATURE_CATALOG = `# Required feature families
 - tiling and block/grid decomposition
@@ -400,7 +416,7 @@ for (const feature of featureCatalog) initFeatureScore(feature)
 // =============================================================================
 // Phase 3: GenerateTests
 // =============================================================================
-phase('GenerateTests')
+phase('GenerateTests'); await __genomeReport('GenerateTests', meta.name)
 
 const testPlan = await agent(`Generate diverse correctness tests for this CUDA-LLM task.
 
@@ -446,7 +462,7 @@ for (let iteration = 0; iteration < ITERATIONS; iteration++) {
   for (let sample = 0; sample < SAMPLES_PER_FEATURE_SET; sample++) {
     log(`\n=== CUDA-LLM FSR iteration ${iteration + 1}/${ITERATIONS}, sample ${sample + 1}/${SAMPLES_PER_FEATURE_SET} ===`)
 
-    phase('SelectFeatures')
+    phase('SelectFeatures'); await __genomeReport('SelectFeatures', meta.name)
 
     const selection = await agent(`Select a ${langToken(LEGACY_SELECT_LANG_TOKEN)} feature combination for the next candidate.
 
@@ -486,7 +502,7 @@ Return selected feature ids and rationale.`, {
       },
     })
 
-    phase('GenerateKernel')
+    phase('GenerateKernel'); await __genomeReport('GenerateKernel', meta.name)
 
     const generation = await agent(`Generate a ${langToken(LEGACY_GENERATE_LANG_TOKEN)} kernel using the selected CUDA-LLM FSR features.
 
@@ -525,7 +541,7 @@ Return candidate code and implemented features.`, {
       },
     })
 
-    phase('Evaluate')
+    phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
 
     const evaluation = await agent(`Evaluate this ${langToken(LEGACY_EVAL_LANG_TOKEN)} candidate with compile, correctness, and latency evidence.
 
@@ -629,7 +645,7 @@ Return evaluator result.`, {
       bestCandidate = candidate
     }
 
-    phase('Reinforce')
+    phase('Reinforce'); await __genomeReport('Reinforce', meta.name)
 
     const reinforce = await agent(`Update ${langToken(LEGACY_REINFORCE_LANG_TOKEN)} feature scores from this measured candidate.
 
@@ -677,7 +693,7 @@ Return updated score records for affected features.`, {
 // =============================================================================
 // Phase 8: Report
 // =============================================================================
-phase('Report')
+phase('Report'); await __genomeReport('Report', meta.name)
 
 const finalReport = await agent(`Write a concise CUDA-LLM FSR optimization report.
 

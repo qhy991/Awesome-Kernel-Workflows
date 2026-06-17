@@ -14,6 +14,22 @@ export const meta = {
   ],
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['triton', 'cuda'],
   supported_problem_types: ['gpu-kernel-optimization', 'kernel-search'],
@@ -301,7 +317,7 @@ for (let i = 0; i < NUM_CLUSTERS; i++) {
 // =============================================================================
 // Phase 1: Setup — Parse kernel, identify hardware, establish baseline
 // =============================================================================
-phase('Setup')
+phase('Setup'); await __genomeReport('Setup', meta.name)
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -455,7 +471,7 @@ for (let t = 1; t <= ITERATIONS; t++) {
   const shouldRecluster = (t % RECLUSTER_PERIOD === 0) && (candidatePool.length >= 2 * NUM_CLUSTERS)
 
   if (shouldRecluster) {
-    phase('Cluster')
+    phase('Cluster'); await __genomeReport('Cluster', meta.name)
 
     const clusterResult = await agent(`You are the KernelBand Dynamic Clustering module (Section 3.3).
 
@@ -525,7 +541,7 @@ Return cluster assignments and centroids.`, {
     }
 
     // Profile cluster centroids for hardware signature updates
-    phase('Profile')
+    phase('Profile'); await __genomeReport('Profile', meta.name)
 
     const profileResult = await agent(`You are the KernelBand Representative Profiling module (Section 3.3).
 
@@ -605,7 +621,7 @@ Return updated hardware signatures and masks.`, {
   // ===========================================================================
   // Action Selection: Masked UCB (Section 3.4)
   // ===========================================================================
-  phase('Select')
+  phase('Select'); await __genomeReport('Select', meta.name)
 
   let bestUCB = -Infinity
   let selectedCluster = 0
@@ -636,7 +652,7 @@ Return updated hardware signatures and masks.`, {
   // ===========================================================================
   // Code Generation: LLM applies strategy to kernel (Section 3.1)
   // ===========================================================================
-  phase('Generate')
+  phase('Generate'); await __genomeReport('Generate', meta.name)
 
   const generateResult = await agent(`You are the KernelBand Code Generator. Apply a specific optimization strategy to the given kernel.
 
@@ -707,7 +723,7 @@ Return the optimized kernel code.`, {
   // ===========================================================================
   // Evaluation: Compile, verify, benchmark (Section 3.1, Algorithm 1 line 19)
   // ===========================================================================
-  phase('Evaluate')
+  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
 
   const evalResult = await agent(`You are the KernelBand Evaluation module. Verify correctness and measure performance.
 
@@ -801,7 +817,7 @@ Return evaluation results.`, {
   // ===========================================================================
   // Bandit Update (Algorithm 1, lines 20-23)
   // ===========================================================================
-  phase('Update')
+  phase('Update'); await __genomeReport('Update', meta.name)
 
   const compiled = evalResult?.compiled || false
   const correct = evalResult?.correct || false
@@ -873,7 +889,7 @@ Return evaluation results.`, {
 // =============================================================================
 // Phase: Report — Final summary
 // =============================================================================
-phase('Report')
+phase('Report'); await __genomeReport('Report', meta.name)
 
 // Compute strategy statistics
 const strategyStats = {}

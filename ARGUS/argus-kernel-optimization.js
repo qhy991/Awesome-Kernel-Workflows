@@ -12,6 +12,22 @@ export const meta = {
   ],
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 // --- BEGIN embedded-eval substrate (auto-inlined by scripts/patch-embedded-eval.js) ---
 const EMBEDDING_CONTRACT = [
   'EMBEDDED-DISPATCH CONTRACT (this kernel is NOT standalone):',
@@ -267,7 +283,7 @@ const KNOWLEDGE_BASE = {
 // =============================================================================
 // Phase 1: Setup — Read kernel, hardware specs, initialize
 // =============================================================================
-phase('Setup')
+phase('Setup'); await __genomeReport('Setup', meta.name)
 
 if (INPUT_MODE === 'generate_then_optimize') {
   const generated = await agent(`No kernel_path was provided. Generate and verify an initial kernel before starting ARGUS ICRL optimization.
@@ -404,7 +420,7 @@ for (let outerIter = 0; outerIter < ITERATIONS; outerIter++) {
   // ===========================================================================
   // Phase 2: Plan — ICRL planner proposes optimizations + invariants
   // ===========================================================================
-  phase('Plan')
+  phase('Plan'); await __genomeReport('Plan', meta.name)
 
   const recentHistory = optimizationHistory.slice(-10)
   const recentViolations = invariantViolationLog.slice(-5)
@@ -489,7 +505,7 @@ Rank proposals by expected impact. Prefer optimizations that:
   // ===========================================================================
   // Phase 3: Select — Sample from proposals, resolve dependencies
   // ===========================================================================
-  phase('Select')
+  phase('Select'); await __genomeReport('Select', meta.name)
 
   const selectResult = await agent(`You are the ARGUS Optimization Selector (Section 6).
 The planner produced a ranked list of proposals. Your job is to select and sequence
@@ -542,7 +558,7 @@ Return the selected optimization plan.`, {
   // ===========================================================================
   // Phase 4: Lower — Implement transformations with invariants
   // ===========================================================================
-  phase('Lower')
+  phase('Lower'); await __genomeReport('Lower', meta.name)
 
   let currentCode = bestKernelCode
   const loweringResults = []
@@ -619,7 +635,7 @@ Return the transformed kernel code with invariants.`, {
   // ===========================================================================
   // Phase 5: Validate — Invariant checking + tests + profiling
   // ===========================================================================
-  phase('Validate')
+  phase('Validate'); await __genomeReport('Validate', meta.name)
 
   // Embedded mode: write the candidate to disk and build the ordered
   // register→build→test→benchmark→unregister plan against the project adapter.
@@ -797,7 +813,7 @@ Return validation results.`, {
   // ===========================================================================
   // Phase 6: Learn — ICRL policy update via text gradients
   // ===========================================================================
-  phase('Learn')
+  phase('Learn'); await __genomeReport('Learn', meta.name)
 
   const learnResult = await agent(`You are performing the ICRL policy update for the ARGUS planner (Algorithm 1, Section 6).
 

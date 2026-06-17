@@ -13,6 +13,22 @@ export const meta = {
   ],
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['triton', 'cuda', 'python'],
   supported_problem_types: ['gpu-kernel-optimization', 'kernel-search'],
@@ -184,7 +200,7 @@ let globalRound = 0
 // =============================================================================
 // Phase 1: Setup — Read spec, evaluate baseline
 // =============================================================================
-phase('Setup')
+phase('Setup'); await __genomeReport('Setup', meta.name)
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -328,7 +344,7 @@ log(`Bottleneck: ${baselineEval.bottleneck_analysis || 'unknown'}`)
 // =============================================================================
 // Phase 2: Initialize — Build the world model decision tree
 // =============================================================================
-phase('Initialize')
+phase('Initialize'); await __genomeReport('Initialize', meta.name)
 
 const initResult = await agent(`You are a kernel optimization architect. Build an initial world model decision tree for systematic design space exploration.
 
@@ -402,7 +418,7 @@ for (let cycle = 0; cycle < MAX_CYCLES; cycle++) {
   // Cycle Start: Propose action nodes to ensure frontier has enough candidates
   // (K-Search calls propose_action_nodes() at the start of every cycle)
   // ===========================================================================
-  phase('Select')
+  phase('Select'); await __genomeReport('Select', meta.name)
 
   const proposeResult = await agent(`You are a world model manager. Ensure the decision tree has enough high-quality open action nodes on the frontier.
 
@@ -516,7 +532,7 @@ Return selection result.`, {
   //   - Attempts 2+: "debug" (no passing solution yet) OR "improve" (have passing solution)
   //     Each further splits on whether base code exists.
   // ===========================================================================
-  phase('Generate')
+  phase('Generate'); await __genomeReport('Generate', meta.name)
 
   let cycleBestCode = null
   let cycleBestEval = null
@@ -682,7 +698,7 @@ Return improved kernel code.`, {
     // =========================================================================
     // Phase: Evaluate
     // =========================================================================
-    phase('Evaluate')
+    phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
 
     const evalResult = await agent(`You are a kernel evaluation expert. Evaluate this ${langToken(LANGUAGE)} kernel for correctness and performance.
 
@@ -817,7 +833,7 @@ Return evaluation.`, {
   // Phase: Refine or Backtrack
   // K-Search: cycleSucceeded = at least one PASSED eval in this cycle
   // ===========================================================================
-  phase('Refine')
+  phase('Refine'); await __genomeReport('Refine', meta.name)
 
   const cycleSucceeded = hasPassedInCycle
 
@@ -924,7 +940,7 @@ Return the updated tree.`, {
 // =============================================================================
 // Final Report
 // =============================================================================
-phase('Report')
+phase('Report'); await __genomeReport('Report', meta.name)
 
 const topSolutions = solutionDb
   .filter(s => s.eval?.is_valid)

@@ -12,6 +12,22 @@ export const meta = {
   ],
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 // --- BEGIN embedded-eval substrate (auto-inlined by scripts/patch-embedded-eval.js) ---
 const EMBEDDING_CONTRACT = [
   'EMBEDDED-DISPATCH CONTRACT (this kernel is NOT standalone):',
@@ -250,7 +266,7 @@ let history = []  // [{turn, action, outcome, speedup, error}]
 // =============================================================================
 // Phase 1: Setup — Read model, establish workspace
 // =============================================================================
-phase('Setup')
+phase('Setup'); await __genomeReport('Setup', meta.name)
 
 if (INPUT_MODE === 'generate_then_optimize') {
   const generated = await agent(`No kernel_path was provided. Generate and verify an initial PyTorch model plus CUDA kernel scaffold before CUDAAgent optimization.
@@ -325,7 +341,7 @@ modelCode = setupResult.model_code
 // =============================================================================
 // Phase 2: Profile — Analyze baseline performance
 // =============================================================================
-phase('Profile')
+phase('Profile'); await __genomeReport('Profile', meta.name)
 
 const profileResult = await agent(`You are a CUDA performance profiler. Profile the baseline PyTorch model.
 
@@ -388,7 +404,7 @@ for (currentAttempt = 0; currentAttempt < MAX_TURNS && !targetMet; currentAttemp
   // ===========================================================================
   // Phase 3: Implement — Generate CUDA kernel + bindings + model_new
   // ===========================================================================
-  phase('Implement')
+  phase('Implement'); await __genomeReport('Implement', meta.name)
 
   const recentHistory = history.slice(-5)
   const historyContext = recentHistory.length > 0
@@ -460,7 +476,7 @@ Return all three files.`, {
   // ===========================================================================
   // Phase 4: Verify — Compile + correctness + performance
   // ===========================================================================
-  phase('Verify')
+  phase('Verify'); await __genomeReport('Verify', meta.name)
 
   // Embedded-dispatch evaluation: register candidate into the project, build/test/
   // benchmark via the project's own commands, then ALWAYS unregister to pristine.
@@ -596,7 +612,7 @@ Return results.`, {
     // ===========================================================================
     // Phase 5: Refine — Diagnose and plan fix
     // ===========================================================================
-    phase('Refine')
+    phase('Refine'); await __genomeReport('Refine', meta.name)
 
     if (!targetMet && currentAttempt < MAX_TURNS - 1) {
       log(`  Turn ${currentAttempt + 1}: ${outcome} | Refining...`)
@@ -607,7 +623,7 @@ Return results.`, {
 // =============================================================================
 // Phase 6: Report
 // =============================================================================
-phase('Report')
+phase('Report'); await __genomeReport('Report', meta.name)
 
 const finalReport = await agent(`Write a concise optimization report.
 

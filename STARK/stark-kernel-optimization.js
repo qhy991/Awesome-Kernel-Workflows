@@ -14,6 +14,22 @@ export const meta = {
   ],
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda'],
   supported_problem_types: ['cuda-kernel-optimization', 'kernel-search'],
@@ -412,7 +428,7 @@ function updateLeaderboard() {
 // =============================================================================
 // Phase 1: Setup — Read reference kernel, init tree
 // =============================================================================
-phase('Setup')
+phase('Setup'); await __genomeReport('Setup', meta.name)
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -611,7 +627,7 @@ for (let t = 0; t < BUDGET; t++) {
   // ===========================================================================
   // Phase 2: Select — ε-greedy node selection
   // ===========================================================================
-  phase('Select')
+  phase('Select'); await __genomeReport('Select', meta.name)
 
   const selectedNode = selectNode()
   const selectedId = selectedNode.id
@@ -628,7 +644,7 @@ for (let t = 0; t < BUDGET; t++) {
 
   if (!selectedNode.compile_ok || !selectedNode.correct) {
     // HasBug(i) → Debug path
-    phase('Debug')
+    phase('Debug'); await __genomeReport('Debug', meta.name)
     isDebugPath = true
     log(`Debug path for ${selectedId}: ${selectedNode.logs?.substring(0, 200) || 'unknown error'}`)
 
@@ -668,7 +684,7 @@ Return a JSON object with:
 
   } else {
     // Normal path: Plan + Code
-    phase('Plan')
+    phase('Plan'); await __genomeReport('Plan', meta.name)
 
     const planCtx = buildPlanContext(selectedId, fenceToken())
 
@@ -726,7 +742,7 @@ Return a JSON object with:
     // =========================================================================
     // Phase 4: Code — Realize grounded instructions
     // =========================================================================
-    phase('Code')
+    phase('Code'); await __genomeReport('Code', meta.name)
 
     const codeCtx = buildCodeContext(selectedId, fenceToken())
 
@@ -776,7 +792,7 @@ Return a JSON object with:
   // ===========================================================================
   // Phase 5: Evaluate — Compile, correctness test, runtime
   // ===========================================================================
-  phase('Evaluate')
+  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
 
   const evalResult = await agent(`Evaluate this kernel for correctness and performance.
 
@@ -854,7 +870,7 @@ Return JSON with:
   // ===========================================================================
   // Phase 6: Update — Append to tree, update leaderboard
   // ===========================================================================
-  phase('Update')
+  phase('Update'); await __genomeReport('Update', meta.name)
 
   const childId = `node_${attemptCount}`
   const childNode = {
@@ -898,7 +914,7 @@ Return JSON with:
 // =============================================================================
 // Phase 7: Report — Final summary
 // =============================================================================
-phase('Report')
+phase('Report'); await __genomeReport('Report', meta.name)
 
 const bestNode = leaderboard[0] || rootNode
 const allCorrect = tree.filter(n => n.correct)

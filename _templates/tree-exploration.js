@@ -64,6 +64,22 @@ export const meta = {
   phases: {{PHASES_ARRAY}},
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 // =============================================================================
 // {{META_NAME}}
 // =============================================================================
@@ -98,14 +114,14 @@ let cycleCount = 0             // Number of completed search cycles
 // =============================================================================
 // Phase: Setup — Read target artifact, establish baseline
 // =============================================================================
-phase('Setup')
+phase('Setup'); await __genomeReport('Setup', meta.name)
 
 {{SETUP_AGENTS}}
 
 // =============================================================================
 // Phase: Initialize — Build the search tree / world model
 // =============================================================================
-phase('Initialize')
+phase('Initialize'); await __genomeReport('Initialize', meta.name)
 
 const initResult = await agent(`{{INIT_TREE_PROMPT}}`, {
   label: 'init-tree',
@@ -126,7 +142,7 @@ for (let cycle = 0; cycle < {{MAX_CYCLES_VAR}}; cycle++) {
   // ===========================================================================
   // Phase: Select — Choose the best frontier action node
   // ===========================================================================
-  phase('Select')
+  phase('Select'); await __genomeReport('Select', meta.name)
 
   const selection = await agent(`{{SELECT_PROMPT}}
 
@@ -155,7 +171,7 @@ ${JSON.stringify(decisionTree, null, 2).substring(0, 6000)}
   // ===========================================================================
   // Phase: Generate — Create kernel implementation for the selected action
   // ===========================================================================
-  phase('Generate')
+  phase('Generate'); await __genomeReport('Generate', meta.name)
 
   //[BLOCK:multi_attempt]
   let cycleBestCode = null
@@ -206,7 +222,7 @@ ${JSON.stringify(cycleBestEval || {}).substring(0, 2000)}
     // =========================================================================
     // Phase: Evaluate — Measure the generated variant
     // =========================================================================
-    phase('Evaluate')
+    phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
 
     const evalResult = await agent(`{{EVALUATE_PROMPT}}
 
@@ -259,7 +275,7 @@ ${genResult.code.substring(0, 5000)}
   // ===========================================================================
   // Phase: Refine or Backtrack — Update the tree based on cycle outcome
   // ===========================================================================
-  phase('Refine')
+  phase('Refine'); await __genomeReport('Refine', meta.name)
 
   const cycleSucceeded = cycleBestEval && cycleBestEval.is_valid
 
@@ -334,7 +350,7 @@ Tasks:
 // =============================================================================
 // Final Report
 // =============================================================================
-phase('Report')
+phase('Report'); await __genomeReport('Report', meta.name)
 
 const finalReport = await agent(`{{REPORT_PROMPT}}
 

@@ -12,6 +12,22 @@ export const meta = {
   ],
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['sycl', 'cuda', 'triton'],
   supported_problem_types: ['gpu-kernel-optimization', 'kernel-generation', 'kernel-search'],
@@ -219,7 +235,7 @@ function computeFitness(compiled, correct, speedup) {
 // =============================================================================
 // Phase 1: Setup — Parse task, baseline, initialize archive
 // =============================================================================
-phase('Setup')
+phase('Setup'); await __genomeReport('Setup', meta.name)
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -296,7 +312,7 @@ for (generation = 0; generation < GENERATIONS; generation++) {
   // ===========================================================================
   // Phase 2: Select — Sample parent(s) from archive
   // ===========================================================================
-  phase('Select')
+  phase('Select'); await __genomeReport('Select', meta.name)
 
   // Gradient-informed selection (Section 3.3)
   const occupiedCells = Object.keys(archive)
@@ -340,7 +356,7 @@ for (generation = 0; generation < GENERATIONS; generation++) {
   // ===========================================================================
   // Phase 3: Vary — LLM generates offspring with meta-evolved prompts
   // ===========================================================================
-  phase('Vary')
+  phase('Vary'); await __genomeReport('Vary', meta.name)
 
   const parentContext = selectedParent
     ? `\n# Parent Kernel (from cell [${selectedParent.cell}], fitness=${selectedParent.fitness.toFixed(2)}, speedup=${selectedParent.speedup.toFixed(2)}x):\n\`\`\`${fenceToken()}\n${selectedParent.code.substring(0, 4000)}\n\`\`\``
@@ -407,7 +423,7 @@ Return the kernel code and its optimization strategy description.`, {
   // ===========================================================================
   // Phase 4: Evaluate — Compile + correctness + benchmark + classify
   // ===========================================================================
-  phase('Evaluate')
+  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
 
   const evalResult = await agent(`You are a kernel evaluator for KernelFoundry. Evaluate this ${langToken(LEGACY_LANG_TOKEN)} kernel.
 
@@ -512,7 +528,7 @@ Return evaluation results.`, {
   // ===========================================================================
   // Phase 5: Insert — Update archive if offspring improves its cell
   // ===========================================================================
-  phase('Insert')
+  phase('Insert'); await __genomeReport('Insert', meta.name)
 
   const existingElite = archive[cellKey]
   let outcome = 'neutral'
@@ -552,7 +568,7 @@ Return evaluation results.`, {
   // Phase 6: Evolve-Prompts — Meta-prompter updates evolvable sections
   // ===========================================================================
   if ((generation + 1) % META_PROMPT_INTERVAL === 0 && generation > 0) {
-    phase('Evolve-Prompts')
+    phase('Evolve-Prompts'); await __genomeReport('Evolve-Prompts', meta.name)
 
     const recentOutcomes = transitions.slice(-META_PROMPT_INTERVAL)
     const improvements = recentOutcomes.filter(t => t.outcome === 'improvement' || t.outcome === 'discovery')
@@ -620,7 +636,7 @@ Return updated prompt sections.`, {
 // =============================================================================
 // Final Report
 // =============================================================================
-phase('Evaluate')
+phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
 
 const finalReport = await agent(`Write a concise technical report on KernelFoundry MAP-Elites optimization.
 

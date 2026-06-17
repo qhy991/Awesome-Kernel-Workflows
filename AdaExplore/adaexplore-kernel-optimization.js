@@ -21,6 +21,22 @@ export const meta = {
   },
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['triton'],
   supported_problem_types: ['triton-kernel-optimization', 'triton-kernel-generation'],
@@ -408,7 +424,7 @@ function renderCommand(template, replacements) {
 // =============================================================================
 // Phase 1: Setup
 // =============================================================================
-phase('Setup')
+phase('Setup'); await __genomeReport('Setup', meta.name)
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -514,7 +530,7 @@ log(`Setup: mode=${MODE} | steps=${STEPS} | memory_update=${MEMORY_UPDATE} | ski
 for (let searchStep = 0; searchStep < STEPS; searchStep++) {
   if (typeof budget !== 'undefined' && budget.total && budget.remaining() < EST_PER_ROUND) { log(`token budget ~exhausted — stop`); break }
 
-  phase('Select')
+  phase('Select'); await __genomeReport('Select', meta.name)
 
   const selectedNode = selectNode()
   const numSmallChildren = selectedNode.children
@@ -529,7 +545,7 @@ for (let searchStep = 0; searchStep < STEPS; searchStep++) {
 
   log(`Step ${searchStep + 1}/${STEPS} | selected=${selectedNode.id} | expand=${isLargeStep ? 'large' : 'small'} | nodes=${mctsNodes.length}`)
 
-  phase('Expand')
+  phase('Expand'); await __genomeReport('Expand', meta.name)
 
   let newKernelCode = ''
   let expandNotes = ''
@@ -669,7 +685,7 @@ Return the edited candidate kernel code.`, {
     expandNotes = (tunerResult?.changes_applied || []).join('; ')
   }
 
-  phase('Evaluate')
+  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
 
   const kernelPath = USE_DRIVER
     ? workspaceKernelPath(searchStep, isLargeStep, DRIVER_SOURCE_EXT)
@@ -808,7 +824,7 @@ Return the parsed evaluation result.`, {
     log(`  NEW BEST: node=${newNodeId} score=${JSON.stringify(newScore)} speedup=${speedup.toFixed(3)}x`)
   }
 
-  phase('Backpropagate')
+  phase('Backpropagate'); await __genomeReport('Backpropagate', meta.name)
 
   let current = newNode
   while (current) {
@@ -834,7 +850,7 @@ Return the parsed evaluation result.`, {
 // =============================================================================
 // Phase 6: Optional memory adaptation
 // =============================================================================
-phase('AdaptMemory')
+phase('AdaptMemory'); await __genomeReport('AdaptMemory', meta.name)
 
 let memoryUpdateReport = { updated: false, new_rules: 0, total_rules: skillMemory.length }
 
@@ -890,7 +906,7 @@ Return updated memory rules.`, {
 // =============================================================================
 // Phase 7: Report
 // =============================================================================
-phase('Report')
+phase('Report'); await __genomeReport('Report', meta.name)
 
 const treeStats = {
   total_nodes: mctsNodes.length,

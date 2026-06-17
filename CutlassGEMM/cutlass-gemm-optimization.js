@@ -12,6 +12,22 @@ export const meta = {
   ],
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cutlass', 'cuda', 'cpp'],
   supported_problem_types: ['cutlass-gemm-optimization'],
@@ -143,7 +159,7 @@ let mfuReport = []
 // =============================================================================
 // Phase 1: Analyze
 // =============================================================================
-phase('Analyze')
+phase('Analyze'); await __genomeReport('Analyze', meta.name)
 
 const analyzeResult = await agent(`You are a CUTLASS GEMM optimization expert. Analyze the SOL-ExecBench problem.
 
@@ -188,7 +204,7 @@ log(`Problem: ${analyzeResult.problem_name} | ${analyzeResult.operation} | N=${a
 // =============================================================================
 // Phase 2: Baseline — Known-good 4-way dispatch + split-K
 // =============================================================================
-phase('Baseline')
+phase('Baseline'); await __genomeReport('Baseline', meta.name)
 
 const baselineResult = await agent(`You are a CUTLASS GEMM kernel engineer. Generate an optimized solution using PROVEN configurations from prior experiments.
 
@@ -413,7 +429,7 @@ if (bestPerWorkload.length > 0) {
 // =============================================================================
 // Phase 3: NCU Profile (one-shot, skip if ceiling already explains everything)
 // =============================================================================
-phase('NCU Profile')
+phase('NCU Profile'); await __genomeReport('NCU Profile', meta.name)
 
 const ncuResult = await agent(`Run profiling on the CUTLASS kernel for representative M values using only the user-provided profiling contract.
 
@@ -524,7 +540,7 @@ for (let iter = 0; iter < ITERATIONS; iter++) {
 
   log(`\n=== Iteration ${iter + 1}/${ITERATIONS} | best=${bestAvgSpeedup.toFixed(4)}x | actionable bottlenecks: ${actionableBottlenecks.length} ===`)
 
-  phase('Tune')
+  phase('Tune'); await __genomeReport('Tune', meta.name)
 
   const tuneResult = await agent(`You are a CUTLASS GEMM tuning expert. Improve the solution based on NCU data and per-workload feedback.
 
@@ -641,7 +657,7 @@ Return results.`, {
 // Phase 5: Hybrid — cuBLAS fallback for overhead-dominated M (if not already in baseline)
 // =============================================================================
 if (ENABLE_HYBRID && ceilingDetected && bestPerWorkload.length > 0) {
-  phase('Hybrid')
+  phase('Hybrid'); await __genomeReport('Hybrid', meta.name)
 
   const smallMBelow1x = bestPerWorkload.filter(w => (w.m || 0) < ceilingThreshold && (w.speedup || 0) < 1.0)
   if (smallMBelow1x.length > 0) {
@@ -732,7 +748,7 @@ Return results.`, {
 // =============================================================================
 // Final: Save best solution
 // =============================================================================
-phase('Validate')
+phase('Validate'); await __genomeReport('Validate', meta.name)
 
 await agent(`Save the final best solution.
 1. Write to: ${OUTPUT_DIR}/solution_best.json

@@ -14,6 +14,22 @@ export const meta = {
   ],
 };
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['triton', 'sycl', 'xpu'],
   supported_problem_types: ['xpu-kernel-optimization', 'triton-kernel-optimization'],
@@ -81,7 +97,7 @@ async function main() {
   // ============================================================================
   // Phase 1: Setup
   // ============================================================================
-  phase('Setup');
+  phase('Setup'); await __genomeReport('Setup', meta.name);
 
   const setupResult = await agent(
     `Set up Xe-Forge optimization environment for Intel XPU:
@@ -162,7 +178,7 @@ Return JSON:
   // ============================================================================
   // Phase 2: Generate Initial Implementation
   // ============================================================================
-  phase('Generate Initial');
+  phase('Generate Initial'); await __genomeReport('Generate Initial', meta.name);
 
   log('Generating initial kernel implementation...');
 
@@ -234,7 +250,7 @@ Return JSON:
     // ==========================================================================
     // Phase 3: Analyze
     // ==========================================================================
-    phase('Analyze');
+    phase('Analyze'); await __genomeReport('Analyze', meta.name);
 
     log('Analyzing performance bottlenecks...');
 
@@ -323,7 +339,7 @@ Return JSON:
     // ==========================================================================
     // Phase 4: Plan
     // ==========================================================================
-    phase('Plan');
+    phase('Plan'); await __genomeReport('Plan', meta.name);
 
     log('Planning optimization strategies...');
 
@@ -410,7 +426,7 @@ Return JSON:
     // ==========================================================================
     // Phase 5: Optimize
     // ==========================================================================
-    phase('Optimize');
+    phase('Optimize'); await __genomeReport('Optimize', meta.name);
 
     log('Applying optimizations...');
 
@@ -470,7 +486,7 @@ Return JSON:
     // ==========================================================================
     // Phase 6: Verify
     // ==========================================================================
-    phase('Verify');
+    phase('Verify'); await __genomeReport('Verify', meta.name);
 
     log('Verifying optimized implementation...');
 
@@ -561,7 +577,7 @@ Return JSON:
     // ==========================================================================
     // Phase 7: Refine (decision to continue)
     // ==========================================================================
-    phase('Refine');
+    phase('Refine'); await __genomeReport('Refine', meta.name);
 
     if (cycle < coverCycles - 1) {
       const refineDecision = await agent(
@@ -607,7 +623,7 @@ Return JSON:
   // ============================================================================
   // Phase 8: Report
   // ============================================================================
-  phase('Report');
+  phase('Report'); await __genomeReport('Report', meta.name);
 
   const report = await agent(
     `Generate Xe-Forge optimization report:

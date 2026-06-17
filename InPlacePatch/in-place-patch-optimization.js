@@ -14,6 +14,22 @@ export const meta = {
   ],
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 // --- BEGIN inlined arg_guard (Workflow runtime parses scripts as bare scripts,
 //                              not ES modules; static imports are rejected) ---
 function __unwrapArgs(rawArgs) {
@@ -241,7 +257,7 @@ const BENCH_SCHEMA = withGroundingFields({
 // Phase 0: Snapshot the original kernel so we can always revert
 // =============================================================================
 
-phase('Snapshot')
+phase('Snapshot'); await __genomeReport('Snapshot', meta.name)
 log(`Kernel: ${KERNEL_PATH}`)
 log(`Backup will live at: ${BACKUP_PATH}`)
 
@@ -345,7 +361,7 @@ async function revertToBackup(reason) {
 // Phase 1: Baseline measurement (UNMODIFIED kernel)
 // =============================================================================
 
-phase('Baseline')
+phase('Baseline'); await __genomeReport('Baseline', meta.name)
 const baseBuild = await buildCurrent('baseline')
 if (baseBuild.state !== 'grounded' || !baseBuild.value.ok) {
   return {
@@ -527,7 +543,7 @@ for (let iter = 1; iter <= MAX_ITER; ++iter) {
 // Final report
 // =============================================================================
 
-phase('Report')
+phase('Report'); await __genomeReport('Report', meta.name)
 
 // Read the (winning) kernel file back so the caller can persist it as best-kernel.
 const finalRead = await agent(

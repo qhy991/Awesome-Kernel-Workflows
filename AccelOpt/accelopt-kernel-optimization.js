@@ -12,6 +12,22 @@ export const meta = {
   ],
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 const WORKFLOW_SUITABILITY = {
   method_supported_backends: ['cuda', 'triton'],
   default_backend: 'cuda',
@@ -537,7 +553,7 @@ function buildBeamSection(candidateBeam, fence) {
 // =============================================================================
 // Phase 1: Setup — Read kernel, build harness, NCU profile baseline
 // =============================================================================
-phase('Setup')
+phase('Setup'); await __genomeReport('Setup', meta.name)
 
 if (USE_DRIVER) {
   const driver = await agent(
@@ -788,7 +804,7 @@ for (let iter = 0; iter < ITERATIONS; iter++) {
   // ===========================================================================
   // Phase 2: Plan — Generate optimization plans GUIDED BY NCU DATA + BEAM
   // ===========================================================================
-  phase('Plan')
+  phase('Plan'); await __genomeReport('Plan', meta.name)
 
   // Experience sampling (AccelOpt: construct_experience.py logic)
   const experienceSection = buildExperienceSection(experienceMemory, lastIterNewPatterns, MAX_EXPERIENCE_IN_PROMPT)
@@ -902,7 +918,7 @@ ${IDIOMS.read_metric_guide}
   // ===========================================================================
   // Phase 3: Execute — Implement each plan
   // ===========================================================================
-  phase('Execute')
+  phase('Execute'); await __genomeReport('Execute', meta.name)
 
   const implementations = await pipeline(
     validPlans,
@@ -966,7 +982,7 @@ Return the complete ${BACKEND} code.`
   // ===========================================================================
   // Phase 4: Evaluate — NCU profile each variant + per-branch dedup + beam update
   // ===========================================================================
-  phase('Evaluate')
+  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
 
   const evalSchema = USE_DRIVER
     ? {
@@ -1124,7 +1140,7 @@ ${baselineNcuProfile}`
   //   - topk_learn total budget
   //   - Experience format: **title** + NCU trigger + code snippets
   // ===========================================================================
-  phase('Learn')
+  phase('Learn'); await __genomeReport('Learn', meta.name)
 
   // Threshold-filtered selection (AccelOpt: rewrites_selection.py)
   const positiveFiltered = improved.filter(r => r.speedup > MAX_THRESHOLD)
@@ -1266,7 +1282,7 @@ Make the rule GENERAL enough to apply to other kernels (not specific to this one
     log(`No pairs passed threshold filters (max>${MAX_THRESHOLD}, min<${(1/MIN_THRESHOLD).toFixed(3)}).`)
   }
 
-  phase('Iterate')
+  phase('Iterate'); await __genomeReport('Iterate', meta.name)
   log(`Iteration ${iter + 1} done. ${(baselineLatency / bestLatency).toFixed(2)}x vs baseline. Beam size: ${candidateBeam.length}`)
 }
 

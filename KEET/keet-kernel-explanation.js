@@ -11,6 +11,22 @@ export const meta = {
   ],
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda'],
   supported_problem_types: ['performance-explanation'],
@@ -167,7 +183,7 @@ Always cite specific NCU metric values when making claims. Distinguish between:
 // =============================================================================
 // Phase 1: Setup — Collect NCU profiles, source code, metadata
 // =============================================================================
-phase('Setup')
+phase('Setup'); await __genomeReport('Setup', meta.name)
 
 const setupResults = await parallel([
   // Agent 1: Read and catalog all source files
@@ -271,7 +287,7 @@ log(`Setup: ${sourceData?.kernel_functions?.length || 0} kernel functions, ${pro
 // =============================================================================
 // Phase 2: Source Code Inspection Stage
 // =============================================================================
-phase('Source Inspection')
+phase('Source Inspection'); await __genomeReport('Source Inspection', meta.name)
 
 // KEET's Source Code Inspection: iteratively review each source file,
 // build algorithm summary, generate performance hypotheses BEFORE seeing data
@@ -357,7 +373,7 @@ log(`Source Inspection: ${performanceHypotheses.length} hypotheses generated | S
 // =============================================================================
 // Phase 3: Profile Inspection Stage
 // =============================================================================
-phase('Profile Inspection')
+phase('Profile Inspection'); await __genomeReport('Profile Inspection', meta.name)
 
 // KEET's Profile Inspection: Metric Selector → Profile Analyzer (iterative per profile)
 // For single profile: analyze directly with hypothesis-informed metric selection
@@ -514,7 +530,7 @@ Generate DrGPU-style suggestions and evaluate their applicability.`, {
 // =============================================================================
 // Phase 4: Aggregation — Combine all analyses into final report
 // =============================================================================
-phase('Aggregation')
+phase('Aggregation'); await __genomeReport('Aggregation', meta.name)
 
 const aggregatedReport = await agent(`You are the KEET Analysis Aggregator (Section III-D).
 Combine all performance analyses into a single, coherent performance explanation report.
@@ -581,7 +597,7 @@ log(`Aggregation: ${aggregatedReport.bottleneck_list?.length || 0} bottlenecks, 
 // =============================================================================
 // Phase 5: Review — Cross-check explanation against hypotheses
 // =============================================================================
-phase('Review')
+phase('Review'); await __genomeReport('Review', meta.name)
 
 const reviewResult = await agent(`You are the KEET Explanation Reviewer (Section III-D).
 Your job is to cross-check the final performance explanation against the

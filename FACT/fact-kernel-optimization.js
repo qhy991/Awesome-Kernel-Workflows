@@ -13,6 +13,22 @@ export const meta = {
   ],
 };
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 // --- BEGIN embedded-eval substrate (auto-inlined by scripts/patch-embedded-eval.js) ---
 const EMBEDDING_CONTRACT = [
   'EMBEDDED-DISPATCH CONTRACT (this kernel is NOT standalone):',
@@ -156,7 +172,7 @@ async function main() {
   // ============================================================================
   // Phase 1: Setup
   // ============================================================================
-  phase('Setup');
+  phase('Setup'); await __genomeReport('Setup', meta.name);
 
   const setupResult = await agent(
     `Set up FACT compositional synthesis environment:
@@ -241,7 +257,7 @@ Return JSON:
   // ============================================================================
   // Phase 2: Pattern Discovery
   // ============================================================================
-  phase('Pattern Discovery');
+  phase('Pattern Discovery'); await __genomeReport('Pattern Discovery', meta.name);
 
   log(`Discovering optimization patterns from ${setupResult.exemplar_kernels.length} exemplars...`);
 
@@ -335,7 +351,7 @@ Return JSON:
   // ============================================================================
   // Phase 3: Pattern Realization
   // ============================================================================
-  phase('Pattern Realization');
+  phase('Pattern Realization'); await __genomeReport('Pattern Realization', meta.name);
 
   log('Realizing patterns as CUTLASS code transformations...');
 
@@ -426,7 +442,7 @@ Return JSON:
   // ============================================================================
   // Phase 4: Pattern Composition
   // ============================================================================
-  phase('Pattern Composition');
+  phase('Pattern Composition'); await __genomeReport('Pattern Composition', meta.name);
 
   log(`Composing patterns to generate optimized kernels (budget: ${compositionBudget})...`);
 
@@ -525,7 +541,7 @@ Return JSON:
   // ============================================================================
   // Phase 5: Ablation Studies
   // ============================================================================
-  phase('Ablation');
+  phase('Ablation'); await __genomeReport('Ablation', meta.name);
 
   log('Running ablation studies to validate pattern contributions...');
 
@@ -602,7 +618,7 @@ Return JSON:
   // ============================================================================
   // Phase 6: Evaluation
   // ============================================================================
-  phase('Evaluation');
+  phase('Evaluation'); await __genomeReport('Evaluation', meta.name);
 
   log('Evaluating composed kernels on target hardware...');
 
@@ -726,7 +742,7 @@ Return JSON:
   // ============================================================================
   // Phase 7: Report
   // ============================================================================
-  phase('Report');
+  phase('Report'); await __genomeReport('Report', meta.name);
 
   const report = await agent(
     `Generate FACT compositional synthesis report:

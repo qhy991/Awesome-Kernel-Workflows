@@ -11,6 +11,22 @@ export const meta = {
   ],
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 // --- BEGIN inlined arg_guard ---
 function __unwrapArgs(rawArgs) {
   if (rawArgs == null) return {}
@@ -302,7 +318,7 @@ async function unregisterVariant(variantName) {
 // Phase: Setup + Baseline
 // =============================================================================
 
-phase('Setup')
+phase('Setup'); await __genomeReport('Setup', meta.name)
 log(`ggml_root         = ${GGML_ROOT}`)
 log(`register_script   = ${REG_SCRIPT}`)
 log(`reference_cuh     = ${REFERENCE_CUH}`)
@@ -329,7 +345,7 @@ await agent(
   }
 )
 
-phase('Baseline')
+phase('Baseline'); await __genomeReport('Baseline', meta.name)
 const baseBuild = await runBuild('baseline', '')
 if (baseBuild.state !== 'grounded' || !baseBuild.value.ok) {
   return { ok: false, grounded: baseBuild.state === 'grounded',
@@ -367,7 +383,7 @@ for (let round = 1; round <= MAX_ROUNDS; ++round) {
     break
   }
 
-  phase('Propose')
+  phase('Propose'); await __genomeReport('Propose', meta.name)
   log(`\n=== Round ${round}/${MAX_ROUNDS} - proposing ${N_VARIANTS} variants in parallel ===`)
 
   const priorTitles = history
@@ -425,7 +441,7 @@ for (let round = 1; round <= MAX_ROUNDS; ++round) {
   log(`Drafted ${drafted.length}/${N_VARIANTS} variants for round ${round}`)
 
   // ----- Serial evaluate -----
-  phase('Evaluate')
+  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
   for (const v of drafted) {
     log(`\n--- Evaluating ${v.variant_name} ("${v.title}") ---`)
     const reg = await registerVariant(v.variant_name, v.cuh_path)
@@ -484,7 +500,7 @@ for (let round = 1; round <= MAX_ROUNDS; ++round) {
 // Report
 // =============================================================================
 
-phase('Report')
+phase('Report'); await __genomeReport('Report', meta.name)
 
 // Read the winning kernel back (or null if no variant beat baseline).
 let bestCode = null
