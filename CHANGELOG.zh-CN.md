@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-17
+
 ### 新增（Added）
 
 - **真实 genome 示例** —— `_meta/genome-trajectory-schema.md` 加入一份真实的
