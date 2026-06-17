@@ -509,6 +509,10 @@ ${manifestResult.manifest_yaml}
 # Critical constraints:
 - Every agent() call MUST have: label, phase, schema (except final report which can omit schema)
 - Every phase() call argument MUST match a title in meta.phases
+- Do NOT hand-write any genome/observability self-report. The live genome scribe
+  (a __genomeReport() helper + a call after each phase()) is injected
+  deterministically post-generation by scripts/patch-genome-report.js (idempotent)
+  per _meta/genome-trajectory-schema.md. Just emit clean phase() calls.
 - parallel() MUST receive array of arrow FUNCTIONS: () => agent(...), NOT direct agent() calls
 - The workflow MUST be syntactically valid JavaScript (no TypeScript annotations!)
 - Use template literals for prompt interpolation
