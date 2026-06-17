@@ -12,21 +12,15 @@ export const meta = {
   ],
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// This workflow does NOT use the generic entry scribe from
+// scripts/patch-genome-report.js (__genomeReport). Instead each phase's doer
+// agent appends a rich, result-bearing line to <exp_dir>/genome.jsonl as its
+// FINAL action — written AFTER the work, so it carries real outcomes
+// (technique / speedup / candidate_id / status) and emits once per loop
+// iteration. See _meta/genome-trajectory-schema.md. The "__genomeReport"
+// mention here is a sentinel so patch-genome-report.js treats this file as
+// already handled and does not re-inject the entry scribe.
 
 // --- BEGIN embedded-eval substrate (auto-inlined by scripts/patch-embedded-eval.js) ---
 const EMBEDDING_CONTRACT = [
@@ -266,7 +260,7 @@ let history = []  // [{turn, action, outcome, speedup, error}]
 // =============================================================================
 // Phase 1: Setup — Read model, establish workspace
 // =============================================================================
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup')
 
 if (INPUT_MODE === 'generate_then_optimize') {
   const generated = await agent(`No kernel_path was provided. Generate and verify an initial PyTorch model plus CUDA kernel scaffold before CUDAAgent optimization.
@@ -319,7 +313,12 @@ const setupResult = await agent(`You are a CUDA kernel optimization expert. Set 
 
 # Operation: ${OP_DESC}
 
-Return the model code and analysis.`, {
+Return the model code and analysis.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create the file if missing; shell append with >>). Get the timestamp first by running: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append this one-line JSON, filling the bracketed parts from your analysis:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"workspace_setup","note":"<critical operators + fusion opportunities, one line>"}`, {
   label: 'setup-workspace',
   phase: 'Setup',
   schema: {
@@ -341,7 +340,7 @@ modelCode = setupResult.model_code
 // =============================================================================
 // Phase 2: Profile — Analyze baseline performance
 // =============================================================================
-phase('Profile'); await __genomeReport('Profile', meta.name)
+phase('Profile')
 
 const profileResult = await agent(`You are a CUDA performance profiler. Profile the baseline PyTorch model.
 
@@ -370,7 +369,12 @@ ${PROFILE_CMD ? `   Run: ${PROFILE_CMD}` : '   Estimate performance from operato
    - What memory access pattern to use?
    - What parallelism strategy (threads/blocks mapping)?
 
-Return profiling results and optimization plan.`, {
+Return profiling results and optimization plan.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Profile","ts":"<ts>","status":"done","technique":"<chosen optimization strategy, e.g. operator_fusion>","speedup":null,"note":"<baseline eager/compile ms + main bottleneck>"}`, {
   label: 'profile-baseline',
   phase: 'Profile',
   schema: {
@@ -404,7 +408,7 @@ for (currentAttempt = 0; currentAttempt < MAX_TURNS && !targetMet; currentAttemp
   // ===========================================================================
   // Phase 3: Implement — Generate CUDA kernel + bindings + model_new
   // ===========================================================================
-  phase('Implement'); await __genomeReport('Implement', meta.name)
+  phase('Implement')
 
   const recentHistory = history.slice(-5)
   const historyContext = recentHistory.length > 0
@@ -458,7 +462,12 @@ Generate THREE files:
 - Ensure numerical correctness (match reference within tolerance)
 - This is attempt ${currentAttempt + 1}/${MAX_TURNS}
 
-Return all three files.`, {
+Return all three files.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this is optimization attempt ${currentAttempt}):
+{"workflow":"${meta.name}","phase":"Implement","ts":"<ts>","status":"done","candidate_id":"attempt-${currentAttempt}","technique":"<the main optimization you applied this attempt>","note":"<what changed vs the previous attempt>"}`, {
     label: `impl-${currentAttempt}`,
     phase: 'Implement',
     schema: {
@@ -476,7 +485,7 @@ Return all three files.`, {
   // ===========================================================================
   // Phase 4: Verify — Compile + correctness + performance
   // ===========================================================================
-  phase('Verify'); await __genomeReport('Verify', meta.name)
+  phase('Verify')
 
   // Embedded-dispatch evaluation: register candidate into the project, build/test/
   // benchmark via the project's own commands, then ALWAYS unregister to pristine.
@@ -553,7 +562,12 @@ ${PROFILE_CMD ? `Run exactly the user-provided profile_command: ${PROFILE_CMD}` 
 - r = 2 if faster than eager only by >5%
 - r = 1 if correct but not faster
 
-Return results.`, {
+Return results.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" if correctness passed, else "error"; speedup is the measured speedup_vs_compile number, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Verify","ts":"<ts>","status":"<done|error>","candidate_id":"attempt-${currentAttempt}","speedup":<number or null>,"technique":"<technique under test>","note":"<compiled? correct? reward; or the failure reason>"}`, {
     label: `verify-${currentAttempt}`,
     phase: 'Verify',
     schema: {
@@ -612,7 +626,7 @@ Return results.`, {
     // ===========================================================================
     // Phase 5: Refine — Diagnose and plan fix
     // ===========================================================================
-    phase('Refine'); await __genomeReport('Refine', meta.name)
+    phase('Refine')
 
     if (!targetMet && currentAttempt < MAX_TURNS - 1) {
       log(`  Turn ${currentAttempt + 1}: ${outcome} | Refining...`)
@@ -623,7 +637,7 @@ Return results.`, {
 // =============================================================================
 // Phase 6: Report
 // =============================================================================
-phase('Report'); await __genomeReport('Report', meta.name)
+phase('Report')
 
 const finalReport = await agent(`Write a concise optimization report.
 
