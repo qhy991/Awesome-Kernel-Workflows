@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+### 新增（Added）
+
+- **真实 genome 示例** —— `_meta/genome-trajectory-schema.md` 加入一份真实的
+  `run-N/genome.jsonl`(cuda-agent 优化 fused RMSNorm),展示每个 phase 的信息密度、
+  每次迭代的 `candidate_id`、以及实测 `speedup`,并附健壮解析提示(跳过非 JSON 行)。
+
 ## [0.2.0] - 2026-06-17
 
 ### 新增（Added）
