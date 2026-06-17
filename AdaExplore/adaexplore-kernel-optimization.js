@@ -21,21 +21,10 @@ export const meta = {
   },
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['triton'],
@@ -424,7 +413,7 @@ function renderCommand(template, replacements) {
 // =============================================================================
 // Phase 1: Setup
 // =============================================================================
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -481,7 +470,12 @@ ${SKILL_MEMORY_PATH
   ? `Read existing skill memory from ${SKILL_MEMORY_PATH}. Lines may be "You cannot ... || score".`
   : 'Start with empty skill memory.'}
 
-Return the materialized operator code, evaluator command template, optional baseline time, and loaded memory rules.`, {
+Return the materialized operator code, evaluator command template, optional baseline time, and loaded memory rules.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"workspace_setup","note":"<operator + evaluator/baseline availability + loaded skill-memory rule count, one line>"}`, {
   label: 'setup',
   phase: 'Setup',
   model: MODEL.mechanical,
@@ -530,7 +524,7 @@ log(`Setup: mode=${MODE} | steps=${STEPS} | memory_update=${MEMORY_UPDATE} | ski
 for (let searchStep = 0; searchStep < STEPS; searchStep++) {
   if (typeof budget !== 'undefined' && budget.total && budget.remaining() < EST_PER_ROUND) { log(`token budget ~exhausted — stop`); break }
 
-  phase('Select'); await __genomeReport('Select', meta.name)
+  phase('Select')
 
   const selectedNode = selectNode()
   const numSmallChildren = selectedNode.children
@@ -545,7 +539,7 @@ for (let searchStep = 0; searchStep < STEPS; searchStep++) {
 
   log(`Step ${searchStep + 1}/${STEPS} | selected=${selectedNode.id} | expand=${isLargeStep ? 'large' : 'small'} | nodes=${mctsNodes.length}`)
 
-  phase('Expand'); await __genomeReport('Expand', meta.name)
+  phase('Expand')
 
   let newKernelCode = ''
   let expandNotes = ''
@@ -586,7 +580,12 @@ ${poolContext}
 4. Prefer structural diversity: different tiling, decomposition, fusion, mapping, or memory strategy from the pool.
 5. Do not call any AdaExplore repository code.
 
-Return the complete candidate kernel code.`, {
+Return the complete candidate kernel code.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this is large-step proposal for candidate node-${searchStep + 1}-L):
+{"workflow":"${meta.name}","phase":"Expand","ts":"<ts>","status":"done","candidate_id":"node-${searchStep + 1}-L","technique":"<the structural strategy you chose, e.g. tiling/fusion/decomposition>","speedup":null,"note":"<how this candidate differs structurally from the diverse pool>"}`, {
       label: `propose-${searchStep + 1}`,
       phase: 'Expand',
       model: MODEL.judgment,
@@ -667,7 +666,12 @@ ${memoryLines(20).join('\n') || 'No constraints yet.'}
 3. Preserve the evaluator-facing interface.
 4. Do not call any AdaExplore repository code.
 
-Return the edited candidate kernel code.`, {
+Return the edited candidate kernel code.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this is small-step surgical edit for candidate node-${searchStep + 1}-S):
+{"workflow":"${meta.name}","phase":"Expand","ts":"<ts>","status":"done","candidate_id":"node-${searchStep + 1}-S","technique":"<the main local edit you applied>","speedup":null,"note":"<the surgical changes made vs the selected kernel>"}`, {
       label: `tune-${searchStep + 1}`,
       phase: 'Expand',
       model: MODEL.judgment,
@@ -685,7 +689,7 @@ Return the edited candidate kernel code.`, {
     expandNotes = (tunerResult?.changes_applied || []).join('; ')
   }
 
-  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
+  phase('Evaluate')
 
   const kernelPath = USE_DRIVER
     ? workspaceKernelPath(searchStep, isLargeStep, DRIVER_SOURCE_EXT)
@@ -724,7 +728,12 @@ ${newKernelCode.substring(0, 9000)}
 ${operatorCode.substring(0, 5000)}
 \`\`\`
 
-Return the parsed evaluation result.`, {
+Return the parsed evaluation result.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" if the candidate compiled AND was correct, else "error"; speedup is the measured speedup number, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"node-${searchStep + 1}-${isLargeStep ? 'L' : 'S'}","speedup":<number or null>,"technique":"measured_evaluation","note":"<compiled? correct? speedup; or the evaluator failure reason>"}`, {
     label: `eval-${searchStep + 1}`,
     phase: 'Evaluate',
     model: MODEL.mechanical,
@@ -824,7 +833,7 @@ Return the parsed evaluation result.`, {
     log(`  NEW BEST: node=${newNodeId} score=${JSON.stringify(newScore)} speedup=${speedup.toFixed(3)}x`)
   }
 
-  phase('Backpropagate'); await __genomeReport('Backpropagate', meta.name)
+  phase('Backpropagate')
 
   let current = newNode
   while (current) {
@@ -850,7 +859,7 @@ Return the parsed evaluation result.`, {
 // =============================================================================
 // Phase 6: Optional memory adaptation
 // =============================================================================
-phase('AdaptMemory'); await __genomeReport('AdaptMemory', meta.name)
+phase('AdaptMemory')
 
 let memoryUpdateReport = { updated: false, new_rules: 0, total_rules: skillMemory.length }
 
@@ -876,7 +885,12 @@ ${SKILL_MEMORY_PATH || '(no path provided; return memory in workflow output only
 ${JSON.stringify(failureLogs, null, 2).substring(0, 12000)}
 \`\`\`
 
-Return updated memory rules.`, {
+Return updated memory rules.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"AdaptMemory","ts":"<ts>","status":"done","technique":"failure_to_constraint_distillation","note":"<how many new You-cannot rules distilled from failure logs, one line>"}`, {
     label: 'adapt-memory',
     phase: 'AdaptMemory',
     model: MODEL.mechanical,
@@ -906,7 +920,7 @@ Return updated memory rules.`, {
 // =============================================================================
 // Phase 7: Report
 // =============================================================================
-phase('Report'); await __genomeReport('Report', meta.name)
+phase('Report')
 
 const treeStats = {
   total_nodes: mctsNodes.length,
@@ -949,7 +963,12 @@ Cover:
 1. Which expansion mode was most useful.
 2. Whether the evaluator evidence is strong enough to trust the best kernel.
 3. What failure patterns should guide the next run.
-4. Any remaining optimization opportunities.`, {
+4. Any remaining optimization opportunities.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the best measured result (speedup is the best measured speedup number, or null if none verified):
+{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"done","candidate_id":"${globalBest.id}","speedup":<number or null>,"technique":"final_report","note":"<which expansion mode won + whether evaluator evidence supports the best kernel, one line>"}`, {
   label: 'final-report',
   phase: 'Report',
   model: MODEL.judgment,

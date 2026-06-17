@@ -12,21 +12,10 @@ export const meta = {
   ],
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['triton'],
@@ -174,7 +163,7 @@ const operators = OPERATOR_LIST.length > 0
 // =============================================================================
 // Phase 1: Setup — Parse operators, prepare harness
 // =============================================================================
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup')
 
 const setupResult = await agent(`You are setting up a TritorX kernel generation session.
 
@@ -200,7 +189,12 @@ const setupResult = await agent(`You are setting up a TritorX kernel generation 
 
 ${operators.length === 1 ? `# Operator: ${operators[0].name}\n# Docstring:\n${operators[0].docstring?.substring(0, 2000) || '(to be loaded)'}` : ''}
 
-Return setup status.`, {
+Return setup status.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"harness_setup","note":"<platform/dialect, operator count, harness_evidence, key signatures/constraints, one line>"}`, {
   label: 'setup',
   phase: 'Setup',
   schema: {
@@ -238,7 +232,7 @@ for (const op of operators) {
     // =========================================================================
     // Phase 2: Generate — LLM produces Triton kernel + wrapper
     // =========================================================================
-    phase('Generate'); await __genomeReport('Generate', meta.name)
+    phase('Generate')
 
     const generateResult = await agent(`You are a TritorX kernel generator. Generate a Triton ${TRITON_DIALECT} kernel and Python wrapper for this PyTorch ATen operator.
 
@@ -270,7 +264,12 @@ ${feedbackPrompt ? `# Feedback from previous attempt:\n${feedbackPrompt}` : ''}
 
 Return the kernel and wrapper code.
 
-Attempt ${attempt + 1}/${MAX_ATTEMPTS}, LLM call ${llmCallsThisAttempt + 1}/${MAX_LLM_CALLS}`, {
+Attempt ${attempt + 1}/${MAX_ATTEMPTS}, LLM call ${llmCallsThisAttempt + 1}/${MAX_LLM_CALLS}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (operator ${opName}, attempt ${attempt}):
+{"workflow":"${meta.name}","phase":"Generate","ts":"<ts>","status":"done","candidate_id":"${opName}","technique":"<core kernel approach you generated, e.g. block_reduction>","speedup":null,"note":"<implementation approach, masking/dtype handling, one line>"}`, {
       label: `generate-${opName}-a${attempt}`,
       phase: 'Generate',
       schema: {
@@ -297,7 +296,7 @@ Attempt ${attempt + 1}/${MAX_ATTEMPTS}, LLM call ${llmCallsThisAttempt + 1}/${MA
         // =====================================================================
         // Phase 3: Lint — Custom linter checks
         // =====================================================================
-        phase('Lint'); await __genomeReport('Lint', meta.name)
+        phase('Lint')
 
         const lintResult = await agent(`You are the TritorX Custom Linter (Section 3.2).
 Check this Triton kernel + wrapper for violations.
@@ -323,7 +322,12 @@ ${TARGET_PLATFORM === 'MTIA' ? '6. Memory access must be 32-byte aligned\n7. Onl
 
 ${LINT_CMD ? `Also run: ${LINT_CMD}` : ''}
 
-Return lint results.`, {
+Return lint results.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (operator ${opName}, status="done" if lint passed else "error"):
+{"workflow":"${meta.name}","phase":"Lint","ts":"<ts>","status":"<done|error>","candidate_id":"${opName}","technique":"custom_triton_linter","speedup":null,"note":"<passed? else top violations + severity, one line>"}`, {
           label: `lint-${opName}-a${attempt}-c${llmCallsThisAttempt}`,
           phase: 'Lint',
           schema: {
@@ -349,7 +353,7 @@ Return lint results.`, {
         // =====================================================================
         // Phase 4: Compile-Test — JIT compile + OpInfo tests
         // =====================================================================
-        phase('Compile-Test'); await __genomeReport('Compile-Test', meta.name)
+        phase('Compile-Test')
 
         const testResult = await agent(`You are the TritorX Compile/Test executor.
 Compile and test this kernel on ${TARGET_PLATFORM}.
@@ -373,7 +377,12 @@ ${currentWrapper.substring(0, 2000)}
    - Compare output against PyTorch reference (CPU ATen)
    - Check numerical tolerance (dtype-dependent)
 
-Report: compilation status, tests passed/failed, error details.`, {
+Report: compilation status, tests passed/failed, error details.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" if all_passed, else "error"):
+{"workflow":"${meta.name}","phase":"Compile-Test","ts":"<ts>","status":"<done|error>","candidate_id":"${opName}","technique":"jit_compile_opinfo","speedup":null,"note":"<compiled? tests_passed/tests_total; failure_type + failing_dtypes if any, one line>"}`, {
           label: `test-${opName}-a${attempt}-c${llmCallsThisAttempt}`,
           phase: 'Compile-Test',
           schema: {
@@ -412,7 +421,7 @@ Report: compilation status, tests passed/failed, error details.`, {
         // =====================================================================
         // Phase 5: Debug — Analyze failure, regenerate
         // =====================================================================
-        phase('Debug'); await __genomeReport('Debug', meta.name)
+        phase('Debug')
 
         const debugResult = await agent(`You are the TritorX Debug agent. Fix this kernel based on the error feedback.
 
@@ -439,7 +448,12 @@ ${feedbackPrompt}
 - Do NOT introduce calls to other ATen operators as a "fix"
 
 Return the fixed kernel and wrapper.
-LLM call ${llmCallsThisAttempt + 1}/${MAX_LLM_CALLS}`, {
+LLM call ${llmCallsThisAttempt + 1}/${MAX_LLM_CALLS}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (operator ${opName}, attempt ${attempt}):
+{"workflow":"${meta.name}","phase":"Debug","ts":"<ts>","status":"done","candidate_id":"${opName}","technique":"<the fix you applied, e.g. fix_memory_alignment>","speedup":null,"note":"<root cause from the error feedback + what you changed, one line>"}`, {
           label: `debug-${opName}-a${attempt}-c${llmCallsThisAttempt}`,
           phase: 'Debug',
           schema: {
@@ -482,7 +496,7 @@ LLM call ${llmCallsThisAttempt + 1}/${MAX_LLM_CALLS}`, {
 // =============================================================================
 // Phase 6: Report
 // =============================================================================
-phase('Report'); await __genomeReport('Report', meta.name)
+phase('Report')
 
 const coverage = operators.length > 0 ? (operatorsPassed.length / operators.length * 100).toFixed(1) : '0'
 
@@ -508,7 +522,12 @@ Write:
 2. Common failure patterns and root causes
 3. In-context learning effectiveness (did later calls succeed faster?)
 4. Platform-specific challenges encountered
-5. Recommendations for improving coverage`, {
+5. Recommendations for improving coverage
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"done","technique":"coverage_report","speedup":null,"note":"<operators passed/attempted, coverage %, dominant failure pattern, one line>"}`, {
   label: 'final-report',
   phase: 'Report',
 })

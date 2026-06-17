@@ -12,21 +12,10 @@ export const meta = {
   ],
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda'],
@@ -194,7 +183,7 @@ let generation = 0
 // =============================================================================
 // Phase 1: Setup — Initial kernel, roofline classification, strategy pool
 // =============================================================================
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup')
 
 const setupResults = await parallel([
   // Agent 1: Generate initial kernel + roofline classification
@@ -235,7 +224,12 @@ ${PROBLEM_DEFINITION ? `\`\`\`python\n${PROBLEM_DEFINITION.substring(0, 3000)}\n
 
 4. Generate initial optimization guidance based on roofline position.
 
-Return the initial kernel and roofline analysis.`, {
+Return the initial kernel and roofline analysis.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"initial_kernel_generation+roofline_classification","speedup":null,"note":"<roofline_class + arithmetic intensity + guidance summary, one line>"}`, {
     model: MODEL.judgment,
     label: 'setup-kernel-roofline',
     phase: 'Setup',
@@ -292,7 +286,12 @@ For each strategy, provide:
 - applicable_when: roofline condition (compute-bound, memory-bound, or both)
 - expected_metrics: which NCU metrics should improve
 
-Return the strategy pool.`, {
+Return the strategy pool.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"strategy_pool_init","speedup":null,"note":"<number of strategies generated + categories covered, one line>"}`, {
     model: MODEL.judgment,
     label: 'setup-strategy-pool',
     phase: 'Setup',
@@ -344,7 +343,7 @@ for (epoch = 0; epoch < EPOCHS; epoch++) {
     // =========================================================================
     // Phase 2: Strategize — SCE Manager generates/crosses strategies
     // =========================================================================
-    phase('Strategize'); await __genomeReport('Strategize', meta.name)
+    phase('Strategize')
 
     // Select parents via tournament selection
     const sortedPop = [...population].sort((a, b) => b.fitness - a.fitness)
@@ -376,7 +375,12 @@ ${strategyPool.slice(0, 15).map((s, i) => `${i + 1}. ${s}`).join('\n')}
 ${rooflineClass === 'compute-bound' ? '   - Tensor core usage, compute throughput, SM utilization' : rooflineClass === 'memory-bound' ? '   - Memory bandwidth, L2 hit rate, vectorized access, memory padding' : '   - Both compute AND memory optimizations together'}
 6. Include at least one "exploratory" strategy that tries something novel
 
-Return new strategies for this generation.`, {
+Return new strategies for this generation.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this is epoch ${epoch}, generation ${generation}):
+{"workflow":"${meta.name}","phase":"Strategize","ts":"<ts>","status":"done","candidate_id":"e${epoch}-g${generation}","technique":"sce_strategy_crossover","speedup":null,"note":"<number of new strategies + how parents were combined, one line>"}`, {
       model: MODEL.judgment,
       label: `strategize-e${epoch}-g${generation}`,
       phase: 'Strategize',
@@ -406,7 +410,7 @@ Return new strategies for this generation.`, {
     // =========================================================================
     // Phase 3: Translate — Apply strategies to kernel code
     // =========================================================================
-    phase('Translate'); await __genomeReport('Translate', meta.name)
+    phase('Translate')
 
     const translatedKernels = await parallel(
       newStrategies.slice(0, 5).map((strat, idx) => () =>
@@ -436,7 +440,12 @@ ${strat.strategy}
    - Swizzling → XOR-based index remapping
 5. Include proper error checking and bounds handling
 
-Return the optimized kernel.`, {
+Return the optimized kernel.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (epoch ${epoch}, generation ${generation}, strategy index ${idx}):
+{"workflow":"${meta.name}","phase":"Translate","ts":"<ts>","status":"done","candidate_id":"e${epoch}-g${generation}-s${idx}","technique":"<the concrete CUDA construct you applied for this strategy>","speedup":null,"note":"<strategy translated + main code change, one line>"}`, {
           model: MODEL.judgment,
           isolation: 'worktree',
           label: `translate-e${epoch}-g${generation}-s${idx}`,
@@ -456,7 +465,7 @@ Return the optimized kernel.`, {
     // =========================================================================
     // Phase 4: Revise — Kernel Revisor: compile → function → profile → fix
     // =========================================================================
-    phase('Revise'); await __genomeReport('Revise', meta.name)
+    phase('Revise')
 
     const revisedResults = await parallel(
       translatedKernels.filter(Boolean).map((tk, idx) => () =>
@@ -495,7 +504,12 @@ Then return to Step 1.
 
 If a kernel cannot be fixed after ${MAX_REVISE_LOOPS} attempts, mark it as failed.
 
-Return the final revised kernel and its metrics.`, {
+Return the final revised kernel and its metrics.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" if compiled AND correct, else "error"; speedup is the measured speedup number, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Revise","ts":"<ts>","status":"<done|error>","candidate_id":"e${epoch}-g${generation}-k${idx}","speedup":<number or null>,"technique":"<strategy under revision>","note":"<compiled? correct? sm/mem util; revision iterations; or the failure reason>"}`, {
           model: MODEL.judgment,
           isolation: 'worktree',
           label: `revise-e${epoch}-g${generation}-k${idx}`,
@@ -521,7 +535,7 @@ Return the final revised kernel and its metrics.`, {
     // =========================================================================
     // Phase 5: Evolve — Tournament selection + elitism + strategy alignment
     // =========================================================================
-    phase('Evolve'); await __genomeReport('Evolve', meta.name)
+    phase('Evolve')
 
     // Compute fitness and add to population
     for (let i = 0; i < revisedResults.length; i++) {
@@ -572,7 +586,7 @@ Return the final revised kernel and its metrics.`, {
 // =============================================================================
 // Phase 6: Report
 // =============================================================================
-phase('Report'); await __genomeReport('Report', meta.name)
+phase('Report')
 
 const finalReport = await agent(`Write a concise technical report on cuPilot evolutionary optimization.
 
@@ -604,7 +618,12 @@ Write:
 2. Roofline guidance effectiveness: did the classification help?
 3. Strategy-level crossover: which combinations were most productive?
 4. Hardware utilization achieved vs theoretical peak
-5. Remaining optimization opportunities`, {
+5. Remaining optimization opportunities
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the final best result:
+{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"done","technique":"<winning best strategy summary>","speedup":<best speedup number or null>,"note":"<roofline class + best strategy + final population/pool sizes, one line>"}`, {
   model: MODEL.judgment,
   label: 'final-report',
   phase: 'Report',

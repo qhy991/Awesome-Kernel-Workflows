@@ -14,21 +14,10 @@ export const meta = {
   ],
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda'],
@@ -293,7 +282,7 @@ function isBetterCandidate(candidate, incumbent) {
 // =============================================================================
 // Phase 1: Setup
 // =============================================================================
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -338,7 +327,12 @@ const setup = await agent(`You are a ${langToken(LEGACY_SETUP_LANG_TOKEN)} kerne
 5. State the evaluator JSON contract and how {kernel_path}/{result_path} are substituted.
 6. List baseline performance if available.
 
-Return structured task information.`, {
+Return structured task information.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"task_setup","note":"<operation type + key constraints/contract, one line>"}`, {
   label: 'setup-task',
   phase: 'Setup',
   schema: {
@@ -362,7 +356,7 @@ referenceCode = setup.reference_code || ''
 // =============================================================================
 // Phase 2: FeatureCatalog
 // =============================================================================
-phase('FeatureCatalog'); await __genomeReport('FeatureCatalog', meta.name)
+phase('FeatureCatalog')
 
 const LEGACY_FEATURE_CATALOG = `# Required feature families
 - tiling and block/grid decomposition
@@ -395,7 +389,12 @@ ${USE_DRIVER ? (DRIVER_FEATURE_CATALOG || LEGACY_TRITON_FEATURE_FALLBACK) : LEGA
 3. Include a conservative baseline feature set.
 4. Initialize all feature scores with neutral priors.
 
-Return feature catalog.`, {
+Return feature catalog.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"FeatureCatalog","ts":"<ts>","status":"done","technique":"feature_search_space","note":"<count + the main feature families in the catalog, one line>"}`, {
   label: 'feature-catalog',
   phase: 'FeatureCatalog',
   schema: {
@@ -416,7 +415,7 @@ for (const feature of featureCatalog) initFeatureScore(feature)
 // =============================================================================
 // Phase 3: GenerateTests
 // =============================================================================
-phase('GenerateTests'); await __genomeReport('GenerateTests', meta.name)
+phase('GenerateTests')
 
 const testPlan = await agent(`Generate diverse correctness tests for this CUDA-LLM task.
 
@@ -439,7 +438,12 @@ rtol=${RTOL}, atol=${ATOL}
 4. Include random and adversarial value distributions.
 5. These tests define what the user-provided benchmark_command should verify; model self-judgment is not enough.
 
-Return test cases.`, {
+Return test cases.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"GenerateTests","ts":"<ts>","status":"done","technique":"correctness_test_suite","note":"<count of tests + shapes/boundary cases covered, one line>"}`, {
   label: 'generate-tests',
   phase: 'GenerateTests',
   schema: {
@@ -462,7 +466,7 @@ for (let iteration = 0; iteration < ITERATIONS; iteration++) {
   for (let sample = 0; sample < SAMPLES_PER_FEATURE_SET; sample++) {
     log(`\n=== CUDA-LLM FSR iteration ${iteration + 1}/${ITERATIONS}, sample ${sample + 1}/${SAMPLES_PER_FEATURE_SET} ===`)
 
-    phase('SelectFeatures'); await __genomeReport('SelectFeatures', meta.name)
+    phase('SelectFeatures')
 
     const selection = await agent(`Select a ${langToken(LEGACY_SELECT_LANG_TOKEN)} feature combination for the next candidate.
 
@@ -488,7 +492,12 @@ ${JSON.stringify(candidates.slice(-8), null, 2).substring(0, 10000)}
 4. Use exploitation when feature evidence shows compile/correctness/speedup reward.
 5. Avoid unsafe features unless explicitly justified by tolerance and tests.
 
-Return selected feature ids and rationale.`, {
+Return selected feature ids and rationale.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"SelectFeatures","ts":"<ts>","status":"done","candidate_id":"iter${iteration}-s${sample}","technique":"<the selected feature combination as a +-joined list>","note":"<exploration vs exploitation + selection rationale, one line>"}`, {
       label: `select-features-${iteration}-${sample}`,
       phase: 'SelectFeatures',
       schema: {
@@ -502,7 +511,7 @@ Return selected feature ids and rationale.`, {
       },
     })
 
-    phase('GenerateKernel'); await __genomeReport('GenerateKernel', meta.name)
+    phase('GenerateKernel')
 
     const generation = await agent(`Generate a ${langToken(LEGACY_GENERATE_LANG_TOKEN)} kernel using the selected CUDA-LLM FSR features.
 
@@ -526,7 +535,12 @@ ${JSON.stringify(selection, null, 2)}
 4. Implement selected features concretely; if a feature is skipped, explain why.
 5. Keep code benchmarkable by benchmark_command.${USE_DRIVER && DRIVER_IMPL_REQUIREMENTS ? `\n6. ${DRIVER_IMPL_REQUIREMENTS}` : ''}
 
-Return candidate code and implemented features.`, {
+Return candidate code and implemented features.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"GenerateKernel","ts":"<ts>","status":"done","candidate_id":"iter${iteration}-s${sample}","technique":"<the implemented feature combination as a +-joined list>","note":"<what was implemented vs skipped and why, one line>"}`, {
       label: `generate-kernel-${iteration}-${sample}`,
       phase: 'GenerateKernel',
       schema: {
@@ -541,7 +555,7 @@ Return candidate code and implemented features.`, {
       },
     })
 
-    phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
+    phase('Evaluate')
 
     const evaluation = await agent(`Evaluate this ${langToken(LEGACY_EVAL_LANG_TOKEN)} candidate with compile, correctness, and latency evidence.
 
@@ -569,7 +583,12 @@ ${JSON.stringify(tests, null, 2).substring(0, 8000)}
 4. Reward must be based on compile success, functional correctness over diverse tests, and measured latency.
 5. Report suspected reward-hacking signs: hardcoded shapes, skipped computation, PyTorch fallback, or ignored inputs.
 
-Return evaluator result.`, {
+Return evaluator result.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" only if compiled AND correct, else "error"; speedup is the measured speedup number, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"iter${iteration}-s${sample}","speedup":<number or null>,"technique":"<the feature combination under test as a +-joined list>","note":"<compiled? correct? passed/total tests; or the failure reason>"}`, {
       label: `evaluate-${iteration}-${sample}`,
       phase: 'Evaluate',
       schema: {
@@ -645,7 +664,7 @@ Return evaluator result.`, {
       bestCandidate = candidate
     }
 
-    phase('Reinforce'); await __genomeReport('Reinforce', meta.name)
+    phase('Reinforce')
 
     const reinforce = await agent(`Update ${langToken(LEGACY_REINFORCE_LANG_TOKEN)} feature scores from this measured candidate.
 
@@ -671,7 +690,12 @@ ${JSON.stringify(featureScores, null, 2).substring(0, 10000)}
 4. reward_hacking_flags suppress reward even if speedup appears high.
 5. Features not implemented should not receive credit.
 
-Return updated score records for affected features.`, {
+Return updated score records for affected features.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Reinforce","ts":"<ts>","status":"done","candidate_id":"iter${iteration}-s${sample}","technique":"<the feature combination whose scores you updated as a +-joined list>","note":"<which features gained/lost reward and why, one line>"}`, {
       label: `reinforce-${iteration}-${sample}`,
       phase: 'Reinforce',
       schema: {
@@ -693,7 +717,7 @@ Return updated score records for affected features.`, {
 // =============================================================================
 // Phase 8: Report
 // =============================================================================
-phase('Report'); await __genomeReport('Report', meta.name)
+phase('Report')
 
 const finalReport = await agent(`Write a concise CUDA-LLM FSR optimization report.
 
@@ -733,7 +757,12 @@ Cover:
 2. Which feature combinations failed and why.
 3. Whether the best kernel is trustworthy under diverse tests.
 4. Which feature sets should be tried next.
-5. Any reward-hacking risks that remain.`, {
+5. Any reward-hacking risks that remain.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"done","candidate_id":"${bestCandidate ? bestCandidate.id : 'none'}","speedup":${bestCandidate && bestCandidate.eval ? (bestCandidate.eval.speedup || 0) : 0},"technique":"<best feature combination as a +-joined list>","note":"<best result + most-reinforced features, one line>"}`, {
   label: 'final-report',
   phase: 'Report',
 })

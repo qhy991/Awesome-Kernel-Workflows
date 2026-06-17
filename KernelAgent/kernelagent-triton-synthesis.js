@@ -13,21 +13,10 @@ export const meta = {
   ],
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['triton'],
@@ -296,7 +285,7 @@ function shouldUsePipeline(analysis) {
 // =============================================================================
 // Phase 1: Setup — Parse problem, generate test, initialize workspace
 // =============================================================================
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -337,7 +326,12 @@ Return a JSON object with:
 - input_tensors: list of {name, shape, dtype} for each input
 - operations: list of operation names in order
 - output_spec: {shape, dtype} of the output
-- complexity_signals: any signals that suggest this needs multi-subgraph decomposition`, {
+- complexity_signals: any signals that suggest this needs multi-subgraph decomposition
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"problem_parse","note":"<op count + input tensor shapes + any complexity signals, one line>"}`, {
   label: 'setup-problem',
   phase: 'Setup',
   model: MODEL.profile,
@@ -402,7 +396,7 @@ log(`Session directory: ${sessionDir}`)
 // =============================================================================
 // Phase 2: Route — Static analysis to choose path
 // =============================================================================
-phase('Route'); await __genomeReport('Route', meta.name)
+phase('Route')
 
 const routeResult = await agent(`Analyze this problem to determine the optimal synthesis path.
 
@@ -432,7 +426,12 @@ Return a JSON object with:
 - path: 'direct' or 'pipeline'
 - reason: explanation of the routing decision
 - subgraph_count: estimated number of subgraphs (1 for direct)
-- estimated_difficulty: 'easy', 'medium', 'hard'`, {
+- estimated_difficulty: 'easy', 'medium', 'hard'
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Route","ts":"<ts>","status":"done","technique":"<chosen path: direct or pipeline>","note":"<routing reason + estimated difficulty + subgraph count>"}`, {
   label: 'route-analysis',
   phase: 'Route',
   model: MODEL.profile,
@@ -502,7 +501,7 @@ Return a JSON object with:
 // =============================================================================
 // Phase 3: Generate — Parallel seed generation
 // =============================================================================
-phase('Generate'); await __genomeReport('Generate', meta.name)
+phase('Generate')
 
 const synthesisTargets = routingDecision.path === 'pipeline' && subgraphs.length > 0
   ? subgraphs.map(sg => ({
@@ -552,7 +551,12 @@ ${seedIdx >= 3 ? 'Explore an alternative algorithmic approach.' : ''}
 Return a JSON object with:
 - kernel_code: ${USE_DRIVER ? `complete source file with ${DRIVER_LANG_FENCE} kernel(s) and a callable wrapper` : 'complete Python file with @triton.jit kernel and kernel_function wrapper'}
 - approach: brief description of the implementation strategy
-- potential_issues: any concerns about correctness or performance`, {
+- potential_issues: any concerns about correctness or performance
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this is seed variant ${seedIdx} for target ${target.id}):
+{"workflow":"${meta.name}","phase":"Generate","ts":"<ts>","status":"done","candidate_id":"${target.id}-seed${seedIdx}","technique":"<your implementation strategy>","note":"<key design choice + any potential issues>"}`, {
         label: `gen-${target.id}-seed${seedIdx}`,
         phase: 'Generate',
         model: MODEL.judgment,
@@ -601,7 +605,7 @@ log(`Generated ${candidates.length} candidates (${validCandidates.length} valid,
 // =============================================================================
 // Phase 4: Verify — Sandboxed test execution
 // =============================================================================
-phase('Verify'); await __genomeReport('Verify', meta.name)
+phase('Verify')
 
 if (VERIFY && validCandidates.length > 0) {
   const verifyPromises = validCandidates.map(candidate => () =>
@@ -638,7 +642,12 @@ Return a JSON object with:
 - stdout: captured standard output
 - stderr: captured standard error
 - error_summary: brief description of failure reason (null if passed)
-- verification_result: 'pass' | 'fail' | 'timeout' | 'error'`, {
+- verification_result: 'pass' | 'fail' | 'timeout' | 'error'
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the result you just measured (status="done" if the kernel passed, else "error"):
+{"workflow":"${meta.name}","phase":"Verify","ts":"<ts>","status":"<done|error>","candidate_id":"${candidate.id}","speedup":null,"technique":"sandboxed_test_execution","note":"<verification_result + exit code; or the failure reason>"}`, {
       label: `verify-${candidate.id}`,
       phase: 'Verify',
       model: MODEL.mechanical,
@@ -751,7 +760,7 @@ Return a JSON object with:
 // =============================================================================
 // Phase 5: Refine — Iterative refinement for failed candidates
 // =============================================================================
-phase('Refine'); await __genomeReport('Refine', meta.name)
+phase('Refine')
 
 const failedCandidates = candidates.filter(c => c.status === 'failed')
 let currentRound = 0
@@ -811,7 +820,12 @@ Return a JSON object with:
 - kernel_code: the fixed complete kernel code
 - changes_made: list of specific changes made
 - confidence: 'high' | 'medium' | 'low' that this fix is correct
-- fix_explanation: brief explanation of what was wrong and how it was fixed`, {
+- fix_explanation: brief explanation of what was wrong and how it was fixed
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this is refinement round ${currentRound} for ${candidate.id}):
+{"workflow":"${meta.name}","phase":"Refine","ts":"<ts>","status":"done","candidate_id":"${candidate.id}","technique":"<the bug class you fixed>","note":"<what was wrong + the change you made + your confidence>"}`, {
       label: `refine-${candidate.id}-r${currentRound}`,
       phase: 'Refine',
       model: MODEL.judgment,
@@ -943,7 +957,7 @@ if (currentRound > 0) {
 // =============================================================================
 // Phase 6: Compose — Stitch subgraph kernels (pipeline path only)
 // =============================================================================
-phase('Compose'); await __genomeReport('Compose', meta.name)
+phase('Compose')
 
 if (routingDecision.path === 'pipeline' && subgraphs.length > 1 && COMPOSE && verifiedKernels.length > 0) {
   const composeResult = await agent(`You are a ${langToken(LEGACY_COMPOSE_LANG_TOKEN)} kernel composition expert. Stitch these verified subgraph kernels into a single, cohesive ${langToken(LEGACY_COMPOSE_LANG_TOKEN)} program.
@@ -975,7 +989,12 @@ ${JSON.stringify(subgraphs.map(sg => ({ id: sg.id, operations: sg.operations }))
 Return a JSON object with:
 - composed_code: the complete composed Python file
 - composition_notes: explanation of how subgraphs were stitched
-- intermediate_tensors: list of intermediate tensor allocations needed`, {
+- intermediate_tensors: list of intermediate tensor allocations needed
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Compose","ts":"<ts>","status":"done","technique":"subgraph_composition","note":"<how subgraphs were stitched + intermediate tensors count>"}`, {
     label: 'compose-stitch',
     phase: 'Compose',
     model: MODEL.judgment,
@@ -1044,7 +1063,7 @@ ${USE_DRIVER ? driverSh('run.sh', `--kernel ${kernelFilename()} --test ${testFil
 // =============================================================================
 // Phase 7: Report — Final summary
 // =============================================================================
-phase('Report'); await __genomeReport('Report', meta.name)
+phase('Report')
 
 const bestKernel = verifiedKernels.length > 0 ? verifiedKernels[0] : null
 const finalCode = composedKernel || (bestKernel ? bestKernel.code : null)
@@ -1089,7 +1108,12 @@ Return a JSON object with:
 - best_kernel_approach: string
 - verification_status: string
 - recommendations: array of strings
-- artifacts_path: string`, {
+- artifacts_path: string
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"<done|error>","technique":"synthesis_report","note":"<outcome + verified count + best kernel approach, one line>"}`, {
   label: 'report-summary',
   phase: 'Report',
   model: MODEL.judgment,

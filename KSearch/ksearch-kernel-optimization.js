@@ -13,21 +13,10 @@ export const meta = {
   ],
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['triton', 'cuda', 'python'],
@@ -200,7 +189,7 @@ let globalRound = 0
 // =============================================================================
 // Phase 1: Setup — Read spec, evaluate baseline
 // =============================================================================
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -244,7 +233,12 @@ Target language: ${langToken(LANGUAGE)}
 Target GPU: ${TARGET_GPU}
 Operation: ${OP_DESC}
 
-Return structured analysis.`, {
+Return structured analysis.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"spec_analysis","speedup":null,"note":"<op_type + key challenges + design dimensions, one line>"}`, {
   label: 'read-spec',
   phase: 'Setup',
   schema: {
@@ -344,7 +338,7 @@ log(`Bottleneck: ${baselineEval.bottleneck_analysis || 'unknown'}`)
 // =============================================================================
 // Phase 2: Initialize — Build the world model decision tree
 // =============================================================================
-phase('Initialize'); await __genomeReport('Initialize', meta.name)
+phase('Initialize')
 
 const initResult = await agent(`You are a kernel optimization architect. Build an initial world model decision tree for systematic design space exploration.
 
@@ -387,7 +381,12 @@ Build a decision tree where:
 6. Cover diverse strategies: don't put all nodes in the same design dimension
 7. Order by estimated impact: highest-value, lowest-difficulty actions should have higher scores
 
-Return the complete decision tree.`, {
+Return the complete decision tree.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Initialize","ts":"<ts>","status":"done","technique":"world_model_init","speedup":null,"note":"<node_count + open_actions + design dimensions covered, one line>"}`, {
   label: 'init-tree',
   phase: 'Initialize',
   schema: {
@@ -418,7 +417,7 @@ for (let cycle = 0; cycle < MAX_CYCLES; cycle++) {
   // Cycle Start: Propose action nodes to ensure frontier has enough candidates
   // (K-Search calls propose_action_nodes() at the start of every cycle)
   // ===========================================================================
-  phase('Select'); await __genomeReport('Select', meta.name)
+  phase('Select')
 
   const proposeResult = await agent(`You are a world model manager. Ensure the decision tree has enough high-quality open action nodes on the frontier.
 
@@ -486,7 +485,12 @@ If still no candidates, return selected_node_id = null (search exhausted).
 - parent_metric: the score of the parent node's solution
 - context_for_generation: ancestor path decisions + sibling outcomes (compact)
 
-Return selection result.`, {
+Return selection result.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Select","ts":"<ts>","status":"done","candidate_id":"cycle-${cycle}","technique":"frontier_selection","speedup":null,"note":"<selected node_id + action_title + score + difficulty, one line>"}`, {
     label: `select-${cycle}`,
     phase: 'Select',
     schema: {
@@ -532,7 +536,7 @@ Return selection result.`, {
   //   - Attempts 2+: "debug" (no passing solution yet) OR "improve" (have passing solution)
   //     Each further splits on whether base code exists.
   // ===========================================================================
-  phase('Generate'); await __genomeReport('Generate', meta.name)
+  phase('Generate')
 
   let cycleBestCode = null
   let cycleBestEval = null
@@ -585,7 +589,12 @@ ${wmSection}
 4. Target ${TARGET_GPU} architecture
 5. Include all necessary imports/headers
 
-Return the complete kernel code.`, {
+Return the complete kernel code.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Generate","ts":"<ts>","status":"done","candidate_id":"cycle-${cycle}-a${attempt}","technique":"<the optimization action implemented this round>","speedup":null,"note":"<key design choices made, one line>"}`, {
         label: `gen-${cycle}-${attempt}`,
         phase: 'Generate',
         schema: {
@@ -630,7 +639,12 @@ ${JSON.stringify(cycleBestEval || {}, null, 2).substring(0, 1500)}
 # Priority: FIX CORRECTNESS FIRST, then optimize performance.
 ${wmSection}
 
-Return the fixed kernel code.`, {
+Return the fixed kernel code.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Generate","ts":"<ts>","status":"done","candidate_id":"cycle-${cycle}-a${attempt}","technique":"debug_fix","speedup":null,"note":"<bugs fixed / changes made this round, one line>"}`, {
         label: `debug-${cycle}-${attempt}`,
         phase: 'Generate',
         schema: {
@@ -675,7 +689,12 @@ ${(currentRawCode || cycleBestCode || '').substring(0, 4000)}
 ${wmSection}
 
 Focus on PERFORMANCE OPTIMIZATION. The code is already correct.
-Return improved kernel code.`, {
+Return improved kernel code.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Generate","ts":"<ts>","status":"done","candidate_id":"cycle-${cycle}-a${attempt}","technique":"performance_improve","speedup":null,"note":"<performance change attempted this round, one line>"}`, {
         label: `improve-${cycle}-${attempt}`,
         phase: 'Generate',
         schema: {
@@ -698,7 +717,7 @@ Return improved kernel code.`, {
     // =========================================================================
     // Phase: Evaluate
     // =========================================================================
-    phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
+    phase('Evaluate')
 
     const evalResult = await agent(`You are a kernel evaluation expert. Evaluate this ${langToken(LANGUAGE)} kernel for correctness and performance.
 
@@ -734,7 +753,12 @@ ${BENCH_CMD ? `Run benchmark: ${BENCH_CMD}` : 'Estimate performance via code ana
 - Baseline: ${baselineMetric}, Parent: ${baseScore}, Global best: ${bestMetric || baselineMetric}
 - Action: "${selection.action_title}"
 
-Return evaluation.`, {
+Return evaluation.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" if it compiled AND passed correctness, else "error"; speedup is the measured speedup_vs_baseline number, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"cycle-${cycle}-a${attempt}","speedup":<number or null>,"technique":"<action under test>","note":"<valid? metric_value + latency; or the failure reason>"}`, {
       label: `eval-${cycle}-${attempt}`,
       phase: 'Evaluate',
       schema: {
@@ -833,7 +857,7 @@ Return evaluation.`, {
   // Phase: Refine or Backtrack
   // K-Search: cycleSucceeded = at least one PASSED eval in this cycle
   // ===========================================================================
-  phase('Refine'); await __genomeReport('Refine', meta.name)
+  phase('Refine')
 
   const cycleSucceeded = hasPassedInCycle
 
@@ -869,7 +893,12 @@ ${JSON.stringify(decisionTree, null, 2).substring(0, 5000)}
    - Assign realistic difficulty (1-5) and score (0-1)
 4. **Reflect**: Add a note with CURRENT observation, FOLLOW_THROUGH items, and UPDATE_BELIEF adjustments
 
-Return the updated tree. The solved node MUST have at least one open child action node.`, {
+Return the updated tree. The solved node MUST have at least one open child action node.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Refine","ts":"<ts>","status":"done","candidate_id":"cycle-${cycle}","technique":"attach_solution","speedup":<the achieved metric number, or null>,"note":"<node solved + new continuation actions added + reflection, one line>"}`, {
       label: `refine-${cycle}`,
       phase: 'Refine',
       schema: {
@@ -912,7 +941,12 @@ ${JSON.stringify(decisionTree, null, 2).substring(0, 5000)}
 3. **Add recovery actions**: Add 1-2 NEW easier alternative nodes (lower difficulty, different approach to same dimension)
 4. **Update siblings**: If this failure implies sibling strategies are also risky, reduce their scores
 
-Return the updated tree.`, {
+Return the updated tree.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Refine","ts":"<ts>","status":"error","candidate_id":"cycle-${cycle}","technique":"backtrack","speedup":null,"note":"<node downgraded + failure analysis + recovery actions added, one line>"}`, {
       label: `backtrack-${cycle}`,
       phase: 'Refine',
       schema: {
@@ -940,7 +974,7 @@ Return the updated tree.`, {
 // =============================================================================
 // Final Report
 // =============================================================================
-phase('Report'); await __genomeReport('Report', meta.name)
+phase('Report')
 
 const topSolutions = solutionDb
   .filter(s => s.eval?.is_valid)
@@ -975,7 +1009,12 @@ ${JSON.stringify(decisionTree, null, 2).substring(0, 3000)}
 2. Key insights: what design decisions yielded the most improvement?
 3. World model evolution: how did the tree structure change over time?
 4. Failed strategies: what was tried and abandoned, and why?
-5. Remaining opportunities: what open actions in the tree look promising for future exploration?`, {
+5. Remaining opportunities: what open actions in the tree look promising for future exploration?
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"done","technique":"search_summary","speedup":<the best metric vs baseline number, or null>,"note":"<best node + cycles completed + winning strategy, one line>"}`, {
   label: 'final-report',
   phase: 'Report',
 })

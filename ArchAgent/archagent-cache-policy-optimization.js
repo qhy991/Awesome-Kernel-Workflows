@@ -14,21 +14,10 @@ export const meta = {
   ],
 };
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cpp'],
@@ -97,7 +86,7 @@ async function main() {
   // ============================================================================
   // Phase 1: Setup
   // ============================================================================
-  phase('Setup'); await __genomeReport('Setup', meta.name);
+  phase('Setup');
 
   const setupResult = await agent(
     `Set up ArchAgent evolutionary search environment:
@@ -131,7 +120,12 @@ Return JSON:
   "short_eval_traces": <int>,
   "long_eval_traces": <int>,
   "lru_baseline_ipc": <float>
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"evolutionary_setup","note":"<islands x population, generations, state budget, LRU baseline IPC; one line>"}`,
     {
       label: 'Setup ArchAgent',
       phase: 'Setup',
@@ -177,7 +171,7 @@ Return JSON:
   // ============================================================================
   // Phase 2: Initialize Population
   // ============================================================================
-  phase('Initialize Population'); await __genomeReport('Initialize Population', meta.name);
+  phase('Initialize Population');
 
   log(`Generating initial population for ${numIslands} islands...`);
 
@@ -213,7 +207,12 @@ Return JSON:
     },
     ...
   ]
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Initialize Population","ts":"<ts>","status":"done","candidate_id":"island-${islandIdx}","technique":"<dominant seeding strategy, e.g. template_lru_rrip_ship>","note":"<count of candidates generated + diversity approach>"}`,
         {
           label: `Init island ${islandIdx}`,
           phase: 'Initialize Population',
@@ -271,7 +270,7 @@ Return JSON:
     // ==========================================================================
     // Phase 3: Short Evaluation
     // ==========================================================================
-    phase('Short Evaluation'); await __genomeReport('Short Evaluation', meta.name);
+    phase('Short Evaluation');
 
     log(`Evaluating all candidates on ${setupResult.short_eval_traces || 5} traces...`);
 
@@ -320,7 +319,12 @@ Return JSON:
   "fitness": <float or null>,
   "cheating_detected": true/false,
   "cheating_reason": "reason if detected"
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" if it compiled, else "error"; speedup is the measured ipc_speedup number, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Short Evaluation","ts":"<ts>","status":"<done|error>","candidate_id":"${cand.id}","speedup":<number or null>,"technique":"<policy family under test>","note":"<compiled? fitness; state KB; cheating verdict; or failure reason>"}`,
           {
             label: `Eval ${cand.id}`,
             phase: 'Short Evaluation',
@@ -355,7 +359,12 @@ Return JSON:
 
 Code: ${cand.code.substring(0, 1000)}...
 
-Return fitness, IPC speedup, constraints check.`,
+Return fitness, IPC speedup, constraints check.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" if it compiled, else "error"; speedup is the measured ipc_speedup number, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Short Evaluation","ts":"<ts>","status":"<done|error>","candidate_id":"${cand.id}","speedup":<number or null>,"technique":"<policy family under test>","note":"<compiled? fitness; cheating verdict; or failure reason>"}`,
             {
               label: `Eval ${cand.id}`,
               phase: 'Short Evaluation',
@@ -421,7 +430,7 @@ Return fitness, IPC speedup, constraints check.`,
     // ==========================================================================
     // Phase 4: Evolution (Mutation & Crossover)
     // ==========================================================================
-    phase('Evolution'); await __genomeReport('Evolution', meta.name);
+    phase('Evolution');
 
     log('Applying evolutionary operators...');
 
@@ -472,7 +481,12 @@ Return JSON:
     },
     ...
   ]
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Evolution","ts":"<ts>","status":"done","candidate_id":"island-${island.id}-gen-${generation + 1}","technique":"<mix of operators applied, e.g. mutation+crossover+elite>","note":"<elites retained, offspring produced, notable structural change vs prior generation>"}`,
           {
             label: `Evolve island ${island.id}`,
             phase: 'Evolution',
@@ -516,7 +530,7 @@ Return JSON:
     // Phase 5: Island Migration
     // ==========================================================================
     if (generation > 0 && generation % 5 === 0) {
-      phase('Island Migration'); await __genomeReport('Island Migration', meta.name);
+      phase('Island Migration');
 
       log('Migrating elite candidates between islands...');
 
@@ -555,7 +569,7 @@ Return JSON:
   // ============================================================================
   // Phase 6: Long Evaluation
   // ============================================================================
-  phase('Long Evaluation'); await __genomeReport('Long Evaluation', meta.name);
+  phase('Long Evaluation');
 
   log('Performing comprehensive evaluation on top candidates...');
 
@@ -592,7 +606,12 @@ Return JSON:
   "state_usage_kb": <float>,
   "verification_passed": true/false,
   "characteristics": "brief description of behavior"
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" if verification_passed, else "error"; speedup is the measured geomean_speedup number, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Long Evaluation","ts":"<ts>","status":"<done|error>","candidate_id":"${cand.id}","speedup":<number or null>,"technique":"<policy characteristics under full-suite test>","note":"<geomean over traces; state KB; verification verdict; or failure reason>"}`,
         {
           label: `Long eval ${cand.id}`,
           phase: 'Long Evaluation',
@@ -632,7 +651,7 @@ Return JSON:
   // ============================================================================
   // Phase 7: Validation
   // ============================================================================
-  phase('Validation'); await __genomeReport('Validation', meta.name);
+  phase('Validation');
 
   const validationResult = await agent(
     `Perform final validation and anti-cheating checks:
@@ -660,7 +679,12 @@ Return JSON:
   "held_out_speedup": <float>,
   "final_verdict": "approved|rejected",
   "notes": "validation notes"
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" if final_verdict is approved, else "error"; speedup is the measured held_out_speedup number, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Validation","ts":"<ts>","status":"<done|error>","candidate_id":"${finalBest.candidate_id}","speedup":<number or null>,"technique":"anti_cheating_validation","note":"<which cheating checks passed/failed; held-out result; final verdict>"}`,
     {
       label: 'Final validation',
       phase: 'Validation',
@@ -691,7 +715,7 @@ Return JSON:
   // ============================================================================
   // Phase 8: Report
   // ============================================================================
-  phase('Report'); await __genomeReport('Report', meta.name);
+  phase('Report');
 
   const report = await agent(
     `Generate ArchAgent evolutionary search report:
@@ -722,7 +746,12 @@ Return JSON:
   "generations": ${maxGenerations},
   "total_evaluations": <int>,
   "report_path": "path/to/report.md"
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"done","candidate_id":"${finalBest.candidate_id}","speedup":${finalBest.geomean_speedup},"technique":"evolutionary_search_summary","note":"<best policy + final geomean speedup vs LRU; islands x generations>"}`,
     {
       label: 'Generate report',
       phase: 'Report',

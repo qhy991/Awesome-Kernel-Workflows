@@ -14,21 +14,10 @@ export const meta = {
   ],
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda'],
@@ -233,7 +222,7 @@ const ANTICHEAT_SCHEMA = {
   required: ['valid', 'reward', 'recorded_speedup'],
 }
 
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup')
 log(`Generalist solver | beam | breadth=${BREADTH} topk=${TOPK} iters=${ITERATIONS} target=${TARGET}x | models ${MODEL.mechanical}/${MODEL.profile}/${MODEL.judgment} | budget ${(typeof budget !== 'undefined' && budget.total) ? Math.round(budget.total / 1000) + 'k' : 'unbounded'}`)
 
 if (USE_DRIVER) {
@@ -272,7 +261,12 @@ if (INPUT_MODE === 'generate_then_optimize') {
 - ncu_command: ${NCU_CMD || '(not provided)'}
 
 # Contract
-Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run benchmark_command if available using {kernel_path}/{result_path}. Return the best verified generated kernel path.`, {
+Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run benchmark_command if available using {kernel_path}/{result_path}. Return the best verified generated kernel path.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"seed_generation","speedup":<best seed verified speedup as number or null>,"note":"<how many of ${SEED_CANDIDATES} seeds verified + the chosen seed path, one line>"}`, {
     label: 'generate-initial-kernel',
     phase: 'Setup',
     model: MODEL.judgment,
@@ -348,7 +342,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
     : BREADTH
 
   // ---- Profile (Layer C input) ----
-  phase('Profile'); await __genomeReport('Profile', meta.name)
+  phase('Profile')
   const metrics = await agent(
     `Profile the current best kernel and produce normalized metrics.\n` +
     `Kernel: ${best.code_path}\nOp: ${OP}\n` +
@@ -357,11 +351,15 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
         : `No benchmark_command provided; do not invent an evaluator. Return missing/null measured metrics.\n`) +
     `Return the JSON exactly per the schema: compiled, correct, candidate_latency_ms, ` +
     `eager_latency_ms, compile_latency_ms, speedup, and metrics{dram_pct, sm_pct, occupancy, latency_ms}. ` +
-    `Use null for unknown numbers. Do not fabricate; missing => null.`,
+    `Use null for unknown numbers. Do not fabricate; missing => null.` +
+    `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\n` +
+    `Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\n` +
+    `Then append:\n` +
+    `{"workflow":"${meta.name}","phase":"Profile","ts":"<ts>","status":"done","candidate_id":"iter-${iter}-best","technique":"profile","speedup":<measured speedup as number or null>,"note":"<measured latency_ms + dominant metric (dram_pct/sm_pct/occupancy), one line>"}`,
     { label: `profile-${iter}`, phase: 'Profile', schema: METRICS_SCHEMA, model: MODEL.profile })
 
   // ---- Diagnose (Layer C, deterministic script) ----
-  phase('Diagnose'); await __genomeReport('Diagnose', meta.name)
+  phase('Diagnose')
   const diag = await agent(
     `Write these metrics to ${EXP_DIR}/run-${iter}/metrics.json:\n${JSON.stringify(metrics.metrics || {})}\n` +
     `${substrateInstruction('diagnose.py', `--metrics ${EXP_DIR}/run-${iter}/metrics.json`)} ` +
@@ -371,7 +369,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
   log(`bottleneck_class = ${bclass}`)
 
   // ---- Retrieve memory (Layer D) + gate methods (Layer E) ----
-  phase('Retrieve'); await __genomeReport('Retrieve', meta.name)
+  phase('Retrieve')
   const [mem, gate] = await parallel([
     () => agent(
       `${substrateInstruction('memory_store.py', `--db ${MEMORY_DB} retrieve --class ${bclass}`)} ` +
@@ -388,7 +386,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
   log(`allowed_methods = ${allowed.join(', ')} | prior techniques = ${priorTech.length} | dead-ends = ${deadEnds.length}`)
 
   // ---- Plan: BREADTH gated plans with grounded anchors (STARK borrow) ----
-  phase('Plan'); await __genomeReport('Plan', meta.name)
+  phase('Plan')
   const planContext =
     `# Bottleneck: ${bclass}\n# Allowed methods (you MUST stay within these): ${allowed.join(', ')}\n` +
     `# Prior techniques by confidence: ${JSON.stringify(priorTech.slice(0, 5))}\n` +
@@ -399,12 +397,16 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
       `You are planner #${i + 1}/${effBreadth} for a ${OP} kernel.\n${planContext}\n\n` +
       `Propose ONE optimization plan that uses ONLY an allowed method. Mark the exact code region to change with ` +
       `grounded anchors <<<IMPROVE BEGINS>>> ... <<<IMPROVE ENDS>>>. Pick the highest-confidence prior technique ` +
-      `that fits, unless a dead-end forbids it. Return {method, plan, anchors}.`,
+      `that fits, unless a dead-end forbids it. Return {method, plan, anchors}.` +
+      `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\n` +
+      `Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\n` +
+      `Then append:\n` +
+      `{"workflow":"${meta.name}","phase":"Plan","ts":"<ts>","status":"done","candidate_id":"iter-${iter}-plan-${i + 1}","technique":"<the allowed method you chose>","speedup":null,"note":"<one-line summary of the plan + why this method fits bottleneck ${bclass}>"}`,
       { label: `plan-${iter}-${i + 1}`, phase: 'Plan', schema: JSON_PASSTHROUGH, model: MODEL.judgment })))
   ).filter(Boolean)
 
   // ---- Evaluate each plan: implement -> eval -> anti-cheat (Layers B, A) ----
-  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
+  phase('Evaluate')
   const evaluated = (await parallel(plans.map((p, i) => () => (async () => {
     const runDir = `${EXP_DIR}/run-${iter}/cand-${i + 1}`
     const m = await agent(
@@ -412,7 +414,11 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
       `<<<IMPROVE BEGINS/ENDS>>> anchors. Method: ${p.method}. Plan: ${JSON.stringify(p.plan)}.\n` +
       (EVAL_CMD
         ? `Then run the benchmark command \`${EVAL_CMD}\` and return the JSON metrics per schema.`
-        : `No benchmark_command provided; do not invent an evaluator. Return compiled=false, correct=false, speedup=0, and missing evidence fields.`),
+        : `No benchmark_command provided; do not invent an evaluator. Return compiled=false, correct=false, speedup=0, and missing evidence fields.`) +
+      `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\n` +
+      `Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\n` +
+      `Then append, using the values you just measured (status="done" if compiled AND correct, else "error"; speedup is the measured speedup number, or null if unavailable):\n` +
+      `{"workflow":"${meta.name}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"iter-${iter}-cand-${i + 1}","technique":"${p.method}","speedup":<number or null>,"note":"<compiled? correct? + the failure reason if any, one line>"}`,
       { label: `impl-${iter}-${i + 1}`, phase: 'Evaluate', schema: METRICS_SCHEMA, model: MODEL.judgment, isolation: 'worktree' })
     const ac = await agent(
       `Write these metrics to ${runDir}/metrics.json:\n${JSON.stringify({ ...m, claimed_speedup: m.speedup })}\n` +
@@ -459,7 +465,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
   }
 
   // ---- Learn: update persistent memory (Layer D) per measured outcome ----
-  phase('Learn'); await __genomeReport('Learn', meta.name)
+  phase('Learn')
   await parallel(evaluated.map((e) => () => {
     const updateArgs = `--db ${MEMORY_DB} update --class ${bclass} --technique ${e.plan.method} --speedup ${e.metrics.speedup || 0} --correct ${e.metrics.correct ? 1 : 0}`
     const deadendArgs = `--db ${MEMORY_DB} add-deadend --claim ${JSON.stringify(e.plan.method)} --why ${JSON.stringify(e.anticheat.reward_reason || (e.anticheat.blocking_flags || []).join(','))} --revalidate-if "metrics change"`
@@ -514,7 +520,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
 }
 
 // ---- Report + Layer A evidence envelope ----
-phase('Report'); await __genomeReport('Report', meta.name)
+phase('Report')
 const status = bestSpeedup >= TARGET ? 'converged' : ((stagnantRounds >= STAGNATION_LIMIT || dryRounds >= DRY_LIMIT) ? 'stalled' : 'budget_exhausted')
 await agent(
   `Write a final optimization report for ${OP}.\n` +
@@ -522,7 +528,11 @@ await agent(
   `Beam (top-${TOPK}): ${JSON.stringify(candidateBeam.map((c) => ({ id: c.id, method: c.planTitle, speedup: c.speedup })))}\n` +
   `All attempts: ${JSON.stringify(allAttempts)}\n` +
   `Cover: which methods the gate allowed, what the persistent memory recommended, ` +
-  `which attempts were rejected by anti-cheat and why, and the final best kernel path.`,
+  `which attempts were rejected by anti-cheat and why, and the final best kernel path.` +
+  `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\n` +
+  `Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\n` +
+  `Then append:\n` +
+  `{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"done","technique":"${candidateBeam[0].planTitle}","speedup":${bestSpeedup},"note":"final status=${status}; best ${bestSpeedup.toFixed(3)}x via the top beam method"}`,
   { label: 'final-report', phase: 'Report', model: MODEL.judgment })
 
 return {

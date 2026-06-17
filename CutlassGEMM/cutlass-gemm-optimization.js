@@ -12,21 +12,10 @@ export const meta = {
   ],
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cutlass', 'cuda', 'cpp'],
@@ -159,7 +148,7 @@ let mfuReport = []
 // =============================================================================
 // Phase 1: Analyze
 // =============================================================================
-phase('Analyze'); await __genomeReport('Analyze', meta.name)
+phase('Analyze')
 
 const analyzeResult = await agent(`You are a CUTLASS GEMM optimization expert. Analyze the SOL-ExecBench problem.
 
@@ -171,7 +160,12 @@ const analyzeResult = await agent(`You are a CUTLASS GEMM optimization expert. A
 5. GPU: ${GPU_ARCH} constraints (instruction shape, alignment)
 6. Count workloads and categorize M distribution
 
-Return analysis.`, {
+Return analysis.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${OUTPUT_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Analyze","ts":"<ts>","status":"done","technique":"problem_analysis","speedup":null,"note":"<operation + N/K + M range + workload count + small/large M split, one line>"}`, {
   label: 'analyze',
   phase: 'Analyze',
   schema: {
@@ -204,7 +198,7 @@ log(`Problem: ${analyzeResult.problem_name} | ${analyzeResult.operation} | N=${a
 // =============================================================================
 // Phase 2: Baseline — Known-good 4-way dispatch + split-K
 // =============================================================================
-phase('Baseline'); await __genomeReport('Baseline', meta.name)
+phase('Baseline')
 
 const baselineResult = await agent(`You are a CUTLASS GEMM kernel engineer. Generate an optimized solution using PROVEN configurations from prior experiments.
 
@@ -262,7 +256,12 @@ For the split-K path, the key changes in Arguments:
 Generate the COMPLETE solution.json. Write it to ${OUTPUT_DIR}/solution.json.
 Then run: cd ${SOL_DIR} && CUTLASS_DIR=${CUTLASS_DIR} uv run sol-execbench ${PROBLEM_DIR} --solution ${OUTPUT_DIR}/solution.json --no-json -v
 
-Return the solution content AND benchmark results.`, {
+Return the solution content AND benchmark results.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${OUTPUT_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" if it compiled, else "error"; speedup is the measured avg_speedup number, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Baseline","ts":"<ts>","status":"<done|error>","candidate_id":"baseline","technique":"5way_dispatch_warmstart","speedup":<number or null>,"note":"<workloads passed/total + speedup range; or the compile error>"}`, {
   label: 'gen-baseline',
   phase: 'Baseline',
   schema: {
@@ -429,7 +428,7 @@ if (bestPerWorkload.length > 0) {
 // =============================================================================
 // Phase 3: NCU Profile (one-shot, skip if ceiling already explains everything)
 // =============================================================================
-phase('NCU Profile'); await __genomeReport('NCU Profile', meta.name)
+phase('NCU Profile')
 
 const ncuResult = await agent(`Run profiling on the CUTLASS kernel for representative M values using only the user-provided profiling contract.
 
@@ -456,7 +455,12 @@ NOTE: Ceiling already detected for M<64 (flat latency). NCU will confirm this is
 overhead-dominated. Focus NCU analysis on M=64 and M=256 where tuning can help.
 ` : ''}
 
-Return NCU metrics and diagnosis.`, {
+Return NCU metrics and diagnosis.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${OUTPUT_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (status="done" if profiling succeeded, else "error"):
+{"workflow":"${meta.name}","phase":"NCU Profile","ts":"<ts>","status":"<done|error>","technique":"ncu_root_cause","speedup":null,"note":"<#M profiled + per-M bottleneck categories (actionable vs ceiling); or why profiling was unavailable>"}`, {
   label: 'ncu-profile',
   phase: 'NCU Profile',
   schema: {
@@ -540,7 +544,7 @@ for (let iter = 0; iter < ITERATIONS; iter++) {
 
   log(`\n=== Iteration ${iter + 1}/${ITERATIONS} | best=${bestAvgSpeedup.toFixed(4)}x | actionable bottlenecks: ${actionableBottlenecks.length} ===`)
 
-  phase('Tune'); await __genomeReport('Tune', meta.name)
+  phase('Tune')
 
   const tuneResult = await agent(`You are a CUTLASS GEMM tuning expert. Improve the solution based on NCU data and per-workload feedback.
 
@@ -599,7 +603,12 @@ ${tuningHistory.map(h => `${h.label}: avg=${h.avg_speedup?.toFixed(4)}x${h.chang
 Write improved solution to: ${OUTPUT_DIR}/solution_iter${iter + 1}.json
 Then benchmark: cd ${SOL_DIR} && CUTLASS_DIR=${CUTLASS_DIR} uv run sol-execbench ${PROBLEM_DIR} --solution ${OUTPUT_DIR}/solution_iter${iter + 1}.json --no-json -v
 
-Return results.`, {
+Return results.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${OUTPUT_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (this is tuning iteration ${iter + 1}; status="done" if it compiled and passed correctness, else "error"; speedup is the measured avg_speedup number, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Tune","ts":"<ts>","status":"<done|error>","candidate_id":"tune-iter-${iter + 1}","technique":"<the tile/split-K/swizzle change you applied this iteration>","speedup":<number or null>,"note":"<changes made + whether it improved over best; or the failure reason>"}`, {
     label: `tune-${iter}`,
     phase: 'Tune',
     schema: {
@@ -657,7 +666,7 @@ Return results.`, {
 // Phase 5: Hybrid — cuBLAS fallback for overhead-dominated M (if not already in baseline)
 // =============================================================================
 if (ENABLE_HYBRID && ceilingDetected && bestPerWorkload.length > 0) {
-  phase('Hybrid'); await __genomeReport('Hybrid', meta.name)
+  phase('Hybrid')
 
   const smallMBelow1x = bestPerWorkload.filter(w => (w.m || 0) < ceilingThreshold && (w.speedup || 0) < 1.0)
   if (smallMBelow1x.length > 0) {
@@ -701,7 +710,12 @@ This is correct because:
 # Write to: ${OUTPUT_DIR}/solution_hybrid.json
 # Then benchmark: cd ${SOL_DIR} && CUTLASS_DIR=${CUTLASS_DIR} uv run sol-execbench ${PROBLEM_DIR} --solution ${OUTPUT_DIR}/solution_hybrid.json --no-json -v
 
-Return results.`, {
+Return results.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${OUTPUT_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" if it compiled and passed correctness, else "error"; speedup is the measured avg_speedup number, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Hybrid","ts":"<ts>","status":"<done|error>","candidate_id":"hybrid","technique":"cublas_fallback_tiny_M","speedup":<number or null>,"note":"<ceiling threshold used + whether the cuBLAS floor lifted overall speedup; or the failure reason>"}`, {
       label: 'hybrid-fallback',
       phase: 'Hybrid',
       schema: {
@@ -748,7 +762,7 @@ Return results.`, {
 // =============================================================================
 // Final: Save best solution
 // =============================================================================
-phase('Validate'); await __genomeReport('Validate', meta.name)
+phase('Validate')
 
 await agent(`Save the final best solution.
 1. Write to: ${OUTPUT_DIR}/solution_best.json
@@ -758,7 +772,12 @@ Content:
 ${bestSolution}
 \`\`\`
 
-Confirm files written.`, {
+Confirm files written.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${OUTPUT_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (status="done" once both files are written):
+{"workflow":"${meta.name}","phase":"Validate","ts":"<ts>","status":"done","technique":"save_best_solution","speedup":${bestAvgSpeedup},"note":"<canonical best solution written to solution_best.json + solution.json; best avg speedup>"}`, {
   label: 'save-best',
   phase: 'Validate',
 })

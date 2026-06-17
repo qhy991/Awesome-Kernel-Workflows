@@ -12,21 +12,10 @@ export const meta = {
   ],
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 const WORKFLOW_SUITABILITY = {
   method_supported_backends: ['cuda', 'triton'],
@@ -284,7 +273,12 @@ If NCU is not available, provide your expert static analysis:
 - Would occupancy change?
 - Estimate speedup based on the targeted inefficiency.
 
-Return evaluation results.`
+Return evaluation results.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (variant ${variant.id}; status="done" if correct AND compilable, else "error"; speedup is your estimated_speedup number or null if unavailable):
+{"workflow":"${meta.name}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"${variant.id}","technique":"${variant.plan.title}","speedup":<number or null>,"note":"<correct? compilable? bottleneck addressed? or the failure reason>"}`
 }
 
 function legacyIterProfile(iter, candidateBeam, bestResult, bestLatency, baselineLatency, baselineNcuProfile) {
@@ -374,7 +368,12 @@ Optimized code:
 \`\`\`
 Why: {hardware-level explanation}
 
-Make the rule GENERAL enough to apply to other kernels (not specific to this one kernel).`
+Make the rule GENERAL enough to apply to other kernels (not specific to this one kernel).
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (pair "${pair.plan_title}", a ${pair.type} example at ${pair.speedup.toFixed(2)}x):
+{"workflow":"${meta.name}","phase":"Learn","ts":"<ts>","status":"done","candidate_id":"learn-${pair.plan_title}","technique":"<your extracted rule title>","speedup":${pair.speedup.toFixed(2)},"note":"<the general reusable rule you extracted, one line>"}`
 }
 
 function legacySetupReadPrompt() {
@@ -389,7 +388,12 @@ Analyze it and return a JSON object with:
 - shared_memory_usage: whether and how shared memory is used
 - memory_access_patterns: description of global memory access patterns
 
-Return ONLY the JSON object.`
+Return ONLY the JSON object.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"baseline_read_analysis","speedup":null,"note":"<op_type + current approach + memory access pattern, one line>"}`
 }
 
 function driverSetupReadPrompt() {
@@ -404,7 +408,12 @@ Analyze it and return a JSON object with:
 - shared_memory_usage: whether and how shared memory is used
 - memory_access_patterns: description of global memory access patterns
 
-Return ONLY the JSON object.`
+Return ONLY the JSON object.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"baseline_read_analysis","speedup":null,"note":"<op_type + current approach + memory access pattern, one line>"}`
 }
 
 function legacyGenerateSeedPrompt() {
@@ -521,7 +530,12 @@ Plan: ${plan.plan}
 5. MUST compile with -lineinfo (don't use features that break debug info)
 6. This is variant ${sampleIdx + 1}/${SAMPLES_PER_PLAN}
 
-Return the complete CUDA code.`
+Return the complete CUDA code.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (plan "${plan.title}", sample ${sampleIdx}):
+{"workflow":"${meta.name}","phase":"Execute","ts":"<ts>","status":"done","candidate_id":"${plan.title}-v${sampleIdx}","technique":"${plan.title}","speedup":null,"note":"<the concrete code transformation you implemented, one line>"}`
 }
 
 function buildExperienceSection(experienceMemory, lastIterNewPatterns, maxInPrompt) {
@@ -553,7 +567,7 @@ function buildBeamSection(candidateBeam, fence) {
 // =============================================================================
 // Phase 1: Setup — Read kernel, build harness, NCU profile baseline
 // =============================================================================
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup')
 
 if (USE_DRIVER) {
   const driver = await agent(
@@ -804,7 +818,7 @@ for (let iter = 0; iter < ITERATIONS; iter++) {
   // ===========================================================================
   // Phase 2: Plan — Generate optimization plans GUIDED BY NCU DATA + BEAM
   // ===========================================================================
-  phase('Plan'); await __genomeReport('Plan', meta.name)
+  phase('Plan')
 
   // Experience sampling (AccelOpt: construct_experience.py logic)
   const experienceSection = buildExperienceSection(experienceMemory, lastIterNewPatterns, MAX_EXPERIENCE_IN_PROMPT)
@@ -903,7 +917,12 @@ ${IDIOMS.read_metric_guide}
 
   const plans = await parallel(
     Array.from({length: BREADTH}, (_, i) => () =>
-      agent(`${planPromptBase}\n\n# YOUR FOCUS AREA: ${planAngles[i % planAngles.length]}\nYou are planner #${i + 1}/${BREADTH}. Focus on: ${planAngles[i % planAngles.length]}.`, {
+      agent(`${planPromptBase}\n\n# YOUR FOCUS AREA: ${planAngles[i % planAngles.length]}\nYou are planner #${i + 1}/${BREADTH}. Focus on: ${planAngles[i % planAngles.length]}.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this is iteration ${iter}, planner ${i}):
+{"workflow":"${meta.name}","phase":"Plan","ts":"<ts>","status":"done","candidate_id":"iter-${iter}-plan-${i}","technique":"<your plan title / optimization move>","speedup":null,"note":"<the profile metric you cited + expected impact, one line>"}`, {
         label: `plan-${iter}-${i}`,
         phase: 'Plan',
         schema: planSchema,
@@ -918,7 +937,7 @@ ${IDIOMS.read_metric_guide}
   // ===========================================================================
   // Phase 3: Execute — Implement each plan
   // ===========================================================================
-  phase('Execute'); await __genomeReport('Execute', meta.name)
+  phase('Execute')
 
   const implementations = await pipeline(
     validPlans,
@@ -943,7 +962,12 @@ Plan: ${plan.plan}
 4. Keep the entrypoint signature unchanged
 5. This is variant ${sampleIdx + 1}/${SAMPLES_PER_PLAN}
 
-Return the complete ${BACKEND} code.`
+Return the complete ${BACKEND} code.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (iteration ${iter}, plan "${plan.title}", sample ${sampleIdx}):
+{"workflow":"${meta.name}","phase":"Execute","ts":"<ts>","status":"done","candidate_id":"iter-${iter}-${plan.title}-v${sampleIdx}","technique":"${plan.title}","speedup":null,"note":"<the concrete code transformation you implemented, one line>"}`
           : legacyExecutePrompt(bestKernelCode, plan, sampleIdx, SAMPLES_PER_PLAN), {
           label: `impl-${iter}-${plan.title.substring(0, 15)}-v${sampleIdx}`,
           phase: 'Execute',
@@ -982,7 +1006,7 @@ Return the complete ${BACKEND} code.`
   // ===========================================================================
   // Phase 4: Evaluate — NCU profile each variant + per-branch dedup + beam update
   // ===========================================================================
-  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
+  phase('Evaluate')
 
   const evalSchema = USE_DRIVER
     ? {
@@ -1054,7 +1078,12 @@ If the profiler is not available, provide your expert static analysis:
 - Did the optimization address the identified bottleneck (${bottleneckClass})?
 - Estimate speedup based on the targeted inefficiency.
 
-Return evaluation results.`
+Return evaluation results.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (iteration ${iter}, variant ${variant.id}; status="done" if correct AND compilable, else "error"; speedup is your estimated_speedup number or null if unavailable):
+{"workflow":"${meta.name}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"iter-${iter}-${variant.id}","technique":"${variant.plan.title}","speedup":<number or null>,"note":"<correct? compilable? bottleneck addressed? or the failure reason>"}`
         : legacyEvaluatePrompt(variant, bestLatency, ncuSetup), {
         label: `eval-${variant.id}`,
         phase: 'Evaluate',
@@ -1140,7 +1169,7 @@ ${baselineNcuProfile}`
   //   - topk_learn total budget
   //   - Experience format: **title** + NCU trigger + code snippets
   // ===========================================================================
-  phase('Learn'); await __genomeReport('Learn', meta.name)
+  phase('Learn')
 
   // Threshold-filtered selection (AccelOpt: rewrites_selection.py)
   const positiveFiltered = improved.filter(r => r.speedup > MAX_THRESHOLD)
@@ -1258,7 +1287,12 @@ Optimized code:
 \`\`\`
 Why: {hardware-level explanation}
 
-Make the rule GENERAL enough to apply to other kernels (not specific to this one kernel).`
+Make the rule GENERAL enough to apply to other kernels (not specific to this one kernel).
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (iteration ${iter}, pair "${pair.plan_title}", a ${pair.type} example at ${pair.speedup.toFixed(2)}x):
+{"workflow":"${meta.name}","phase":"Learn","ts":"<ts>","status":"done","candidate_id":"iter-${iter}-learn-${pair.plan_title}","technique":"<your extracted rule title>","speedup":${pair.speedup.toFixed(2)},"note":"<the general reusable rule you extracted, one line>"}`
           : legacyLearnPrompt(pair), {
           label: `learn-${pair.plan_title.substring(0, 20)}`,
           phase: 'Learn',
@@ -1282,7 +1316,7 @@ Make the rule GENERAL enough to apply to other kernels (not specific to this one
     log(`No pairs passed threshold filters (max>${MAX_THRESHOLD}, min<${(1/MIN_THRESHOLD).toFixed(3)}).`)
   }
 
-  phase('Iterate'); await __genomeReport('Iterate', meta.name)
+  phase('Iterate')
   log(`Iteration ${iter + 1} done. ${(baselineLatency / bestLatency).toFixed(2)}x vs baseline. Beam size: ${candidateBeam.length}`)
 }
 

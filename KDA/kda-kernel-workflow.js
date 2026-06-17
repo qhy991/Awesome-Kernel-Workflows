@@ -26,21 +26,10 @@ export const meta = {
   skill_binding_mode: 'local_skills_plus_external_resources',
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda'],
@@ -249,7 +238,7 @@ function recordCandidate(id, parentId, status, code, metrics, reason) {
 // KDA step: "Read the repository structure, existing implementation, tests,
 //            and task documentation."
 // =============================================================================
-phase('Inspect'); await __genomeReport('Inspect', meta.name)
+phase('Inspect')
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -338,7 +327,12 @@ ${USE_DRIVER
 5. Check if there are docs/draft.md or docs/plan.md already.
 6. Research relevant optimization techniques for this kernel type using available domain knowledge.
 
-Return a structured analysis.`, {
+Return a structured analysis.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Inspect","ts":"<ts>","status":"done","technique":"workspace_inspection","note":"<baseline approach + validation path + key risks, one line>"}`, {
   label: 'inspect-workspace',
   phase: 'Inspect',
   schema: {
@@ -368,7 +362,7 @@ log(`Inspected: ${inspection.key_functions.length} key functions, approach: ${in
 // KDA step 4: "Convert the draft into an executable plan."
 // "Do not start implementation until the draft exists."
 // =============================================================================
-phase('Plan'); await __genomeReport('Plan', meta.name)
+phase('Plan')
 
 const draftResult = await agent(`Write a plan draft to docs/draft.md for this kernel optimization task.
 
@@ -411,7 +405,12 @@ The draft MUST include:
 5. The exact validation and evaluation commands to run.
 6. The evidence required to promote, revise, or reject a candidate.
 
-Write the draft to docs/draft.md. Then return the draft content.`, {
+Write the draft to docs/draft.md. Then return the draft content.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Plan","ts":"<ts>","status":"done","technique":"plan_draft","speedup":null,"note":"<top candidate directions ranked by value/risk, one line>"}`, {
   label: 'write-draft',
   phase: 'Plan',
   schema: {
@@ -502,7 +501,7 @@ for (iteration = 0; iteration < Math.min(planCandidates.length, MAX_CANDIDATES) 
   log(`\n=== Candidate ${iteration + 1}/${planCandidates.length}: ${candidate.title} ===`)
 
   // ---- Phase 3: Implement ----
-  phase('Implement'); await __genomeReport('Implement', meta.name)
+  phase('Implement')
 
   const impl = await agent(`Implement this optimization candidate as a complete, compilable kernel.
 
@@ -536,7 +535,12 @@ ${USE_DRIVER
 3. Apply ONLY the changes described in this candidate. Do not combine with other optimizations.
 4. Must be functionally correct: ${CORRECTNESS}
 
-Return the complete implementation code.`, {
+Return the complete implementation code.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Implement","ts":"<ts>","status":"done","candidate_id":"${candidateId}","technique":"<the main optimization you applied for this candidate>","note":"<what changed vs the current best, one line>"}`, {
     label: `impl-${candidateId}`,
     phase: 'Implement',
     schema: {
@@ -552,7 +556,7 @@ Return the complete implementation code.`, {
   const candidateCode = impl.code
 
   // ---- Phase 4: Validate ----
-  phase('Validate'); await __genomeReport('Validate', meta.name)
+  phase('Validate')
 
   const validation = await agent(`Validate this kernel candidate: run correctness and performance tests.
 
@@ -595,7 +599,12 @@ ${USE_DRIVER
   ? `5. If driver profiling evidence is available, consult the driver-supplied bottleneck guidance for ${DRIVER_LANG_FENCE}.`
   : `5. If NCU profiling data is available or can be generated, use the \`ncu-report-skill\` to analyze bottlenecks.`}
 
-Return the validation results with MEASURED values when available, estimates only as fallback.`, {
+Return the validation results with MEASURED values when available, estimates only as fallback.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" if correctness passed, else "error"; speedup is the measured speedup number, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Validate","ts":"<ts>","status":"<done|error>","candidate_id":"${candidateId}","speedup":<number or null>,"technique":"<technique under test>","note":"<correct? measured latency vs baseline; or the failure reason>"}`, {
     label: `validate-${candidateId}`,
     phase: 'Validate',
     schema: {
@@ -652,7 +661,7 @@ Return the validation results with MEASURED values when available, estimates onl
   }
 
   // ---- Phase 5: Decide ----
-  phase('Decide'); await __genomeReport('Decide', meta.name)
+  phase('Decide')
 
   const candidateMetrics = {
     latency_ms: validation.measured_latency_ms || validation.estimated_latency_ms,
@@ -700,7 +709,7 @@ Return the validation results with MEASURED values when available, estimates onl
 // KDA: "A future reader should be able to reconstruct what changed, what was
 //        measured, and why a candidate was promoted."
 // =============================================================================
-phase('Report'); await __genomeReport('Report', meta.name)
+phase('Report')
 
 const report = await agent(`Write the final optimization report.
 
@@ -721,7 +730,12 @@ ${candidates.map(c => `- ${c.id} (parent: ${c.parent_id}): ${c.status} — ${c.r
 4. Which candidate was promoted and why it meets the promotion criteria.
 5. What remaining blockers or future work exist.
 
-Also write the candidates list to candidates.jsonl (one JSON object per line).`, {
+Also write the candidates list to candidates.jsonl (one JSON object per line).
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the final outcome (status="done" if a candidate was promoted, else "error"; speedup is the promoted candidate's measured speedup number, or null if none promoted):
+{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"<done|error>","technique":"final_report","speedup":<number or null>,"note":"<promoted candidate id + why it met promotion criteria, or remaining blockers, one line>"}`, {
   label: 'final-report',
   phase: 'Report',
 })

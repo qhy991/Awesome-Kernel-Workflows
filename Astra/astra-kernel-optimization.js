@@ -15,21 +15,10 @@ export const meta = {
   ],
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda'],
@@ -260,7 +249,7 @@ function isBetter(candidate, incumbent) {
 // =============================================================================
 // Phase 1: Setup
 // =============================================================================
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -343,7 +332,12 @@ const setup = await agent(`You are the Astra setup agent for production ${langTo
 4. Identify whether this should be optimized as a standalone kernel or reintegrated into SGLang-style code.
 5. List likely performance-sensitive regions before profiling.
 
-Return the kernel text and integration contract.`, {
+Return the kernel text and integration contract.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"kernel_intake","note":"<entry points + integration mode + likely hotspots, one line>"}`, {
   label: 'setup-astra',
   phase: 'Setup',
   schema: {
@@ -365,7 +359,7 @@ currentBestCode = initialKernelCode
 // =============================================================================
 // Phase 2: PrepareTests
 // =============================================================================
-phase('PrepareTests'); await __genomeReport('PrepareTests', meta.name)
+phase('PrepareTests')
 
 const tests = await agent(`You are Astra's Testing Agent. Build a correctness and benchmark test suite for this ${langToken(LEGACY_TESTING_LANG_TOKEN)} kernel.
 
@@ -392,7 +386,12 @@ ${setup.kernel_summary || ''}
 4. Include tolerance rules for floating-point comparison.
 5. Do not accept performance measurements unless they come from benchmark_command or an explicit user-provided harness.
 
-Return the test plan and shape suite.`, {
+Return the test plan and shape suite.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"PrepareTests","ts":"<ts>","status":"done","technique":"test_suite","speedup":null,"note":"<number of shapes + tolerance + whether commands are authoritative or evidence missing>"}`, {
   label: 'prepare-tests',
   phase: 'PrepareTests',
   schema: {
@@ -412,7 +411,7 @@ testSuite = tests.test_cases || []
 // =============================================================================
 // Phase 3: ProfileBaseline
 // =============================================================================
-phase('ProfileBaseline'); await __genomeReport('ProfileBaseline', meta.name)
+phase('ProfileBaseline')
 
 baselineProfile = await agent(`You are Astra's Profiling Agent. Establish the baseline profile for the initial kernel.
 
@@ -436,7 +435,12 @@ ${JSON.stringify(testSuite, null, 2).substring(0, 6000)}
 3. Identify bottlenecks from measurements, code inspection, and optional profiler output.
 4. If command execution is unavailable, mark measured=false and keep performance claims conservative.
 
-Return baseline profile evidence.`, {
+Return baseline profile evidence.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (status="done" if measured, else "error"):
+{"workflow":"${meta.name}","phase":"ProfileBaseline","ts":"<ts>","status":"<done|error>","technique":"baseline_profile","speedup":null,"note":"<measured? baseline runtime ms + top bottlenecks>"}`, {
   label: 'profile-baseline',
   phase: 'ProfileBaseline',
   schema: {
@@ -458,7 +462,7 @@ Return baseline profile evidence.`, {
 for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
   log(`\n=== Astra iteration ${iteration + 1}/${MAX_ITERATIONS} | best=${bestResult?.speedup || 0}x ===`)
 
-  phase('Plan'); await __genomeReport('Plan', meta.name)
+  phase('Plan')
 
   const plan = await agent(`You are Astra's Planning Agent. Propose the next ${langToken(LEGACY_PLAN_LANG_TOKEN)} optimization.
 
@@ -487,7 +491,12 @@ ${lessons.join('\n') || 'No lessons yet.'}
 4. Prefer production-safe changes: loop transformations, memory access improvements, ${USE_DRIVER ? `${DRIVER_LANG_FENCE} idiomatic` : 'CUDA'} intrinsics, fast math only when correctness tolerance allows it.
 5. Include explicit risk and rollback criteria.
 
-Return a structured plan.`, {
+Return a structured plan.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this is loop iteration ${iteration}):
+{"workflow":"${meta.name}","phase":"Plan","ts":"<ts>","status":"done","candidate_id":"iter-${iteration}","technique":"<the optimization direction you chose>","speedup":null,"note":"<target regions + expected speedup reason, one line>"}`, {
     label: `plan-${iteration}`,
     phase: 'Plan',
     schema: {
@@ -503,7 +512,7 @@ Return a structured plan.`, {
     },
   })
 
-  phase('Code'); await __genomeReport('Code', meta.name)
+  phase('Code')
 
   const code = await agent(`You are Astra's Coding Agent. Apply the planning agent's optimization to the current best ${langToken(LEGACY_CODE_LANG_TOKEN)} kernel.
 
@@ -527,7 +536,12 @@ ${JSON.stringify(plan, null, 2)}
 4. Apply only the planned optimization. Do not combine unrelated rewrites.
 5. Add short comments only where they clarify non-obvious ${langToken(LEGACY_CODE_LANG_TOKEN)} choices.
 
-Return the candidate code and changed regions.`, {
+Return the candidate code and changed regions.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this is loop iteration ${iteration}):
+{"workflow":"${meta.name}","phase":"Code","ts":"<ts>","status":"done","candidate_id":"iter-${iteration}","technique":"<the optimization you applied this iteration>","speedup":null,"note":"<changed regions, one line>"}`, {
     label: `code-${iteration}`,
     phase: 'Code',
     schema: {
@@ -541,7 +555,7 @@ Return the candidate code and changed regions.`, {
     },
   })
 
-  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
+  phase('Evaluate')
 
   const evaluation = await agent(`You are Astra's Testing and Profiling Agents working together. Evaluate this candidate with real evidence.
 
@@ -570,7 +584,12 @@ ${JSON.stringify(testSuite, null, 2).substring(0, 6000)}
 4. Runtime and speedup must come from measured evidence only.
 5. Include profile summary and failure logs that Planning can use next iteration.
 
-Return evaluator evidence.`, {
+Return evaluator evidence.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" if it compiled and is correct, else "error"; speedup is the measured speedup number, or null if unavailable; this is loop iteration ${iteration}):
+{"workflow":"${meta.name}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"iter-${iteration}","speedup":<number or null>,"technique":"candidate_evaluation","note":"<compiled? correct? runtime ms; or the failure reason>"}`, {
     label: `evaluate-${iteration}`,
     phase: 'Evaluate',
     schema: {
@@ -625,7 +644,7 @@ Return evaluator evidence.`, {
     }
   }
 
-  phase('Record'); await __genomeReport('Record', meta.name)
+  phase('Record')
 
   const record = {
     iteration,
@@ -651,7 +670,12 @@ ${JSON.stringify(record, null, 2).substring(0, 8000)}
 # Best updated?
 ${bestResult === evaluation}
 
-Return one or two concise lessons for the next Planning Agent. Focus on measured evidence.`, {
+Return one or two concise lessons for the next Planning Agent. Focus on measured evidence.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this is loop iteration ${iteration}):
+{"workflow":"${meta.name}","phase":"Record","ts":"<ts>","status":"done","candidate_id":"iter-${iteration}","technique":"lesson_distillation","speedup":null,"note":"<the distilled lesson, one line>"}`, {
     label: `record-${iteration}`,
     phase: 'Record',
     schema: {
@@ -669,7 +693,7 @@ Return one or two concise lessons for the next Planning Agent. Focus on measured
 // =============================================================================
 // Phase 8: PostProcess
 // =============================================================================
-phase('PostProcess'); await __genomeReport('PostProcess', meta.name)
+phase('PostProcess')
 
 const postProcess = await agent(`Prepare final Astra post-processing guidance.
 
@@ -695,7 +719,12 @@ ${JSON.stringify(bestResult, null, 2)}
 3. Note any precision or shape limitations discovered during testing.
 4. Provide a safe rollback criterion.
 
-Return post-processing notes.`, {
+Return post-processing notes.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"PostProcess","ts":"<ts>","status":"done","technique":"reintegration_notes","speedup":null,"note":"<integration mode + key limitations + rollback criterion, one line>"}`, {
   label: 'post-process',
   phase: 'PostProcess',
   schema: {
@@ -713,7 +742,7 @@ Return post-processing notes.`, {
 // =============================================================================
 // Phase 9: Report
 // =============================================================================
-phase('Report'); await __genomeReport('Report', meta.name)
+phase('Report')
 
 const finalReport = await agent(`Write a concise technical report for this Astra optimization campaign.
 
@@ -748,7 +777,12 @@ Cover:
 2. Which optimizations improved measured runtime.
 3. Which attempted changes failed and why.
 4. Whether evidence is strong enough for production reintegration.
-5. Next high-value optimization opportunities.`, {
+5. Next high-value optimization opportunities.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (speedup is the best measured speedup, or null if no candidate was verified):
+{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"done","technique":"campaign_summary","speedup":<number or null>,"note":"<best speedup + whether evidence is production-ready, one line>"}`, {
   label: 'final-report',
   phase: 'Report',
 })

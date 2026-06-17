@@ -13,21 +13,10 @@ export const meta = {
   ],
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda'],
@@ -401,7 +390,7 @@ function buildRepairMemoryBlock(mem) {
 // =============================================================================
 // Phase: Setup — read the PyTorch reference, establish the eager baseline
 // =============================================================================
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -500,7 +489,12 @@ const baseline = await agent(`You are a GPU benchmarking expert. Establish the T
 
 If the GPU/torch environment or benchmark_command is unavailable, return baseline_available=false and mark baseline_latency_ms as unmeasured.
 
-Return the baseline result.`, {
+Return the baseline result.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the value you just measured (status="done" if baseline measured, else "error"):
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"<done|error>","technique":"eager_baseline","speedup":null,"note":"<baseline latency ms + whether benchmark_command was available>"}`, {
   label: 'eager-baseline',
   phase: 'Setup',
   schema: {
@@ -520,7 +514,7 @@ log(`Torch Eager baseline: ${baselineLatency}ms (available=${baseline.baseline_a
 // =============================================================================
 // Phase: Seed — generate several candidate kernels (correctness-first), pick best
 // =============================================================================
-phase('Seed'); await __genomeReport('Seed', meta.name)
+phase('Seed')
 
 const seedKernels = await parallel(
   Array.from({ length: SEED_CANDIDATES }, (_, i) => () =>
@@ -542,7 +536,12 @@ ${referenceCode.substring(0, 4000)}
 4. Functionally correct first; performance comes later.
 5. This is seed candidate ${i + 1}/${SEED_CANDIDATES} — vary the decomposition/strategy from a naive baseline so the seeds are diverse.
 
-Return the complete kernel source.`, {
+Return the complete kernel source.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Seed","ts":"<ts>","status":"done","candidate_id":"seed-${i}","technique":"<your decomposition/strategy for this seed>","speedup":null,"note":"<kernels materialized + how this seed differs from a naive baseline>"}`, {
       label: `seed-${i}`,
       phase: 'Seed',
       schema: {
@@ -641,7 +640,7 @@ for (let round = 0; round < ROUNDS; round++) {
   // ===========================================================================
   // Phase: Evaluate — Reviewer (Compiler + Verifier + Profiler via ncu+nsys)
   // ===========================================================================
-  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
+  phase('Evaluate')
 
   const review = await agent(`You are the KernelSkill Reviewer for round ${round + 1}. Produce execution feedback for the CURRENT kernel using Compiler + Verifier + Profiler (ncu + nsys).
 
@@ -667,7 +666,12 @@ ${BENCH_CMD ? `   You may use: ${BENCH_CMD}` : ''}
 
 If the environment cannot run tools or commands are missing, do a rigorous static evaluation: decide is_compilable / is_correct where possible, set unmeasured metric fields to 0, and mark missing evidence in the notes.
 
-Return the structured review. Always include the normalized ncu_metrics object (keys: dram_throughput_pct, l2_throughput_pct, l1_throughput_pct, sm_throughput_pct, achieved_occupancy_pct, registers_per_thread, kernel_duration_ns, stall_long_scoreboard_ratio, stall_short_scoreboard_ratio, branch_divergent_cnt, branch_uniform_cnt, kernel_launch_count).`, {
+Return the structured review. Always include the normalized ncu_metrics object (keys: dram_throughput_pct, l2_throughput_pct, l1_throughput_pct, sm_throughput_pct, achieved_occupancy_pct, registers_per_thread, kernel_duration_ns, stall_long_scoreboard_ratio, stall_short_scoreboard_ratio, branch_divergent_cnt, branch_uniform_cnt, kernel_launch_count).
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" if compiles AND correct, else "error"; speedup is the measured speedup number, or null if unmeasured):
+{"workflow":"${meta.name}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"round-${round}","speedup":<number or null>,"technique":"evaluate_ncu_nsys","note":"<compiled? correct? primary limiter; or the failure reason>"}`, {
     label: `review-${round}`,
     phase: 'Evaluate',
     schema: {
@@ -755,7 +759,7 @@ Return the structured review. Always include the normalized ncu_metrics object (
     // =========================================================================
     // Phase: Repair — Diagnoser -> Repairer, using CHAINED repair memory
     // =========================================================================
-    phase('Repair'); await __genomeReport('Repair', meta.name)
+    phase('Repair')
 
     const diagnosis = await agent(`You are the KernelSkill Diagnoser. The current kernel is INVALID. Infer the root cause and propose a repair plan. You are given the CHAINED repair memory for this fault chain — use it to AVOID proposing a fix that was already tried and failed (no cyclic repair).
 
@@ -797,7 +801,12 @@ ${currentKernelCode.substring(0, 4000)}
 # Error excerpt:
 ${(review.error_excerpt || '').slice(0, 1000)}
 
-Keep the forward() signature identical to the reference. Return the complete fixed kernel source.`, {
+Keep the forward() signature identical to the reference. Return the complete fixed kernel source.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Repair","ts":"<ts>","status":"done","candidate_id":"round-${round}","technique":"<the repair strategy you applied>","speedup":null,"note":"<root cause + what you changed to fix it>"}`, {
       label: `repair-${round}`,
       phase: 'Repair',
       schema: {
@@ -830,7 +839,7 @@ Keep the forward() signature identical to the reference. Return the complete fix
     // A valid kernel clears the repair chain.
     // =========================================================================
     repairMemory = []
-    phase('Optimize'); await __genomeReport('Optimize', meta.name)
+    phase('Optimize')
 
     // 1) Feature Extractor (hybrid: rule-based + LLM structural inference)
     const features = await agent(`You are the KernelSkill Feature Extractor. Derive the deterministic code-structure features the gate needs. Use a hybrid approach: rule-based pattern matching over the source for stable lexical/syntactic signatures, and structural inference for features that syntax alone cannot capture.
@@ -999,7 +1008,12 @@ Requirements:
 3. Output the COMPLETE kernel source (all includes, kernels, bindings).
 4. Do not regress correctness.
 
-Return the optimized kernel.`, {
+Return the optimized kernel.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (the speedup of this edit is measured next round, so leave it null here):
+{"workflow":"${meta.name}","phase":"Optimize","ts":"<ts>","status":"done","candidate_id":"round-${round}","technique":"${plan.method_name}","speedup":null,"note":"<what you changed to apply ${plan.method_name} + the metric evidence it targets>"}`, {
       label: `optimize-${round}`,
       phase: 'Optimize',
       schema: {
@@ -1033,7 +1047,7 @@ Return the optimized kernel.`, {
   // ===========================================================================
   // Phase: Iterate — backfill memory outcomes from the latest measurement
   // ===========================================================================
-  phase('Iterate'); await __genomeReport('Iterate', meta.name)
+  phase('Iterate')
   // Backfill the previous optimize-memory entry's measured result once we have a new speedup.
   if (optimizeMemory.length > 0 && currentValid) {
     const last = optimizeMemory[optimizeMemory.length - 1]
