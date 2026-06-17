@@ -1,0 +1,190 @@
+schema_version: '1.1'
+name: warpspeed-kernel-search
+entrypoint: warpspeed-kernel-search.js
+backend:
+  portability: vendor_locked
+  matrix_eligible: false
+  method_supported_backends:
+  - cuda
+  supported:
+  - cuda
+  default: cuda
+  notes: 'Vendor-locked to NVIDIA. The method drives NVIDIA-specific tooling (NCU
+    section sets, compute-sanitizer, application clock locking via nvidia-smi) and
+    assumes exclusive access to a multi-GPU node. WORKFLOW_SUITABILITY.supported_languages=[''cuda''];
+    no driver path or cross-backend matrix eligibility. Bench/profile scripts refuse
+    to run outside a gpu_run mutex session.
+
+    '
+source:
+  paper_title: 'AKW design note: WarpSpeed — rewindable parallel kernel-optimization search'
+  paper_url: WarpSpeed/README.md
+  paper_venue: AKW design notes 2026
+  repo_url: ''
+  commit_or_tag: ''
+  license: MIT
+  notes: 'Original AKW engineering workflow (not a paper reproduction). Designed for
+    sustained optimization campaigns on a dedicated multi-GPU node: a checkpoint tree
+    of git commits annotated with structural-assumption tags, mutex-scheduled GPUs,
+    two-tier benchmarking, curated NCU diagnosis, cross-model review, append-only
+    BitLessons, and post-mortem ablation with frontier rewind. Decoupling rule: the
+    workflow directory holds only code and templates; the target kernel project is
+    project_dir (any git repo on disk) and ALL run state lives under the project''s
+    state dir, with machine-global GPU lock files so concurrent searches on different
+    projects can never double-book a device.
+
+    '
+workflow:
+  name: warpspeed-kernel-search
+  description: 'Rewindable parallel kernel-optimization search: SQLite checkpoint
+    tree, flock-scheduled GPUs, A/B screen → locked-clock confirm, NCU diagnosis,
+    codex cross-review, BitLessons, postmortem ablation + rewind.'
+  when_to_use: 'Use for multi-hour/multi-day CUDA optimization campaigns on a node
+    you control exclusively, where the kernel lives in its own git repo with a project-owned
+    correctness harness, and you want an experiment ledger with rewind semantics rather
+    than a single greedy patch loop. Not for one-shot patches (use InPlacePatch),
+    shared GPUs, or hosts without NCU/compute-sanitizer.
+
+    '
+  output_filename: warpspeed-kernel-search.js
+  directory: WarpSpeed/
+method:
+  category: tree_exploration
+  core_insight: 'Treat kernel states as an annotated checkpoint tree and optimization
+    as blame-assignable experiments: every candidate pre-registers a predicted gain
+    + mechanism, every measurement is significance-gated against calibrated cross-device
+    noise, and when a subtree stalls the orchestrator runs ONE ablation before rewinding
+    the frontier pointer — discarding code but never the append-only lesson store.
+
+    '
+  feedback_signal:
+    type: latency_delta_with_significance_gate
+    description: Project-built self-timing binary under gpu_run (interleaved A/B screen,
+      device-unbiased; locked-clock confirm) plus curated NCU sections and compute-sanitizer.
+    tool: custom_bench
+    higher_is_better: false
+  phases:
+  - 'Init: materialize config (render_config), preflight tools, scaffold/lock harness'
+  - 'Calibrate: one-time cross-device sigma defining the significance margin'
+  - 'Seed: baseline checkpoint with tier-2 latency + cached NCU profile'
+  - 'Plan: orphan recovery, tree snapshot, exploit/explore/wildcard allocation, soft dedup'
+  - 'Generate: worktree implementor ↔ fresh-clone codex reviewer (≤3 iterations)'
+  - 'Screen: interleaved A/B vs parent on a pool device (device-unbiased)'
+  - 'Confirm: locked-clock canonical device when decision-relevant'
+  - 'Profile: curated NCU sections, parents cached once ever, analyst diagnosis'
+  - 'Record: hard dedup (noise + fingerprint), checkpoint promotion, blocked counting, BitLessons'
+  - 'Postmortem: blame → single ablation → rewind + replay queue, or refutation lesson'
+  - 'Maintain: worktree cleanup, lesson compaction'
+  - 'Report: leaderboard, lessons, rewinds, stop reason'
+  carried_state:
+  - SQLite checkpoint tree + experiment ledger + GPU-minutes ledger (per-project state dir)
+  - Append-only bitlessons.jsonl (+ md mirror) surviving rewinds
+  - NCU profile cache per checkpoint commit (profiled once, ever)
+  - Per-experiment git branches kept as evidence (worktrees pruned per round)
+args:
+  required:
+  - name: project_dir
+    type: string
+    description: Path to the target kernel git repo to optimize. All run state lives under its state dir.
+    example: /home/user/my-kernel-project
+  - name: build_command
+    type: string
+    description: Command that builds the self-timing benchmark binary in project_dir.
+    example: make bench
+  - name: binary_path
+    type: string
+    description: Path to the built self-timing binary, relative to project_dir.
+    example: build/bench
+  - name: kernel_paths
+    type: string
+    description: Comma-separated source files the search is allowed to edit.
+    example: src/gemm.cu
+  - name: target_gpu
+    type: string
+    description: Canonical confirm-device identifier (locked-clock measurements run here).
+    example: 'cuda:0'
+  optional:
+  - name: warpspeed_dir
+    type: string
+    default: ''''''
+    description: Path to the WarpSpeed workflow directory (code + templates). Defaults to the workflow's own directory.
+    example: WarpSpeed/
+  - name: state_dir
+    type: string
+    default: '''<project_dir>/.warpspeed'''
+    description: Per-project state directory for SQLite tree, ledger, BitLessons, worktrees.
+    example: /home/user/my-kernel-project/.warpspeed
+  - name: harness_dir
+    type: string
+    default: ''''''
+    description: Project-owned correctness harness directory; chmod -R a-w at Init.
+    example: harness/
+  - name: iterations
+    type: number
+    default: '0'
+    description: Max search rounds (0 = budget-bounded).
+    example: '20'
+  - name: budget_gpu_minutes
+    type: number
+    default: '0'
+    description: GPU-minutes budget; the ledger stops the campaign when exhausted.
+    example: '480'
+  - name: target_latency_us
+    type: number
+    default: '0'
+    description: Stop early when a confirmed candidate reaches this latency.
+    example: '120'
+  - name: parallel_agents
+    type: number
+    default: '1'
+    description: Number of concurrent implementor agents per Generate round.
+    example: '4'
+  - name: reviewer_cmd
+    type: string
+    default: ''''''
+    description: Cross-model reviewer CLI command (codex). Reviewer-unavailable is a rejection, never a silent pass.
+    example: codex review
+  - name: bench_shape
+    type: string
+    default: ''''''
+    description: Problem shape passed to the benchmark binary.
+    example: 4096x4096x4096
+  - name: op_description
+    type: string
+    default: ''''''
+    description: Human description of the kernel/op for agent context.
+    example: FP16 batched GEMM
+  - name: single_spec_json
+    type: string
+    default: ''''''
+    description: Inline single-problem spec JSON; overrides harness problem shapes.
+    example: '{"M":4096,"N":4096,"K":4096}'
+  - name: config_overrides
+    type: object
+    default: '{}'
+    description: Overrides merged onto config.defaults.json at Init by render_config.py.
+    example: '{significance_sigma: 3}'
+grounding:
+  enforced: true
+  contract: _substrate/grounding.js (inlined)
+  notes: 'All tool invocations come from command strings rendered at Init by tools/render_config.py;
+    the workflow file contains no literal tool commands. Bench/profile scripts refuse
+    to run outside a gpu_run session. The reviewer agent relays the cross-model CLI
+    verdict and may not substitute its own judgment.
+
+    '
+outputs:
+  primary_metric: best_latency_us (confirmed, locked-clock) and speedup vs baseline
+  artifacts:
+  - results/report.md in the project state dir
+  - search.sqlite (checkpoint tree, experiments, ledger)
+  - bitlessons.jsonl / bitlessons.md
+  side_effects:
+  - Creates branches exp/r<round>/<exp-id>-<slug> and ckpt/* tags in the target repo
+  - Creates/destroys git worktrees and review clones under the state dir
+  - Holds machine-global GPU locks under /tmp/warpspeed/locks during measurements
+  - chmod -R a-w on the project harness dir at Init
+testing:
+  mock_suite: WarpSpeed/tests/mock/run_mock_tests.sh (T1–T13; PATH-injected fake GPU tools; no GPUs needed)
+  dryrun: node WarpSpeed/tests/workflow/dryrun.test.mjs (vm harness, fixture agents, routing/rewind logic)
+  node_suite: WarpSpeed/tests/node/run_node_tests.sh (real flock/calibrate/screen/confirm/NCU on the GPU node)
