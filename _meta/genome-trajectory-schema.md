@@ -62,6 +62,30 @@ contract or `exp_dir` was unset.
 | `speedup` | no | measured speedup at this point, if known |
 | `parent_origin` | no | for recombined workflows: which parent this phase came from |
 
+## Real example
+
+A real `run-N/genome.jsonl` from `cuda-agent-kernel-optimization` optimizing a
+fused RMSNorm (one line per phase; the loop body — Implement/Verify — emits one
+line per attempt, so a retry produces a distinct `attempt-N`):
+
+```jsonl
+{"workflow":"cuda-agent-kernel-optimization","phase":"Setup","ts":"2026-06-17T05:23:09Z","status":"done","technique":"workspace_setup","note":"RMSNorm(hidden_size=128): pow2+mean reduction (critical), rsqrt+2x elemwise mul (critical), 2x dtype cast (overhead); fuse all into single kernel eliminating intermediate tensors"}
+{"workflow":"cuda-agent-kernel-optimization","phase":"Profile","ts":"2026-06-17T05:29:51Z","status":"done","technique":"operator_fusion","speedup":null,"note":"Eager 3.15ms / Compile 0.656ms (BS=520K). 9 eager kernels fuse to 2; top bottleneck = dtype cast (30-53% of CUDA time) + redundant intermediates. Strategy: single CUDA kernel, fp32 compute, warp-reduce mean, fused rsqrt+mul+weight, bf16 I/O."}
+{"workflow":"cuda-agent-kernel-optimization","phase":"Implement","ts":"2026-06-17T05:45:30Z","status":"done","candidate_id":"attempt-0","technique":"fused-single-kernel-warp-shuffle-reduction","note":"Single CUDA kernel replaces 9 eager ops. 256 threads/block, 8 warps, 1 row/warp; __shfl_xor_sync reduction (no shared mem, no __syncthreads); bf16 I/O via __ldg, fp32 compute."}
+{"workflow":"cuda-agent-kernel-optimization","phase":"Verify","ts":"2026-06-17T05:58:34Z","status":"done","candidate_id":"attempt-0","speedup":6.10,"technique":"fused-single-kernel-warp-shuffle-reduction","note":"compiled:yes correct:all-14-PASSED reward:3. BS=2048: 0.003648ms vs eager 0.022271ms (6.10x), vs compile (20.83x). P50 9.00x. max abs err 0.0625."}
+```
+
+What it shows: **per-phase richness** (Setup names the critical ops + fusion plan;
+Profile carries baseline timings + the bottleneck + the chosen strategy);
+**per-iteration trajectory** (Implement/Verify keyed by `candidate_id`); and a
+**measured outcome** in the Verify line (`status: done`, `speedup: 6.10`,
+correctness). An envelope-only, post-hoc view would collapse all of this to a
+single best number.
+
+Parsing note: each line is one JSON object; a robust consumer should **skip any
+non-JSON line** (a doer occasionally echoes its `date` output), e.g.
+`jq -R 'fromjson? // empty'`.
+
 ## Trust boundary (read this)
 
 `genome.jsonl` / `trajectory.jsonl` are **self-reported by the workflow** — they

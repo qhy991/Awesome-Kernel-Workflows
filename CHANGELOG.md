@@ -8,6 +8,13 @@ for the versioning policy.
 
 ## [Unreleased]
 
+### Added
+
+- **Real genome example** in `_meta/genome-trajectory-schema.md` — an actual
+  `run-N/genome.jsonl` (fused RMSNorm via cuda-agent) showing per-phase richness,
+  per-iteration `candidate_id`, and a measured `speedup`, plus a robust-parsing
+  note (skip non-JSON lines).
+
 ## [0.2.0] - 2026-06-17
 
 ### Added
