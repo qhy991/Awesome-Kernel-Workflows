@@ -11,21 +11,10 @@ export const meta = {
   ],
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 // --- BEGIN inlined arg_guard ---
 function __unwrapArgs(rawArgs) {
@@ -318,7 +307,7 @@ async function unregisterVariant(variantName) {
 // Phase: Setup + Baseline
 // =============================================================================
 
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup')
 log(`ggml_root         = ${GGML_ROOT}`)
 log(`register_script   = ${REG_SCRIPT}`)
 log(`reference_cuh     = ${REFERENCE_CUH}`)
@@ -333,6 +322,7 @@ await agent(
     `  python "${REG_SCRIPT}" list --ggml-root "${GGML_ROOT}"`,
     `Report ok=true iff both succeeded.`,
     GROUNDING_INSTRUCTION,
+    `# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append:\n{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"variants_dir_and_register_sanity","note":"<variants dir created? register script listable? one line>"}`,
   ].join('\n\n'),
   {
     phase: 'Setup',
@@ -345,7 +335,7 @@ await agent(
   }
 )
 
-phase('Baseline'); await __genomeReport('Baseline', meta.name)
+phase('Baseline')
 const baseBuild = await runBuild('baseline', '')
 if (baseBuild.state !== 'grounded' || !baseBuild.value.ok) {
   return { ok: false, grounded: baseBuild.state === 'grounded',
@@ -383,7 +373,7 @@ for (let round = 1; round <= MAX_ROUNDS; ++round) {
     break
   }
 
-  phase('Propose'); await __genomeReport('Propose', meta.name)
+  phase('Propose')
   log(`\n=== Round ${round}/${MAX_ROUNDS} - proposing ${N_VARIANTS} variants in parallel ===`)
 
   const priorTitles = history
@@ -427,6 +417,7 @@ for (let round = 1; round <= MAX_ROUNDS; ++round) {
           `and a rationale citing the specific design choice (tile shape, register`,
           `layout, sync pattern, ...).`,
           GROUNDING_INSTRUCTION,
+          `# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append (this is variant ${slot} of round ${round}):\n{"workflow":"${meta.name}","phase":"Propose","ts":"<ts>","status":"done","candidate_id":"${slot}","technique":"<the distinct design choice for this variant, e.g. tile_shape_or_register_layout>","speedup":null,"note":"<one-line rationale for why this variant should be faster>"}`,
         ].filter(Boolean).join('\n\n'),
         { phase: 'Propose', label: `propose:${slot}`, schema: PROPOSAL_SCHEMA }
       )
@@ -441,7 +432,7 @@ for (let round = 1; round <= MAX_ROUNDS; ++round) {
   log(`Drafted ${drafted.length}/${N_VARIANTS} variants for round ${round}`)
 
   // ----- Serial evaluate -----
-  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
+  phase('Evaluate')
   for (const v of drafted) {
     log(`\n--- Evaluating ${v.variant_name} ("${v.title}") ---`)
     const reg = await registerVariant(v.variant_name, v.cuh_path)
@@ -500,13 +491,13 @@ for (let round = 1; round <= MAX_ROUNDS; ++round) {
 // Report
 // =============================================================================
 
-phase('Report'); await __genomeReport('Report', meta.name)
+phase('Report')
 
 // Read the winning kernel back (or null if no variant beat baseline).
 let bestCode = null
 if (bestVariantName !== '(baseline)') {
   const r = await agent(
-    `Read the file at ${bestCuhPath} and return its full contents in best_kernel_code.`,
+    `Read the file at ${bestCuhPath} and return its full contents in best_kernel_code.\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append (the search winner is variant ${bestVariantName} at ${bestSpeedup}x over baseline):\n{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"done","candidate_id":"${bestVariantName}","speedup":${bestSpeedup},"technique":"best_variant_selected","note":"<one-line summary of the winning design and its latency>"}`,
     {
       phase: 'Report',
       label: 'final-read',

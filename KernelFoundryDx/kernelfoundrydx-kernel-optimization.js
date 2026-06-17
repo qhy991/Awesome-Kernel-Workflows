@@ -13,21 +13,10 @@ export const meta = {
   ],
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['triton'],
@@ -313,7 +302,7 @@ function updateHint(hintId, speedup, correct) {
 // =============================================================================
 // Phase: Setup — Read the reference task, baseline, seed the experience library
 // =============================================================================
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -393,7 +382,12 @@ ${HINT_LIBRARY_PATH
 Seed 6-10 GENERAL Triton optimization hints, each grouped by the bottleneck class it addresses. Bottleneck classes are exactly: "correctness", "memory_bound", "latency_bound", "instruction_bound".
 Each hint entry must have: trigger (when it applies), bottleneck_class (one of the four), context (short descriptor), suggestion (the actionable optimization in one sentence).
 
-Return JSON.`, {
+Return JSON.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"baseline_and_hint_seed","speedup":null,"note":"<eager baseline ms + number of hints seeded + op chain, one line>"}`, {
   label: 'baseline-and-seed',
   phase: 'Setup',
   schema: {
@@ -436,7 +430,7 @@ log(`Baseline: ${baselineLatency}ms | seeded ${hintLibrary.length} hints`)
 // =============================================================================
 // Phase: Init — Expert-guided RAG initialization + anti-cheating validation
 // =============================================================================
-phase('Init'); await __genomeReport('Init', meta.name)
+phase('Init')
 
 const seeds = await parallel(
   Array.from({ length: SEED_CANDIDATES }, (_, i) => () =>
@@ -463,7 +457,12 @@ ${RAG_CORPUS_PATH
 3. Must be numerically equivalent to the reference within tolerance.
 4. This is seed variant ${i + 1}/${SEED_CANDIDATES}; vary the decomposition slightly from a naive baseline.
 
-Return JSON with the code and a short note on the approach.`, {
+Return JSON with the code and a short note on the approach.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Init","ts":"<ts>","status":"done","candidate_id":"seed-${i}","technique":"<your initialization decomposition / RAG-guided approach>","speedup":null,"note":"<the seed approach in one line>"}`, {
       label: `seed-${i}`,
       phase: 'Init',
       schema: {
@@ -556,7 +555,7 @@ for (let iter = 0; iter < ITERATIONS; iter++) {
   // ===========================================================================
   // Phase: Evolve — each island mutates a parent (parallel across islands)
   // ===========================================================================
-  phase('Evolve'); await __genomeReport('Evolve', meta.name)
+  phase('Evolve')
 
   const mutations = await parallel(
     islands.map((island, islIdx) => () => {
@@ -599,7 +598,12 @@ ${hintSection}
 Generate ONE new Triton kernel variant that improves on the parent FROM YOUR ISLAND'S PERSPECTIVE (${island.role.name}). Stay correct. All math must remain in Triton (no torch-op cheating).
 Cite which hint(s) you applied (by their text) so we can track hint usefulness.
 
-Return JSON with the complete code, the applied hint(s), and a one-line summary of the change.`, {
+Return JSON with the complete code, the applied hint(s), and a one-line summary of the change.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Evolve","ts":"<ts>","status":"done","candidate_id":"iter${iter}-isl${islIdx}-${island.role.name}","technique":"<the mutation you applied from your island role + hints>","speedup":null,"note":"<what changed vs the parent, one line>"}`, {
         label: `mutate-${iter}-isl${islIdx}`,
         phase: 'Evolve',
         schema: {
@@ -618,7 +622,7 @@ Return JSON with the complete code, the applied hint(s), and a one-line summary 
   // ===========================================================================
   // Phase: Evaluate — compile + run on real hardware (lightweight signals)
   // ===========================================================================
-  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
+  phase('Evaluate')
 
   const variants = []
   for (let islIdx = 0; islIdx < islands.length; islIdx++) {
@@ -646,7 +650,12 @@ ${v.code.substring(0, 4000)}
 4. Report: compiles?, runs?, correct?, latency_ms only if measured, measured flag, and speedup only when both baseline and candidate latencies are measured.
 5. Capture lightweight execution metadata: launch config (BLOCK_SIZE, num_warps, num_stages, grid) if visible, and a one-line runtime characterization.
 
-Return JSON.`, {
+Return JSON.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" if it compiled and ran correctly, else "error"; speedup is the measured speedup vs eager baseline, or null if unmeasured):
+{"workflow":"${meta.name}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"iter${iter}-isl${v.islIdx}-${islands[v.islIdx].role.name}","speedup":<number or null>,"technique":"<launch config / runtime characterization>","note":"<compiles? correct? latency; or the failure reason>"}`, {
         label: `eval-${iter}-isl${v.islIdx}`,
         phase: 'Evaluate',
         schema: {
@@ -714,7 +723,7 @@ Return JSON.`, {
   // ===========================================================================
   // Phase: Diagnose — Result Analyzer (failure mode OR perf limiter) + hints
   // ===========================================================================
-  phase('Diagnose'); await __genomeReport('Diagnose', meta.name)
+  phase('Diagnose')
 
   const diagnoses = await parallel(
     variants.map((v, k) => () => {
@@ -742,7 +751,12 @@ ${v.code.substring(0, 2500)}
 
 The hint must be GENERAL and reusable (a one-sentence actionable suggestion with a trigger condition), not specific to this exact kernel.
 
-Return JSON.`, {
+Return JSON.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (status="done" for a performance diagnosis, "error" for a failure diagnosis):
+{"workflow":"${meta.name}","phase":"Diagnose","ts":"<ts>","status":"<done|error>","candidate_id":"iter${iter}-isl${v.islIdx}-${islands[v.islIdx].role.name}","speedup":null,"technique":"<diagnosed limiter or failure_mode>","note":"<the generated hint, one line>"}`, {
         label: `diagnose-${iter}-isl${v.islIdx}`,
         phase: 'Diagnose',
         schema: {
@@ -772,7 +786,7 @@ Return JSON.`, {
   // ===========================================================================
   // Phase: Evolve-Pop — update populations, migrate elites, reinforce hints
   // ===========================================================================
-  phase('Evolve-Pop'); await __genomeReport('Evolve-Pop', meta.name)
+  phase('Evolve-Pop')
 
   for (let k = 0; k < variants.length; k++) {
     const v = variants[k]
@@ -885,7 +899,7 @@ Return JSON.`, {
 // =============================================================================
 // Phase: Report
 // =============================================================================
-phase('Report'); await __genomeReport('Report', meta.name)
+phase('Report')
 
 const finalReport = await agent(`Write a concise technical report for this Kernel Foundry (diagnosis-driven, multi-island) optimization run.
 

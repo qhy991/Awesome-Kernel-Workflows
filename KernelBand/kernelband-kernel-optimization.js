@@ -14,21 +14,10 @@ export const meta = {
   ],
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['triton', 'cuda'],
@@ -317,7 +306,7 @@ for (let i = 0; i < NUM_CLUSTERS; i++) {
 // =============================================================================
 // Phase 1: Setup — Parse kernel, identify hardware, establish baseline
 // =============================================================================
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -372,7 +361,12 @@ const setupResult = await agent(`You are setting up a KernelBand optimization se
 # Operation: ${OP_DESCRIPTION}
 # Strategies available: ${STRATEGIES.join(', ')}
 
-Return the baseline metrics and hardware signature.`, {
+Return the baseline metrics and hardware signature.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"baseline_profiling","speedup":null,"note":"<baseline latency us + dominant hardware bottleneck (DRAM/L2/SM) one line>"}`, {
   label: 'setup',
   phase: 'Setup',
   model: MODEL.profile,
@@ -471,7 +465,7 @@ for (let t = 1; t <= ITERATIONS; t++) {
   const shouldRecluster = (t % RECLUSTER_PERIOD === 0) && (candidatePool.length >= 2 * NUM_CLUSTERS)
 
   if (shouldRecluster) {
-    phase('Cluster'); await __genomeReport('Cluster', meta.name)
+    phase('Cluster')
 
     const clusterResult = await agent(`You are the KernelBand Dynamic Clustering module (Section 3.3).
 
@@ -491,7 +485,12 @@ ${candidatePool.map((c, idx) => `Kernel ${c.id}: φ = [T̄=${c.features.normaliz
 4. For each cluster centroid, identify the representative kernel (nearest to centroid)
    - This representative will be profiled for hardware signature updates
 
-Return cluster assignments and centroids.`, {
+Return cluster assignments and centroids.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this is bandit iteration ${t}):
+{"workflow":"${meta.name}","phase":"Cluster","ts":"<ts>","status":"done","candidate_id":"iter-${t}","technique":"kmeans_recluster","speedup":null,"note":"<resulting cluster sizes + what moved, one line>"}`, {
       label: `cluster-t${t}`,
       phase: 'Cluster',
       model: MODEL.mechanical,
@@ -541,7 +540,7 @@ Return cluster assignments and centroids.`, {
     }
 
     // Profile cluster centroids for hardware signature updates
-    phase('Profile'); await __genomeReport('Profile', meta.name)
+    phase('Profile')
 
     const profileResult = await agent(`You are the KernelBand Representative Profiling module (Section 3.3).
 
@@ -570,7 +569,12 @@ A strategy s is VALID for cluster i only if: h(k_c^(i))[Target(s)] < ${SATURATIO
 - reordering targets: L2 (cache locality)
 - access_layout targets: DRAM (coalescing)
 
-Return updated hardware signatures and masks.`, {
+Return updated hardware signatures and masks.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this is bandit iteration ${t}):
+{"workflow":"${meta.name}","phase":"Profile","ts":"<ts>","status":"done","candidate_id":"iter-${t}","technique":"representative_profiling","speedup":null,"note":"<per-cluster DRAM/L2/SM throughput + how many (cluster,strategy) pairs pruned, one line>"}`, {
       label: `profile-t${t}`,
       phase: 'Profile',
       model: MODEL.profile,
@@ -621,7 +625,7 @@ Return updated hardware signatures and masks.`, {
   // ===========================================================================
   // Action Selection: Masked UCB (Section 3.4)
   // ===========================================================================
-  phase('Select'); await __genomeReport('Select', meta.name)
+  phase('Select')
 
   let bestUCB = -Infinity
   let selectedCluster = 0
@@ -652,7 +656,7 @@ Return updated hardware signatures and masks.`, {
   // ===========================================================================
   // Code Generation: LLM applies strategy to kernel (Section 3.1)
   // ===========================================================================
-  phase('Generate'); await __genomeReport('Generate', meta.name)
+  phase('Generate')
 
   const generateResult = await agent(`You are the KernelBand Code Generator. Apply a specific optimization strategy to the given kernel.
 
@@ -703,7 +707,12 @@ ${selectedStrategy === 'access_layout' ? `ACCESS & LAYOUT: Optimize memory layou
 - This (cluster, strategy) pair has been tried ${banditStats[`${selectedCluster}_${selectedStrategy}`]?.count || 0} times
 - Average reward so far: ${(banditStats[`${selectedCluster}_${selectedStrategy}`]?.mean_reward || 0).toFixed(3)}
 
-Return the optimized kernel code.`, {
+Return the optimized kernel code.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this is bandit iteration ${t}; the arm pulled is strategy ${selectedStrategy} on cluster ${selectedCluster}, source kernel ${selectedKernel.id}):
+{"workflow":"${meta.name}","phase":"Generate","ts":"<ts>","status":"done","candidate_id":"iter-${t}","technique":"${selectedStrategy}","speedup":null,"note":"<concrete change applied to kernel ${selectedKernel.id} under the ${selectedStrategy} strategy, one line>"}`, {
     label: `generate-t${t}-${selectedStrategy}`,
     phase: 'Generate',
     model: MODEL.judgment,
@@ -723,7 +732,7 @@ Return the optimized kernel code.`, {
   // ===========================================================================
   // Evaluation: Compile, verify, benchmark (Section 3.1, Algorithm 1 line 19)
   // ===========================================================================
-  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
+  phase('Evaluate')
 
   const evalResult = await agent(`You are the KernelBand Evaluation module. Verify correctness and measure performance.
 
@@ -748,7 +757,12 @@ ${generatedCode.substring(0, 6000)}
 # Baseline latency: ${baselineLatency} μs
 # Previous best: ${bestKernel.latency === Infinity ? 'N/A' : bestKernel.latency.toFixed(1) + ' μs (' + bestKernel.speedup.toFixed(2) + 'x)'}
 
-Return evaluation results.`, {
+Return evaluation results.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" if it compiled AND passed correctness, else "error"; speedup is the measured speedup number vs baseline, or null if unavailable; this is bandit iteration ${t}, strategy ${selectedStrategy}):
+{"workflow":"${meta.name}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"iter-${t}","technique":"${selectedStrategy}","speedup":<number or null>,"note":"<compiled? correct? measured latency us; or the failure reason>"}`, {
     label: `eval-t${t}`,
     phase: 'Evaluate',
     model: MODEL.mechanical,
@@ -817,7 +831,7 @@ Return evaluation results.`, {
   // ===========================================================================
   // Bandit Update (Algorithm 1, lines 20-23)
   // ===========================================================================
-  phase('Update'); await __genomeReport('Update', meta.name)
+  phase('Update')
 
   const compiled = evalResult?.compiled || false
   const correct = evalResult?.correct || false
@@ -889,7 +903,7 @@ Return evaluation results.`, {
 // =============================================================================
 // Phase: Report — Final summary
 // =============================================================================
-phase('Report'); await __genomeReport('Report', meta.name)
+phase('Report')
 
 // Compute strategy statistics
 const strategyStats = {}
@@ -938,7 +952,12 @@ Analyze:
 2. Did the bandit converge to exploiting the best strategy or keep exploring?
 3. Was hardware-aware pruning effective? How many invalid strategies were avoided?
 4. Clustering effectiveness: did kernels in the same cluster respond similarly?
-5. Recommendations for further optimization (more iterations, different K, etc.)`, {
+5. Recommendations for further optimization (more iterations, different K, etc.)
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the final results above (speedup is the best speedup ${bestKernel.speedup.toFixed(2)} as a number, or null if no improvement):
+{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"done","technique":"<the winning strategy>","speedup":<number or null>,"note":"<best latency us + which strategy won + cumulative reward, one line>"}`, {
   label: 'report',
   phase: 'Report',
   model: MODEL.judgment,

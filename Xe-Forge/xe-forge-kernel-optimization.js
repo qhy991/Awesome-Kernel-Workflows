@@ -14,21 +14,12 @@ export const meta = {
   ],
 };
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
+
+const EXPDIR = args.exp_dir || '.'
 
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['triton', 'sycl', 'xpu'],
@@ -97,7 +88,7 @@ async function main() {
   // ============================================================================
   // Phase 1: Setup
   // ============================================================================
-  phase('Setup'); await __genomeReport('Setup', meta.name);
+  phase('Setup');
 
   const setupResult = await agent(
     `Set up Xe-Forge optimization environment for Intel XPU:
@@ -135,7 +126,12 @@ Return JSON:
   "verification_strategies": ["correctness", "performance", "numerical"],
   "profiling_tools": ["tool1", "tool2", ...],
   "target_backend": "triton|sycl"
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXPDIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"xpu_env_setup","note":"<xpu model + target backend + kernel operation + cover cycles, one line>"}`,
     {
       label: 'Setup Xe-Forge',
       phase: 'Setup',
@@ -178,7 +174,7 @@ Return JSON:
   // ============================================================================
   // Phase 2: Generate Initial Implementation
   // ============================================================================
-  phase('Generate Initial'); await __genomeReport('Generate Initial', meta.name);
+  phase('Generate Initial');
 
   log('Generating initial kernel implementation...');
 
@@ -214,7 +210,12 @@ Return JSON:
   "host_code": "host launch code",
   "test_code": "correctness test",
   "initial_strategy": "description of initial approach"
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXPDIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Generate Initial","ts":"<ts>","status":"done","candidate_id":"initial","technique":"<initial tiling/strategy approach>","speedup":null,"note":"<backend + initial approach summary, one line>"}`,
     {
       label: 'Generate initial impl',
       phase: 'Generate Initial',
@@ -250,7 +251,7 @@ Return JSON:
     // ==========================================================================
     // Phase 3: Analyze
     // ==========================================================================
-    phase('Analyze'); await __genomeReport('Analyze', meta.name);
+    phase('Analyze');
 
     log('Analyzing performance bottlenecks...');
 
@@ -294,7 +295,12 @@ Return JSON:
     "opportunity2",
     ...
   ]
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXPDIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured:
+{"workflow":"${meta.name}","phase":"Analyze","ts":"<ts>","status":"done","candidate_id":"cycle-${cycle + 1}","technique":"profiling","speedup":null,"note":"<measured gflops + bottleneck type + main optimization opportunity, one line>"}`,
       {
         label: `Analyze cycle ${cycle + 1}`,
         phase: 'Analyze',
@@ -339,7 +345,7 @@ Return JSON:
     // ==========================================================================
     // Phase 4: Plan
     // ==========================================================================
-    phase('Plan'); await __genomeReport('Plan', meta.name);
+    phase('Plan');
 
     log('Planning optimization strategies...');
 
@@ -385,7 +391,12 @@ Return JSON:
     ...
   ],
   "rationale": "why these strategies were chosen"
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXPDIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Plan","ts":"<ts>","status":"done","candidate_id":"cycle-${cycle + 1}","technique":"<top selected strategy name>","note":"<chosen strategies + rationale, one line>"}`,
       {
         label: `Plan cycle ${cycle + 1}`,
         phase: 'Plan',
@@ -426,7 +437,7 @@ Return JSON:
     // ==========================================================================
     // Phase 5: Optimize
     // ==========================================================================
-    phase('Optimize'); await __genomeReport('Optimize', meta.name);
+    phase('Optimize');
 
     log('Applying optimizations...');
 
@@ -458,7 +469,12 @@ Return JSON:
     ...
   ],
   "optimization_summary": "summary of applied optimizations"
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXPDIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Optimize","ts":"<ts>","status":"done","candidate_id":"cycle-${cycle + 1}","technique":"<main optimization applied this cycle>","note":"<changes applied this cycle, one line>"}`,
       {
         label: `Optimize cycle ${cycle + 1}`,
         phase: 'Optimize',
@@ -486,7 +502,7 @@ Return JSON:
     // ==========================================================================
     // Phase 6: Verify
     // ==========================================================================
-    phase('Verify'); await __genomeReport('Verify', meta.name);
+    phase('Verify');
 
     log('Verifying optimized implementation...');
 
@@ -525,7 +541,12 @@ Return JSON:
   },
   "verification_passed": true/false,
   "notes": "verification notes"
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXPDIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" if correctness passed, else "error"; speedup is the measured performance_improvement as a multiplier, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Verify","ts":"<ts>","status":"<done|error>","candidate_id":"cycle-${cycle + 1}","speedup":<number or null>,"technique":"<technique under test>","note":"<correct? gflops + improvement pct; or the failure reason>"}`,
       {
         label: `Verify cycle ${cycle + 1}`,
         phase: 'Verify',
@@ -577,7 +598,7 @@ Return JSON:
     // ==========================================================================
     // Phase 7: Refine (decision to continue)
     // ==========================================================================
-    phase('Refine'); await __genomeReport('Refine', meta.name);
+    phase('Refine');
 
     if (cycle < coverCycles - 1) {
       const refineDecision = await agent(
@@ -623,7 +644,7 @@ Return JSON:
   // ============================================================================
   // Phase 8: Report
   // ============================================================================
-  phase('Report'); await __genomeReport('Report', meta.name);
+  phase('Report');
 
   const report = await agent(
     `Generate Xe-Forge optimization report:
@@ -658,7 +679,12 @@ Return JSON:
   "baseline_gflops": ${kernelSpec.baseline_gflops || null},
   "speedup": ${kernelSpec.baseline_gflops ? bestPerformance / kernelSpec.baseline_gflops : null},
   "report_path": "path/to/report.md"
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXPDIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the final results (speedup is best_gflops over baseline_gflops, or null if no baseline):
+{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"done","technique":"final_report","speedup":<number or null>,"note":"<best gflops + cycles completed + speedup summary, one line>"}`,
     {
       label: 'Generate report',
       phase: 'Report',

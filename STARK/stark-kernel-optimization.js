@@ -14,21 +14,10 @@ export const meta = {
   ],
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda'],
@@ -428,7 +417,7 @@ function updateLeaderboard() {
 // =============================================================================
 // Phase 1: Setup — Read reference kernel, init tree
 // =============================================================================
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -502,7 +491,12 @@ Return ONLY a JSON object with:
 - algorithm_description: string
 - launch_config: string
 - optimization_assessment: string
-- potential_directions: array of strings`, {
+- potential_directions: array of strings
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"read_reference_kernel","note":"<op_type + optimization assessment + top potential direction, one line>"}`, {
   label: 'setup-read-reference',
   phase: 'Setup',
   schema: {
@@ -627,7 +621,7 @@ for (let t = 0; t < BUDGET; t++) {
   // ===========================================================================
   // Phase 2: Select — ε-greedy node selection
   // ===========================================================================
-  phase('Select'); await __genomeReport('Select', meta.name)
+  phase('Select')
 
   const selectedNode = selectNode()
   const selectedId = selectedNode.id
@@ -644,7 +638,7 @@ for (let t = 0; t < BUDGET; t++) {
 
   if (!selectedNode.compile_ok || !selectedNode.correct) {
     // HasBug(i) → Debug path
-    phase('Debug'); await __genomeReport('Debug', meta.name)
+    phase('Debug')
     isDebugPath = true
     log(`Debug path for ${selectedId}: ${selectedNode.logs?.substring(0, 200) || 'unknown error'}`)
 
@@ -663,7 +657,12 @@ ${debugCtx}
 Return a JSON object with:
 - kernel_code: string (complete fixed ${langToken(LEGACY_DEBUG_LANG_TOKEN)} kernel)
 - fix_summary: string (brief description of what was wrong and how it was fixed)
-- confidence: 'high' | 'medium' | 'low'`, {
+- confidence: 'high' | 'medium' | 'low'
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Debug","ts":"<ts>","status":"done","candidate_id":"node_${attemptCount}","technique":"debug_fix","speedup":null,"note":"<what was wrong + how it was fixed + confidence, one line>"}`, {
       label: `debug-${selectedId}-a${attemptCount}`,
       phase: 'Debug',
       schema: {
@@ -684,7 +683,7 @@ Return a JSON object with:
 
   } else {
     // Normal path: Plan + Code
-    phase('Plan'); await __genomeReport('Plan', meta.name)
+    phase('Plan')
 
     const planCtx = buildPlanContext(selectedId, fenceToken())
 
@@ -707,7 +706,12 @@ Return a JSON object with:
 - plan: string (text description of the optimization strategy)
 - anchored_scaffold: string (kernel code with <<<IMPROVE BEGINS/ENDS>>> anchors)
 - anchors: array of {name, begin_line, end_line, description}
-- rationale: string`, {
+- rationale: string
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Plan","ts":"<ts>","status":"done","candidate_id":"node_${attemptCount}","technique":"<the single optimization you propose, e.g. shared_memory_tiling>","speedup":null,"note":"<rationale for this optimization, one line>"}`, {
       label: `plan-${selectedId}-a${attemptCount}`,
       phase: 'Plan',
       schema: {
@@ -742,7 +746,7 @@ Return a JSON object with:
     // =========================================================================
     // Phase 4: Code — Realize grounded instructions
     // =========================================================================
-    phase('Code'); await __genomeReport('Code', meta.name)
+    phase('Code')
 
     const codeCtx = buildCodeContext(selectedId, fenceToken())
 
@@ -771,7 +775,12 @@ ${planResult.anchors.map(a => `- ${a.name} (lines ${a.begin_line}-${a.end_line})
 Return a JSON object with:
 - kernel_code: string (complete, anchor-free ${langToken(LEGACY_CODE_LANG_TOKEN)} kernel)
 - implementation_notes: string (brief notes on how anchors were resolved)
-- anchor_resolutions: array of {name, resolution_summary}`, {
+- anchor_resolutions: array of {name, resolution_summary}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Code","ts":"<ts>","status":"done","candidate_id":"node_${attemptCount}","technique":"<the optimization you realized into code>","speedup":null,"note":"<how the anchors were resolved into concrete code, one line>"}`, {
       label: `code-${selectedId}-a${attemptCount}`,
       phase: 'Code',
       schema: {
@@ -792,7 +801,7 @@ Return a JSON object with:
   // ===========================================================================
   // Phase 5: Evaluate — Compile, correctness test, runtime
   // ===========================================================================
-  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
+  phase('Evaluate')
 
   const evalResult = await agent(`Evaluate this kernel for correctness and performance.
 
@@ -814,7 +823,12 @@ Return JSON with:
 - runtime_ms: number (wall-clock, lower is better; null if failed)
 - speedup_vs_baseline: number (or null)
 - logs: string (compiler + test output)
-- error_category: 'compile_error' | 'runtime_error' | 'correctness_fail' | 'timeout' | 'none'`, {
+- error_category: 'compile_error' | 'runtime_error' | 'correctness_fail' | 'timeout' | 'none'
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" if compiled AND correct, else "error"; speedup is the measured speedup_vs_baseline number, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"node_${attemptCount}","speedup":<number or null>,"technique":"evaluate_candidate","note":"<compile_ok? correct? runtime_ms; or the error_category and failure reason>"}`, {
     label: `eval-a${attemptCount}`,
     phase: 'Evaluate',
     schema: {
@@ -870,7 +884,7 @@ Return JSON with:
   // ===========================================================================
   // Phase 6: Update — Append to tree, update leaderboard
   // ===========================================================================
-  phase('Update'); await __genomeReport('Update', meta.name)
+  phase('Update')
 
   const childId = `node_${attemptCount}`
   const childNode = {
@@ -914,7 +928,7 @@ Return JSON with:
 // =============================================================================
 // Phase 7: Report — Final summary
 // =============================================================================
-phase('Report'); await __genomeReport('Report', meta.name)
+phase('Report')
 
 const bestNode = leaderboard[0] || rootNode
 const allCorrect = tree.filter(n => n.correct)
@@ -963,7 +977,12 @@ Return a JSON object with:
 - best_kernel_code: string
 - best_kernel_plan: string
 - best_kernel_id: string
-- optimization_trajectory: array of {attempt, node_id, runtime, speedup, plan_summary}`, {
+- optimization_trajectory: array of {attempt, node_id, runtime, speedup, plan_summary}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the session outcome (status="done" if outcome is success or partial, else "error"; speedup is the best speedup number, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"<done|error>","speedup":<number or null>,"technique":"session_report","note":"<outcome + best runtime vs baseline + best_kernel_id, one line>"}`, {
   label: 'report-final',
   phase: 'Report',
   schema: {

@@ -22,21 +22,10 @@ export const meta = {
   skill_binding_mode: 'prompt_reference_only',
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['triton', 'cuda', 'cute-dsl', 'tilelang', 'cpp', 'pytorch'],
@@ -387,7 +376,7 @@ function formatTraps() {
 // =============================================================================
 // Phase 1: Setup — Read kernel, detect language, create workspace, baseline
 // =============================================================================
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -432,7 +421,12 @@ Analyze it and return a JSON object with:
 - potential_bottlenecks: initial observations about potential performance issues
 - imports_used: list of all imports (to check for library delegation later)
 
-Return ONLY the JSON object.`, {
+Return ONLY the JSON object.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"baseline_readout","speedup":null,"note":"<detected language + op_type + main potential bottleneck, one line>"}`, {
   label: 'read-baseline',
   phase: 'Setup',
   model: MODEL.mechanical,
@@ -609,7 +603,7 @@ for (let round = 0; round < ROUNDS; round++) {
   // AKO4X MASTER.md step 1: Read README, TRAPS, _failed, and variant headers.
   // Treat "Open directions" as forensic signal, NOT a checklist to relay.
   // =========================================================================
-  phase('Round-Init'); await __genomeReport('Round-Init', meta.name)
+  phase('Round-Init')
 
   const dslHint = USE_AKO4X_SKILLS ? getDslSkillHint(detectedLang) : ''
   const benchMethodology = getBenchmarkMethodology()
@@ -629,7 +623,7 @@ for (let round = 0; round < ROUNDS; round++) {
   //   6. Log to ITERATIONS.md (every labeled bench leaves a row)
   //   7. Pre-commit Expected: write hypothesis BEFORE benching
   // =========================================================================
-  phase('Iterate'); await __genomeReport('Iterate', meta.name)
+  phase('Iterate')
 
   // Generate hypotheses for this round
   const planPromptBase = `You are a GPU kernel optimization expert. Generate ONE specific, evidence-based optimization hypothesis.
@@ -734,7 +728,12 @@ ${dslHint}
 # Anti-patterns (dead-ends from previous rounds):
 ${deadEndsSection}
 
-Return the complete kernel code.`, {
+Return the complete kernel code.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this variant is round ${round + 1}, hypothesis "${plan.title}", sample ${si + 1}):
+{"workflow":"${meta.name}","phase":"Iterate","ts":"<ts>","status":"done","candidate_id":"r${round + 1}-${plan.title.substring(0, 20).replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}-v${si}","technique":"<the specific transformation you applied for this hypothesis>","speedup":null,"note":"<what changed vs the parent kernel, one line>"}`, {
           label: `impl-${round}-${plan.title.substring(0, 10)}-v${si}`,
           phase: 'Iterate',
           model: MODEL.judgment,
@@ -965,7 +964,7 @@ Execute this step.`, {
   //   4. Update TRAPS.md if new silent-skip pattern found
   //   5. Archive failed rounds
   // =========================================================================
-  phase('Archive'); await __genomeReport('Archive', meta.name)
+  phase('Archive')
 
   if (roundBest) {
     // --- Pre-archive Gate 1: Silent-skip detection ---
@@ -1108,7 +1107,12 @@ ${roundBest.code.substring(0, 5000)}
 6. For Dead-ends: each MUST include WHY — the mechanism of failure.
 7. For Open directions: write as forensic narrative, NOT as a checklist.
 
-Execute these steps.`, {
+Execute these steps.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this is the archived round-best variant; speedup is the measured ${roundBest.speedup.toFixed(2)}x vs baseline, hypothesis was "${roundBest.plan.title}"):
+{"workflow":"${meta.name}","phase":"Archive","ts":"<ts>","status":"done","candidate_id":"${roundBest.iterLabel}","technique":"<the winning transformation, from the hypothesis above>","speedup":${roundBest.speedup},"note":"<archived variant score ${roundBest.score}; one-line on why it won>"}`, {
         label: `archive-${variantName}`,
         phase: 'Archive',
         model: MODEL.mechanical,
@@ -1201,7 +1205,7 @@ Execute this step.`, {
   //   - Master evidence-gates and applies accepted edits
   //   - Session-best handoff: package best variant for master
   // =========================================================================
-  phase('Retrospect'); await __genomeReport('Retrospect', meta.name)
+  phase('Retrospect')
 
   if (MODE === 3 && roundBest) {
     const retrospective = await agent(`You have completed Phase-1 optimization. Now do a HARNESS RETROSPECTIVE — only based on actual evidence from this session.
@@ -1299,7 +1303,7 @@ Execute.`, {
 // =============================================================================
 // Final Report
 // =============================================================================
-phase('Report'); await __genomeReport('Report', meta.name)
+phase('Report')
 
 const finalReport = await agent(`Write a comprehensive optimization report.
 

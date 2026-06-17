@@ -11,21 +11,10 @@ export const meta = {
   ],
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda'],
@@ -183,7 +172,7 @@ Always cite specific NCU metric values when making claims. Distinguish between:
 // =============================================================================
 // Phase 1: Setup — Collect NCU profiles, source code, metadata
 // =============================================================================
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup')
 
 const setupResults = await parallel([
   // Agent 1: Read and catalog all source files
@@ -244,7 +233,12 @@ Extract ALL available metrics organized by category:
 
 Also extract metrics for any additional profiles listed.
 
-Return structured profile data.`, {
+Return structured profile data.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"ncu_profile_extraction","speedup":null,"note":"<profiles found + key metrics extracted, one line>"}`, {
     label: 'extract-profiles',
     phase: 'Setup',
     schema: {
@@ -287,7 +281,7 @@ log(`Setup: ${sourceData?.kernel_functions?.length || 0} kernel functions, ${pro
 // =============================================================================
 // Phase 2: Source Code Inspection Stage
 // =============================================================================
-phase('Source Inspection'); await __genomeReport('Source Inspection', meta.name)
+phase('Source Inspection')
 
 // KEET's Source Code Inspection: iteratively review each source file,
 // build algorithm summary, generate performance hypotheses BEFORE seeing data
@@ -336,7 +330,12 @@ Each hypothesis should be:
 - Expressed as: "I predict X because of code pattern Y"
 
 This is crucial for KEET's interpretability: we generate predictions from code alone,
-then verify against hardware measurements.`, {
+then verify against hardware measurements.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Source Inspection","ts":"<ts>","status":"done","technique":"hypothesis_first_source_analysis","speedup":null,"note":"<algorithm + number of perf hypotheses generated, one line>"}`, {
   label: 'source-inspection',
   phase: 'Source Inspection',
   schema: {
@@ -373,7 +372,7 @@ log(`Source Inspection: ${performanceHypotheses.length} hypotheses generated | S
 // =============================================================================
 // Phase 3: Profile Inspection Stage
 // =============================================================================
-phase('Profile Inspection'); await __genomeReport('Profile Inspection', meta.name)
+phase('Profile Inspection')
 
 // KEET's Profile Inspection: Metric Selector → Profile Analyzer (iterative per profile)
 // For single profile: analyze directly with hypothesis-informed metric selection
@@ -453,7 +452,12 @@ Reference specific metric values inline: e.g., "The kernel is memory-latency
 bound (long_scoreboard = 45.2% of stall samples, dram__throughput = 12.3%)"
 
 CRITICAL: Every claim must be supported by a cited metric value from the profile data.
-Do not hallucinate metric values. If a metric is not available, say so.`, {
+Do not hallucinate metric values. If a metric is not available, say so.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Profile Inspection","ts":"<ts>","status":"done","technique":"metric_grounded_profile_analysis","speedup":null,"note":"<primary bottleneck + the cited metric, one line>"}`, {
       label: `profile-analysis-${profile.label}`,
       phase: 'Profile Inspection',
       schema: {
@@ -530,7 +534,7 @@ Generate DrGPU-style suggestions and evaluate their applicability.`, {
 // =============================================================================
 // Phase 4: Aggregation — Combine all analyses into final report
 // =============================================================================
-phase('Aggregation'); await __genomeReport('Aggregation', meta.name)
+phase('Aggregation')
 
 const aggregatedReport = await agent(`You are the KEET Analysis Aggregator (Section III-D).
 Combine all performance analyses into a single, coherent performance explanation report.
@@ -563,7 +567,12 @@ ${drgpuAnalysis ? `# DrGPU Suggestions (rule-based):\n${(drgpuAnalysis.useful_su
 6. Keep language precise and actionable — this report may be used as context
    for an LLM performing code optimization downstream
 
-Generate the final performance explanation report.`, {
+Generate the final performance explanation report.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Aggregation","ts":"<ts>","status":"done","technique":"analysis_aggregation","speedup":null,"note":"<number of bottlenecks unified + headline finding, one line>"}`, {
   label: 'aggregate-report',
   phase: 'Aggregation',
   schema: {
@@ -597,7 +606,7 @@ log(`Aggregation: ${aggregatedReport.bottleneck_list?.length || 0} bottlenecks, 
 // =============================================================================
 // Phase 5: Review — Cross-check explanation against hypotheses
 // =============================================================================
-phase('Review'); await __genomeReport('Review', meta.name)
+phase('Review')
 
 const reviewResult = await agent(`You are the KEET Explanation Reviewer (Section III-D).
 Your job is to cross-check the final performance explanation against the
@@ -625,7 +634,12 @@ Then assess the overall explanation:
 - Is the explanation actionable for a developer?
 
 This review provides interpretability — readers can see which code-based
-predictions were validated by hardware measurements and which were not.`, {
+predictions were validated by hardware measurements and which were not.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Review","ts":"<ts>","status":"done","technique":"hypothesis_confirm_refute","speedup":null,"note":"<confirmed/refuted/inconclusive counts + overall quality, one line>"}`, {
   label: 'explanation-review',
   phase: 'Review',
   schema: {

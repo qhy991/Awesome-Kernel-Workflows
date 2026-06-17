@@ -14,21 +14,10 @@ export const meta = {
   ],
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 // --- BEGIN inlined arg_guard (Workflow runtime parses scripts as bare scripts,
 //                              not ES modules; static imports are rejected) ---
@@ -179,6 +168,7 @@ const OP_DESC           = args.op_description || ''
 const HANDOFF           = args.handoff_context || ''
 const WORKLOAD_AXES     = args.workload_axes || ''
 const MAX_PROPOSALS     = Math.max(1, parseInt(args.max_proposals_per_iter || 1, 10))
+const EXPDIR            = args.exp_dir || '.'
 const BACKUP_PATH       = args.backup_dir
   ? `${args.backup_dir}/in_place_patch.bak`
   : `${KERNEL_PATH}.in_place_patch.bak`
@@ -257,7 +247,7 @@ const BENCH_SCHEMA = withGroundingFields({
 // Phase 0: Snapshot the original kernel so we can always revert
 // =============================================================================
 
-phase('Snapshot'); await __genomeReport('Snapshot', meta.name)
+phase('Snapshot')
 log(`Kernel: ${KERNEL_PATH}`)
 log(`Backup will live at: ${BACKUP_PATH}`)
 
@@ -267,6 +257,7 @@ const snapshotAgent = await agent(
     `Then report whether the backup file now exists and is non-empty.`,
     `Do NOT modify ${KERNEL_PATH} yet.`,
     GROUNDING_INSTRUCTION,
+    `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXPDIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append:\n{"workflow":"${meta.name}","phase":"Snapshot","ts":"<ts>","status":"done","technique":"backup_original_kernel","note":"<backup path + whether backup is non-empty>"}`,
   ].join('\n\n'),
   {
     phase: 'Snapshot',
@@ -335,6 +326,7 @@ async function benchCurrent(label) {
       `Set aggregate_strategy to a short description (e.g. "geomean of 4 kv points").`,
       WORKLOAD_AXES ? `Workload axes hint: ${WORKLOAD_AXES}` : '',
       GROUNDING_INSTRUCTION,
+      `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXPDIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append, using the value you just measured (status="done" if a latency was parsed, else "error"):\n{"workflow":"${meta.name}","phase":"Bench","ts":"<ts>","status":"<done|error>","candidate_id":"${label}","speedup":null,"technique":"benchmark_measurement","note":"<aggregate_latency + unit + aggregate_strategy, or the parse failure reason>"}`,
     ].filter(Boolean).join('\n\n'),
     { phase: 'Bench', label: `bench:${label}`, schema: BENCH_SCHEMA }
   )
@@ -361,7 +353,7 @@ async function revertToBackup(reason) {
 // Phase 1: Baseline measurement (UNMODIFIED kernel)
 // =============================================================================
 
-phase('Baseline'); await __genomeReport('Baseline', meta.name)
+phase('Baseline')
 const baseBuild = await buildCurrent('baseline')
 if (baseBuild.state !== 'grounded' || !baseBuild.value.ok) {
   return {
@@ -433,6 +425,7 @@ for (let iter = 1; iter <= MAX_ITER; ++iter) {
     `Avoid strategies already in the "Prior attempts" list above.`,
     `If you cannot find a productive change, return applied=false with the reason in summary.`,
     GROUNDING_INSTRUCTION,
+    `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXPDIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append (this is optimization iteration ${iter}):\n{"workflow":"${meta.name}","phase":"Propose","ts":"<ts>","status":"done","candidate_id":"iter-${iter}","technique":"<the focused change you applied, or none if applied=false>","speedup":null,"note":"<one-line diff summary of the Edit, or why no change>"}`,
   ].filter(Boolean).join('\n\n')
 
   const propResult = await agent(proposeContext, {
@@ -543,7 +536,7 @@ for (let iter = 1; iter <= MAX_ITER; ++iter) {
 // Final report
 // =============================================================================
 
-phase('Report'); await __genomeReport('Report', meta.name)
+phase('Report')
 
 // Read the (winning) kernel file back so the caller can persist it as best-kernel.
 const finalRead = await agent(

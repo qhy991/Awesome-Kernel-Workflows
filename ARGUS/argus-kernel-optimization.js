@@ -12,21 +12,10 @@ export const meta = {
   ],
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 // --- BEGIN embedded-eval substrate (auto-inlined by scripts/patch-embedded-eval.js) ---
 const EMBEDDING_CONTRACT = [
@@ -283,7 +272,7 @@ const KNOWLEDGE_BASE = {
 // =============================================================================
 // Phase 1: Setup — Read kernel, hardware specs, initialize
 // =============================================================================
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup')
 
 if (INPUT_MODE === 'generate_then_optimize') {
   const generated = await agent(`No kernel_path was provided. Generate and verify an initial kernel before starting ARGUS ICRL optimization.
@@ -348,7 +337,12 @@ const setupResult = await agent(`You are a GPU kernel optimization expert. Read 
    - Arithmetic intensity requirements (ops/byte for compute-bound)
    - Memory bandwidth and latency characteristics
 
-Return the kernel analysis.`, {
+Return the kernel analysis.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"kernel_analysis","note":"<computation type + current opt level + top missing optimizations, one line>"}`, {
   label: 'read-kernel',
   phase: 'Setup',
   schema: {
@@ -420,7 +414,7 @@ for (let outerIter = 0; outerIter < ITERATIONS; outerIter++) {
   // ===========================================================================
   // Phase 2: Plan — ICRL planner proposes optimizations + invariants
   // ===========================================================================
-  phase('Plan'); await __genomeReport('Plan', meta.name)
+  phase('Plan')
 
   const recentHistory = optimizationHistory.slice(-10)
   const recentViolations = invariantViolationLog.slice(-5)
@@ -472,7 +466,12 @@ Generate a RANKED list of 3-5 optimization proposals. For each:
 Rank proposals by expected impact. Prefer optimizations that:
 - Address the LARGEST remaining performance gap
 - Have clear invariants that can be verified
-- Build on already-successful optimizations in history`, {
+- Build on already-successful optimizations in history
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this is ICRL iteration ${outerIter}):
+{"workflow":"${meta.name}","phase":"Plan","ts":"<ts>","status":"done","candidate_id":"iter-${outerIter}","technique":"<top-ranked proposal optimization>","note":"<how many proposals + the largest performance gap targeted>"}`, {
     label: `plan-${outerIter}`,
     phase: 'Plan',
     schema: {
@@ -505,7 +504,7 @@ Rank proposals by expected impact. Prefer optimizations that:
   // ===========================================================================
   // Phase 3: Select — Sample from proposals, resolve dependencies
   // ===========================================================================
-  phase('Select'); await __genomeReport('Select', meta.name)
+  phase('Select')
 
   const selectResult = await agent(`You are the ARGUS Optimization Selector (Section 6).
 The planner produced a ranked list of proposals. Your job is to select and sequence
@@ -526,7 +525,12 @@ ${proposals.map((p, i) => `${i + 1}. [${p.category}] ${p.optimization} (confiden
 5. If a global intrusive change is selected, it typically must come before
    local source changes that depend on its data layout
 
-Return the selected optimization plan.`, {
+Return the selected optimization plan.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this is ICRL iteration ${outerIter}):
+{"workflow":"${meta.name}","phase":"Select","ts":"<ts>","status":"done","candidate_id":"iter-${outerIter}","technique":"<the ordered optimization sequence you selected>","note":"<exploration vs top-rank choice + dependency resolution, one line>"}`, {
     label: `select-${outerIter}`,
     phase: 'Select',
     schema: {
@@ -558,7 +562,7 @@ Return the selected optimization plan.`, {
   // ===========================================================================
   // Phase 4: Lower — Implement transformations with invariants
   // ===========================================================================
-  phase('Lower'); await __genomeReport('Lower', meta.name)
+  phase('Lower')
 
   let currentCode = bestKernelCode
   const loweringResults = []
@@ -605,7 +609,12 @@ signature EXACTLY (entry-point shape, template params, launch-bounds). Emit a
 COMPLETE dispatch-compatible .cuh (NOT a standalone translation unit, NO main(),
 no standalone harness). transformed_code must be the full .cuh file contents.` : ''}
 
-Return the transformed kernel code with invariants.`, {
+Return the transformed kernel code with invariants.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (ICRL iteration ${outerIter}, lowering step ${stepIdx}):
+{"workflow":"${meta.name}","phase":"Lower","ts":"<ts>","status":"done","candidate_id":"iter-${outerIter}-step-${stepIdx}","technique":"${step.optimization}","note":"<what tag functions/assertions you added + any potential issues, one line>"}`, {
       label: `lower-${outerIter}-step${stepIdx}`,
       phase: 'Lower',
       schema: {
@@ -635,7 +644,7 @@ Return the transformed kernel code with invariants.`, {
   // ===========================================================================
   // Phase 5: Validate — Invariant checking + tests + profiling
   // ===========================================================================
-  phase('Validate'); await __genomeReport('Validate', meta.name)
+  phase('Validate')
 
   // Embedded mode: write the candidate to disk and build the ordered
   // register→build→test→benchmark→unregister plan against the project adapter.
@@ -757,7 +766,12 @@ Reward = f(correctness, invariant_satisfaction, performance)
 - If tests fail: zero reward
 - If correct + improved: positive reward proportional to speedup`}
 
-Return validation results.`, {
+Return validation results.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" if invariants satisfied AND tests passed, else "error"; speedup is the measured speedup number, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Validate","ts":"<ts>","status":"<done|error>","candidate_id":"iter-${outerIter}","speedup":<number or null>,"technique":"<technique under test>","note":"<throughput TFLOPS; invariants satisfied? tests pass? reward; or the failure/counterexample>"}`, {
     label: `validate-${outerIter}`,
     phase: 'Validate',
     schema: {
@@ -813,7 +827,7 @@ Return validation results.`, {
   // ===========================================================================
   // Phase 6: Learn — ICRL policy update via text gradients
   // ===========================================================================
-  phase('Learn'); await __genomeReport('Learn', meta.name)
+  phase('Learn')
 
   const learnResult = await agent(`You are performing the ICRL policy update for the ARGUS planner (Algorithm 1, Section 6).
 
@@ -842,7 +856,12 @@ Key insights from ARGUS ICRL:
 - Learn ordering dependencies (e.g., bank conflict mitigation before pipelining)
 - Bind knowledge base entries to this specific kernel instance
 
-Produce the updated planner policy — this will guide the next iteration's proposals.`, {
+Produce the updated planner policy — this will guide the next iteration's proposals.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this is ICRL iteration ${outerIter}):
+{"workflow":"${meta.name}","phase":"Learn","ts":"<ts>","status":"done","candidate_id":"iter-${outerIter}","technique":"icrl_policy_update","note":"<key learnings + effective optimizations + next priority, one line>"}`, {
     label: `learn-${outerIter}`,
     phase: 'Learn',
     schema: {

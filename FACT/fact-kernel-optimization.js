@@ -13,21 +13,10 @@ export const meta = {
   ],
 };
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 // --- BEGIN embedded-eval substrate (auto-inlined by scripts/patch-embedded-eval.js) ---
 const EMBEDDING_CONTRACT = [
@@ -172,7 +161,7 @@ async function main() {
   // ============================================================================
   // Phase 1: Setup
   // ============================================================================
-  phase('Setup'); await __genomeReport('Setup', meta.name);
+  phase('Setup');
 
   const setupResult = await agent(
     `Set up FACT compositional synthesis environment:
@@ -213,7 +202,12 @@ Return JSON:
   "discovery_depth": <int>,
   "composition_budget": <int>,
   "baseline_gflops": <float or null>
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"cutlass_workspace_setup","note":"<target operation + architecture + exemplar count, one line>"}`,
     {
       label: 'Setup FACT',
       phase: 'Setup',
@@ -257,7 +251,7 @@ Return JSON:
   // ============================================================================
   // Phase 2: Pattern Discovery
   // ============================================================================
-  phase('Pattern Discovery'); await __genomeReport('Pattern Discovery', meta.name);
+  phase('Pattern Discovery');
 
   log(`Discovering optimization patterns from ${setupResult.exemplar_kernels.length} exemplars...`);
 
@@ -304,7 +298,12 @@ Return JSON:
     ...
   ],
   "discovery_summary": "summary of discovered patterns"
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Pattern Discovery","ts":"<ts>","status":"done","technique":"pattern_discovery","note":"<how many patterns discovered + dominant pattern types, one line>"}`,
     {
       label: 'Discover patterns',
       phase: 'Pattern Discovery',
@@ -351,7 +350,7 @@ Return JSON:
   // ============================================================================
   // Phase 3: Pattern Realization
   // ============================================================================
-  phase('Pattern Realization'); await __genomeReport('Pattern Realization', meta.name);
+  phase('Pattern Realization');
 
   log('Realizing patterns as CUTLASS code transformations...');
 
@@ -400,7 +399,12 @@ Return JSON:
   ],
   "realization_summary": "summary of realization process",
   "dependency_graph": "description of pattern dependencies"
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Pattern Realization","ts":"<ts>","status":"done","technique":"pattern_realization","note":"<how many patterns realized as code transformations + key dependencies, one line>"}`,
     {
       label: 'Realize patterns',
       phase: 'Pattern Realization',
@@ -442,7 +446,7 @@ Return JSON:
   // ============================================================================
   // Phase 4: Pattern Composition
   // ============================================================================
-  phase('Pattern Composition'); await __genomeReport('Pattern Composition', meta.name);
+  phase('Pattern Composition');
 
   log(`Composing patterns to generate optimized kernels (budget: ${compositionBudget})...`);
 
@@ -499,7 +503,12 @@ Return JSON:
     ...
   ],
   "composition_summary": "summary of composition process"
-}${compositionEmbeddingBlock}`,
+}${compositionEmbeddingBlock}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Pattern Composition","ts":"<ts>","status":"done","technique":"<composition strategy, e.g. greedy|dependency-aware|search-based>","note":"<how many kernel candidates composed + patterns most frequently applied, one line>"}`,
     {
       label: 'Compose patterns',
       phase: 'Pattern Composition',
@@ -541,7 +550,7 @@ Return JSON:
   // ============================================================================
   // Phase 5: Ablation Studies
   // ============================================================================
-  phase('Ablation'); await __genomeReport('Ablation', meta.name);
+  phase('Ablation');
 
   log('Running ablation studies to validate pattern contributions...');
 
@@ -582,7 +591,12 @@ Return JSON:
   ],
   "critical_patterns": ["pattern_id1", "pattern_id2", ...],
   "ablation_summary": "summary of ablation findings"
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (status="done" if ablation completed, else "error"):
+{"workflow":"${meta.name}","phase":"Ablation","ts":"<ts>","status":"<done|error>","technique":"leave_one_out_ablation","note":"<critical vs marginal patterns identified, one line>"}`,
     {
       label: 'Ablation studies',
       phase: 'Ablation',
@@ -618,7 +632,7 @@ Return JSON:
   // ============================================================================
   // Phase 6: Evaluation
   // ============================================================================
-  phase('Evaluation'); await __genomeReport('Evaluation', meta.name);
+  phase('Evaluation');
 
   log('Evaluating composed kernels on target hardware...');
 
@@ -702,7 +716,12 @@ Return JSON:
     "applied_patterns": ["pattern1", "pattern2", ...]
   },
   "evaluation_summary": "summary of evaluation"
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" if the best kernel compiled and passed correctness, else "error"; speedup is best_kernel.speedup_vs_baseline, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Evaluation","ts":"<ts>","status":"<done|error>","candidate_id":"<best_kernel.kernel_id>","speedup":<number or null>,"technique":"<patterns applied in best kernel>","note":"<best GFLOPS + how many kernels evaluated; or the failure reason>"}`,
     {
       label: 'Evaluate kernels',
       phase: 'Evaluation',
@@ -742,7 +761,7 @@ Return JSON:
   // ============================================================================
   // Phase 7: Report
   // ============================================================================
-  phase('Report'); await __genomeReport('Report', meta.name);
+  phase('Report');
 
   const report = await agent(
     `Generate FACT compositional synthesis report:
@@ -777,7 +796,12 @@ Return JSON:
   "speedup": ${evaluationResult.best_kernel.speedup_vs_baseline},
   "critical_patterns": ${JSON.stringify(ablationResult?.critical_patterns || [])},
   "report_path": "path/to/report.md"
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (speedup is the best speedup vs baseline, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"done","speedup":<number or null>,"technique":"compositional_pattern_synthesis","note":"<one-line headline: best GFLOPS + critical patterns>"}`,
     {
       label: 'Generate report',
       phase: 'Report',

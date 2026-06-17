@@ -14,21 +14,10 @@ export const meta = {
   ],
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda'],
@@ -335,7 +324,7 @@ function dbSummaryForPrompt(db) {
 // =============================================================================
 // Phase 1: Setup — read kernel + driver, load/seed DB, NCU-profile baseline
 // =============================================================================
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup')
 
 if (INPUT_MODE === 'generate_then_optimize') {
   const generated = await agent(`No kernel_path was provided. Generate and verify an initial CUDA kernel before starting KernelBlaster.
@@ -389,7 +378,12 @@ Analyze the kernel and return JSON with:
 - driver_summary: how the driver builds/runs/validates the kernel (if a driver path was given)
 - loaded_db: parsed JSON of the persistent optimization database if it exists and is valid, else null
 
-Return ONLY the JSON object.`, {
+Return ONLY the JSON object.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"baseline_analysis","speedup":null,"note":"<op_type + kernels + whether persistent DB was loaded, one line>"}`, {
   label: 'read-baseline',
   phase: 'Setup',
   schema: {
@@ -489,7 +483,7 @@ for (let iter = 0; iter < RL_ITERATIONS; iter++) {
     // -------------------------------------------------------------------------
     // Phase 2: ProfileState — profile current kernel, classify hardware state
     // -------------------------------------------------------------------------
-    phase('ProfileState'); await __genomeReport('ProfileState', meta.name)
+    phase('ProfileState')
 
     const stateResult = await agent(`You are a CUDA performance-state classifier (KernelBlaster MAIC-RL). Profile the current kernel and classify it into EXACTLY ONE hardware performance state.
 
@@ -511,7 +505,12 @@ ${ncuBaseline.profile_summary}
 - latency_occupancy_limited: neither mem nor compute saturated / low occupancy / sync or latency stalls
 
 Re-profile only if ncu_binary and run_cmd were provided; otherwise reason from the metrics above and the code, and mark missing profiler evidence explicitly.
-Return the classification.`, {
+Return the classification.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (rollout ${iter}, step ${step}):
+{"workflow":"${meta.name}","phase":"ProfileState","ts":"<ts>","status":"done","candidate_id":"r${iter}-s${step}","technique":"<the classified state_name>","speedup":null,"note":"<primary_bottleneck + the evidence in one line>"}`, {
       label: `state-${iter}-${step}`,
       phase: 'ProfileState',
       schema: {
@@ -532,7 +531,7 @@ Return the classification.`, {
     // -------------------------------------------------------------------------
     // Phase 3: Retrieve — rank candidate optimizations for the matched state
     // -------------------------------------------------------------------------
-    phase('Retrieve'); await __genomeReport('Retrieve', meta.name)
+    phase('Retrieve')
 
     const ranked = rankOptimizations(optDb.optimization_strategies[currentState])
       .filter((o) => !usedThisRollout.has(o.technique))
@@ -546,7 +545,7 @@ Return the classification.`, {
     // -------------------------------------------------------------------------
     // Phase 4: Plan — LLM specializes one strategy, citing DB + NCU evidence
     // -------------------------------------------------------------------------
-    phase('Plan'); await __genomeReport('Plan', meta.name)
+    phase('Plan')
 
     const plans = await parallel(
       candidates.map((cand) => () =>
@@ -573,7 +572,12 @@ Produce a plan that:
 1. Names the exact code region + transformation for "${cand.technique}"
 2. Cites the state evidence that justifies it
 3. Predicts a speedup (predicted_improvement %) grounded in the metric you target
-4. Keeps the kernel functionally correct (same outputs as baseline)`, {
+4. Keeps the kernel functionally correct (same outputs as baseline)
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (rollout ${iter}, step ${step}):
+{"workflow":"${meta.name}","phase":"Plan","ts":"<ts>","status":"done","candidate_id":"r${iter}-s${step}-${cand.technique}","technique":"${cand.technique}","speedup":null,"note":"<the code region + transformation planned and the predicted_improvement, one line>"}`, {
           label: `plan-${iter}-${step}-${cand.technique.substring(0, 12)}`,
           phase: 'Plan',
           schema: {
@@ -598,7 +602,7 @@ Produce a plan that:
     // -------------------------------------------------------------------------
     // Phase 5: Execute — implement the selected plan(s)
     // -------------------------------------------------------------------------
-    phase('Execute'); await __genomeReport('Execute', meta.name)
+    phase('Execute')
 
     const impls = await parallel(
       validPlans.map((plan) => () =>
@@ -620,7 +624,12 @@ Requirements:
 4. Keep the kernel signature compatible with the driver harness.
 5. Compile-able with -lineinfo on ${GPU_TYPE}.
 
-Return the complete CUDA code.`, {
+Return the complete CUDA code.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (rollout ${iter}, step ${step}):
+{"workflow":"${meta.name}","phase":"Execute","ts":"<ts>","status":"done","candidate_id":"r${iter}-s${step}-${plan.technique}","technique":"${plan.technique}","speedup":null,"note":"<what changed in the kernel to apply this strategy, one line>"}`, {
           label: `impl-${iter}-${step}-${plan.technique.substring(0, 12)}`,
           phase: 'Execute',
           schema: {
@@ -647,7 +656,7 @@ Return the complete CUDA code.`, {
     // -------------------------------------------------------------------------
     // Phase 6: Evaluate — compile, correctness-check, re-profile (Elapsed Cycles)
     // -------------------------------------------------------------------------
-    phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
+    phase('Evaluate')
 
     const evals = await parallel(
       variants.map((v) => () =>
@@ -670,7 +679,12 @@ Steps:
 4. Re-profile to get Elapsed Cycles only when ncu_binary plus run_cmd are provided; otherwise use test_command/benchmark_command if present and mark NCU cycles as missing evidence.
 5. speedup = baseline_cycles / new_cycles; improvement% = (baseline-new)/baseline*100.
 
-Return the evaluation.`, {
+Return the evaluation.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" if correct AND compilable, else "error"; speedup is the measured number, or null if no profiler/test evidence was available):
+{"workflow":"${meta.name}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"r${iter}-s${step}-${v.technique}","technique":"${v.technique}","speedup":<number or null>,"note":"<compiled? correct? elapsed_cycles + improvement_pct; or the failure reason>"}`, {
           label: `eval-${iter}-${step}-${v.technique.substring(0, 12)}`,
           phase: 'Evaluate',
           schema: {
@@ -703,7 +717,7 @@ Return the evaluation.`, {
     // -------------------------------------------------------------------------
     // Phase 7: Reward — compute RL reward, update DB stats, extend trajectory
     // -------------------------------------------------------------------------
-    phase('Reward'); await __genomeReport('Reward', meta.name)
+    phase('Reward')
 
     if (!bestStep) {
       // All variants failed correctness/compile: penalize the attempted techniques.
@@ -764,7 +778,7 @@ Return the evaluation.`, {
   // ---------------------------------------------------------------------------
   // Phase 8: Iterate — periodic policy-update cycle over the replay buffer
   // ---------------------------------------------------------------------------
-  phase('Iterate'); await __genomeReport('Iterate', meta.name)
+  phase('Iterate')
 
   if (totalTrajectories % UPDATE_FREQUENCY === 0 && replayBuffer.length >= 2) {
     const perfData = []
@@ -787,7 +801,12 @@ Identify:
 2. Which (state, technique) pairs reliably improve performance.
 3. Recommended confidence adjustments (technique -> +/- delta in [-0.3, 0.3]).
 
-Return structured recommendations.`, {
+Return structured recommendations.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (after rollout ${iter}):
+{"workflow":"${meta.name}","phase":"Iterate","ts":"<ts>","status":"done","candidate_id":"policy-update-${iter}","technique":"policy_update_cycle","speedup":null,"note":"<prediction-bias findings + how many confidence adjustments recommended, one line>"}`, {
       label: `policy-update-${iter}`,
       phase: 'Iterate',
       schema: {

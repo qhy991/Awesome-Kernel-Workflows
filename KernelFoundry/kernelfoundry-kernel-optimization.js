@@ -12,21 +12,10 @@ export const meta = {
   ],
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['sycl', 'cuda', 'triton'],
@@ -235,7 +224,7 @@ function computeFitness(compiled, correct, speedup) {
 // =============================================================================
 // Phase 1: Setup — Parse task, baseline, initialize archive
 // =============================================================================
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -281,7 +270,12 @@ ${TASK_SPEC ? `\`\`\`python\n${TASK_SPEC.substring(0, 3000)}\n\`\`\`` : '(Determ
    - What parallelism levels apply? (d_sync: 0-3)
 4. Initialize experiment: mkdir -p ${EXP_DIR}/{kernels,archive,prompts}
 
-Return operator analysis and baseline.`, {
+Return operator analysis and baseline.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"map_elites_setup","note":"<operator type + baseline ms + feasible behavioral cells, one line>"}`, {
   label: 'setup',
   phase: 'Setup',
   schema: {
@@ -312,7 +306,7 @@ for (generation = 0; generation < GENERATIONS; generation++) {
   // ===========================================================================
   // Phase 2: Select — Sample parent(s) from archive
   // ===========================================================================
-  phase('Select'); await __genomeReport('Select', meta.name)
+  phase('Select')
 
   // Gradient-informed selection (Section 3.3)
   const occupiedCells = Object.keys(archive)
@@ -356,7 +350,7 @@ for (generation = 0; generation < GENERATIONS; generation++) {
   // ===========================================================================
   // Phase 3: Vary — LLM generates offspring with meta-evolved prompts
   // ===========================================================================
-  phase('Vary'); await __genomeReport('Vary', meta.name)
+  phase('Vary')
 
   const parentContext = selectedParent
     ? `\n# Parent Kernel (from cell [${selectedParent.cell}], fitness=${selectedParent.fitness.toFixed(2)}, speedup=${selectedParent.speedup.toFixed(2)}x):\n\`\`\`${fenceToken()}\n${selectedParent.code.substring(0, 4000)}\n\`\`\``
@@ -400,7 +394,12 @@ ${gradientHints ? `# Gradient Hints (from evolutionary history):\n${gradientHint
 4. Try to explore a DIFFERENT optimization strategy than the parent (different memory pattern, algorithm, or parallelism level)
 5. You may optionally produce a TEMPLATED kernel with configurable parameters (tile_size, work_group_size, unroll_factor) alongside a dispatch function
 
-Return the kernel code and its optimization strategy description.`, {
+Return the kernel code and its optimization strategy description.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this is generation ${generation}):
+{"workflow":"${meta.name}","phase":"Vary","ts":"<ts>","status":"done","candidate_id":"gen${generation}","technique":"<the mutation/variation strategy you applied: memory pattern, algorithm, or parallelism change>","note":"<how this offspring differs from the parent>"}`, {
     label: `vary-${generation}`,
     phase: 'Vary',
     schema: {
@@ -423,7 +422,7 @@ Return the kernel code and its optimization strategy description.`, {
   // ===========================================================================
   // Phase 4: Evaluate — Compile + correctness + benchmark + classify
   // ===========================================================================
-  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
+  phase('Evaluate')
 
   const evalResult = await agent(`You are a kernel evaluator for KernelFoundry. Evaluate this ${langToken(LEGACY_LANG_TOKEN)} kernel.
 
@@ -465,7 +464,12 @@ ${BENCH_CMD ? `   Run: ${BENCH_CMD}` : `   Estimate speedup over baseline (${bas
 
    Use STATIC PATTERN MATCHING on the code (not runtime behavior).
 
-Return evaluation results.`, {
+Return evaluation results.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this is generation ${generation}; status="done" if it compiled AND was correct, else "error"; speedup is the measured speedup number, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"gen${generation}","speedup":<number or null>,"technique":"<behavioral cell d_mem,d_algo,d_sync you classified>","note":"<compiled? correct? speedup; or the failure reason>"}`, {
     label: `eval-${generation}`,
     phase: 'Evaluate',
     schema: {
@@ -528,7 +532,7 @@ Return evaluation results.`, {
   // ===========================================================================
   // Phase 5: Insert — Update archive if offspring improves its cell
   // ===========================================================================
-  phase('Insert'); await __genomeReport('Insert', meta.name)
+  phase('Insert')
 
   const existingElite = archive[cellKey]
   let outcome = 'neutral'
@@ -568,7 +572,7 @@ Return evaluation results.`, {
   // Phase 6: Evolve-Prompts — Meta-prompter updates evolvable sections
   // ===========================================================================
   if ((generation + 1) % META_PROMPT_INTERVAL === 0 && generation > 0) {
-    phase('Evolve-Prompts'); await __genomeReport('Evolve-Prompts', meta.name)
+    phase('Evolve-Prompts')
 
     const recentOutcomes = transitions.slice(-META_PROMPT_INTERVAL)
     const improvements = recentOutcomes.filter(t => t.outcome === 'improvement' || t.outcome === 'discovery')
@@ -604,7 +608,12 @@ ${Object.entries(archive).sort((a, b) => b[1].fitness - a[1].fitness).slice(0, 5
 3. Successful strategies should be REINFORCED; failed advice should be PRUNED
 4. Keep each section concise (2-4 sentences)
 
-Return updated prompt sections.`, {
+Return updated prompt sections.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this meta-evolution ran at generation ${generation}):
+{"workflow":"${meta.name}","phase":"Evolve-Prompts","ts":"<ts>","status":"done","candidate_id":"gen${generation}","technique":"meta_prompt_evolution","note":"<which evolvable sections changed and why, one line>"}`, {
       label: `meta-prompt-${generation}`,
       phase: 'Evolve-Prompts',
       schema: {
@@ -636,7 +645,7 @@ Return updated prompt sections.`, {
 // =============================================================================
 // Final Report
 // =============================================================================
-phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
+phase('Evaluate')
 
 const finalReport = await agent(`Write a concise technical report on KernelFoundry MAP-Elites optimization.
 
@@ -668,7 +677,12 @@ Write:
 1. Quality-diversity analysis: how well did the archive cover the behavioral space?
 2. Meta-prompt evolution: how did the guidance change and what impact did it have?
 3. Most effective optimization strategies discovered
-4. Hardware awareness: evidence of hardware-specific optimizations`, {
+4. Hardware awareness: evidence of hardware-specific optimizations
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (final report; speedup is the best speedup found, or null if none):
+{"workflow":"${meta.name}","phase":"Evaluate","ts":"<ts>","status":"done","candidate_id":"final","speedup":<number or null>,"technique":"<best cell strategy>","note":"<archive coverage + best speedup + most effective strategy, one line>"}`, {
   label: 'final-report',
   phase: 'Evaluate',
 })

@@ -13,21 +13,10 @@ export const meta = {
   ],
 }
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda', 'triton'],
@@ -273,7 +262,7 @@ function graphStats() {
 // =============================================================================
 // Phase 1: Setup
 // =============================================================================
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -349,7 +338,12 @@ const setupResult = await agent(`Read the CUDA optimization task and evaluator c
 4. State the required evaluator JSON contract. Evaluation evidence must come from benchmark_command; if it is missing, mark evidence as unavailable.
 5. Identify CUDA optimization dimensions relevant to this task.
 
-Return structured setup data.`, {
+Return structured setup data.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"task_setup","speedup":null,"note":"<operation type + key optimization dimensions + whether baseline evidence is available, one line>"}`, {
   label: 'setup-task',
   phase: 'Setup',
   schema: {
@@ -375,7 +369,7 @@ baselineMetric = setupResult.baseline_metric || 1.0
 // =============================================================================
 // Phase 2: BuildGraph
 // =============================================================================
-phase('BuildGraph'); await __genomeReport('BuildGraph', meta.name)
+phase('BuildGraph')
 
 const graphResult = await agent(`Build or refresh a CUDA Reasoning Graph for ReGraphT.
 
@@ -405,7 +399,12 @@ ${sourceCode.substring(0, 5000)}
 4. Include v_init as the start node.
 5. For each edge, include a prior score and one or more example snippets when available.
 
-Return a graph suitable for Monte Carlo Graph Search.`, {
+Return a graph suitable for Monte Carlo Graph Search.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"BuildGraph","ts":"<ts>","status":"done","technique":"reasoning_graph_construction","speedup":null,"note":"<node count + edge count + how built (loaded graph_path / extracted from trace corpus / synthesized seed), one line>"}`, {
   label: 'build-regraph',
   phase: 'BuildGraph',
   schema: {
@@ -460,7 +459,7 @@ if (USE_DRIVER) {
 for (let attempt = 0; attempt < BUDGET; attempt++) {
   log(`\n=== ReGraphT attempt ${attempt + 1}/${BUDGET} | best=${bestCandidate?.eval?.speedup || 0}x | graph=${graph.nodes.length} nodes/${graph.edges.length} edges ===`)
 
-  phase('Select'); await __genomeReport('Select', meta.name)
+  phase('Select')
 
   const selection = await agent(`Select a promising CUDA optimization path with Monte Carlo Graph Search.
 
@@ -482,7 +481,12 @@ ${JSON.stringify(graph, null, 2).substring(0, 10000)}
 ${JSON.stringify(evaluatedCandidates.slice(-8), null, 2).substring(0, 8000)}
 \`\`\`
 
-Return the selected method path and the examples that should condition generation.`, {
+Return the selected method path and the examples that should condition generation.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this is MCGS attempt ${attempt}):
+{"workflow":"${meta.name}","phase":"Select","ts":"<ts>","status":"done","candidate_id":"attempt_${attempt}","technique":"mcgs_path_selection","speedup":null,"note":"<selected method sequence + selection rationale, one line>"}`, {
     label: `select-${attempt}`,
     phase: 'Select',
     schema: {
@@ -500,7 +504,7 @@ Return the selected method path and the examples that should condition generatio
 
   selectedPaths.push(selection)
 
-  phase('Generate'); await __genomeReport('Generate', meta.name)
+  phase('Generate')
 
   const generation = await agent(`Generate a CUDA optimization candidate using the selected ReGraphT path.
 
@@ -533,7 +537,12 @@ ${setupResult.evaluator_contract}
 4. If a selected method is unsuitable, explain why and apply the next suitable method in the path.
 5. Do not claim speedup without evaluator evidence.
 
-Return candidate code and suitability decisions for each method.`, {
+Return candidate code and suitability decisions for each method.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this is MCGS attempt ${attempt}):
+{"workflow":"${meta.name}","phase":"Generate","ts":"<ts>","status":"done","candidate_id":"attempt_${attempt}","technique":"<the main optimization method actually applied this candidate>","speedup":null,"note":"<applied vs skipped methods + what changed in the code>"}`, {
     label: `generate-${attempt}`,
     phase: 'Generate',
     schema: {
@@ -549,7 +558,7 @@ Return candidate code and suitability decisions for each method.`, {
     },
   })
 
-  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
+  phase('Evaluate')
 
   const evaluation = await agent(`Evaluate the generated CUDA candidate with real evidence.
 
@@ -571,7 +580,12 @@ Use ${EXP_DIR}/regrapht_attempt_${attempt}.cu as {kernel_path}.
 3. Parse evaluator JSON. If no command is provided, mark correct=false and explain missing evidence.
 4. Correctness and speedup must be based on evaluator output only.
 
-Return evaluator evidence.`, {
+Return evaluator evidence.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the values you just measured (status="done" if correctness passed, else "error"; speedup is the measured speedup number, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"attempt_${attempt}","speedup":<number or null>,"technique":"<methods under test>","note":"<compiled? correct? measured kernel/baseline ms; or the failure reason>"}`, {
     label: `evaluate-${attempt}`,
     phase: 'Evaluate',
     schema: {
@@ -641,7 +655,7 @@ Return evaluator evidence.`, {
     bestCandidate = measuredBest
   }
 
-  phase('UpdateGraph'); await __genomeReport('UpdateGraph', meta.name)
+  phase('UpdateGraph')
 
   const update = await agent(`Update the CUDA Reasoning Graph from measured evaluator feedback.
 
@@ -671,7 +685,12 @@ ${JSON.stringify(graph, null, 2).substring(0, 10000)}
 5. Add 1-3 follow-up edges from the best promising node when evidence suggests a next method.
 6. If graph_path is provided, write the updated graph there.
 
-Return the updated graph and update summary.`, {
+Return the updated graph and update summary.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (this is MCGS attempt ${attempt}):
+{"workflow":"${meta.name}","phase":"UpdateGraph","ts":"<ts>","status":"done","candidate_id":"attempt_${attempt}","technique":"reward_backprop","speedup":null,"note":"<reward applied + added/relabeled nodes/edges, one line>"}`, {
     label: `update-graph-${attempt}`,
     phase: 'UpdateGraph',
     schema: {
@@ -696,7 +715,7 @@ Return the updated graph and update summary.`, {
 // =============================================================================
 // Phase 7: Report
 // =============================================================================
-phase('Report'); await __genomeReport('Report', meta.name)
+phase('Report')
 
 const finalGraphStats = graphStats()
 const finalReport = await agent(`Write a concise technical report for this ReGraphT optimization run.
@@ -738,7 +757,12 @@ Cover:
 1. Which reasoning-graph methods were most useful.
 2. Which methods were unsuitable or failed, based on evaluator evidence.
 3. Whether the best candidate is trustworthy.
-4. Which open graph paths should be tried next.`, {
+4. Which open graph paths should be tried next.
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append, using the best measured candidate (speedup is the best measured speedup number, or null if no correct candidate):
+{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"done","technique":"final_report","speedup":<number or null>,"note":"<best candidate id + most useful reasoning-graph methods + whether result is trustworthy>"}`, {
   label: 'final-report',
   phase: 'Report',
 })

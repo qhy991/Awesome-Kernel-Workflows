@@ -23,21 +23,10 @@ export const meta = {
   ],
 };
 
-// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
-// Self-reported, work-plane (forgeable) stage trace for observability + the
-// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
-async function __genomeReport(phaseName, wfName) {
-  try {
-    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
-      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
-      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
-      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
-      { label: 'genome:' + phaseName, phase: phaseName }
-    )
-  } catch (__e) { /* observability must never break the workflow */ }
-}
-// --- END genome-report ---
+// --- genome self-report: INLINE (rich, doer-written) ---
+// Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
+// action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
+// treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 // --- BEGIN embedded-eval substrate (auto-inlined by scripts/patch-embedded-eval.js) ---
 const EMBEDDING_CONTRACT = [
@@ -310,7 +299,7 @@ async function main() {
   // ============================================================================
   // Phase 1: Setup
   // ============================================================================
-  phase('Setup'); await __genomeReport('Setup', meta.name);
+  phase('Setup');
 
   const setupResult = await agent(
     `Set up GPU Forecasters optimization environment:
@@ -349,7 +338,12 @@ Return JSON:
   "baseline_perf": <float>,
   "backend": "modal|local",
   "target_gpu": "A100|H100|V100|..."
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"forecaster_search_setup","speedup":null,"note":"<kernel name + search space size + forecaster models + baseline_perf, one line>"}`,
     {
       label: 'Setup GPUForecasters',
       phase: 'Setup',
@@ -399,7 +393,7 @@ Return JSON:
   // ============================================================================
   // Phase 2: Train Forecasters
   // ============================================================================
-  phase('Train Forecasters'); await __genomeReport('Train Forecasters', meta.name);
+  phase('Train Forecasters');
 
   log(`Training surrogate models with budget ${trainingBudget} evaluations...`);
 
@@ -464,7 +458,12 @@ Return JSON:
   ],
   "best_training_speedup": <float>,
   "best_training_config": "config description"
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (best_training_speedup is a measured speedup from training evaluations, or null if no measured evidence):
+{"workflow":"${meta.name}","phase":"Train Forecasters","ts":"<ts>","status":"done","technique":"surrogate_forecaster_training","speedup":<number or null>,"note":"<#training samples + #models trained + best val MAE + best training config>"}`,
     {
       label: 'Train forecasters',
       phase: 'Train Forecasters',
@@ -515,7 +514,7 @@ Return JSON:
   // ============================================================================
   // Phase 3: Calibration
   // ============================================================================
-  phase('Calibration'); await __genomeReport('Calibration', meta.name);
+  phase('Calibration');
 
   log('Calibrating abstention thresholds...');
 
@@ -554,7 +553,12 @@ Return JSON:
   "ensemble_mae": <float>,
   "ensemble_abstention_rate": <float>,
   "ensemble_coverage": <float>
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append:
+{"workflow":"${meta.name}","phase":"Calibration","ts":"<ts>","status":"done","technique":"abstention_threshold_calibration","speedup":null,"note":"<ensemble strategy + ensemble MAE + ensemble coverage + abstention rate>"}`,
     {
       label: 'Calibrate forecasters',
       phase: 'Calibration',
@@ -595,7 +599,7 @@ Return JSON:
   // ============================================================================
   // Phase 4: PUCT Search
   // ============================================================================
-  phase('PUCT Search'); await __genomeReport('PUCT Search', meta.name);
+  phase('PUCT Search');
 
   log(`Running PUCT tree search with ${puctSimulations} simulations...`);
 
@@ -659,7 +663,12 @@ Return JSON:
     {"step": <int>, "speedup": <float>, "executed": true/false},
     ...
   ]
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (candidate_id is the best config found; best_speedup is the measured speedup of that config, or null if not measured):
+{"workflow":"${meta.name}","phase":"PUCT Search","ts":"<ts>","status":"done","candidate_id":"<best config description>","technique":"puct_tree_search","speedup":<number or null>,"note":"<total GPU executions + executions saved by abstention + nodes explored + best config>"}`,
     {
       label: 'PUCT search',
       phase: 'PUCT Search',
@@ -709,7 +718,7 @@ Return JSON:
   // ============================================================================
   // Phase 5: Refinement
   // ============================================================================
-  phase('Refinement'); await __genomeReport('Refinement', meta.name);
+  phase('Refinement');
 
   log('Refining top candidates with local search...');
 
@@ -746,7 +755,12 @@ Return JSON:
   "best_refined_speedup": <float>,
   "improvement_over_puct": <float>,
   "ablation_insights": "brief insights"
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (candidate_id is the best refined config; best_refined_speedup is the measured speedup, or null if not measured):
+{"workflow":"${meta.name}","phase":"Refinement","ts":"<ts>","status":"done","candidate_id":"<best refined config description>","technique":"local_search_refinement","speedup":<number or null>,"note":"<#refinement candidates + #executions + improvement over PUCT + ablation insight>"}`,
     {
       label: 'Refine candidates',
       phase: 'Refinement',
@@ -781,7 +795,7 @@ Return JSON:
   // ============================================================================
   // Phase 6: Validation
   // ============================================================================
-  phase('Validation'); await __genomeReport('Validation', meta.name);
+  phase('Validation');
 
   log('Validating best configuration...');
 
@@ -830,7 +844,12 @@ Return JSON:
     "compute_throughput_pct": <float>
   },
   "validation_passed": true/false
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (status="done" if correctness passed AND validation passed, else "error"; speedup is the measured mean_speedup number, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Validation","ts":"<ts>","status":"<done|error>","candidate_id":"<validated config>","technique":"target_hardware_validation","speedup":<number or null>,"note":"<mean +/- std speedup + correctness pass/fail + validation pass/fail; or the failure reason>"}`,
     {
       label: 'Validate best config',
       phase: 'Validation',
@@ -873,7 +892,7 @@ Return JSON:
   // ============================================================================
   // Phase 7: Report
   // ============================================================================
-  phase('Report'); await __genomeReport('Report', meta.name);
+  phase('Report');
 
   const report = await agent(
     `Generate GPU Forecasters optimization report:
@@ -914,7 +933,12 @@ Return JSON:
   "executions_saved": ${puctResult.abstention_saved_executions},
   "search_efficiency": <float>,
   "report_path": "path/to/report.md"
-}`,
+}
+
+# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
+Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
+Then append (speedup is the final best validated speedup number, or null if unavailable):
+{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"done","technique":"optimization_report","speedup":<number or null>,"note":"<final best speedup + total executions + executions saved by forecasters + report path>"}`,
     {
       label: 'Generate report',
       phase: 'Report',
