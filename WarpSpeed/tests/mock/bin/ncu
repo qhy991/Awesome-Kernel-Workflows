@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""Mock NVIDIA Nsight Compute CLI for WarpSpeed acceptance tests.
+
+Two modes, mirroring how infra/ncu_profile.sh drives the real tool:
+  profile:  ncu [--section S]... [--set full] -o <rep> -f <binary> [args...]
+            -> asks the mock binary for its embedded profile (--emit-profile)
+               and stores it as JSON in <rep>.ncu-rep
+  import:   ncu --import <rep>.ncu-rep --csv --page details
+            -> renders the stored profile as a details-page CSV (the exact
+               shape tools/ncu_parse.py consumes)
+
+Every invocation is logged to $WARPSPEED_MOCK_DIR/ncu.log so tests can assert
+curated-section usage and serialization.
+"""
+import csv
+import json
+import os
+import subprocess
+import sys
+import time
+
+MOCK_DIR = os.environ.get("WARPSPEED_MOCK_DIR", "/tmp/warpspeed-mock")
+
+
+def record(argv):
+    os.makedirs(MOCK_DIR, exist_ok=True)
+    with open(os.path.join(MOCK_DIR, "ncu.log"), "a") as f:
+        f.write(json.dumps({"ts": time.time(), "argv": argv}) + "\n")
+
+
+# canonical key -> (Section Name, Metric Name, Metric Unit, scale)
+ROWS = [
+    ("sm_pct",        "GPU Speed Of Light Throughput", "Compute (SM) Throughput",   "%"),
+    ("mem_pct",       "GPU Speed Of Light Throughput", "Memory Throughput",         "%"),
+    ("dram_pct",      "GPU Speed Of Light Throughput", "DRAM Throughput",           "%"),
+    ("l1_pct",        "GPU Speed Of Light Throughput", "L1/TEX Cache Throughput",   "%"),
+    ("l2_pct",        "GPU Speed Of Light Throughput", "L2 Cache Throughput",       "%"),
+    ("duration_us",   "GPU Speed Of Light Throughput", "Duration",                  "us"),
+    ("elapsed_cycles","GPU Speed Of Light Throughput", "Elapsed Cycles",            "cycle"),
+    ("l2_hit_pct",    "Memory Workload Analysis",      "L2 Hit Rate",               "%"),
+    ("dram_gbps",     "Memory Workload Analysis",      "Memory Throughput",         "Gbyte/second"),
+    ("eligible_warps_per_scheduler", "Scheduler Statistics", "Eligible Warps Per Scheduler", "warp"),
+    ("issued_warp_per_scheduler",    "Scheduler Statistics", "Issued Warp Per Scheduler",    "inst"),
+    ("active_warps_per_scheduler",   "Scheduler Statistics", "Active Warps Per Scheduler",   "warp"),
+    ("warp_cycles_per_issued_inst",  "Warp State Statistics", "Warp Cycles Per Issued Instruction", "cycle"),
+    ("occupancy_pct",            "Occupancy", "Achieved Occupancy",    "%"),
+    ("theoretical_occupancy_pct","Occupancy", "Theoretical Occupancy", "%"),
+    ("regs_per_thread",  "Launch Statistics", "Registers Per Thread",             "register/thread"),
+    ("smem_static_bytes","Launch Statistics", "Static Shared Memory Per Block",   "byte/block"),
+    ("smem_dynamic_bytes","Launch Statistics","Dynamic Shared Memory Per Block",  "byte/block"),
+    ("grid_size",        "Launch Statistics", "Grid Size",                        ""),
+    ("block_size",       "Launch Statistics", "Block Size",                       ""),
+    ("waves_per_sm",     "Launch Statistics", "Waves Per SM",                     ""),
+]
+
+
+def do_profile(sections, full_set, rep_path, target_cmd):
+    out = subprocess.run([target_cmd[0], "--emit-profile"],
+                         capture_output=True, text=True)
+    if out.returncode != 0:
+        sys.stderr.write("mock ncu: target --emit-profile failed: %s\n" % out.stderr)
+        return 1
+    prof = json.loads(out.stdout)
+    if not rep_path.endswith(".ncu-rep"):
+        rep_path += ".ncu-rep"
+    with open(rep_path, "w") as f:
+        json.dump({"mock_ncu_rep": 1, "sections": sections, "full_set": full_set,
+                   "binary": os.path.abspath(target_cmd[0]),
+                   "kernels": prof.get("kernels", [])}, f, indent=1)
+    sys.stderr.write("==PROF== Report: %s\n" % rep_path)
+    return 0
+
+
+def do_import(rep_path):
+    with open(rep_path) as f:
+        rep = json.load(f)
+    w = csv.writer(sys.stdout)
+    w.writerow(["ID", "Kernel Name", "Section Name", "Metric Name", "Metric Unit", "Metric Value"])
+    for kid, kern in enumerate(rep.get("kernels", [])):
+        metrics = kern.get("metrics", {})
+        for key, section, mname, unit in ROWS:
+            if key in metrics:
+                w.writerow([kid, kern.get("name", "mock_kernel"), section, mname, unit,
+                            "{:,}".format(metrics[key]) if isinstance(metrics[key], int) and metrics[key] >= 1000
+                            else metrics[key]])
+    return 0
+
+
+def main(argv):
+    record(argv)
+    if "--version" in argv:
+        print("Mock NVIDIA (R) Nsight Compute Command Line Profiler, Version 2026.1.0")
+        return 0
+    sections, full_set, rep, imp = [], False, None, None
+    i = 0
+    rest = []
+    while i < len(argv):
+        a = argv[i]
+        if a == "--section":
+            sections.append(argv[i + 1]); i += 2
+        elif a == "--set":
+            full_set = argv[i + 1] == "full"; i += 2
+        elif a == "-o":
+            rep = argv[i + 1]; i += 2
+        elif a == "--import":
+            imp = argv[i + 1]; i += 2
+        elif a in ("-f", "--force-overwrite", "--csv"):
+            i += 1
+        elif a == "--page":
+            i += 2
+        elif a == "--target-processes":
+            i += 2
+        else:
+            rest = argv[i:]; break
+    if imp:
+        return do_import(imp)
+    if rep and rest:
+        return do_profile(sections, full_set, rep, rest)
+    sys.stderr.write("mock ncu: unrecognized invocation\n")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -107,6 +107,14 @@ Awesome-Kernel-Workflows/
 ├── StitchCUDA/                  # Planner/Coder/Verifier CUDA 合成
 │   ├── stitchcuda-kernel-optimization.js
 │   └── README.md
+├── WarpSpeed/                   # 多 GPU 节点上可回退的并行内核搜索
+│   ├── warpspeed-kernel-search.js
+│   ├── infra/                   # gpu_run 互斥启动器、两级基准、NCU 剖析
+│   ├── tools/                   # wsdb CLI（SQLite 检查点树）、配置渲染、NCU 解析
+│   ├── wiki/                    # 技术页（按标签索引、按架构限定）
+│   ├── harness-template/        # 工程自有正确性 harness 脚手架
+│   ├── tests/                   # mock GPU 套件 + vm 干跑 + 节点验收
+│   └── README.md
 ├── Xe-Forge/                    # Intel XPU 多阶段 CoVeR 优化
 │   ├── xe-forge-kernel-optimization.js
 │   └── README.md
@@ -156,6 +164,7 @@ Workflow 文件遵循 Claude Code 约定：导出 `meta`（名称、描述、阶
 | [LlamacppEmbeddedSearch](LlamacppEmbeddedSearch/) | llama.cpp ggml-cuda（method-intrinsic） | `embedded-kernel-search` | 嵌入 llama.cpp ggml-cuda 的 kernel 的多变体并行搜索 | 独立 CUDA/Triton kernel 优化 |
 | [KernelSkill](KernelSkill/) | CUDA（默认）· Triton via driver（experimental） | `cuda-kernel-optimization`, `cuda-kernel-generation` | 从 PyTorch reference 生成/优化 CUDA custom kernels，并使用 memory/profiler guidance | Triton/SYCL/Metal 任务 |
 | [StitchCUDA](StitchCUDA/) | CUDA（默认）· Triton via driver（experimental） | `cuda-kernel-generation`, `cuda-kernel-optimization` | Planner/Coder/Verifier CUDA 合成和重规划 | 非 CUDA 后端 |
+| [WarpSpeed](WarpSpeed/) | CUDA（vendor-locked：需要 NCU/compute-sanitizer） | `cuda-kernel-optimization`, `kernel-search` | 独占多 GPU 节点上的持续优化战役：检查点树、GPU 互斥、两级基准、可回退 | 一次性补丁、共享 GPU、缺少 NCU/sanitizer 的主机 |
 | [Xe-Forge](Xe-Forge/) | Intel XPU（vendor-locked: xpu） | `xpu-kernel-optimization`, `triton-kernel-optimization` | Intel XPU CoVeR staged refinement | NVIDIA CUDA-only 调优 |
 | [Generalist](Generalist/) | CUDA（默认）· Triton via driver（experimental） | `cuda-kernel-generation`, `cuda-kernel-optimization` | CUDA benchmark-driven default solver substrate | 后端无关求解；当前还未泛化 |
 | [Meta-Workflow](_meta/) | Tooling | N/A | 生成和验证 workflow 定义 | 直接 kernel 优化 |
@@ -191,6 +200,7 @@ Workflow 文件遵循 Claude Code 约定：导出 `meta`（名称、描述、阶
 | [KernelFoundryDx](KernelFoundryDx/) | ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![Evolutionary](https://img.shields.io/badge/evolutionary-darkblue?style=flat) ![MultiAgent](https://img.shields.io/badge/multi--agent-teal?style=flat) ![RAG](https://img.shields.io/badge/RAG-orange?style=flat) ![Diagnosis](https://img.shields.io/badge/diagnosis-teal?style=flat) | RAG 种子 → 岛屿进化 → 评估 → 诊断 → 迁移 | [arXiv:2605.30359](https://arxiv.org/abs/2605.30359)（CUHK/Huawei 2026） |
 | [KernelSkill](KernelSkill/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![NCU](https://img.shields.io/badge/NCU-555?style=flat) ![MultiAgent](https://img.shields.io/badge/multi--agent-teal?style=flat) ![SkillMemory](https://img.shields.io/badge/skill--memory-orange?style=flat) ![Verification](https://img.shields.io/badge/verification-green?style=flat) | Seed → Review → 修复/优化 → Profile → 更新记忆 | [arXiv:2603.10085](https://arxiv.org/abs/2603.10085) |
 | [StitchCUDA](StitchCUDA/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![MultiAgent](https://img.shields.io/badge/multi--agent-teal?style=flat) ![Pipeline](https://img.shields.io/badge/pipeline-purple?style=flat) ![Verification](https://img.shields.io/badge/verification-green?style=flat) ![Replanning](https://img.shields.io/badge/adaptive--replanning-orange?style=flat) | 规划 → 编码 → 验证 → 重规划 → 迭代 | [arXiv:2603.02637](https://arxiv.org/abs/2603.02637) |
+| [WarpSpeed](WarpSpeed/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Tree](https://img.shields.io/badge/tree--search-darkblue?style=flat) ![NCU](https://img.shields.io/badge/NCU-555?style=flat) ![Experience](https://img.shields.io/badge/experience--memory-orange?style=flat) ![Rewind](https://img.shields.io/badge/rewind-red?style=flat) ![CrossReview](https://img.shields.io/badge/cross--model--review-green?style=flat) | 规划 → 并行生成 → A/B 初筛 → 锁频确认 → NCU 剖析 → 记录 → 验尸/回退 | [设计说明](WarpSpeed/README.md) |
 | [Xe-Forge](Xe-Forge/) | ![XPU](https://img.shields.io/badge/Intel--XPU-0071C5?style=flat&logo=intel&logoColor=white) ![Triton](https://img.shields.io/badge/Triton-6C3483?style=flat) ![Pipeline](https://img.shields.io/badge/pipeline-purple?style=flat) ![CoVeR](https://img.shields.io/badge/CoVeR-purple?style=flat) ![VTune](https://img.shields.io/badge/VTune-555?style=flat) | 阶段 → 生成 → 验证 → 优化 → 提升 | [Xe-Forge 项目](https://github.com/intel/Xe-Forge) |
 | [Meta-Workflow](_meta/) | ![Tooling](https://img.shields.io/badge/tooling-gray?style=flat) | Research → Model → Assemble → Generate → Validate | — |
 
@@ -236,6 +246,7 @@ Workflow 文件遵循 Claude Code 约定：导出 `meta`（名称、描述、阶
 | [KernelFoundryDx](KernelFoundryDx/) | `search_based` | 诊断提示驱动的多岛 Triton 进化 | 编译/正确性/speedup + 反作弊检查 | island populations、elite archives、hint library | 依据论文的 faithful adaptation；无公开 runtime/source repo |
 | [KernelSkill](KernelSkill/) | `iterative_self_improving` | seed/review 后的 repair-or-optimize 精炼循环 | compiler/verifier/profiler、speedup、NCU/nsys 证据 | 长期 skill library、optimize history、repair chain | 决策流程保真；gate 由 prompt/workflow 表达 |
 | [StitchCUDA](StitchCUDA/) | `multi_stage_refinement` | Planner/Coder/Verifier + 自适应重规划 | 编译、正确性、benchmark speedup | plan history、failure counters、best candidate | 三智能体编排形状保真但有简化 |
+| [WarpSpeed](WarpSpeed/) | `tree_exploration` | 带假设标签的检查点树上做预注册实验；验尸消融后前沿回退 | 显著性门控的 A/B 初筛 + 锁频确认、精选 NCU 段、sanitizer、codex 跨模型评审 | SQLite 树 + GPU 分钟台账、仅追加 BitLessons、NCU 缓存、证据分支 | AKW 原创工程 workflow（无论文）；GPU 纪律由互斥锁强制 |
 | [Xe-Forge](Xe-Forge/) | `multi_stage_refinement` | 硬序 11 阶段 CoVeR 循环 | Intel Triton 编译、正确性、speedup、可选 VTune | best-in-stage kernels、promotion history | 面向 Intel XPU 项目流程的 workflow adaptation |
 | [Meta-Workflow](_meta/) | `tooling` | Research/Model/Assemble/Generate/Validate | manifest schema、静态/语义检查 | templates、manifests、validation reports | 仓库基础设施，不是论文方法 |
 

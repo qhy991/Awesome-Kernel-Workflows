@@ -1,0 +1,45 @@
+{
+  "_doc": "WarpSpeed framework defaults. NEVER edited per-run: render_config.py merges this with caller overrides and writes the materialized instance config to <state_dir>/config.json. Command templates live here (not in the workflow script) so the orchestrator stays free of literal tool invocations and every path resolves at init time.",
+
+  "PARALLEL_AGENTS": 4,
+  "MAX_REVIEW_ITERS": 3,
+  "K_BLOCKED": 4,
+  "MIN_GAIN_PCT": 1.0,
+  "CONFIRM_MARGIN_PCT": 5.0,
+  "SCREEN_REPS": 50,
+  "CONFIRM_REPS": 200,
+  "WARMUP_REPS": 10,
+  "SCREEN_BLOCKS": 5,
+  "CALIBRATE_REPS": 50,
+  "POOL_DEVICES": [0, 1, 2, 3, 4, 5],
+  "BENCH_DEVICE": 6,
+  "NCU_DEVICE": 7,
+  "LOCK_DIR": "/tmp/warpspeed/locks",
+  "LOCKED_GRAPHICS_CLOCK": null,
+  "LOCKED_MEM_CLOCK": null,
+  "CLOCK_CMD_PREFIX": "",
+  "COMPACT_EVERY": 10,
+  "ALLOCATION": {"exploit": 0.6, "explore": 0.3, "wildcard": 0.1},
+  "BUDGET_GPU_MINUTES": null,
+  "TARGET_LATENCY_US": null,
+  "AGENT_TIMEOUT_SEC": 3600,
+  "NCU_SECTIONS": "SpeedOfLight,MemoryWorkloadAnalysis,SchedulerStats,WarpStateStats,Occupancy,LaunchStats",
+  "REVIEWER_CMD": "codex exec",
+  "target_gpu": "sm90",
+  "ARCH_MAP": {"H100": "sm90", "H200": "sm90", "B200": "sm100", "GB200": "sm100", "sm90": "sm90", "sm100": "sm100"},
+
+  "env_prefix_template": "env WARPSPEED_STATE={state} WARPSPEED_LOCK_DIR={lock_dir} WARPSPEED_POOL_DEVICES={pool_devices} WARPSPEED_BENCH_DEVICE={bench_device} WARPSPEED_NCU_DEVICE={ncu_device} WARPSPEED_SCREEN_REPS={screen_reps} WARPSPEED_CONFIRM_REPS={confirm_reps} WARPSPEED_WARMUP_REPS={warmup_reps} WARPSPEED_NCU_SECTIONS={ncu_sections}{clock_env}",
+
+  "command_templates": {
+    "wsdb": "python3 {warpspeed}/tools/wsdb.py --db {state}/search.sqlite",
+    "render_config": "python3 {warpspeed}/tools/render_config.py --warpspeed-dir {warpspeed} --project-dir {project}",
+    "gpu_run": "{env_prefix} {warpspeed}/infra/gpu_run",
+    "correctness": "{env_prefix} {warpspeed}/infra/gpu_run pool --timeout 1800 --label correctness -- python3 {harness}/correctness.py --impl",
+    "screen": "{env_prefix} {warpspeed}/infra/gpu_run pool --timeout 1800 --label screen -- {warpspeed}/infra/bench_screen.sh",
+    "confirm": "{env_prefix} {warpspeed}/infra/gpu_run bench --timeout 1800 --label confirm -- {warpspeed}/infra/bench_confirm.sh",
+    "ncu_profile": "{env_prefix} {warpspeed}/infra/gpu_run ncu --timeout 2400 --label profile -- {warpspeed}/infra/ncu_profile.sh",
+    "calibrate": "{env_prefix} {warpspeed}/infra/gpu_run cal --timeout 3600 --label calibrate -- {warpspeed}/infra/calibrate.sh",
+    "sanitizer_racecheck": "{env_prefix} {warpspeed}/infra/gpu_run pool --timeout 1800 --label sanitizer -- compute-sanitizer --tool racecheck --error-exitcode 1",
+    "sanitizer_memcheck": "{env_prefix} {warpspeed}/infra/gpu_run pool --timeout 1800 --label sanitizer -- compute-sanitizer --tool memcheck --error-exitcode 1"
+  }
+}

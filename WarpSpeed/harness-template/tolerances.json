@@ -1,0 +1,7 @@
+{
+  "_TODO": "HUMAN-REVIEWED, ONCE: these per-dtype tolerances are the correctness ground truth for the whole search. FP8 values especially must be chosen deliberately for your kernel's accumulation order and reviewed by a human before the first experiment. Agents can never edit this file (harness dir is chmod a-w).",
+  "fp32": {"rtol": 1e-5, "atol": 1e-6},
+  "fp16": {"rtol": 1e-3, "atol": 1e-4},
+  "bf16": {"rtol": 8e-3, "atol": 8e-4},
+  "fp8":  {"rtol": 5e-2, "atol": 5e-3}
+}
