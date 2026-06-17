@@ -98,6 +98,7 @@ Workflow({
 | `parallel_agents` | no | 4 | experiment fan-out per round |
 | `reviewer_cmd` | no | `codex exec` | cross-model reviewer CLI |
 | `bench_shape` | no | `default` | shape used for screen/confirm/profile |
+| `exp_dir` | no | — | KerSor session run dir (`genome.jsonl` + report mirror); search state stays in `state_dir` |
 | `op_description` | no | — | free-text task context for planner + implementor |
 | `single_spec_json` | no | — | M2 mode: run exactly one hand-written spec, then report |
 | `config_overrides` | no | — | JSON merged into the materialized config (clocks, reps, devices, …) |

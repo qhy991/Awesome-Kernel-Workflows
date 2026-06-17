@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 project adheres to [Semantic Versioning](https://semver.org/). See `AGENTS.md`
 for the versioning policy.
 
+## [Unreleased]
+
+### Added
+
+- **WarpSpeed: align with AKW v0.2 genome + KerSor dispatch.** `exp_dir` for
+  `genome.jsonl` and report mirror; KerSor arg aliases (`compile_command`,
+  `kernel_path`, `ggml_root`); inline genome self-report on phases and
+  Screen/Confirm/Profile; manifest topology/inputs/fidelity fields.
+  (`WarpSpeed/warpspeed-kernel-search.js`, `WarpSpeed/manifest.yaml`)
+
 ## [Unreleased] - feat/proactive-knowledge-fetch
 
 ### Changed

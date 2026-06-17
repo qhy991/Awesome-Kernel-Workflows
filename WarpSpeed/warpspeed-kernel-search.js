@@ -18,6 +18,25 @@ export const meta = {
   ],
 }
 
+// --- genome self-report: INLINE (rich, doer-written) + entry scribe ---
+// Doer agents append result-bearing lines to <genome_dir>/genome.jsonl; top-level
+// phase() calls also invoke __genomeReport for live "entered" traces. genome_dir =
+// args.exp_dir (KerSor session) when set, else state_dir / <project>/.warpspeed.
+// The "__genomeReport" sentinel prevents scripts/patch-genome-report.js from
+// double-injecting. See _meta/genome-trajectory-schema.md.
+
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = genomeDir()
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda'],
   supported_problem_types: ['cuda-kernel-optimization', 'kernel-search'],
@@ -206,17 +225,33 @@ function classifyResult(agentResult) {
 //   single_spec_json   M2 mode: run exactly ONE hand-written spec (JSON object
 //                      or string) through the full candidate path, then report
 //   config_overrides   JSON object merged into the materialized config
+//   exp_dir            KerSor session run dir (genome.jsonl + report mirror); optional standalone
+//
+// KerSor / standard aliases (when the WarpSpeed-specific names are absent):
+//   project_dir  <- ggml_root | dirname(kernel_path)
+//   build_command <- compile_command
+//   kernel_paths <- kernel_path (single file)
 //
 // =============================================================================
 
-const PROJECT_DIR = args.project_dir || ''
-const BUILD_CMD = args.build_command || ''
+function dirnamePath(p) {
+  const s = String(p || '')
+  const i = s.lastIndexOf('/')
+  return i > 0 ? s.slice(0, i) : (s ? '.' : '')
+}
+
+let PROJECT_DIR = args.project_dir || args.ggml_root || ''
+if (!PROJECT_DIR && args.kernel_path) PROJECT_DIR = dirnamePath(args.kernel_path)
+
+const BUILD_CMD = args.build_command || args.compile_command || ''
 const BINARY_PATH = args.binary_path || ''
-const KERNEL_PATHS = String(args.kernel_paths || '').split(',').map(s => s.trim()).filter(Boolean)
+const KERNEL_PATHS_RAW = args.kernel_paths || args.kernel_path || ''
+const KERNEL_PATHS = String(KERNEL_PATHS_RAW).split(',').map(s => s.trim()).filter(Boolean)
 const TARGET_GPU = args.target_gpu || ''
 const WARPSPEED_DIR_ARG = args.warpspeed_dir || 'WarpSpeed'
 const STATE_DIR_ARG = args.state_dir || ''
 const HARNESS_DIR_ARG = args.harness_dir || ''
+const EXP_DIR = args.exp_dir || ''
 const ITERATIONS = Math.max(1, parseInt(args.iterations || 20, 10))
 const BUDGET_GPU_MINUTES = args.budget_gpu_minutes != null ? Number(args.budget_gpu_minutes) : null
 const TARGET_LATENCY_US = args.target_latency_us != null ? Number(args.target_latency_us) : null
@@ -224,12 +259,29 @@ const PARALLEL_AGENTS_ARG = args.parallel_agents != null ? parseInt(args.paralle
 const REVIEWER_CMD_ARG = args.reviewer_cmd || ''
 const BENCH_SHAPE = args.bench_shape || 'default'
 const OP_DESC = args.op_description || ''
-const SINGLE_SPEC = args.single_spec_json
-  ? (typeof args.single_spec_json === 'string' ? JSON.parse(args.single_spec_json) : args.single_spec_json)
+const SINGLE_SPEC_RAW = Object.prototype.hasOwnProperty.call(args, 'single_spec_json') ? args.single_spec_json : null
+const SINGLE_SPEC = SINGLE_SPEC_RAW
+  ? (typeof SINGLE_SPEC_RAW === 'string' ? JSON.parse(SINGLE_SPEC_RAW) : SINGLE_SPEC_RAW)
   : null
-const CONFIG_OVERRIDES = args.config_overrides
-  ? (typeof args.config_overrides === 'string' ? JSON.parse(args.config_overrides) : args.config_overrides)
+const CONFIG_OVERRIDES_RAW = Object.prototype.hasOwnProperty.call(args, 'config_overrides') ? args.config_overrides : null
+const CONFIG_OVERRIDES = CONFIG_OVERRIDES_RAW
+  ? (typeof CONFIG_OVERRIDES_RAW === 'string' ? JSON.parse(CONFIG_OVERRIDES_RAW) : CONFIG_OVERRIDES_RAW)
   : {}
+
+function genomeDir() {
+  return EXP_DIR || STATE_DIR_ARG || (PROJECT_DIR ? `${PROJECT_DIR}/.warpspeed` : '.')
+}
+
+function genomeFooter(phaseName, extraFields = '') {
+  const dir = genomeDir()
+  const tail = extraFields ? `, ${extraFields}` : ''
+  return [
+    '',
+    `Append exactly one line to ${dir}/genome.jsonl (create if missing; shell append with >>).`,
+    'Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ',
+    `One-line JSON: workflow="${meta.name}", phase="${phaseName}", ts=<UTC>, status="done"${tail}.`,
+  ].join('\n')
+}
 
 const MISSING = []
 if (!PROJECT_DIR) MISSING.push('project_dir')
@@ -579,7 +631,7 @@ const REPORT_SCHEMA = withGroundingFields({
 // Phase: Init
 // =============================================================================
 
-phase('Init')
+phase('Init'); await __genomeReport('Init', meta.name)
 log(`WarpSpeed: project=${PROJECT_DIR} target=${TARGET_GPU} fan-out<=${PARALLEL_AGENTS_ARG || '(config)'} max-rounds=${ITERATIONS}`)
 
 const overrideSets = []
@@ -624,6 +676,7 @@ const initResult = await agent(
     '',
     'Return the config object verbatim plus the preflight booleans. If any preflight tool is absent that the run cannot proceed without (wsdb, git), use the grounded=false shape instead of guessing.',
     GROUNDING_INSTRUCTION,
+    genomeFooter('Init'),
   ].join('\n'),
   { phase: 'Init', label: 'init:materialize', schema: INIT_SCHEMA }
 )
@@ -701,7 +754,7 @@ function taskContract(expId) {
 // Phase: Calibrate
 // =============================================================================
 
-phase('Calibrate')
+phase('Calibrate'); await __genomeReport('Calibrate', meta.name)
 const calResult = await agent(
   [
     'Cross-device noise calibration for WarpSpeed (skip if already done).',
@@ -728,7 +781,7 @@ log(`Calibration: sigma=${cal.value.cross_device_sigma_pct != null ? cal.value.c
 // Phase: Seed
 // =============================================================================
 
-phase('Seed')
+phase('Seed'); await __genomeReport('Seed', meta.name)
 const seedResult = await agent(
   [
     'Seed the WarpSpeed baseline checkpoint (skip if already seeded).',
@@ -865,6 +918,7 @@ function screenPrompt(spec, implOut) {
     '4. Relay the JSON fields verbatim (rel_speedup_pct, parent_mean_us, cand_mean_us, within_device_std_pct) plus the device number from the GPU_RUN_DEVICE= line on stderr.',
     '',
     taskContract(spec.exp_id),
+    genomeFooter('Screen', `candidate_id="${spec.exp_id}", technique="${(spec.hypothesis || '').replace(/"/g, '')}"`),
   ].join('\n')
 }
 
@@ -877,6 +931,7 @@ function confirmPrompt(spec) {
     '2. Relay latency_us_mean, latency_us_std, reps, clocks verbatim.',
     '',
     taskContract(spec.exp_id),
+    genomeFooter('Confirm', `candidate_id="${spec.exp_id}"`),
   ].join('\n')
 }
 
@@ -892,6 +947,7 @@ function profilePrompt(spec) {
     '3. Return cand = {fingerprint, key_metrics} and parent = {fingerprint, key_metrics}, both VERBATIM from the JSON files, and ncu_path = the candidate JSON path. Compute nothing yourself.',
     '',
     taskContract(spec.exp_id),
+    genomeFooter('Profile', `candidate_id="${spec.exp_id}"`),
   ].join('\n')
 }
 
@@ -1337,7 +1393,7 @@ let lastSnap = null
 
 for (let r = 1; r <= ITERATIONS; r++) {
   // ---- Plan ----
-  phase('Plan')
+  phase('Plan'); await __genomeReport('Plan', meta.name)
   const snapRes = classifyResult(await agent(snapshotPrompt(null), {
     phase: 'Plan', label: `r${r}:snapshot`, schema: SNAP_SCHEMA,
   }))
@@ -1391,7 +1447,7 @@ for (let r = 1; r <= ITERATIONS; r++) {
   const runnable = specs.filter(s => registeredIds.has(s.exp_id))
 
   // ---- Generate/Screen/Confirm/Profile per candidate, fan-out capped ----
-  phase('Generate')
+  phase('Generate'); await __genomeReport('Generate', meta.name)
   const results = []
   for (const chunk of chunkArray(runnable, PARALLEL_AGENTS)) {
     const chunkResults = await parallel(chunk.map(s => () => runCandidate(s, snap)))
@@ -1399,7 +1455,7 @@ for (let r = 1; r <= ITERATIONS; r++) {
   }
 
   // ---- Record barrier ----
-  phase('Record')
+  phase('Record'); await __genomeReport('Record', meta.name)
   const roundNoise = Math.max(
     (snap.calibration || {}).cross_device_sigma_pct || 0,
     ...results.map(x => x.noise || 0)
@@ -1429,7 +1485,7 @@ for (let r = 1; r <= ITERATIONS; r++) {
   }
 
   // ---- Postmortem (blame -> ablation -> rewind|refute) ----
-  phase('Postmortem')
+  phase('Postmortem'); await __genomeReport('Postmortem', meta.name)
   const due = (rec.postmortem_due || []).filter(c => !pmAttempted.has(c))
   for (const ckCommit of due) {
     pmAttempted.add(ckCommit)
@@ -1485,7 +1541,7 @@ for (let r = 1; r <= ITERATIONS; r++) {
   }
 
   // ---- Maintain ----
-  phase('Maintain')
+  phase('Maintain'); await __genomeReport('Maintain', meta.name)
   const doneIds = results.map(x => x.spec.exp_id)
   if (doneIds.length) {
     await agent(cleanupPrompt(doneIds, round), {
@@ -1518,17 +1574,19 @@ if (!stop) stop = 'iteration_limit_reached'
 // Phase: Report
 // =============================================================================
 
-phase('Report')
+phase('Report'); await __genomeReport('Report', meta.name)
 const reportRes = classifyResult(await agent(
   [
     'Produce the final WarpSpeed report.',
     '',
     `1. Run: ${C.wsdb} status --full   (and ${C.wsdb} round-snapshot for the structured view)`,
     `2. Write a human report to ${P.results}/report.md: leaderboard with assumption sets, baseline vs best (absolute + speedup), rounds run, per-status experiment counts, rewinds executed, the lessons digest, and the 10 highest-confidence lessons.`,
-    `3. Return report_path, best_commit, best_latency_us, baseline_latency_us (the latency of the baseline checkpoint), lessons_total (count of non-superseded lessons).`,
+    EXP_DIR ? `3. Mirror the report for KerSor: cp ${P.results}/report.md ${EXP_DIR}/warpspeed-report.md` : '',
+    `4. Return report_path, best_commit, best_latency_us, baseline_latency_us (the latency of the baseline checkpoint), lessons_total (count of non-superseded lessons).`,
     '',
     taskContract('report'),
-  ].join('\n'),
+    genomeFooter('Report', 'note="final summary"'),
+  ].filter(Boolean).join('\n'),
   { phase: 'Report', label: 'report', schema: REPORT_SCHEMA }
 ))
 const rep = reportRes.state === 'grounded' ? reportRes.value : {}
@@ -1548,5 +1606,7 @@ return {
   lessons_total: rep.lessons_total != null ? rep.lessons_total : null,
   report_path: rep.report_path || `${P.results}/report.md`,
   state_dir: P.state_dir,
+  exp_dir: EXP_DIR || null,
+  genome_dir: genomeDir(),
   history,
 }
