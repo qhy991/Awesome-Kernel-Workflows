@@ -4,6 +4,18 @@
 [Keep a Changelog](https://keepachangelog.com/),版本号遵循
 [语义化版本(SemVer)](https://semver.org/)。版本策略见 `AGENTS.md`。
 
+## [Unreleased] - feat/proactive-knowledge-fetch
+
+### 变更（Changed）
+
+- **cuda-agent:重试时主动拉取知识(pilot)。** Implement doer 在重试时(history
+  非空)现被要求:先用 KerSor 注入的 `## Knowledge Tools (on-demand)` 块里的检索命令
+  (如 `query.py` 查 kernel 模式、`chub search` 查 API/Triton 文档)搜一下,读 1-2 页再
+  实现——而不只消费轮次开始时预取的 `## Retrieved Context`。尽力而为(retrieval 关时无
+  此块;永不阻塞)。把 workflow 从"被动消费注入上下文"变为"主动调用知识工具"。其余
+  workflow 暂保持被动,待同样升级。
+  (`CUDAAgent/cuda-agent-kernel-optimization.js`)
+
 ## [Unreleased]
 
 ## [0.2.1] - 2026-06-17
