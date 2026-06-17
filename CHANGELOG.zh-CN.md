@@ -4,6 +4,16 @@
 [Keep a Changelog](https://keepachangelog.com/),版本号遵循
 [语义化版本(SemVer)](https://semver.org/)。版本策略见 `AGENTS.md`。
 
+## [Unreleased]
+
+### 新增（Added）
+
+- **WarpSpeed:对齐 AKW v0.2 genome 与 KerSor 派发。** 支持 `exp_dir` 写入
+  `genome.jsonl` 并镜像报告;KerSor 参数别名(`compile_command`、`kernel_path`、
+  `ggml_root`);阶段与 Screen/Confirm/Profile 的内联 genome 自报告;manifest 补全
+  topology/inputs/fidelity 字段。
+  (`WarpSpeed/warpspeed-kernel-search.js`, `WarpSpeed/manifest.yaml`)
+
 ## [Unreleased] - feat/proactive-knowledge-fetch
 
 ### 变更（Changed）

@@ -81,6 +81,22 @@ method:
   - Append-only bitlessons.jsonl (+ md mirror) surviving rewinds
   - NCU profile cache per checkpoint commit (profiled once, ever)
   - Per-experiment git branches kept as evidence (worktrees pruned per round)
+  fidelity_boundary: original_akw_engineering
+topology:
+  type: tree
+  tree:
+    branching_factor_arg: parallel_agents
+    max_depth_arg: iterations
+    scoring_function: significance-gated relative speedup vs parent; hard dedup on latency + NCU fingerprint
+    backtrack_condition: blocked checkpoint subtree for K rounds -> postmortem ablation -> frontier rewind on confirmed blame
+inputs:
+  supports_existing_kernel: true
+  supports_problem_definition: false
+  required_one_of:
+  - project_dir
+  generation:
+    enabled: false
+    notes: WarpSpeed optimizes an existing kernel repo via checkpoint tree; it does not synthesize a first kernel from a problem definition alone.
 args:
   required:
   - name: project_dir
@@ -104,6 +120,11 @@ args:
     description: Canonical confirm-device identifier (locked-clock measurements run here).
     example: 'cuda:0'
   optional:
+  - name: exp_dir
+    type: string
+    default: ''''''
+    description: KerSor session run directory for genome.jsonl observability and report mirror; search state remains under state_dir.
+    example: /path/to/.kersor/session/run-1
   - name: warpspeed_dir
     type: string
     default: ''''''
