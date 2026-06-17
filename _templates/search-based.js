@@ -51,6 +51,22 @@ export const meta = {
   phases: {{PHASES_ARRAY}},
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 // =============================================================================
 // {{META_NAME}}
 // =============================================================================
@@ -83,14 +99,14 @@ let bestMetric = null
 // =============================================================================
 // Phase: Setup — Analyze target and define search space
 // =============================================================================
-phase('Setup')
+phase('Setup'); await __genomeReport('Setup', meta.name)
 
 {{SETUP_AGENTS}}
 
 // =============================================================================
 // Phase: Define Search Space
 // =============================================================================
-phase('Define')
+phase('Define'); await __genomeReport('Define', meta.name)
 
 const searchSpace = await agent(`{{SEARCH_SPACE_DESC}}`, {
   label: 'define-search-space',
@@ -122,7 +138,7 @@ for (let round = 0; round < {{BUDGET_VAR}}; round++) {
   // ===========================================================================
   // Phase: Sample — Generate candidate configurations
   // ===========================================================================
-  phase('Sample')
+  phase('Sample'); await __genomeReport('Sample', meta.name)
 
   const candidates = await agent(`{{SAMPLE_PROMPT}}
 
@@ -149,7 +165,7 @@ Generate ${{{POPULATION_SIZE_VAR}}} candidate configurations.`, {
   // ===========================================================================
   // Phase: Evaluate — Measure each candidate
   // ===========================================================================
-  phase('Evaluate')
+  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
 
   const evaluations = await parallel(
     configs.map((config, idx) => () =>
@@ -190,7 +206,7 @@ ${JSON.stringify(config)}`, {
   // ===========================================================================
   // Phase: Prune — Select survivors and update search strategy
   // ===========================================================================
-  phase('Prune')
+  phase('Prune'); await __genomeReport('Prune', meta.name)
 
   //[BLOCK:search_space_shrink]
   const refinement = await agent(`{{REFINE_PROMPT}}
@@ -214,7 +230,7 @@ Analyze patterns in good vs bad configurations. Suggest how to narrow the search
 // =============================================================================
 // Final Report
 // =============================================================================
-phase('Report')
+phase('Report'); await __genomeReport('Report', meta.name)
 
 const finalReport = await agent(`{{REPORT_PROMPT}}
 

@@ -23,6 +23,22 @@ export const meta = {
   ],
 };
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 // --- BEGIN embedded-eval substrate (auto-inlined by scripts/patch-embedded-eval.js) ---
 const EMBEDDING_CONTRACT = [
   'EMBEDDED-DISPATCH CONTRACT (this kernel is NOT standalone):',
@@ -294,7 +310,7 @@ async function main() {
   // ============================================================================
   // Phase 1: Setup
   // ============================================================================
-  phase('Setup');
+  phase('Setup'); await __genomeReport('Setup', meta.name);
 
   const setupResult = await agent(
     `Set up GPU Forecasters optimization environment:
@@ -383,7 +399,7 @@ Return JSON:
   // ============================================================================
   // Phase 2: Train Forecasters
   // ============================================================================
-  phase('Train Forecasters');
+  phase('Train Forecasters'); await __genomeReport('Train Forecasters', meta.name);
 
   log(`Training surrogate models with budget ${trainingBudget} evaluations...`);
 
@@ -499,7 +515,7 @@ Return JSON:
   // ============================================================================
   // Phase 3: Calibration
   // ============================================================================
-  phase('Calibration');
+  phase('Calibration'); await __genomeReport('Calibration', meta.name);
 
   log('Calibrating abstention thresholds...');
 
@@ -579,7 +595,7 @@ Return JSON:
   // ============================================================================
   // Phase 4: PUCT Search
   // ============================================================================
-  phase('PUCT Search');
+  phase('PUCT Search'); await __genomeReport('PUCT Search', meta.name);
 
   log(`Running PUCT tree search with ${puctSimulations} simulations...`);
 
@@ -693,7 +709,7 @@ Return JSON:
   // ============================================================================
   // Phase 5: Refinement
   // ============================================================================
-  phase('Refinement');
+  phase('Refinement'); await __genomeReport('Refinement', meta.name);
 
   log('Refining top candidates with local search...');
 
@@ -765,7 +781,7 @@ Return JSON:
   // ============================================================================
   // Phase 6: Validation
   // ============================================================================
-  phase('Validation');
+  phase('Validation'); await __genomeReport('Validation', meta.name);
 
   log('Validating best configuration...');
 
@@ -857,7 +873,7 @@ Return JSON:
   // ============================================================================
   // Phase 7: Report
   // ============================================================================
-  phase('Report');
+  phase('Report'); await __genomeReport('Report', meta.name);
 
   const report = await agent(
     `Generate GPU Forecasters optimization report:

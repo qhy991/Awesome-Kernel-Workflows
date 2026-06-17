@@ -38,6 +38,22 @@ export const meta = {
   phases: {{PHASES_ARRAY}},
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 // =============================================================================
 // {{META_NAME}}
 // =============================================================================
@@ -64,7 +80,7 @@ export const meta = {
 // =============================================================================
 // Phase: Analyze — Identify transformation opportunities
 // =============================================================================
-phase('Analyze')
+phase('Analyze'); await __genomeReport('Analyze', meta.name)
 
 const analysis = await agent(`{{ANALYZE_PROMPT}}`, {
   label: 'analyze-kernel',
@@ -86,7 +102,7 @@ log(`Applicable passes: ${applicablePasses.join(' → ')}`)
 // =============================================================================
 // Phase: Transform — Apply optimization passes sequentially
 // =============================================================================
-phase('Transform')
+phase('Transform'); await __genomeReport('Transform', meta.name)
 
 let currentCode = analysis.source_code || ''
 const transformResults = []
@@ -125,7 +141,7 @@ log(`Transforms applied: ${transformResults.length}/${applicablePasses.length}`)
 // =============================================================================
 // Phase: Verify — Check correctness of the final transformed code
 // =============================================================================
-phase('Verify')
+phase('Verify'); await __genomeReport('Verify', meta.name)
 
 const verification = await agent(`{{VERIFY_PROMPT}}
 
@@ -152,7 +168,7 @@ log(`Verification: ${verification.is_correct ? 'PASSED' : 'FAILED'} — ${verifi
 // =============================================================================
 // Phase: Report — Summary of transformations
 // =============================================================================
-phase('Report')
+phase('Report'); await __genomeReport('Report', meta.name)
 
 const finalReport = await agent(`{{REPORT_PROMPT}}
 

@@ -14,6 +14,22 @@ export const meta = {
   ],
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda'],
   supported_problem_types: ['cuda-kernel-optimization'],
@@ -319,7 +335,7 @@ function dbSummaryForPrompt(db) {
 // =============================================================================
 // Phase 1: Setup — read kernel + driver, load/seed DB, NCU-profile baseline
 // =============================================================================
-phase('Setup')
+phase('Setup'); await __genomeReport('Setup', meta.name)
 
 if (INPUT_MODE === 'generate_then_optimize') {
   const generated = await agent(`No kernel_path was provided. Generate and verify an initial CUDA kernel before starting KernelBlaster.
@@ -473,7 +489,7 @@ for (let iter = 0; iter < RL_ITERATIONS; iter++) {
     // -------------------------------------------------------------------------
     // Phase 2: ProfileState — profile current kernel, classify hardware state
     // -------------------------------------------------------------------------
-    phase('ProfileState')
+    phase('ProfileState'); await __genomeReport('ProfileState', meta.name)
 
     const stateResult = await agent(`You are a CUDA performance-state classifier (KernelBlaster MAIC-RL). Profile the current kernel and classify it into EXACTLY ONE hardware performance state.
 
@@ -516,7 +532,7 @@ Return the classification.`, {
     // -------------------------------------------------------------------------
     // Phase 3: Retrieve — rank candidate optimizations for the matched state
     // -------------------------------------------------------------------------
-    phase('Retrieve')
+    phase('Retrieve'); await __genomeReport('Retrieve', meta.name)
 
     const ranked = rankOptimizations(optDb.optimization_strategies[currentState])
       .filter((o) => !usedThisRollout.has(o.technique))
@@ -530,7 +546,7 @@ Return the classification.`, {
     // -------------------------------------------------------------------------
     // Phase 4: Plan — LLM specializes one strategy, citing DB + NCU evidence
     // -------------------------------------------------------------------------
-    phase('Plan')
+    phase('Plan'); await __genomeReport('Plan', meta.name)
 
     const plans = await parallel(
       candidates.map((cand) => () =>
@@ -582,7 +598,7 @@ Produce a plan that:
     // -------------------------------------------------------------------------
     // Phase 5: Execute — implement the selected plan(s)
     // -------------------------------------------------------------------------
-    phase('Execute')
+    phase('Execute'); await __genomeReport('Execute', meta.name)
 
     const impls = await parallel(
       validPlans.map((plan) => () =>
@@ -631,7 +647,7 @@ Return the complete CUDA code.`, {
     // -------------------------------------------------------------------------
     // Phase 6: Evaluate — compile, correctness-check, re-profile (Elapsed Cycles)
     // -------------------------------------------------------------------------
-    phase('Evaluate')
+    phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
 
     const evals = await parallel(
       variants.map((v) => () =>
@@ -687,7 +703,7 @@ Return the evaluation.`, {
     // -------------------------------------------------------------------------
     // Phase 7: Reward — compute RL reward, update DB stats, extend trajectory
     // -------------------------------------------------------------------------
-    phase('Reward')
+    phase('Reward'); await __genomeReport('Reward', meta.name)
 
     if (!bestStep) {
       // All variants failed correctness/compile: penalize the attempted techniques.
@@ -748,7 +764,7 @@ Return the evaluation.`, {
   // ---------------------------------------------------------------------------
   // Phase 8: Iterate — periodic policy-update cycle over the replay buffer
   // ---------------------------------------------------------------------------
-  phase('Iterate')
+  phase('Iterate'); await __genomeReport('Iterate', meta.name)
 
   if (totalTrajectories % UPDATE_FREQUENCY === 0 && replayBuffer.length >= 2) {
     const perfData = []

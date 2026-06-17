@@ -13,6 +13,22 @@ export const meta = {
   ],
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda'],
   supported_problem_types: ['cuda-kernel-optimization', 'cuda-kernel-generation'],
@@ -385,7 +401,7 @@ function buildRepairMemoryBlock(mem) {
 // =============================================================================
 // Phase: Setup — read the PyTorch reference, establish the eager baseline
 // =============================================================================
-phase('Setup')
+phase('Setup'); await __genomeReport('Setup', meta.name)
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -504,7 +520,7 @@ log(`Torch Eager baseline: ${baselineLatency}ms (available=${baseline.baseline_a
 // =============================================================================
 // Phase: Seed — generate several candidate kernels (correctness-first), pick best
 // =============================================================================
-phase('Seed')
+phase('Seed'); await __genomeReport('Seed', meta.name)
 
 const seedKernels = await parallel(
   Array.from({ length: SEED_CANDIDATES }, (_, i) => () =>
@@ -625,7 +641,7 @@ for (let round = 0; round < ROUNDS; round++) {
   // ===========================================================================
   // Phase: Evaluate — Reviewer (Compiler + Verifier + Profiler via ncu+nsys)
   // ===========================================================================
-  phase('Evaluate')
+  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
 
   const review = await agent(`You are the KernelSkill Reviewer for round ${round + 1}. Produce execution feedback for the CURRENT kernel using Compiler + Verifier + Profiler (ncu + nsys).
 
@@ -739,7 +755,7 @@ Return the structured review. Always include the normalized ncu_metrics object (
     // =========================================================================
     // Phase: Repair — Diagnoser -> Repairer, using CHAINED repair memory
     // =========================================================================
-    phase('Repair')
+    phase('Repair'); await __genomeReport('Repair', meta.name)
 
     const diagnosis = await agent(`You are the KernelSkill Diagnoser. The current kernel is INVALID. Infer the root cause and propose a repair plan. You are given the CHAINED repair memory for this fault chain — use it to AVOID proposing a fix that was already tried and failed (no cyclic repair).
 
@@ -814,7 +830,7 @@ Keep the forward() signature identical to the reference. Return the complete fix
     // A valid kernel clears the repair chain.
     // =========================================================================
     repairMemory = []
-    phase('Optimize')
+    phase('Optimize'); await __genomeReport('Optimize', meta.name)
 
     // 1) Feature Extractor (hybrid: rule-based + LLM structural inference)
     const features = await agent(`You are the KernelSkill Feature Extractor. Derive the deterministic code-structure features the gate needs. Use a hybrid approach: rule-based pattern matching over the source for stable lexical/syntactic signatures, and structural inference for features that syntax alone cannot capture.
@@ -1017,7 +1033,7 @@ Return the optimized kernel.`, {
   // ===========================================================================
   // Phase: Iterate — backfill memory outcomes from the latest measurement
   // ===========================================================================
-  phase('Iterate')
+  phase('Iterate'); await __genomeReport('Iterate', meta.name)
   // Backfill the previous optimize-memory entry's measured result once we have a new speedup.
   if (optimizeMemory.length > 0 && currentValid) {
     const last = optimizeMemory[optimizeMemory.length - 1]

@@ -13,6 +13,22 @@ export const meta = {
   ],
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda', 'triton'],
   supported_problem_types: ['cuda-kernel-optimization', 'kernel-search'],
@@ -257,7 +273,7 @@ function graphStats() {
 // =============================================================================
 // Phase 1: Setup
 // =============================================================================
-phase('Setup')
+phase('Setup'); await __genomeReport('Setup', meta.name)
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -359,7 +375,7 @@ baselineMetric = setupResult.baseline_metric || 1.0
 // =============================================================================
 // Phase 2: BuildGraph
 // =============================================================================
-phase('BuildGraph')
+phase('BuildGraph'); await __genomeReport('BuildGraph', meta.name)
 
 const graphResult = await agent(`Build or refresh a CUDA Reasoning Graph for ReGraphT.
 
@@ -444,7 +460,7 @@ if (USE_DRIVER) {
 for (let attempt = 0; attempt < BUDGET; attempt++) {
   log(`\n=== ReGraphT attempt ${attempt + 1}/${BUDGET} | best=${bestCandidate?.eval?.speedup || 0}x | graph=${graph.nodes.length} nodes/${graph.edges.length} edges ===`)
 
-  phase('Select')
+  phase('Select'); await __genomeReport('Select', meta.name)
 
   const selection = await agent(`Select a promising CUDA optimization path with Monte Carlo Graph Search.
 
@@ -484,7 +500,7 @@ Return the selected method path and the examples that should condition generatio
 
   selectedPaths.push(selection)
 
-  phase('Generate')
+  phase('Generate'); await __genomeReport('Generate', meta.name)
 
   const generation = await agent(`Generate a CUDA optimization candidate using the selected ReGraphT path.
 
@@ -533,7 +549,7 @@ Return candidate code and suitability decisions for each method.`, {
     },
   })
 
-  phase('Evaluate')
+  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
 
   const evaluation = await agent(`Evaluate the generated CUDA candidate with real evidence.
 
@@ -625,7 +641,7 @@ Return evaluator evidence.`, {
     bestCandidate = measuredBest
   }
 
-  phase('UpdateGraph')
+  phase('UpdateGraph'); await __genomeReport('UpdateGraph', meta.name)
 
   const update = await agent(`Update the CUDA Reasoning Graph from measured evaluator feedback.
 
@@ -680,7 +696,7 @@ Return the updated graph and update summary.`, {
 // =============================================================================
 // Phase 7: Report
 // =============================================================================
-phase('Report')
+phase('Report'); await __genomeReport('Report', meta.name)
 
 const finalGraphStats = graphStats()
 const finalReport = await agent(`Write a concise technical report for this ReGraphT optimization run.

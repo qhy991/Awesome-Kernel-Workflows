@@ -13,6 +13,22 @@ export const meta = {
   ],
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['triton'],
   supported_problem_types: ['triton-kernel-generation', 'operator-generation'],
@@ -280,7 +296,7 @@ function shouldUsePipeline(analysis) {
 // =============================================================================
 // Phase 1: Setup — Parse problem, generate test, initialize workspace
 // =============================================================================
-phase('Setup')
+phase('Setup'); await __genomeReport('Setup', meta.name)
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -386,7 +402,7 @@ log(`Session directory: ${sessionDir}`)
 // =============================================================================
 // Phase 2: Route — Static analysis to choose path
 // =============================================================================
-phase('Route')
+phase('Route'); await __genomeReport('Route', meta.name)
 
 const routeResult = await agent(`Analyze this problem to determine the optimal synthesis path.
 
@@ -486,7 +502,7 @@ Return a JSON object with:
 // =============================================================================
 // Phase 3: Generate — Parallel seed generation
 // =============================================================================
-phase('Generate')
+phase('Generate'); await __genomeReport('Generate', meta.name)
 
 const synthesisTargets = routingDecision.path === 'pipeline' && subgraphs.length > 0
   ? subgraphs.map(sg => ({
@@ -585,7 +601,7 @@ log(`Generated ${candidates.length} candidates (${validCandidates.length} valid,
 // =============================================================================
 // Phase 4: Verify — Sandboxed test execution
 // =============================================================================
-phase('Verify')
+phase('Verify'); await __genomeReport('Verify', meta.name)
 
 if (VERIFY && validCandidates.length > 0) {
   const verifyPromises = validCandidates.map(candidate => () =>
@@ -735,7 +751,7 @@ Return a JSON object with:
 // =============================================================================
 // Phase 5: Refine — Iterative refinement for failed candidates
 // =============================================================================
-phase('Refine')
+phase('Refine'); await __genomeReport('Refine', meta.name)
 
 const failedCandidates = candidates.filter(c => c.status === 'failed')
 let currentRound = 0
@@ -927,7 +943,7 @@ if (currentRound > 0) {
 // =============================================================================
 // Phase 6: Compose — Stitch subgraph kernels (pipeline path only)
 // =============================================================================
-phase('Compose')
+phase('Compose'); await __genomeReport('Compose', meta.name)
 
 if (routingDecision.path === 'pipeline' && subgraphs.length > 1 && COMPOSE && verifiedKernels.length > 0) {
   const composeResult = await agent(`You are a ${langToken(LEGACY_COMPOSE_LANG_TOKEN)} kernel composition expert. Stitch these verified subgraph kernels into a single, cohesive ${langToken(LEGACY_COMPOSE_LANG_TOKEN)} program.
@@ -1028,7 +1044,7 @@ ${USE_DRIVER ? driverSh('run.sh', `--kernel ${kernelFilename()} --test ${testFil
 // =============================================================================
 // Phase 7: Report — Final summary
 // =============================================================================
-phase('Report')
+phase('Report'); await __genomeReport('Report', meta.name)
 
 const bestKernel = verifiedKernels.length > 0 ? verifiedKernels[0] : null
 const finalCode = composedKernel || (bestKernel ? bestKernel.code : null)

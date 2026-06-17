@@ -26,6 +26,22 @@ export const meta = {
   skill_binding_mode: 'local_skills_plus_external_resources',
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda'],
   supported_problem_types: ['cuda-kernel-optimization', 'cuda-kernel-generation'],
@@ -233,7 +249,7 @@ function recordCandidate(id, parentId, status, code, metrics, reason) {
 // KDA step: "Read the repository structure, existing implementation, tests,
 //            and task documentation."
 // =============================================================================
-phase('Inspect')
+phase('Inspect'); await __genomeReport('Inspect', meta.name)
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -352,7 +368,7 @@ log(`Inspected: ${inspection.key_functions.length} key functions, approach: ${in
 // KDA step 4: "Convert the draft into an executable plan."
 // "Do not start implementation until the draft exists."
 // =============================================================================
-phase('Plan')
+phase('Plan'); await __genomeReport('Plan', meta.name)
 
 const draftResult = await agent(`Write a plan draft to docs/draft.md for this kernel optimization task.
 
@@ -486,7 +502,7 @@ for (iteration = 0; iteration < Math.min(planCandidates.length, MAX_CANDIDATES) 
   log(`\n=== Candidate ${iteration + 1}/${planCandidates.length}: ${candidate.title} ===`)
 
   // ---- Phase 3: Implement ----
-  phase('Implement')
+  phase('Implement'); await __genomeReport('Implement', meta.name)
 
   const impl = await agent(`Implement this optimization candidate as a complete, compilable kernel.
 
@@ -536,7 +552,7 @@ Return the complete implementation code.`, {
   const candidateCode = impl.code
 
   // ---- Phase 4: Validate ----
-  phase('Validate')
+  phase('Validate'); await __genomeReport('Validate', meta.name)
 
   const validation = await agent(`Validate this kernel candidate: run correctness and performance tests.
 
@@ -636,7 +652,7 @@ Return the validation results with MEASURED values when available, estimates onl
   }
 
   // ---- Phase 5: Decide ----
-  phase('Decide')
+  phase('Decide'); await __genomeReport('Decide', meta.name)
 
   const candidateMetrics = {
     latency_ms: validation.measured_latency_ms || validation.estimated_latency_ms,
@@ -684,7 +700,7 @@ Return the validation results with MEASURED values when available, estimates onl
 // KDA: "A future reader should be able to reconstruct what changed, what was
 //        measured, and why a candidate was promoted."
 // =============================================================================
-phase('Report')
+phase('Report'); await __genomeReport('Report', meta.name)
 
 const report = await agent(`Write the final optimization report.
 

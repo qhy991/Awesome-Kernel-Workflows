@@ -15,6 +15,22 @@ export const meta = {
   ],
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda'],
   supported_problem_types: ['cuda-kernel-optimization'],
@@ -244,7 +260,7 @@ function isBetter(candidate, incumbent) {
 // =============================================================================
 // Phase 1: Setup
 // =============================================================================
-phase('Setup')
+phase('Setup'); await __genomeReport('Setup', meta.name)
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -349,7 +365,7 @@ currentBestCode = initialKernelCode
 // =============================================================================
 // Phase 2: PrepareTests
 // =============================================================================
-phase('PrepareTests')
+phase('PrepareTests'); await __genomeReport('PrepareTests', meta.name)
 
 const tests = await agent(`You are Astra's Testing Agent. Build a correctness and benchmark test suite for this ${langToken(LEGACY_TESTING_LANG_TOKEN)} kernel.
 
@@ -396,7 +412,7 @@ testSuite = tests.test_cases || []
 // =============================================================================
 // Phase 3: ProfileBaseline
 // =============================================================================
-phase('ProfileBaseline')
+phase('ProfileBaseline'); await __genomeReport('ProfileBaseline', meta.name)
 
 baselineProfile = await agent(`You are Astra's Profiling Agent. Establish the baseline profile for the initial kernel.
 
@@ -442,7 +458,7 @@ Return baseline profile evidence.`, {
 for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
   log(`\n=== Astra iteration ${iteration + 1}/${MAX_ITERATIONS} | best=${bestResult?.speedup || 0}x ===`)
 
-  phase('Plan')
+  phase('Plan'); await __genomeReport('Plan', meta.name)
 
   const plan = await agent(`You are Astra's Planning Agent. Propose the next ${langToken(LEGACY_PLAN_LANG_TOKEN)} optimization.
 
@@ -487,7 +503,7 @@ Return a structured plan.`, {
     },
   })
 
-  phase('Code')
+  phase('Code'); await __genomeReport('Code', meta.name)
 
   const code = await agent(`You are Astra's Coding Agent. Apply the planning agent's optimization to the current best ${langToken(LEGACY_CODE_LANG_TOKEN)} kernel.
 
@@ -525,7 +541,7 @@ Return the candidate code and changed regions.`, {
     },
   })
 
-  phase('Evaluate')
+  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
 
   const evaluation = await agent(`You are Astra's Testing and Profiling Agents working together. Evaluate this candidate with real evidence.
 
@@ -609,7 +625,7 @@ Return evaluator evidence.`, {
     }
   }
 
-  phase('Record')
+  phase('Record'); await __genomeReport('Record', meta.name)
 
   const record = {
     iteration,
@@ -653,7 +669,7 @@ Return one or two concise lessons for the next Planning Agent. Focus on measured
 // =============================================================================
 // Phase 8: PostProcess
 // =============================================================================
-phase('PostProcess')
+phase('PostProcess'); await __genomeReport('PostProcess', meta.name)
 
 const postProcess = await agent(`Prepare final Astra post-processing guidance.
 
@@ -697,7 +713,7 @@ Return post-processing notes.`, {
 // =============================================================================
 // Phase 9: Report
 // =============================================================================
-phase('Report')
+phase('Report'); await __genomeReport('Report', meta.name)
 
 const finalReport = await agent(`Write a concise technical report for this Astra optimization campaign.
 

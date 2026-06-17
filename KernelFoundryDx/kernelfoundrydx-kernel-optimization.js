@@ -13,6 +13,22 @@ export const meta = {
   ],
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['triton'],
   supported_problem_types: ['triton-kernel-optimization', 'triton-kernel-generation'],
@@ -297,7 +313,7 @@ function updateHint(hintId, speedup, correct) {
 // =============================================================================
 // Phase: Setup — Read the reference task, baseline, seed the experience library
 // =============================================================================
-phase('Setup')
+phase('Setup'); await __genomeReport('Setup', meta.name)
 
 if (USE_DRIVER) {
   DRIVER = await agent(
@@ -420,7 +436,7 @@ log(`Baseline: ${baselineLatency}ms | seeded ${hintLibrary.length} hints`)
 // =============================================================================
 // Phase: Init — Expert-guided RAG initialization + anti-cheating validation
 // =============================================================================
-phase('Init')
+phase('Init'); await __genomeReport('Init', meta.name)
 
 const seeds = await parallel(
   Array.from({ length: SEED_CANDIDATES }, (_, i) => () =>
@@ -540,7 +556,7 @@ for (let iter = 0; iter < ITERATIONS; iter++) {
   // ===========================================================================
   // Phase: Evolve — each island mutates a parent (parallel across islands)
   // ===========================================================================
-  phase('Evolve')
+  phase('Evolve'); await __genomeReport('Evolve', meta.name)
 
   const mutations = await parallel(
     islands.map((island, islIdx) => () => {
@@ -602,7 +618,7 @@ Return JSON with the complete code, the applied hint(s), and a one-line summary 
   // ===========================================================================
   // Phase: Evaluate — compile + run on real hardware (lightweight signals)
   // ===========================================================================
-  phase('Evaluate')
+  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
 
   const variants = []
   for (let islIdx = 0; islIdx < islands.length; islIdx++) {
@@ -698,7 +714,7 @@ Return JSON.`, {
   // ===========================================================================
   // Phase: Diagnose — Result Analyzer (failure mode OR perf limiter) + hints
   // ===========================================================================
-  phase('Diagnose')
+  phase('Diagnose'); await __genomeReport('Diagnose', meta.name)
 
   const diagnoses = await parallel(
     variants.map((v, k) => () => {
@@ -756,7 +772,7 @@ Return JSON.`, {
   // ===========================================================================
   // Phase: Evolve-Pop — update populations, migrate elites, reinforce hints
   // ===========================================================================
-  phase('Evolve-Pop')
+  phase('Evolve-Pop'); await __genomeReport('Evolve-Pop', meta.name)
 
   for (let k = 0; k < variants.length; k++) {
     const v = variants[k]
@@ -869,7 +885,7 @@ Return JSON.`, {
 // =============================================================================
 // Phase: Report
 // =============================================================================
-phase('Report')
+phase('Report'); await __genomeReport('Report', meta.name)
 
 const finalReport = await agent(`Write a concise technical report for this Kernel Foundry (diagnosis-driven, multi-island) optimization run.
 

@@ -12,6 +12,22 @@ export const meta = {
   ],
 };
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda'],
   supported_problem_types: ['cuda-kernel-generation', 'cuda-kernel-optimization'],
@@ -154,7 +170,7 @@ async function main() {
   // ============================================================================
   // Phase 1: Setup
   // ============================================================================
-  phase('Setup');
+  phase('Setup'); await __genomeReport('Setup', meta.name);
 
   if (USE_DRIVER) {
     DRIVER = await agent(
@@ -288,7 +304,7 @@ Return JSON:
 
     if (shouldReplan && attempt > 0) {
       log('Adaptive replanning triggered');
-      phase('Replan');
+      phase('Replan'); await __genomeReport('Replan', meta.name);
 
       const replanResult = await agent(
         `Adaptive replanning triggered (Attempt ${attempt + 1}):
@@ -348,7 +364,7 @@ Return JSON:
     // ==========================================================================
     // Phase 2: Plan (Planner Agent)
     // ==========================================================================
-    phase('Plan');
+    phase('Plan'); await __genomeReport('Plan', meta.name);
 
     const planContext = shouldReplan && attempt > 0
       ? `Replanned approach from previous attempt`
@@ -446,7 +462,7 @@ Return JSON:
     // ==========================================================================
     // Phase 3: Code (Coder Agent)
     // ==========================================================================
-    phase('Code');
+    phase('Code'); await __genomeReport('Code', meta.name);
 
     log('Coder: Generating CUDA kernel...');
 
@@ -546,7 +562,7 @@ Return JSON:
     // ==========================================================================
     // Phase 4: Verify (Verifier Agent)
     // ==========================================================================
-    phase('Verify');
+    phase('Verify'); await __genomeReport('Verify', meta.name);
 
     log('Verifier: Checking correctness and performance...');
 
@@ -671,7 +687,7 @@ Return JSON:
   // ============================================================================
   // Phase 6: Report
   // ============================================================================
-  phase('Report');
+  phase('Report'); await __genomeReport('Report', meta.name);
 
   if (!bestKernel) {
     log('No successful kernel found');

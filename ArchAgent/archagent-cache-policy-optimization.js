@@ -14,6 +14,22 @@ export const meta = {
   ],
 };
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cpp'],
   supported_problem_types: ['cache-policy-search'],
@@ -81,7 +97,7 @@ async function main() {
   // ============================================================================
   // Phase 1: Setup
   // ============================================================================
-  phase('Setup');
+  phase('Setup'); await __genomeReport('Setup', meta.name);
 
   const setupResult = await agent(
     `Set up ArchAgent evolutionary search environment:
@@ -161,7 +177,7 @@ Return JSON:
   // ============================================================================
   // Phase 2: Initialize Population
   // ============================================================================
-  phase('Initialize Population');
+  phase('Initialize Population'); await __genomeReport('Initialize Population', meta.name);
 
   log(`Generating initial population for ${numIslands} islands...`);
 
@@ -255,7 +271,7 @@ Return JSON:
     // ==========================================================================
     // Phase 3: Short Evaluation
     // ==========================================================================
-    phase('Short Evaluation');
+    phase('Short Evaluation'); await __genomeReport('Short Evaluation', meta.name);
 
     log(`Evaluating all candidates on ${setupResult.short_eval_traces || 5} traces...`);
 
@@ -405,7 +421,7 @@ Return fitness, IPC speedup, constraints check.`,
     // ==========================================================================
     // Phase 4: Evolution (Mutation & Crossover)
     // ==========================================================================
-    phase('Evolution');
+    phase('Evolution'); await __genomeReport('Evolution', meta.name);
 
     log('Applying evolutionary operators...');
 
@@ -500,7 +516,7 @@ Return JSON:
     // Phase 5: Island Migration
     // ==========================================================================
     if (generation > 0 && generation % 5 === 0) {
-      phase('Island Migration');
+      phase('Island Migration'); await __genomeReport('Island Migration', meta.name);
 
       log('Migrating elite candidates between islands...');
 
@@ -539,7 +555,7 @@ Return JSON:
   // ============================================================================
   // Phase 6: Long Evaluation
   // ============================================================================
-  phase('Long Evaluation');
+  phase('Long Evaluation'); await __genomeReport('Long Evaluation', meta.name);
 
   log('Performing comprehensive evaluation on top candidates...');
 
@@ -616,7 +632,7 @@ Return JSON:
   // ============================================================================
   // Phase 7: Validation
   // ============================================================================
-  phase('Validation');
+  phase('Validation'); await __genomeReport('Validation', meta.name);
 
   const validationResult = await agent(
     `Perform final validation and anti-cheating checks:
@@ -675,7 +691,7 @@ Return JSON:
   // ============================================================================
   // Phase 8: Report
   // ============================================================================
-  phase('Report');
+  phase('Report'); await __genomeReport('Report', meta.name);
 
   const report = await agent(
     `Generate ArchAgent evolutionary search report:

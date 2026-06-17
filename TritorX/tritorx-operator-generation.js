@@ -12,6 +12,22 @@ export const meta = {
   ],
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['triton'],
   supported_problem_types: ['aten-triton-operator-generation', 'operator-generation'],
@@ -158,7 +174,7 @@ const operators = OPERATOR_LIST.length > 0
 // =============================================================================
 // Phase 1: Setup — Parse operators, prepare harness
 // =============================================================================
-phase('Setup')
+phase('Setup'); await __genomeReport('Setup', meta.name)
 
 const setupResult = await agent(`You are setting up a TritorX kernel generation session.
 
@@ -222,7 +238,7 @@ for (const op of operators) {
     // =========================================================================
     // Phase 2: Generate — LLM produces Triton kernel + wrapper
     // =========================================================================
-    phase('Generate')
+    phase('Generate'); await __genomeReport('Generate', meta.name)
 
     const generateResult = await agent(`You are a TritorX kernel generator. Generate a Triton ${TRITON_DIALECT} kernel and Python wrapper for this PyTorch ATen operator.
 
@@ -281,7 +297,7 @@ Attempt ${attempt + 1}/${MAX_ATTEMPTS}, LLM call ${llmCallsThisAttempt + 1}/${MA
         // =====================================================================
         // Phase 3: Lint — Custom linter checks
         // =====================================================================
-        phase('Lint')
+        phase('Lint'); await __genomeReport('Lint', meta.name)
 
         const lintResult = await agent(`You are the TritorX Custom Linter (Section 3.2).
 Check this Triton kernel + wrapper for violations.
@@ -333,7 +349,7 @@ Return lint results.`, {
         // =====================================================================
         // Phase 4: Compile-Test — JIT compile + OpInfo tests
         // =====================================================================
-        phase('Compile-Test')
+        phase('Compile-Test'); await __genomeReport('Compile-Test', meta.name)
 
         const testResult = await agent(`You are the TritorX Compile/Test executor.
 Compile and test this kernel on ${TARGET_PLATFORM}.
@@ -396,7 +412,7 @@ Report: compilation status, tests passed/failed, error details.`, {
         // =====================================================================
         // Phase 5: Debug — Analyze failure, regenerate
         // =====================================================================
-        phase('Debug')
+        phase('Debug'); await __genomeReport('Debug', meta.name)
 
         const debugResult = await agent(`You are the TritorX Debug agent. Fix this kernel based on the error feedback.
 
@@ -466,7 +482,7 @@ LLM call ${llmCallsThisAttempt + 1}/${MAX_LLM_CALLS}`, {
 // =============================================================================
 // Phase 6: Report
 // =============================================================================
-phase('Report')
+phase('Report'); await __genomeReport('Report', meta.name)
 
 const coverage = operators.length > 0 ? (operatorsPassed.length / operators.length * 100).toFixed(1) : '0'
 

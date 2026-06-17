@@ -14,6 +14,22 @@ export const meta = {
   ],
 }
 
+// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
+// Self-reported, work-plane (forgeable) stage trace for observability + the
+// recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
+async function __genomeReport(phaseName, wfName) {
+  try {
+    const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
+    await agent(
+      'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
+      'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
+      'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
+      { label: 'genome:' + phaseName, phase: phaseName }
+    )
+  } catch (__e) { /* observability must never break the workflow */ }
+}
+// --- END genome-report ---
+
 const WORKFLOW_SUITABILITY = {
   supported_languages: ['cuda'],
   supported_problem_types: ['cuda-kernel-generation', 'cuda-kernel-optimization'],
@@ -217,7 +233,7 @@ const ANTICHEAT_SCHEMA = {
   required: ['valid', 'reward', 'recorded_speedup'],
 }
 
-phase('Setup')
+phase('Setup'); await __genomeReport('Setup', meta.name)
 log(`Generalist solver | beam | breadth=${BREADTH} topk=${TOPK} iters=${ITERATIONS} target=${TARGET}x | models ${MODEL.mechanical}/${MODEL.profile}/${MODEL.judgment} | budget ${(typeof budget !== 'undefined' && budget.total) ? Math.round(budget.total / 1000) + 'k' : 'unbounded'}`)
 
 if (USE_DRIVER) {
@@ -332,7 +348,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
     : BREADTH
 
   // ---- Profile (Layer C input) ----
-  phase('Profile')
+  phase('Profile'); await __genomeReport('Profile', meta.name)
   const metrics = await agent(
     `Profile the current best kernel and produce normalized metrics.\n` +
     `Kernel: ${best.code_path}\nOp: ${OP}\n` +
@@ -345,7 +361,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
     { label: `profile-${iter}`, phase: 'Profile', schema: METRICS_SCHEMA, model: MODEL.profile })
 
   // ---- Diagnose (Layer C, deterministic script) ----
-  phase('Diagnose')
+  phase('Diagnose'); await __genomeReport('Diagnose', meta.name)
   const diag = await agent(
     `Write these metrics to ${EXP_DIR}/run-${iter}/metrics.json:\n${JSON.stringify(metrics.metrics || {})}\n` +
     `${substrateInstruction('diagnose.py', `--metrics ${EXP_DIR}/run-${iter}/metrics.json`)} ` +
@@ -355,7 +371,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
   log(`bottleneck_class = ${bclass}`)
 
   // ---- Retrieve memory (Layer D) + gate methods (Layer E) ----
-  phase('Retrieve')
+  phase('Retrieve'); await __genomeReport('Retrieve', meta.name)
   const [mem, gate] = await parallel([
     () => agent(
       `${substrateInstruction('memory_store.py', `--db ${MEMORY_DB} retrieve --class ${bclass}`)} ` +
@@ -372,7 +388,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
   log(`allowed_methods = ${allowed.join(', ')} | prior techniques = ${priorTech.length} | dead-ends = ${deadEnds.length}`)
 
   // ---- Plan: BREADTH gated plans with grounded anchors (STARK borrow) ----
-  phase('Plan')
+  phase('Plan'); await __genomeReport('Plan', meta.name)
   const planContext =
     `# Bottleneck: ${bclass}\n# Allowed methods (you MUST stay within these): ${allowed.join(', ')}\n` +
     `# Prior techniques by confidence: ${JSON.stringify(priorTech.slice(0, 5))}\n` +
@@ -388,7 +404,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
   ).filter(Boolean)
 
   // ---- Evaluate each plan: implement -> eval -> anti-cheat (Layers B, A) ----
-  phase('Evaluate')
+  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
   const evaluated = (await parallel(plans.map((p, i) => () => (async () => {
     const runDir = `${EXP_DIR}/run-${iter}/cand-${i + 1}`
     const m = await agent(
@@ -443,7 +459,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
   }
 
   // ---- Learn: update persistent memory (Layer D) per measured outcome ----
-  phase('Learn')
+  phase('Learn'); await __genomeReport('Learn', meta.name)
   await parallel(evaluated.map((e) => () => {
     const updateArgs = `--db ${MEMORY_DB} update --class ${bclass} --technique ${e.plan.method} --speedup ${e.metrics.speedup || 0} --correct ${e.metrics.correct ? 1 : 0}`
     const deadendArgs = `--db ${MEMORY_DB} add-deadend --claim ${JSON.stringify(e.plan.method)} --why ${JSON.stringify(e.anticheat.reward_reason || (e.anticheat.blocking_flags || []).join(','))} --revalidate-if "metrics change"`
@@ -498,7 +514,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
 }
 
 // ---- Report + Layer A evidence envelope ----
-phase('Report')
+phase('Report'); await __genomeReport('Report', meta.name)
 const status = bestSpeedup >= TARGET ? 'converged' : ((stagnantRounds >= STAGNATION_LIMIT || dryRounds >= DRY_LIMIT) ? 'stalled' : 'budget_exhausted')
 await agent(
   `Write a final optimization report for ${OP}.\n` +
