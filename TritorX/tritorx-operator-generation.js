@@ -12,6 +12,44 @@ export const meta = {
   ],
 }
 
+const WORKFLOW_NAME = 'tritorx-operator-generation'
+
+
+// --- BEGIN inlined arg_guard (Workflow runtime parses scripts as bare scripts,
+//                              not ES modules; static imports are rejected) ---
+function __unwrapArgs(rawArgs) {
+  if (rawArgs == null) return {}
+  if (typeof rawArgs === 'object' && !Array.isArray(rawArgs)) return rawArgs
+  if (typeof rawArgs === 'string') {
+    const trimmed = rawArgs.trim()
+    if (trimmed === '') return {}
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+        throw new Error('arg_guard: parsed JSON value is not a plain object')
+      } catch (e) { throw new Error(`arg_guard: invalid JSON args: ${e.message}`) }
+    }
+    const out = {}
+    const re = /(\w[\w.-]*)=("(?:\\\\\"|[^"])*"|\'(?:\\\\\'|[^\'])*\'|\S+)/g
+    let m
+    while ((m = re.exec(trimmed)) !== null) {
+      let v = m[2]
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1)
+      }
+      out[m[1]] = v
+    }
+    if (Object.keys(out).length === 0) {
+      throw new Error(`arg_guard: workflow args is a non-empty string but contains no key=value pairs and is not JSON. First 160 chars: ${trimmed.slice(0, 160)}`)
+    }
+    return out
+  }
+  throw new Error(`arg_guard: workflow args has unexpected type: ${typeof rawArgs}`)
+}
+// eslint-disable-next-line no-global-assign
+args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
+// --- END inlined arg_guard ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
@@ -53,7 +91,7 @@ function assertWorkflowSuitability() {
     const supported = WORKFLOW_SUITABILITY.supported_languages.map(normalizeSuitabilityValue)
     if (!supported.includes(requestedLanguage)) {
       throw new Error(
-        `${meta.name} is not suitable for language="${args.language}". ` +
+        `${WORKFLOW_NAME} is not suitable for language="${args.language}". ` +
         `Supported languages/backends: ${WORKFLOW_SUITABILITY.supported_languages.join(', ')}. ` +
         `Reason: ${WORKFLOW_SUITABILITY.reason}`
       )
@@ -65,7 +103,7 @@ function assertWorkflowSuitability() {
     const supportedProblemTypes = (WORKFLOW_SUITABILITY.supported_problem_types || []).map(normalizeSuitabilityValue)
     if (supportedProblemTypes.length && !supportsSuitabilityValue(supportedProblemTypes, requestedProblemType)) {
       throw new Error(
-        `${meta.name} is not suitable for problem_type="${args.problem_type}". ` +
+        `${WORKFLOW_NAME} is not suitable for problem_type="${args.problem_type}". ` +
         `Supported problem types: ${WORKFLOW_SUITABILITY.supported_problem_types.join(', ')}. ` +
         `Typical use cases: ${WORKFLOW_SUITABILITY.problem_types.join('; ')}. ` +
         `Reason: ${WORKFLOW_SUITABILITY.reason}`
@@ -194,7 +232,7 @@ Return setup status.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"harness_setup","note":"<platform/dialect, operator count, harness_evidence, key signatures/constraints, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Setup","ts":"<ts>","status":"done","technique":"harness_setup","note":"<platform/dialect, operator count, harness_evidence, key signatures/constraints, one line>"}`, {
   label: 'setup',
   phase: 'Setup',
   schema: {
@@ -269,7 +307,7 @@ Attempt ${attempt + 1}/${MAX_ATTEMPTS}, LLM call ${llmCallsThisAttempt + 1}/${MA
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (operator ${opName}, attempt ${attempt}):
-{"workflow":"${meta.name}","phase":"Generate","ts":"<ts>","status":"done","candidate_id":"${opName}","technique":"<core kernel approach you generated, e.g. block_reduction>","speedup":null,"note":"<implementation approach, masking/dtype handling, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Generate","ts":"<ts>","status":"done","candidate_id":"${opName}","technique":"<core kernel approach you generated, e.g. block_reduction>","speedup":null,"note":"<implementation approach, masking/dtype handling, one line>"}`, {
       label: `generate-${opName}-a${attempt}`,
       phase: 'Generate',
       schema: {
@@ -327,7 +365,7 @@ Return lint results.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (operator ${opName}, status="done" if lint passed else "error"):
-{"workflow":"${meta.name}","phase":"Lint","ts":"<ts>","status":"<done|error>","candidate_id":"${opName}","technique":"custom_triton_linter","speedup":null,"note":"<passed? else top violations + severity, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Lint","ts":"<ts>","status":"<done|error>","candidate_id":"${opName}","technique":"custom_triton_linter","speedup":null,"note":"<passed? else top violations + severity, one line>"}`, {
           label: `lint-${opName}-a${attempt}-c${llmCallsThisAttempt}`,
           phase: 'Lint',
           schema: {
@@ -382,7 +420,7 @@ Report: compilation status, tests passed/failed, error details.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append, using the values you just measured (status="done" if all_passed, else "error"):
-{"workflow":"${meta.name}","phase":"Compile-Test","ts":"<ts>","status":"<done|error>","candidate_id":"${opName}","technique":"jit_compile_opinfo","speedup":null,"note":"<compiled? tests_passed/tests_total; failure_type + failing_dtypes if any, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Compile-Test","ts":"<ts>","status":"<done|error>","candidate_id":"${opName}","technique":"jit_compile_opinfo","speedup":null,"note":"<compiled? tests_passed/tests_total; failure_type + failing_dtypes if any, one line>"}`, {
           label: `test-${opName}-a${attempt}-c${llmCallsThisAttempt}`,
           phase: 'Compile-Test',
           schema: {
@@ -453,7 +491,7 @@ LLM call ${llmCallsThisAttempt + 1}/${MAX_LLM_CALLS}
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (operator ${opName}, attempt ${attempt}):
-{"workflow":"${meta.name}","phase":"Debug","ts":"<ts>","status":"done","candidate_id":"${opName}","technique":"<the fix you applied, e.g. fix_memory_alignment>","speedup":null,"note":"<root cause from the error feedback + what you changed, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Debug","ts":"<ts>","status":"done","candidate_id":"${opName}","technique":"<the fix you applied, e.g. fix_memory_alignment>","speedup":null,"note":"<root cause from the error feedback + what you changed, one line>"}`, {
           label: `debug-${opName}-a${attempt}-c${llmCallsThisAttempt}`,
           phase: 'Debug',
           schema: {
@@ -527,7 +565,7 @@ Write:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"done","technique":"coverage_report","speedup":null,"note":"<operators passed/attempted, coverage %, dominant failure pattern, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Report","ts":"<ts>","status":"done","technique":"coverage_report","speedup":null,"note":"<operators passed/attempted, coverage %, dominant failure pattern, one line>"}`, {
   label: 'final-report',
   phase: 'Report',
 })

@@ -64,6 +64,44 @@ export const meta = {
   phases: {{PHASES_ARRAY}},
 }
 
+const WORKFLOW_NAME = '{{META_NAME}}'
+
+
+// --- BEGIN inlined arg_guard (Workflow runtime parses scripts as bare scripts,
+//                              not ES modules; static imports are rejected) ---
+function __unwrapArgs(rawArgs) {
+  if (rawArgs == null) return {}
+  if (typeof rawArgs === 'object' && !Array.isArray(rawArgs)) return rawArgs
+  if (typeof rawArgs === 'string') {
+    const trimmed = rawArgs.trim()
+    if (trimmed === '') return {}
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+        throw new Error('arg_guard: parsed JSON value is not a plain object')
+      } catch (e) { throw new Error(`arg_guard: invalid JSON args: ${e.message}`) }
+    }
+    const out = {}
+    const re = /(\w[\w.-]*)=("(?:\\\\\"|[^"])*"|\'(?:\\\\\'|[^\'])*\'|\S+)/g
+    let m
+    while ((m = re.exec(trimmed)) !== null) {
+      let v = m[2]
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1)
+      }
+      out[m[1]] = v
+    }
+    if (Object.keys(out).length === 0) {
+      throw new Error(`arg_guard: workflow args is a non-empty string but contains no key=value pairs and is not JSON. First 160 chars: ${trimmed.slice(0, 160)}`)
+    }
+    return out
+  }
+  throw new Error(`arg_guard: workflow args has unexpected type: ${typeof rawArgs}`)
+}
+// eslint-disable-next-line no-global-assign
+args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
+// --- END inlined arg_guard ---
 // --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
 // Self-reported, work-plane (forgeable) stage trace for observability + the
 // recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
@@ -114,14 +152,14 @@ let cycleCount = 0             // Number of completed search cycles
 // =============================================================================
 // Phase: Setup — Read target artifact, establish baseline
 // =============================================================================
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup'); await __genomeReport('Setup', WORKFLOW_NAME)
 
 {{SETUP_AGENTS}}
 
 // =============================================================================
 // Phase: Initialize — Build the search tree / world model
 // =============================================================================
-phase('Initialize'); await __genomeReport('Initialize', meta.name)
+phase('Initialize'); await __genomeReport('Initialize', WORKFLOW_NAME)
 
 const initResult = await agent(`{{INIT_TREE_PROMPT}}`, {
   label: 'init-tree',
@@ -142,7 +180,7 @@ for (let cycle = 0; cycle < {{MAX_CYCLES_VAR}}; cycle++) {
   // ===========================================================================
   // Phase: Select — Choose the best frontier action node
   // ===========================================================================
-  phase('Select'); await __genomeReport('Select', meta.name)
+  phase('Select'); await __genomeReport('Select', WORKFLOW_NAME)
 
   const selection = await agent(`{{SELECT_PROMPT}}
 
@@ -171,7 +209,7 @@ ${JSON.stringify(decisionTree, null, 2).substring(0, 6000)}
   // ===========================================================================
   // Phase: Generate — Create kernel implementation for the selected action
   // ===========================================================================
-  phase('Generate'); await __genomeReport('Generate', meta.name)
+  phase('Generate'); await __genomeReport('Generate', WORKFLOW_NAME)
 
   //[BLOCK:multi_attempt]
   let cycleBestCode = null
@@ -222,7 +260,7 @@ ${JSON.stringify(cycleBestEval || {}).substring(0, 2000)}
     // =========================================================================
     // Phase: Evaluate — Measure the generated variant
     // =========================================================================
-    phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
+    phase('Evaluate'); await __genomeReport('Evaluate', WORKFLOW_NAME)
 
     const evalResult = await agent(`{{EVALUATE_PROMPT}}
 
@@ -275,7 +313,7 @@ ${genResult.code.substring(0, 5000)}
   // ===========================================================================
   // Phase: Refine or Backtrack — Update the tree based on cycle outcome
   // ===========================================================================
-  phase('Refine'); await __genomeReport('Refine', meta.name)
+  phase('Refine'); await __genomeReport('Refine', WORKFLOW_NAME)
 
   const cycleSucceeded = cycleBestEval && cycleBestEval.is_valid
 
@@ -350,7 +388,7 @@ Tasks:
 // =============================================================================
 // Final Report
 // =============================================================================
-phase('Report'); await __genomeReport('Report', meta.name)
+phase('Report'); await __genomeReport('Report', WORKFLOW_NAME)
 
 const finalReport = await agent(`{{REPORT_PROMPT}}
 

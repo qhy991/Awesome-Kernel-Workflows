@@ -14,6 +14,44 @@ export const meta = {
   ],
 }
 
+const WORKFLOW_NAME = 'stark-kernel-optimization'
+
+
+// --- BEGIN inlined arg_guard (Workflow runtime parses scripts as bare scripts,
+//                              not ES modules; static imports are rejected) ---
+function __unwrapArgs(rawArgs) {
+  if (rawArgs == null) return {}
+  if (typeof rawArgs === 'object' && !Array.isArray(rawArgs)) return rawArgs
+  if (typeof rawArgs === 'string') {
+    const trimmed = rawArgs.trim()
+    if (trimmed === '') return {}
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+        throw new Error('arg_guard: parsed JSON value is not a plain object')
+      } catch (e) { throw new Error(`arg_guard: invalid JSON args: ${e.message}`) }
+    }
+    const out = {}
+    const re = /(\w[\w.-]*)=("(?:\\\\\"|[^"])*"|\'(?:\\\\\'|[^\'])*\'|\S+)/g
+    let m
+    while ((m = re.exec(trimmed)) !== null) {
+      let v = m[2]
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1)
+      }
+      out[m[1]] = v
+    }
+    if (Object.keys(out).length === 0) {
+      throw new Error(`arg_guard: workflow args is a non-empty string but contains no key=value pairs and is not JSON. First 160 chars: ${trimmed.slice(0, 160)}`)
+    }
+    return out
+  }
+  throw new Error(`arg_guard: workflow args has unexpected type: ${typeof rawArgs}`)
+}
+// eslint-disable-next-line no-global-assign
+args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
+// --- END inlined arg_guard ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
@@ -55,7 +93,7 @@ function assertWorkflowSuitability() {
     const supported = WORKFLOW_SUITABILITY.supported_languages.map(normalizeSuitabilityValue)
     if (!supported.includes(requestedLanguage)) {
       throw new Error(
-        `${meta.name} is not suitable for language="${args.language}". ` +
+        `${WORKFLOW_NAME} is not suitable for language="${args.language}". ` +
         `Supported languages/backends: ${WORKFLOW_SUITABILITY.supported_languages.join(', ')}. ` +
         `Reason: ${WORKFLOW_SUITABILITY.reason}`
       )
@@ -67,7 +105,7 @@ function assertWorkflowSuitability() {
     const supportedProblemTypes = (WORKFLOW_SUITABILITY.supported_problem_types || []).map(normalizeSuitabilityValue)
     if (supportedProblemTypes.length && !supportsSuitabilityValue(supportedProblemTypes, requestedProblemType)) {
       throw new Error(
-        `${meta.name} is not suitable for problem_type="${args.problem_type}". ` +
+        `${WORKFLOW_NAME} is not suitable for problem_type="${args.problem_type}". ` +
         `Supported problem types: ${WORKFLOW_SUITABILITY.supported_problem_types.join(', ')}. ` +
         `Typical use cases: ${WORKFLOW_SUITABILITY.problem_types.join('; ')}. ` +
         `Reason: ${WORKFLOW_SUITABILITY.reason}`
@@ -496,7 +534,7 @@ Return ONLY a JSON object with:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"read_reference_kernel","note":"<op_type + optimization assessment + top potential direction, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Setup","ts":"<ts>","status":"done","technique":"read_reference_kernel","note":"<op_type + optimization assessment + top potential direction, one line>"}`, {
   label: 'setup-read-reference',
   phase: 'Setup',
   schema: {
@@ -662,7 +700,7 @@ Return a JSON object with:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Debug","ts":"<ts>","status":"done","candidate_id":"node_${attemptCount}","technique":"debug_fix","speedup":null,"note":"<what was wrong + how it was fixed + confidence, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Debug","ts":"<ts>","status":"done","candidate_id":"node_${attemptCount}","technique":"debug_fix","speedup":null,"note":"<what was wrong + how it was fixed + confidence, one line>"}`, {
       label: `debug-${selectedId}-a${attemptCount}`,
       phase: 'Debug',
       schema: {
@@ -711,7 +749,7 @@ Return a JSON object with:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Plan","ts":"<ts>","status":"done","candidate_id":"node_${attemptCount}","technique":"<the single optimization you propose, e.g. shared_memory_tiling>","speedup":null,"note":"<rationale for this optimization, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Plan","ts":"<ts>","status":"done","candidate_id":"node_${attemptCount}","technique":"<the single optimization you propose, e.g. shared_memory_tiling>","speedup":null,"note":"<rationale for this optimization, one line>"}`, {
       label: `plan-${selectedId}-a${attemptCount}`,
       phase: 'Plan',
       schema: {
@@ -780,7 +818,7 @@ Return a JSON object with:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Code","ts":"<ts>","status":"done","candidate_id":"node_${attemptCount}","technique":"<the optimization you realized into code>","speedup":null,"note":"<how the anchors were resolved into concrete code, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Code","ts":"<ts>","status":"done","candidate_id":"node_${attemptCount}","technique":"<the optimization you realized into code>","speedup":null,"note":"<how the anchors were resolved into concrete code, one line>"}`, {
       label: `code-${selectedId}-a${attemptCount}`,
       phase: 'Code',
       schema: {
@@ -828,7 +866,7 @@ Return JSON with:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append, using the values you just measured (status="done" if compiled AND correct, else "error"; speedup is the measured speedup_vs_baseline number, or null if unavailable):
-{"workflow":"${meta.name}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"node_${attemptCount}","speedup":<number or null>,"technique":"evaluate_candidate","note":"<compile_ok? correct? runtime_ms; or the error_category and failure reason>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"node_${attemptCount}","speedup":<number or null>,"technique":"evaluate_candidate","note":"<compile_ok? correct? runtime_ms; or the error_category and failure reason>"}`, {
     label: `eval-a${attemptCount}`,
     phase: 'Evaluate',
     schema: {
@@ -982,7 +1020,7 @@ Return a JSON object with:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append, using the session outcome (status="done" if outcome is success or partial, else "error"; speedup is the best speedup number, or null if unavailable):
-{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"<done|error>","speedup":<number or null>,"technique":"session_report","note":"<outcome + best runtime vs baseline + best_kernel_id, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Report","ts":"<ts>","status":"<done|error>","speedup":<number or null>,"technique":"session_report","note":"<outcome + best runtime vs baseline + best_kernel_id, one line>"}`, {
   label: 'report-final',
   phase: 'Report',
   schema: {

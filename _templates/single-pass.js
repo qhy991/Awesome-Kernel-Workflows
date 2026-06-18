@@ -38,6 +38,44 @@ export const meta = {
   phases: {{PHASES_ARRAY}},
 }
 
+const WORKFLOW_NAME = '{{META_NAME}}'
+
+
+// --- BEGIN inlined arg_guard (Workflow runtime parses scripts as bare scripts,
+//                              not ES modules; static imports are rejected) ---
+function __unwrapArgs(rawArgs) {
+  if (rawArgs == null) return {}
+  if (typeof rawArgs === 'object' && !Array.isArray(rawArgs)) return rawArgs
+  if (typeof rawArgs === 'string') {
+    const trimmed = rawArgs.trim()
+    if (trimmed === '') return {}
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+        throw new Error('arg_guard: parsed JSON value is not a plain object')
+      } catch (e) { throw new Error(`arg_guard: invalid JSON args: ${e.message}`) }
+    }
+    const out = {}
+    const re = /(\w[\w.-]*)=("(?:\\\\\"|[^"])*"|\'(?:\\\\\'|[^\'])*\'|\S+)/g
+    let m
+    while ((m = re.exec(trimmed)) !== null) {
+      let v = m[2]
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1)
+      }
+      out[m[1]] = v
+    }
+    if (Object.keys(out).length === 0) {
+      throw new Error(`arg_guard: workflow args is a non-empty string but contains no key=value pairs and is not JSON. First 160 chars: ${trimmed.slice(0, 160)}`)
+    }
+    return out
+  }
+  throw new Error(`arg_guard: workflow args has unexpected type: ${typeof rawArgs}`)
+}
+// eslint-disable-next-line no-global-assign
+args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
+// --- END inlined arg_guard ---
 // --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
 // Self-reported, work-plane (forgeable) stage trace for observability + the
 // recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
@@ -80,7 +118,7 @@ async function __genomeReport(phaseName, wfName) {
 // =============================================================================
 // Phase: Analyze — Identify transformation opportunities
 // =============================================================================
-phase('Analyze'); await __genomeReport('Analyze', meta.name)
+phase('Analyze'); await __genomeReport('Analyze', WORKFLOW_NAME)
 
 const analysis = await agent(`{{ANALYZE_PROMPT}}`, {
   label: 'analyze-kernel',
@@ -102,7 +140,7 @@ log(`Applicable passes: ${applicablePasses.join(' → ')}`)
 // =============================================================================
 // Phase: Transform — Apply optimization passes sequentially
 // =============================================================================
-phase('Transform'); await __genomeReport('Transform', meta.name)
+phase('Transform'); await __genomeReport('Transform', WORKFLOW_NAME)
 
 let currentCode = analysis.source_code || ''
 const transformResults = []
@@ -141,7 +179,7 @@ log(`Transforms applied: ${transformResults.length}/${applicablePasses.length}`)
 // =============================================================================
 // Phase: Verify — Check correctness of the final transformed code
 // =============================================================================
-phase('Verify'); await __genomeReport('Verify', meta.name)
+phase('Verify'); await __genomeReport('Verify', WORKFLOW_NAME)
 
 const verification = await agent(`{{VERIFY_PROMPT}}
 
@@ -168,7 +206,7 @@ log(`Verification: ${verification.is_correct ? 'PASSED' : 'FAILED'} — ${verifi
 // =============================================================================
 // Phase: Report — Summary of transformations
 // =============================================================================
-phase('Report'); await __genomeReport('Report', meta.name)
+phase('Report'); await __genomeReport('Report', WORKFLOW_NAME)
 
 const finalReport = await agent(`{{REPORT_PROMPT}}
 

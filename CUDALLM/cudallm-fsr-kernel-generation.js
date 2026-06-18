@@ -14,6 +14,44 @@ export const meta = {
   ],
 }
 
+const WORKFLOW_NAME = 'cudallm-fsr-kernel-generation'
+
+
+// --- BEGIN inlined arg_guard (Workflow runtime parses scripts as bare scripts,
+//                              not ES modules; static imports are rejected) ---
+function __unwrapArgs(rawArgs) {
+  if (rawArgs == null) return {}
+  if (typeof rawArgs === 'object' && !Array.isArray(rawArgs)) return rawArgs
+  if (typeof rawArgs === 'string') {
+    const trimmed = rawArgs.trim()
+    if (trimmed === '') return {}
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+        throw new Error('arg_guard: parsed JSON value is not a plain object')
+      } catch (e) { throw new Error(`arg_guard: invalid JSON args: ${e.message}`) }
+    }
+    const out = {}
+    const re = /(\w[\w.-]*)=("(?:\\\\\"|[^"])*"|\'(?:\\\\\'|[^\'])*\'|\S+)/g
+    let m
+    while ((m = re.exec(trimmed)) !== null) {
+      let v = m[2]
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1)
+      }
+      out[m[1]] = v
+    }
+    if (Object.keys(out).length === 0) {
+      throw new Error(`arg_guard: workflow args is a non-empty string but contains no key=value pairs and is not JSON. First 160 chars: ${trimmed.slice(0, 160)}`)
+    }
+    return out
+  }
+  throw new Error(`arg_guard: workflow args has unexpected type: ${typeof rawArgs}`)
+}
+// eslint-disable-next-line no-global-assign
+args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
+// --- END inlined arg_guard ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
@@ -55,7 +93,7 @@ function assertWorkflowSuitability() {
     const supported = WORKFLOW_SUITABILITY.supported_languages.map(normalizeSuitabilityValue)
     if (!supported.includes(requestedLanguage)) {
       throw new Error(
-        `${meta.name} is not suitable for language="${args.language}". ` +
+        `${WORKFLOW_NAME} is not suitable for language="${args.language}". ` +
         `Supported languages/backends: ${WORKFLOW_SUITABILITY.supported_languages.join(', ')}. ` +
         `Reason: ${WORKFLOW_SUITABILITY.reason}`
       )
@@ -67,7 +105,7 @@ function assertWorkflowSuitability() {
     const supportedProblemTypes = (WORKFLOW_SUITABILITY.supported_problem_types || []).map(normalizeSuitabilityValue)
     if (supportedProblemTypes.length && !supportsSuitabilityValue(supportedProblemTypes, requestedProblemType)) {
       throw new Error(
-        `${meta.name} is not suitable for problem_type="${args.problem_type}". ` +
+        `${WORKFLOW_NAME} is not suitable for problem_type="${args.problem_type}". ` +
         `Supported problem types: ${WORKFLOW_SUITABILITY.supported_problem_types.join(', ')}. ` +
         `Typical use cases: ${WORKFLOW_SUITABILITY.problem_types.join('; ')}. ` +
         `Reason: ${WORKFLOW_SUITABILITY.reason}`
@@ -332,7 +370,7 @@ Return structured task information.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"task_setup","note":"<operation type + key constraints/contract, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Setup","ts":"<ts>","status":"done","technique":"task_setup","note":"<operation type + key constraints/contract, one line>"}`, {
   label: 'setup-task',
   phase: 'Setup',
   schema: {
@@ -394,7 +432,7 @@ Return feature catalog.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"FeatureCatalog","ts":"<ts>","status":"done","technique":"feature_search_space","note":"<count + the main feature families in the catalog, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"FeatureCatalog","ts":"<ts>","status":"done","technique":"feature_search_space","note":"<count + the main feature families in the catalog, one line>"}`, {
   label: 'feature-catalog',
   phase: 'FeatureCatalog',
   schema: {
@@ -443,7 +481,7 @@ Return test cases.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"GenerateTests","ts":"<ts>","status":"done","technique":"correctness_test_suite","note":"<count of tests + shapes/boundary cases covered, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"GenerateTests","ts":"<ts>","status":"done","technique":"correctness_test_suite","note":"<count of tests + shapes/boundary cases covered, one line>"}`, {
   label: 'generate-tests',
   phase: 'GenerateTests',
   schema: {
@@ -497,7 +535,7 @@ Return selected feature ids and rationale.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"SelectFeatures","ts":"<ts>","status":"done","candidate_id":"iter${iteration}-s${sample}","technique":"<the selected feature combination as a +-joined list>","note":"<exploration vs exploitation + selection rationale, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"SelectFeatures","ts":"<ts>","status":"done","candidate_id":"iter${iteration}-s${sample}","technique":"<the selected feature combination as a +-joined list>","note":"<exploration vs exploitation + selection rationale, one line>"}`, {
       label: `select-features-${iteration}-${sample}`,
       phase: 'SelectFeatures',
       schema: {
@@ -540,7 +578,7 @@ Return candidate code and implemented features.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"GenerateKernel","ts":"<ts>","status":"done","candidate_id":"iter${iteration}-s${sample}","technique":"<the implemented feature combination as a +-joined list>","note":"<what was implemented vs skipped and why, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"GenerateKernel","ts":"<ts>","status":"done","candidate_id":"iter${iteration}-s${sample}","technique":"<the implemented feature combination as a +-joined list>","note":"<what was implemented vs skipped and why, one line>"}`, {
       label: `generate-kernel-${iteration}-${sample}`,
       phase: 'GenerateKernel',
       schema: {
@@ -588,7 +626,7 @@ Return evaluator result.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append, using the values you just measured (status="done" only if compiled AND correct, else "error"; speedup is the measured speedup number, or null if unavailable):
-{"workflow":"${meta.name}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"iter${iteration}-s${sample}","speedup":<number or null>,"technique":"<the feature combination under test as a +-joined list>","note":"<compiled? correct? passed/total tests; or the failure reason>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"iter${iteration}-s${sample}","speedup":<number or null>,"technique":"<the feature combination under test as a +-joined list>","note":"<compiled? correct? passed/total tests; or the failure reason>"}`, {
       label: `evaluate-${iteration}-${sample}`,
       phase: 'Evaluate',
       schema: {
@@ -695,7 +733,7 @@ Return updated score records for affected features.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Reinforce","ts":"<ts>","status":"done","candidate_id":"iter${iteration}-s${sample}","technique":"<the feature combination whose scores you updated as a +-joined list>","note":"<which features gained/lost reward and why, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Reinforce","ts":"<ts>","status":"done","candidate_id":"iter${iteration}-s${sample}","technique":"<the feature combination whose scores you updated as a +-joined list>","note":"<which features gained/lost reward and why, one line>"}`, {
       label: `reinforce-${iteration}-${sample}`,
       phase: 'Reinforce',
       schema: {
@@ -762,7 +800,7 @@ Cover:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"done","candidate_id":"${bestCandidate ? bestCandidate.id : 'none'}","speedup":${bestCandidate && bestCandidate.eval ? (bestCandidate.eval.speedup || 0) : 0},"technique":"<best feature combination as a +-joined list>","note":"<best result + most-reinforced features, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Report","ts":"<ts>","status":"done","candidate_id":"${bestCandidate ? bestCandidate.id : 'none'}","speedup":${bestCandidate && bestCandidate.eval ? (bestCandidate.eval.speedup || 0) : 0},"technique":"<best feature combination as a +-joined list>","note":"<best result + most-reinforced features, one line>"}`, {
   label: 'final-report',
   phase: 'Report',
 })

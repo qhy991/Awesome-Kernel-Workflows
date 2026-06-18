@@ -12,6 +12,44 @@ export const meta = {
   ],
 }
 
+const WORKFLOW_NAME = 'accelopt-kernel-optimization'
+
+
+// --- BEGIN inlined arg_guard (Workflow runtime parses scripts as bare scripts,
+//                              not ES modules; static imports are rejected) ---
+function __unwrapArgs(rawArgs) {
+  if (rawArgs == null) return {}
+  if (typeof rawArgs === 'object' && !Array.isArray(rawArgs)) return rawArgs
+  if (typeof rawArgs === 'string') {
+    const trimmed = rawArgs.trim()
+    if (trimmed === '') return {}
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+        throw new Error('arg_guard: parsed JSON value is not a plain object')
+      } catch (e) { throw new Error(`arg_guard: invalid JSON args: ${e.message}`) }
+    }
+    const out = {}
+    const re = /(\w[\w.-]*)=("(?:\\\\\"|[^"])*"|\'(?:\\\\\'|[^\'])*\'|\S+)/g
+    let m
+    while ((m = re.exec(trimmed)) !== null) {
+      let v = m[2]
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1)
+      }
+      out[m[1]] = v
+    }
+    if (Object.keys(out).length === 0) {
+      throw new Error(`arg_guard: workflow args is a non-empty string but contains no key=value pairs and is not JSON. First 160 chars: ${trimmed.slice(0, 160)}`)
+    }
+    return out
+  }
+  throw new Error(`arg_guard: workflow args has unexpected type: ${typeof rawArgs}`)
+}
+// eslint-disable-next-line no-global-assign
+args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
+// --- END inlined arg_guard ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
@@ -68,7 +106,7 @@ function assertWorkflowSuitability() {
   const ms = WORKFLOW_SUITABILITY.method_supported_backends
   if (ms !== 'any' && !ms.map(normalizeSuitabilityValue).includes(backend)) {
     throw new Error(
-      `${meta.name}'s method does not support backend="${backend}". ` +
+      `${WORKFLOW_NAME}'s method does not support backend="${backend}". ` +
       `Method-supported: ${ms.join(', ')}. Reason: ${WORKFLOW_SUITABILITY.reason}`
     )
   }
@@ -78,7 +116,7 @@ function assertWorkflowSuitability() {
     const supportedProblemTypes = (WORKFLOW_SUITABILITY.supported_problem_types || []).map(normalizeSuitabilityValue)
     if (supportedProblemTypes.length && !supportsSuitabilityValue(supportedProblemTypes, requestedProblemType)) {
       throw new Error(
-        `${meta.name} is not suitable for problem_type="${args.problem_type}". ` +
+        `${WORKFLOW_NAME} is not suitable for problem_type="${args.problem_type}". ` +
         `Supported problem types: ${WORKFLOW_SUITABILITY.supported_problem_types.join(', ')}. ` +
         `Typical use cases: ${WORKFLOW_SUITABILITY.problem_types.join('; ')}. ` +
         `Reason: ${WORKFLOW_SUITABILITY.reason}`
@@ -278,7 +316,7 @@ Return evaluation results.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (variant ${variant.id}; status="done" if correct AND compilable, else "error"; speedup is your estimated_speedup number or null if unavailable):
-{"workflow":"${meta.name}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"${variant.id}","technique":"${variant.plan.title}","speedup":<number or null>,"note":"<correct? compilable? bottleneck addressed? or the failure reason>"}`
+{"workflow":"${WORKFLOW_NAME}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"${variant.id}","technique":"${variant.plan.title}","speedup":<number or null>,"note":"<correct? compilable? bottleneck addressed? or the failure reason>"}`
 }
 
 function legacyIterProfile(iter, candidateBeam, bestResult, bestLatency, baselineLatency, baselineNcuProfile) {
@@ -373,7 +411,7 @@ Make the rule GENERAL enough to apply to other kernels (not specific to this one
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (pair "${pair.plan_title}", a ${pair.type} example at ${pair.speedup.toFixed(2)}x):
-{"workflow":"${meta.name}","phase":"Learn","ts":"<ts>","status":"done","candidate_id":"learn-${pair.plan_title}","technique":"<your extracted rule title>","speedup":${pair.speedup.toFixed(2)},"note":"<the general reusable rule you extracted, one line>"}`
+{"workflow":"${WORKFLOW_NAME}","phase":"Learn","ts":"<ts>","status":"done","candidate_id":"learn-${pair.plan_title}","technique":"<your extracted rule title>","speedup":${pair.speedup.toFixed(2)},"note":"<the general reusable rule you extracted, one line>"}`
 }
 
 function legacySetupReadPrompt() {
@@ -393,7 +431,7 @@ Return ONLY the JSON object.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"baseline_read_analysis","speedup":null,"note":"<op_type + current approach + memory access pattern, one line>"}`
+{"workflow":"${WORKFLOW_NAME}","phase":"Setup","ts":"<ts>","status":"done","technique":"baseline_read_analysis","speedup":null,"note":"<op_type + current approach + memory access pattern, one line>"}`
 }
 
 function driverSetupReadPrompt() {
@@ -413,7 +451,7 @@ Return ONLY the JSON object.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"baseline_read_analysis","speedup":null,"note":"<op_type + current approach + memory access pattern, one line>"}`
+{"workflow":"${WORKFLOW_NAME}","phase":"Setup","ts":"<ts>","status":"done","technique":"baseline_read_analysis","speedup":null,"note":"<op_type + current approach + memory access pattern, one line>"}`
 }
 
 function legacyGenerateSeedPrompt() {
@@ -535,7 +573,7 @@ Return the complete CUDA code.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (plan "${plan.title}", sample ${sampleIdx}):
-{"workflow":"${meta.name}","phase":"Execute","ts":"<ts>","status":"done","candidate_id":"${plan.title}-v${sampleIdx}","technique":"${plan.title}","speedup":null,"note":"<the concrete code transformation you implemented, one line>"}`
+{"workflow":"${WORKFLOW_NAME}","phase":"Execute","ts":"<ts>","status":"done","candidate_id":"${plan.title}-v${sampleIdx}","technique":"${plan.title}","speedup":null,"note":"<the concrete code transformation you implemented, one line>"}`
 }
 
 function buildExperienceSection(experienceMemory, lastIterNewPatterns, maxInPrompt) {
@@ -922,7 +960,7 @@ ${IDIOMS.read_metric_guide}
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (this is iteration ${iter}, planner ${i}):
-{"workflow":"${meta.name}","phase":"Plan","ts":"<ts>","status":"done","candidate_id":"iter-${iter}-plan-${i}","technique":"<your plan title / optimization move>","speedup":null,"note":"<the profile metric you cited + expected impact, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Plan","ts":"<ts>","status":"done","candidate_id":"iter-${iter}-plan-${i}","technique":"<your plan title / optimization move>","speedup":null,"note":"<the profile metric you cited + expected impact, one line>"}`, {
         label: `plan-${iter}-${i}`,
         phase: 'Plan',
         schema: planSchema,
@@ -967,7 +1005,7 @@ Return the complete ${BACKEND} code.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (iteration ${iter}, plan "${plan.title}", sample ${sampleIdx}):
-{"workflow":"${meta.name}","phase":"Execute","ts":"<ts>","status":"done","candidate_id":"iter-${iter}-${plan.title}-v${sampleIdx}","technique":"${plan.title}","speedup":null,"note":"<the concrete code transformation you implemented, one line>"}`
+{"workflow":"${WORKFLOW_NAME}","phase":"Execute","ts":"<ts>","status":"done","candidate_id":"iter-${iter}-${plan.title}-v${sampleIdx}","technique":"${plan.title}","speedup":null,"note":"<the concrete code transformation you implemented, one line>"}`
           : legacyExecutePrompt(bestKernelCode, plan, sampleIdx, SAMPLES_PER_PLAN), {
           label: `impl-${iter}-${plan.title.substring(0, 15)}-v${sampleIdx}`,
           phase: 'Execute',
@@ -1083,7 +1121,7 @@ Return evaluation results.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (iteration ${iter}, variant ${variant.id}; status="done" if correct AND compilable, else "error"; speedup is your estimated_speedup number or null if unavailable):
-{"workflow":"${meta.name}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"iter-${iter}-${variant.id}","technique":"${variant.plan.title}","speedup":<number or null>,"note":"<correct? compilable? bottleneck addressed? or the failure reason>"}`
+{"workflow":"${WORKFLOW_NAME}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"iter-${iter}-${variant.id}","technique":"${variant.plan.title}","speedup":<number or null>,"note":"<correct? compilable? bottleneck addressed? or the failure reason>"}`
         : legacyEvaluatePrompt(variant, bestLatency, ncuSetup), {
         label: `eval-${variant.id}`,
         phase: 'Evaluate',
@@ -1292,7 +1330,7 @@ Make the rule GENERAL enough to apply to other kernels (not specific to this one
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (iteration ${iter}, pair "${pair.plan_title}", a ${pair.type} example at ${pair.speedup.toFixed(2)}x):
-{"workflow":"${meta.name}","phase":"Learn","ts":"<ts>","status":"done","candidate_id":"iter-${iter}-learn-${pair.plan_title}","technique":"<your extracted rule title>","speedup":${pair.speedup.toFixed(2)},"note":"<the general reusable rule you extracted, one line>"}`
+{"workflow":"${WORKFLOW_NAME}","phase":"Learn","ts":"<ts>","status":"done","candidate_id":"iter-${iter}-learn-${pair.plan_title}","technique":"<your extracted rule title>","speedup":${pair.speedup.toFixed(2)},"note":"<the general reusable rule you extracted, one line>"}`
           : legacyLearnPrompt(pair), {
           label: `learn-${pair.plan_title.substring(0, 20)}`,
           phase: 'Learn',

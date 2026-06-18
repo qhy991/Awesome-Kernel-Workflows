@@ -10,8 +10,9 @@
 //   node scripts/patch-genome-report.js [--dry]
 //
 // What it injects, once after `export const meta = {...}`:
+//   const WORKFLOW_NAME = '<workflow name literal>'
 //   async function __genomeReport(phaseName, wfName) { ... await agent(...) ... }
-// and rewrites each   phase('X')   ->   phase('X'); await __genomeReport('X', meta.name)
+// and rewrites each   phase('X')   ->   phase('X'); await __genomeReport('X', WORKFLOW_NAME)
 //
 // The orchestration script is sandboxed (no fs, no Date) so the actual write is
 // done by a subagent; the call is wrapped in try/catch so observability can
@@ -79,6 +80,15 @@ function findMetaEnd(src) {
   return -1
 }
 
+function extractWorkflowNameLiteral(src) {
+  const start = src.indexOf('export const meta')
+  const end = findMetaEnd(src)
+  if (start < 0 || end < 0) return ''
+  const metaBlock = src.slice(start, end)
+  const match = metaBlock.match(/\bname\s*:\s*(['"])(.*?)\1/)
+  return match ? `${match[1]}${match[2]}${match[1]}` : ''
+}
+
 const HELPER = [
   '',
   '// --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---',
@@ -139,11 +149,17 @@ async function patchOne(filePath) {
   const insertAt = findMetaEnd(src)
   if (insertAt < 0) return { filePath, status: 'skipped_meta_parse_failed' }
 
-  const withHelper = src.slice(0, insertAt) + HELPER + src.slice(insertAt)
+  const workflowNameLiteral = extractWorkflowNameLiteral(src)
+  if (!workflowNameLiteral) return { filePath, status: 'skipped_meta_name_parse_failed' }
+  const workflowNameConst = /\bconst\s+WORKFLOW_NAME\b/.test(src)
+    ? ''
+    : `\nconst WORKFLOW_NAME = ${workflowNameLiteral}\n`
+
+  const withHelper = src.slice(0, insertAt) + workflowNameConst + HELPER + src.slice(insertAt)
   PHASE_RE.lastIndex = 0
   const next = withHelper.replace(
     PHASE_RE,
-    (_m, q, name) => `phase(${q}${name}${q}); await __genomeReport(${q}${name}${q}, meta.name)`)
+    (_m, q, name) => `phase(${q}${name}${q}); await __genomeReport(${q}${name}${q}, WORKFLOW_NAME)`)
 
   // Gate on node --check ONLY when the ORIGINAL file is parseable. Templates
   // carry non-JS placeholders ({{PHASES_ARRAY}}) so they never parse; for those

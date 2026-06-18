@@ -23,6 +23,44 @@ export const meta = {
   ],
 };
 
+const WORKFLOW_NAME = 'gpuforecasters-kernel-optimization'
+
+
+// --- BEGIN inlined arg_guard (Workflow runtime parses scripts as bare scripts,
+//                              not ES modules; static imports are rejected) ---
+function __unwrapArgs(rawArgs) {
+  if (rawArgs == null) return {}
+  if (typeof rawArgs === 'object' && !Array.isArray(rawArgs)) return rawArgs
+  if (typeof rawArgs === 'string') {
+    const trimmed = rawArgs.trim()
+    if (trimmed === '') return {}
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+        throw new Error('arg_guard: parsed JSON value is not a plain object')
+      } catch (e) { throw new Error(`arg_guard: invalid JSON args: ${e.message}`) }
+    }
+    const out = {}
+    const re = /(\w[\w.-]*)=("(?:\\\\\"|[^"])*"|\'(?:\\\\\'|[^\'])*\'|\S+)/g
+    let m
+    while ((m = re.exec(trimmed)) !== null) {
+      let v = m[2]
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1)
+      }
+      out[m[1]] = v
+    }
+    if (Object.keys(out).length === 0) {
+      throw new Error(`arg_guard: workflow args is a non-empty string but contains no key=value pairs and is not JSON. First 160 chars: ${trimmed.slice(0, 160)}`)
+    }
+    return out
+  }
+  throw new Error(`arg_guard: workflow args has unexpected type: ${typeof rawArgs}`)
+}
+// eslint-disable-next-line no-global-assign
+args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
+// --- END inlined arg_guard ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
@@ -115,7 +153,7 @@ function assertWorkflowSuitability() {
     const supported = WORKFLOW_SUITABILITY.supported_languages.map(normalizeSuitabilityValue)
     if (!supported.includes(requestedLanguage)) {
       throw new Error(
-        `${meta.name} is not suitable for language="${args.language}". ` +
+        `${WORKFLOW_NAME} is not suitable for language="${args.language}". ` +
         `Supported languages/backends: ${WORKFLOW_SUITABILITY.supported_languages.join(', ')}. ` +
         `Reason: ${WORKFLOW_SUITABILITY.reason}`
       )
@@ -127,7 +165,7 @@ function assertWorkflowSuitability() {
     const supportedProblemTypes = (WORKFLOW_SUITABILITY.supported_problem_types || []).map(normalizeSuitabilityValue)
     if (supportedProblemTypes.length && !supportsSuitabilityValue(supportedProblemTypes, requestedProblemType)) {
       throw new Error(
-        `${meta.name} is not suitable for problem_type="${args.problem_type}". ` +
+        `${WORKFLOW_NAME} is not suitable for problem_type="${args.problem_type}". ` +
         `Supported problem types: ${WORKFLOW_SUITABILITY.supported_problem_types.join(', ')}. ` +
         `Typical use cases: ${WORKFLOW_SUITABILITY.problem_types.join('; ')}. ` +
         `Reason: ${WORKFLOW_SUITABILITY.reason}`
@@ -174,7 +212,7 @@ function assertEmbeddedArgs() {
   if (!BENCHMARK_CMD) missing.push('benchmark_command')
   if (missing.length) {
     throw new Error(
-      `${meta.name}: integration_pattern="${INTEGRATION_PATTERN}" (embedded dispatch) requires ` +
+      `${WORKFLOW_NAME}: integration_pattern="${INTEGRATION_PATTERN}" (embedded dispatch) requires ` +
       `the following non-empty args: ${missing.join(', ')}. ` +
       `Provide a contract-conforming register_script and the project's build/test/benchmark commands ` +
       `(see _substrate/embedded/ADAPTER_CONTRACT.md), or use integration_pattern="standalone".`
@@ -343,7 +381,7 @@ Return JSON:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"forecaster_search_setup","speedup":null,"note":"<kernel name + search space size + forecaster models + baseline_perf, one line>"}`,
+{"workflow":"${WORKFLOW_NAME}","phase":"Setup","ts":"<ts>","status":"done","technique":"forecaster_search_setup","speedup":null,"note":"<kernel name + search space size + forecaster models + baseline_perf, one line>"}`,
     {
       label: 'Setup GPUForecasters',
       phase: 'Setup',
@@ -463,7 +501,7 @@ Return JSON:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (best_training_speedup is a measured speedup from training evaluations, or null if no measured evidence):
-{"workflow":"${meta.name}","phase":"Train Forecasters","ts":"<ts>","status":"done","technique":"surrogate_forecaster_training","speedup":<number or null>,"note":"<#training samples + #models trained + best val MAE + best training config>"}`,
+{"workflow":"${WORKFLOW_NAME}","phase":"Train Forecasters","ts":"<ts>","status":"done","technique":"surrogate_forecaster_training","speedup":<number or null>,"note":"<#training samples + #models trained + best val MAE + best training config>"}`,
     {
       label: 'Train forecasters',
       phase: 'Train Forecasters',
@@ -558,7 +596,7 @@ Return JSON:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Calibration","ts":"<ts>","status":"done","technique":"abstention_threshold_calibration","speedup":null,"note":"<ensemble strategy + ensemble MAE + ensemble coverage + abstention rate>"}`,
+{"workflow":"${WORKFLOW_NAME}","phase":"Calibration","ts":"<ts>","status":"done","technique":"abstention_threshold_calibration","speedup":null,"note":"<ensemble strategy + ensemble MAE + ensemble coverage + abstention rate>"}`,
     {
       label: 'Calibrate forecasters',
       phase: 'Calibration',
@@ -668,7 +706,7 @@ Return JSON:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (candidate_id is the best config found; best_speedup is the measured speedup of that config, or null if not measured):
-{"workflow":"${meta.name}","phase":"PUCT Search","ts":"<ts>","status":"done","candidate_id":"<best config description>","technique":"puct_tree_search","speedup":<number or null>,"note":"<total GPU executions + executions saved by abstention + nodes explored + best config>"}`,
+{"workflow":"${WORKFLOW_NAME}","phase":"PUCT Search","ts":"<ts>","status":"done","candidate_id":"<best config description>","technique":"puct_tree_search","speedup":<number or null>,"note":"<total GPU executions + executions saved by abstention + nodes explored + best config>"}`,
     {
       label: 'PUCT search',
       phase: 'PUCT Search',
@@ -760,7 +798,7 @@ Return JSON:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (candidate_id is the best refined config; best_refined_speedup is the measured speedup, or null if not measured):
-{"workflow":"${meta.name}","phase":"Refinement","ts":"<ts>","status":"done","candidate_id":"<best refined config description>","technique":"local_search_refinement","speedup":<number or null>,"note":"<#refinement candidates + #executions + improvement over PUCT + ablation insight>"}`,
+{"workflow":"${WORKFLOW_NAME}","phase":"Refinement","ts":"<ts>","status":"done","candidate_id":"<best refined config description>","technique":"local_search_refinement","speedup":<number or null>,"note":"<#refinement candidates + #executions + improvement over PUCT + ablation insight>"}`,
     {
       label: 'Refine candidates',
       phase: 'Refinement',
@@ -849,7 +887,7 @@ Return JSON:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (status="done" if correctness passed AND validation passed, else "error"; speedup is the measured mean_speedup number, or null if unavailable):
-{"workflow":"${meta.name}","phase":"Validation","ts":"<ts>","status":"<done|error>","candidate_id":"<validated config>","technique":"target_hardware_validation","speedup":<number or null>,"note":"<mean +/- std speedup + correctness pass/fail + validation pass/fail; or the failure reason>"}`,
+{"workflow":"${WORKFLOW_NAME}","phase":"Validation","ts":"<ts>","status":"<done|error>","candidate_id":"<validated config>","technique":"target_hardware_validation","speedup":<number or null>,"note":"<mean +/- std speedup + correctness pass/fail + validation pass/fail; or the failure reason>"}`,
     {
       label: 'Validate best config',
       phase: 'Validation',
@@ -938,7 +976,7 @@ Return JSON:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (speedup is the final best validated speedup number, or null if unavailable):
-{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"done","technique":"optimization_report","speedup":<number or null>,"note":"<final best speedup + total executions + executions saved by forecasters + report path>"}`,
+{"workflow":"${WORKFLOW_NAME}","phase":"Report","ts":"<ts>","status":"done","technique":"optimization_report","speedup":<number or null>,"note":"<final best speedup + total executions + executions saved by forecasters + report path>"}`,
     {
       label: 'Generate report',
       phase: 'Report',

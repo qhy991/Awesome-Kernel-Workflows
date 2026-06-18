@@ -14,6 +14,8 @@ export const meta = {
   ],
 }
 
+const WORKFLOW_NAME = 'in-place-patch-optimization'
+
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
@@ -257,7 +259,7 @@ const snapshotAgent = await agent(
     `Then report whether the backup file now exists and is non-empty.`,
     `Do NOT modify ${KERNEL_PATH} yet.`,
     GROUNDING_INSTRUCTION,
-    `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXPDIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append:\n{"workflow":"${meta.name}","phase":"Snapshot","ts":"<ts>","status":"done","technique":"backup_original_kernel","note":"<backup path + whether backup is non-empty>"}`,
+    `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXPDIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append:\n{"workflow":"${WORKFLOW_NAME}","phase":"Snapshot","ts":"<ts>","status":"done","technique":"backup_original_kernel","note":"<backup path + whether backup is non-empty>"}`,
   ].join('\n\n'),
   {
     phase: 'Snapshot',
@@ -326,7 +328,7 @@ async function benchCurrent(label) {
       `Set aggregate_strategy to a short description (e.g. "geomean of 4 kv points").`,
       WORKLOAD_AXES ? `Workload axes hint: ${WORKLOAD_AXES}` : '',
       GROUNDING_INSTRUCTION,
-      `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXPDIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append, using the value you just measured (status="done" if a latency was parsed, else "error"):\n{"workflow":"${meta.name}","phase":"Bench","ts":"<ts>","status":"<done|error>","candidate_id":"${label}","speedup":null,"technique":"benchmark_measurement","note":"<aggregate_latency + unit + aggregate_strategy, or the parse failure reason>"}`,
+      `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXPDIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append, using the value you just measured (status="done" if a latency was parsed, else "error"):\n{"workflow":"${WORKFLOW_NAME}","phase":"Bench","ts":"<ts>","status":"<done|error>","candidate_id":"${label}","speedup":null,"technique":"benchmark_measurement","note":"<aggregate_latency + unit + aggregate_strategy, or the parse failure reason>"}`,
     ].filter(Boolean).join('\n\n'),
     { phase: 'Bench', label: `bench:${label}`, schema: BENCH_SCHEMA }
   )
@@ -425,7 +427,7 @@ for (let iter = 1; iter <= MAX_ITER; ++iter) {
     `Avoid strategies already in the "Prior attempts" list above.`,
     `If you cannot find a productive change, return applied=false with the reason in summary.`,
     GROUNDING_INSTRUCTION,
-    `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXPDIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append (this is optimization iteration ${iter}):\n{"workflow":"${meta.name}","phase":"Propose","ts":"<ts>","status":"done","candidate_id":"iter-${iter}","technique":"<the focused change you applied, or none if applied=false>","speedup":null,"note":"<one-line diff summary of the Edit, or why no change>"}`,
+    `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXPDIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append (this is optimization iteration ${iter}):\n{"workflow":"${WORKFLOW_NAME}","phase":"Propose","ts":"<ts>","status":"done","candidate_id":"iter-${iter}","technique":"<the focused change you applied, or none if applied=false>","speedup":null,"note":"<one-line diff summary of the Edit, or why no change>"}`,
   ].filter(Boolean).join('\n\n')
 
   const propResult = await agent(proposeContext, {

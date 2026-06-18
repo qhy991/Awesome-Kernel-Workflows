@@ -18,6 +18,8 @@ export const meta = {
   ],
 }
 
+const WORKFLOW_NAME = 'warpspeed-kernel-search'
+
 // --- genome self-report: INLINE (rich, doer-written) + entry scribe ---
 // Doer agents append result-bearing lines to <genome_dir>/genome.jsonl; top-level
 // phase() calls also invoke __genomeReport for live "entered" traces. genome_dir =
@@ -67,7 +69,7 @@ function assertWorkflowSuitability() {
     const supported = WORKFLOW_SUITABILITY.supported_languages.map(normalizeSuitabilityValue)
     if (!supported.includes(requestedLanguage)) {
       throw new Error(
-        `${meta.name} is not suitable for language="${requestedLanguage}". ` +
+        `${WORKFLOW_NAME} is not suitable for language="${requestedLanguage}". ` +
         `Supported: ${WORKFLOW_SUITABILITY.supported_languages.join(', ')}. ` +
         `Reason: ${WORKFLOW_SUITABILITY.reason}`
       )
@@ -79,7 +81,7 @@ function assertWorkflowSuitability() {
     if (supported.length && !supported.includes(requestedProblemType) &&
         !supported.some(v => v.endsWith(`-${requestedProblemType}`))) {
       throw new Error(
-        `${meta.name} is not suitable for problem_type="${requestedProblemType}". ` +
+        `${WORKFLOW_NAME} is not suitable for problem_type="${requestedProblemType}". ` +
         `Supported: ${WORKFLOW_SUITABILITY.supported_problem_types.join(', ')}. ` +
         `Reason: ${WORKFLOW_SUITABILITY.reason}`
       )
@@ -279,7 +281,7 @@ function genomeFooter(phaseName, extraFields = '') {
     '',
     `Append exactly one line to ${dir}/genome.jsonl (create if missing; shell append with >>).`,
     'Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ',
-    `One-line JSON: workflow="${meta.name}", phase="${phaseName}", ts=<UTC>, status="done"${tail}.`,
+    `One-line JSON: workflow="${WORKFLOW_NAME}", phase="${phaseName}", ts=<UTC>, status="done"${tail}.`,
   ].join('\n')
 }
 
@@ -631,7 +633,7 @@ const REPORT_SCHEMA = withGroundingFields({
 // Phase: Init
 // =============================================================================
 
-phase('Init'); await __genomeReport('Init', meta.name)
+phase('Init'); await __genomeReport('Init', WORKFLOW_NAME)
 log(`WarpSpeed: project=${PROJECT_DIR} target=${TARGET_GPU} fan-out<=${PARALLEL_AGENTS_ARG || '(config)'} max-rounds=${ITERATIONS}`)
 
 const overrideSets = []
@@ -754,7 +756,7 @@ function taskContract(expId) {
 // Phase: Calibrate
 // =============================================================================
 
-phase('Calibrate'); await __genomeReport('Calibrate', meta.name)
+phase('Calibrate'); await __genomeReport('Calibrate', WORKFLOW_NAME)
 const calResult = await agent(
   [
     'Cross-device noise calibration for WarpSpeed (skip if already done).',
@@ -781,7 +783,7 @@ log(`Calibration: sigma=${cal.value.cross_device_sigma_pct != null ? cal.value.c
 // Phase: Seed
 // =============================================================================
 
-phase('Seed'); await __genomeReport('Seed', meta.name)
+phase('Seed'); await __genomeReport('Seed', WORKFLOW_NAME)
 const seedResult = await agent(
   [
     'Seed the WarpSpeed baseline checkpoint (skip if already seeded).',
@@ -1393,7 +1395,7 @@ let lastSnap = null
 
 for (let r = 1; r <= ITERATIONS; r++) {
   // ---- Plan ----
-  phase('Plan'); await __genomeReport('Plan', meta.name)
+  phase('Plan'); await __genomeReport('Plan', WORKFLOW_NAME)
   const snapRes = classifyResult(await agent(snapshotPrompt(null), {
     phase: 'Plan', label: `r${r}:snapshot`, schema: SNAP_SCHEMA,
   }))
@@ -1447,7 +1449,7 @@ for (let r = 1; r <= ITERATIONS; r++) {
   const runnable = specs.filter(s => registeredIds.has(s.exp_id))
 
   // ---- Generate/Screen/Confirm/Profile per candidate, fan-out capped ----
-  phase('Generate'); await __genomeReport('Generate', meta.name)
+  phase('Generate'); await __genomeReport('Generate', WORKFLOW_NAME)
   const results = []
   for (const chunk of chunkArray(runnable, PARALLEL_AGENTS)) {
     const chunkResults = await parallel(chunk.map(s => () => runCandidate(s, snap)))
@@ -1455,7 +1457,7 @@ for (let r = 1; r <= ITERATIONS; r++) {
   }
 
   // ---- Record barrier ----
-  phase('Record'); await __genomeReport('Record', meta.name)
+  phase('Record'); await __genomeReport('Record', WORKFLOW_NAME)
   const roundNoise = Math.max(
     (snap.calibration || {}).cross_device_sigma_pct || 0,
     ...results.map(x => x.noise || 0)
@@ -1485,7 +1487,7 @@ for (let r = 1; r <= ITERATIONS; r++) {
   }
 
   // ---- Postmortem (blame -> ablation -> rewind|refute) ----
-  phase('Postmortem'); await __genomeReport('Postmortem', meta.name)
+  phase('Postmortem'); await __genomeReport('Postmortem', WORKFLOW_NAME)
   const due = (rec.postmortem_due || []).filter(c => !pmAttempted.has(c))
   for (const ckCommit of due) {
     pmAttempted.add(ckCommit)
@@ -1541,7 +1543,7 @@ for (let r = 1; r <= ITERATIONS; r++) {
   }
 
   // ---- Maintain ----
-  phase('Maintain'); await __genomeReport('Maintain', meta.name)
+  phase('Maintain'); await __genomeReport('Maintain', WORKFLOW_NAME)
   const doneIds = results.map(x => x.spec.exp_id)
   if (doneIds.length) {
     await agent(cleanupPrompt(doneIds, round), {
@@ -1574,7 +1576,7 @@ if (!stop) stop = 'iteration_limit_reached'
 // Phase: Report
 // =============================================================================
 
-phase('Report'); await __genomeReport('Report', meta.name)
+phase('Report'); await __genomeReport('Report', WORKFLOW_NAME)
 const reportRes = classifyResult(await agent(
   [
     'Produce the final WarpSpeed report.',

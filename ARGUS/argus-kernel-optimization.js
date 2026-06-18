@@ -12,6 +12,44 @@ export const meta = {
   ],
 }
 
+const WORKFLOW_NAME = 'argus-kernel-optimization'
+
+
+// --- BEGIN inlined arg_guard (Workflow runtime parses scripts as bare scripts,
+//                              not ES modules; static imports are rejected) ---
+function __unwrapArgs(rawArgs) {
+  if (rawArgs == null) return {}
+  if (typeof rawArgs === 'object' && !Array.isArray(rawArgs)) return rawArgs
+  if (typeof rawArgs === 'string') {
+    const trimmed = rawArgs.trim()
+    if (trimmed === '') return {}
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+        throw new Error('arg_guard: parsed JSON value is not a plain object')
+      } catch (e) { throw new Error(`arg_guard: invalid JSON args: ${e.message}`) }
+    }
+    const out = {}
+    const re = /(\w[\w.-]*)=("(?:\\\\\"|[^"])*"|\'(?:\\\\\'|[^\'])*\'|\S+)/g
+    let m
+    while ((m = re.exec(trimmed)) !== null) {
+      let v = m[2]
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1)
+      }
+      out[m[1]] = v
+    }
+    if (Object.keys(out).length === 0) {
+      throw new Error(`arg_guard: workflow args is a non-empty string but contains no key=value pairs and is not JSON. First 160 chars: ${trimmed.slice(0, 160)}`)
+    }
+    return out
+  }
+  throw new Error(`arg_guard: workflow args has unexpected type: ${typeof rawArgs}`)
+}
+// eslint-disable-next-line no-global-assign
+args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
+// --- END inlined arg_guard ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
@@ -104,7 +142,7 @@ function assertWorkflowSuitability() {
     const supported = WORKFLOW_SUITABILITY.supported_languages.map(normalizeSuitabilityValue)
     if (!supported.includes(requestedLanguage)) {
       throw new Error(
-        `${meta.name} is not suitable for language="${args.language}". ` +
+        `${WORKFLOW_NAME} is not suitable for language="${args.language}". ` +
         `Supported languages/backends: ${WORKFLOW_SUITABILITY.supported_languages.join(', ')}. ` +
         `Reason: ${WORKFLOW_SUITABILITY.reason}`
       )
@@ -116,7 +154,7 @@ function assertWorkflowSuitability() {
     const supportedProblemTypes = (WORKFLOW_SUITABILITY.supported_problem_types || []).map(normalizeSuitabilityValue)
     if (supportedProblemTypes.length && !supportsSuitabilityValue(supportedProblemTypes, requestedProblemType)) {
       throw new Error(
-        `${meta.name} is not suitable for problem_type="${args.problem_type}". ` +
+        `${WORKFLOW_NAME} is not suitable for problem_type="${args.problem_type}". ` +
         `Supported problem types: ${WORKFLOW_SUITABILITY.supported_problem_types.join(', ')}. ` +
         `Typical use cases: ${WORKFLOW_SUITABILITY.problem_types.join('; ')}. ` +
         `Reason: ${WORKFLOW_SUITABILITY.reason}`
@@ -342,7 +380,7 @@ Return the kernel analysis.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"kernel_analysis","note":"<computation type + current opt level + top missing optimizations, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Setup","ts":"<ts>","status":"done","technique":"kernel_analysis","note":"<computation type + current opt level + top missing optimizations, one line>"}`, {
   label: 'read-kernel',
   phase: 'Setup',
   schema: {
@@ -471,7 +509,7 @@ Rank proposals by expected impact. Prefer optimizations that:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (this is ICRL iteration ${outerIter}):
-{"workflow":"${meta.name}","phase":"Plan","ts":"<ts>","status":"done","candidate_id":"iter-${outerIter}","technique":"<top-ranked proposal optimization>","note":"<how many proposals + the largest performance gap targeted>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Plan","ts":"<ts>","status":"done","candidate_id":"iter-${outerIter}","technique":"<top-ranked proposal optimization>","note":"<how many proposals + the largest performance gap targeted>"}`, {
     label: `plan-${outerIter}`,
     phase: 'Plan',
     schema: {
@@ -530,7 +568,7 @@ Return the selected optimization plan.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (this is ICRL iteration ${outerIter}):
-{"workflow":"${meta.name}","phase":"Select","ts":"<ts>","status":"done","candidate_id":"iter-${outerIter}","technique":"<the ordered optimization sequence you selected>","note":"<exploration vs top-rank choice + dependency resolution, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Select","ts":"<ts>","status":"done","candidate_id":"iter-${outerIter}","technique":"<the ordered optimization sequence you selected>","note":"<exploration vs top-rank choice + dependency resolution, one line>"}`, {
     label: `select-${outerIter}`,
     phase: 'Select',
     schema: {
@@ -614,7 +652,7 @@ Return the transformed kernel code with invariants.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (ICRL iteration ${outerIter}, lowering step ${stepIdx}):
-{"workflow":"${meta.name}","phase":"Lower","ts":"<ts>","status":"done","candidate_id":"iter-${outerIter}-step-${stepIdx}","technique":"${step.optimization}","note":"<what tag functions/assertions you added + any potential issues, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Lower","ts":"<ts>","status":"done","candidate_id":"iter-${outerIter}-step-${stepIdx}","technique":"${step.optimization}","note":"<what tag functions/assertions you added + any potential issues, one line>"}`, {
       label: `lower-${outerIter}-step${stepIdx}`,
       phase: 'Lower',
       schema: {
@@ -771,7 +809,7 @@ Return validation results.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append, using the values you just measured (status="done" if invariants satisfied AND tests passed, else "error"; speedup is the measured speedup number, or null if unavailable):
-{"workflow":"${meta.name}","phase":"Validate","ts":"<ts>","status":"<done|error>","candidate_id":"iter-${outerIter}","speedup":<number or null>,"technique":"<technique under test>","note":"<throughput TFLOPS; invariants satisfied? tests pass? reward; or the failure/counterexample>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Validate","ts":"<ts>","status":"<done|error>","candidate_id":"iter-${outerIter}","speedup":<number or null>,"technique":"<technique under test>","note":"<throughput TFLOPS; invariants satisfied? tests pass? reward; or the failure/counterexample>"}`, {
     label: `validate-${outerIter}`,
     phase: 'Validate',
     schema: {
@@ -861,7 +899,7 @@ Produce the updated planner policy — this will guide the next iteration's prop
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (this is ICRL iteration ${outerIter}):
-{"workflow":"${meta.name}","phase":"Learn","ts":"<ts>","status":"done","candidate_id":"iter-${outerIter}","technique":"icrl_policy_update","note":"<key learnings + effective optimizations + next priority, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Learn","ts":"<ts>","status":"done","candidate_id":"iter-${outerIter}","technique":"icrl_policy_update","note":"<key learnings + effective optimizations + next priority, one line>"}`, {
     label: `learn-${outerIter}`,
     phase: 'Learn',
     schema: {

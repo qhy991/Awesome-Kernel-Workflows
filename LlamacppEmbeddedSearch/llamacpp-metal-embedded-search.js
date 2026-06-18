@@ -11,6 +11,8 @@ export const meta = {
   ],
 }
 
+const WORKFLOW_NAME = 'llamacpp-metal-embedded-search'
+
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
@@ -386,7 +388,7 @@ await agent(
     `  python "${REG_SCRIPT}" list --project-root "${GGML_ROOT}"`,
     `Report ok=true iff both succeeded.`,
     GROUNDING_INSTRUCTION,
-    `# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append:\n{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"workspace_sanity_check","note":"<variants dir created? register script listed ok? one line>"}`,
+    `# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append:\n{"workflow":"${WORKFLOW_NAME}","phase":"Setup","ts":"<ts>","status":"done","technique":"workspace_sanity_check","note":"<variants dir created? register script listed ok? one line>"}`,
   ].join('\n\n'),
   {
     phase: 'Setup',
@@ -486,7 +488,7 @@ for (let round = 1; round <= MAX_ROUNDS; ++round) {
           `Return the absolute metal_path you wrote, the variant_name, a short title,`,
           `and a rationale citing the specific design choice.`,
           GROUNDING_INSTRUCTION,
-          `# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append (this is round ${round}, proposal slot ${slot}):\n{"workflow":"${meta.name}","phase":"Propose","ts":"<ts>","status":"done","candidate_id":"${slot}","technique":"<the main Metal optimization in this variant, e.g. simdgroup_reduction or threadgroup_tiling>","speedup":null,"note":"<one-line rationale: what makes this design distinct from prior attempts>"}`,
+          `# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append (this is round ${round}, proposal slot ${slot}):\n{"workflow":"${WORKFLOW_NAME}","phase":"Propose","ts":"<ts>","status":"done","candidate_id":"${slot}","technique":"<the main Metal optimization in this variant, e.g. simdgroup_reduction or threadgroup_tiling>","speedup":null,"note":"<one-line rationale: what makes this design distinct from prior attempts>"}`,
         ].filter(Boolean).join('\n\n'),
         { phase: 'Propose', label: `propose:${slot}`, schema: PROPOSAL_SCHEMA }
       )
@@ -568,7 +570,7 @@ if (bestVariantName !== '(baseline)') {
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"done","candidate_id":"${bestVariantName}","technique":"best_variant_selected","speedup":${bestSpeedup},"note":"<best variant ${bestVariantName} at ${bestLatency} ${LATENCY_UNIT}; one-line summary>"}`,
+{"workflow":"${WORKFLOW_NAME}","phase":"Report","ts":"<ts>","status":"done","candidate_id":"${bestVariantName}","technique":"best_variant_selected","speedup":${bestSpeedup},"note":"<best variant ${bestVariantName} at ${bestLatency} ${LATENCY_UNIT}; one-line summary>"}`,
     {
       phase: 'Report',
       label: 'final-read',
