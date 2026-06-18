@@ -13,6 +13,44 @@ export const meta = {
   ],
 };
 
+const WORKFLOW_NAME = 'fact-kernel-optimization'
+
+
+// --- BEGIN inlined arg_guard (Workflow runtime parses scripts as bare scripts,
+//                              not ES modules; static imports are rejected) ---
+function __unwrapArgs(rawArgs) {
+  if (rawArgs == null) return {}
+  if (typeof rawArgs === 'object' && !Array.isArray(rawArgs)) return rawArgs
+  if (typeof rawArgs === 'string') {
+    const trimmed = rawArgs.trim()
+    if (trimmed === '') return {}
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+        throw new Error('arg_guard: parsed JSON value is not a plain object')
+      } catch (e) { throw new Error(`arg_guard: invalid JSON args: ${e.message}`) }
+    }
+    const out = {}
+    const re = /(\w[\w.-]*)=("(?:\\\\\"|[^"])*"|\'(?:\\\\\'|[^\'])*\'|\S+)/g
+    let m
+    while ((m = re.exec(trimmed)) !== null) {
+      let v = m[2]
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1)
+      }
+      out[m[1]] = v
+    }
+    if (Object.keys(out).length === 0) {
+      throw new Error(`arg_guard: workflow args is a non-empty string but contains no key=value pairs and is not JSON. First 160 chars: ${trimmed.slice(0, 160)}`)
+    }
+    return out
+  }
+  throw new Error(`arg_guard: workflow args has unexpected type: ${typeof rawArgs}`)
+}
+// eslint-disable-next-line no-global-assign
+args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
+// --- END inlined arg_guard ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
@@ -105,7 +143,7 @@ function assertWorkflowSuitability() {
     const supported = WORKFLOW_SUITABILITY.supported_languages.map(normalizeSuitabilityValue)
     if (!supported.includes(requestedLanguage)) {
       throw new Error(
-        `${meta.name} is not suitable for language="${args.language}". ` +
+        `${WORKFLOW_NAME} is not suitable for language="${args.language}". ` +
         `Supported languages/backends: ${WORKFLOW_SUITABILITY.supported_languages.join(', ')}. ` +
         `Reason: ${WORKFLOW_SUITABILITY.reason}`
       )
@@ -117,7 +155,7 @@ function assertWorkflowSuitability() {
     const supportedProblemTypes = (WORKFLOW_SUITABILITY.supported_problem_types || []).map(normalizeSuitabilityValue)
     if (supportedProblemTypes.length && !supportsSuitabilityValue(supportedProblemTypes, requestedProblemType)) {
       throw new Error(
-        `${meta.name} is not suitable for problem_type="${args.problem_type}". ` +
+        `${WORKFLOW_NAME} is not suitable for problem_type="${args.problem_type}". ` +
         `Supported problem types: ${WORKFLOW_SUITABILITY.supported_problem_types.join(', ')}. ` +
         `Typical use cases: ${WORKFLOW_SUITABILITY.problem_types.join('; ')}. ` +
         `Reason: ${WORKFLOW_SUITABILITY.reason}`
@@ -207,7 +245,7 @@ Return JSON:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"cutlass_workspace_setup","note":"<target operation + architecture + exemplar count, one line>"}`,
+{"workflow":"${WORKFLOW_NAME}","phase":"Setup","ts":"<ts>","status":"done","technique":"cutlass_workspace_setup","note":"<target operation + architecture + exemplar count, one line>"}`,
     {
       label: 'Setup FACT',
       phase: 'Setup',
@@ -303,7 +341,7 @@ Return JSON:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Pattern Discovery","ts":"<ts>","status":"done","technique":"pattern_discovery","note":"<how many patterns discovered + dominant pattern types, one line>"}`,
+{"workflow":"${WORKFLOW_NAME}","phase":"Pattern Discovery","ts":"<ts>","status":"done","technique":"pattern_discovery","note":"<how many patterns discovered + dominant pattern types, one line>"}`,
     {
       label: 'Discover patterns',
       phase: 'Pattern Discovery',
@@ -404,7 +442,7 @@ Return JSON:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Pattern Realization","ts":"<ts>","status":"done","technique":"pattern_realization","note":"<how many patterns realized as code transformations + key dependencies, one line>"}`,
+{"workflow":"${WORKFLOW_NAME}","phase":"Pattern Realization","ts":"<ts>","status":"done","technique":"pattern_realization","note":"<how many patterns realized as code transformations + key dependencies, one line>"}`,
     {
       label: 'Realize patterns',
       phase: 'Pattern Realization',
@@ -508,7 +546,7 @@ Return JSON:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Pattern Composition","ts":"<ts>","status":"done","technique":"<composition strategy, e.g. greedy|dependency-aware|search-based>","note":"<how many kernel candidates composed + patterns most frequently applied, one line>"}`,
+{"workflow":"${WORKFLOW_NAME}","phase":"Pattern Composition","ts":"<ts>","status":"done","technique":"<composition strategy, e.g. greedy|dependency-aware|search-based>","note":"<how many kernel candidates composed + patterns most frequently applied, one line>"}`,
     {
       label: 'Compose patterns',
       phase: 'Pattern Composition',
@@ -596,7 +634,7 @@ Return JSON:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (status="done" if ablation completed, else "error"):
-{"workflow":"${meta.name}","phase":"Ablation","ts":"<ts>","status":"<done|error>","technique":"leave_one_out_ablation","note":"<critical vs marginal patterns identified, one line>"}`,
+{"workflow":"${WORKFLOW_NAME}","phase":"Ablation","ts":"<ts>","status":"<done|error>","technique":"leave_one_out_ablation","note":"<critical vs marginal patterns identified, one line>"}`,
     {
       label: 'Ablation studies',
       phase: 'Ablation',
@@ -721,7 +759,7 @@ Return JSON:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append, using the values you just measured (status="done" if the best kernel compiled and passed correctness, else "error"; speedup is best_kernel.speedup_vs_baseline, or null if unavailable):
-{"workflow":"${meta.name}","phase":"Evaluation","ts":"<ts>","status":"<done|error>","candidate_id":"<best_kernel.kernel_id>","speedup":<number or null>,"technique":"<patterns applied in best kernel>","note":"<best GFLOPS + how many kernels evaluated; or the failure reason>"}`,
+{"workflow":"${WORKFLOW_NAME}","phase":"Evaluation","ts":"<ts>","status":"<done|error>","candidate_id":"<best_kernel.kernel_id>","speedup":<number or null>,"technique":"<patterns applied in best kernel>","note":"<best GFLOPS + how many kernels evaluated; or the failure reason>"}`,
     {
       label: 'Evaluate kernels',
       phase: 'Evaluation',
@@ -801,7 +839,7 @@ Return JSON:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (speedup is the best speedup vs baseline, or null if unavailable):
-{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"done","speedup":<number or null>,"technique":"compositional_pattern_synthesis","note":"<one-line headline: best GFLOPS + critical patterns>"}`,
+{"workflow":"${WORKFLOW_NAME}","phase":"Report","ts":"<ts>","status":"done","speedup":<number or null>,"technique":"compositional_pattern_synthesis","note":"<one-line headline: best GFLOPS + critical patterns>"}`,
     {
       label: 'Generate report',
       phase: 'Report',

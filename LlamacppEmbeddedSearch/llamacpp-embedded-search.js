@@ -11,6 +11,8 @@ export const meta = {
   ],
 }
 
+const WORKFLOW_NAME = 'llamacpp-embedded-search'
+
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
@@ -322,7 +324,7 @@ await agent(
     `  python "${REG_SCRIPT}" list --ggml-root "${GGML_ROOT}"`,
     `Report ok=true iff both succeeded.`,
     GROUNDING_INSTRUCTION,
-    `# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append:\n{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"variants_dir_and_register_sanity","note":"<variants dir created? register script listable? one line>"}`,
+    `# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append:\n{"workflow":"${WORKFLOW_NAME}","phase":"Setup","ts":"<ts>","status":"done","technique":"variants_dir_and_register_sanity","note":"<variants dir created? register script listable? one line>"}`,
   ].join('\n\n'),
   {
     phase: 'Setup',
@@ -417,7 +419,7 @@ for (let round = 1; round <= MAX_ROUNDS; ++round) {
           `and a rationale citing the specific design choice (tile shape, register`,
           `layout, sync pattern, ...).`,
           GROUNDING_INSTRUCTION,
-          `# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append (this is variant ${slot} of round ${round}):\n{"workflow":"${meta.name}","phase":"Propose","ts":"<ts>","status":"done","candidate_id":"${slot}","technique":"<the distinct design choice for this variant, e.g. tile_shape_or_register_layout>","speedup":null,"note":"<one-line rationale for why this variant should be faster>"}`,
+          `# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append (this is variant ${slot} of round ${round}):\n{"workflow":"${WORKFLOW_NAME}","phase":"Propose","ts":"<ts>","status":"done","candidate_id":"${slot}","technique":"<the distinct design choice for this variant, e.g. tile_shape_or_register_layout>","speedup":null,"note":"<one-line rationale for why this variant should be faster>"}`,
         ].filter(Boolean).join('\n\n'),
         { phase: 'Propose', label: `propose:${slot}`, schema: PROPOSAL_SCHEMA }
       )
@@ -497,7 +499,7 @@ phase('Report')
 let bestCode = null
 if (bestVariantName !== '(baseline)') {
   const r = await agent(
-    `Read the file at ${bestCuhPath} and return its full contents in best_kernel_code.\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append (the search winner is variant ${bestVariantName} at ${bestSpeedup}x over baseline):\n{"workflow":"${meta.name}","phase":"Report","ts":"<ts>","status":"done","candidate_id":"${bestVariantName}","speedup":${bestSpeedup},"technique":"best_variant_selected","note":"<one-line summary of the winning design and its latency>"}`,
+    `Read the file at ${bestCuhPath} and return its full contents in best_kernel_code.\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append (the search winner is variant ${bestVariantName} at ${bestSpeedup}x over baseline):\n{"workflow":"${WORKFLOW_NAME}","phase":"Report","ts":"<ts>","status":"done","candidate_id":"${bestVariantName}","speedup":${bestSpeedup},"technique":"best_variant_selected","note":"<one-line summary of the winning design and its latency>"}`,
     {
       phase: 'Report',
       label: 'final-read',

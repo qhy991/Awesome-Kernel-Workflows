@@ -13,6 +13,44 @@ export const meta = {
   ],
 }
 
+const WORKFLOW_NAME = 'kernelfoundrydx-kernel-optimization'
+
+
+// --- BEGIN inlined arg_guard (Workflow runtime parses scripts as bare scripts,
+//                              not ES modules; static imports are rejected) ---
+function __unwrapArgs(rawArgs) {
+  if (rawArgs == null) return {}
+  if (typeof rawArgs === 'object' && !Array.isArray(rawArgs)) return rawArgs
+  if (typeof rawArgs === 'string') {
+    const trimmed = rawArgs.trim()
+    if (trimmed === '') return {}
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+        throw new Error('arg_guard: parsed JSON value is not a plain object')
+      } catch (e) { throw new Error(`arg_guard: invalid JSON args: ${e.message}`) }
+    }
+    const out = {}
+    const re = /(\w[\w.-]*)=("(?:\\\\\"|[^"])*"|\'(?:\\\\\'|[^\'])*\'|\S+)/g
+    let m
+    while ((m = re.exec(trimmed)) !== null) {
+      let v = m[2]
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1)
+      }
+      out[m[1]] = v
+    }
+    if (Object.keys(out).length === 0) {
+      throw new Error(`arg_guard: workflow args is a non-empty string but contains no key=value pairs and is not JSON. First 160 chars: ${trimmed.slice(0, 160)}`)
+    }
+    return out
+  }
+  throw new Error(`arg_guard: workflow args has unexpected type: ${typeof rawArgs}`)
+}
+// eslint-disable-next-line no-global-assign
+args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
+// --- END inlined arg_guard ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
@@ -54,7 +92,7 @@ function assertWorkflowSuitability() {
     const supported = WORKFLOW_SUITABILITY.supported_languages.map(normalizeSuitabilityValue)
     if (!supported.includes(requestedLanguage)) {
       throw new Error(
-        `${meta.name} is not suitable for language="${args.language}". ` +
+        `${WORKFLOW_NAME} is not suitable for language="${args.language}". ` +
         `Supported languages/backends: ${WORKFLOW_SUITABILITY.supported_languages.join(', ')}. ` +
         `Reason: ${WORKFLOW_SUITABILITY.reason}`
       )
@@ -66,7 +104,7 @@ function assertWorkflowSuitability() {
     const supportedProblemTypes = (WORKFLOW_SUITABILITY.supported_problem_types || []).map(normalizeSuitabilityValue)
     if (supportedProblemTypes.length && !supportsSuitabilityValue(supportedProblemTypes, requestedProblemType)) {
       throw new Error(
-        `${meta.name} is not suitable for problem_type="${args.problem_type}". ` +
+        `${WORKFLOW_NAME} is not suitable for problem_type="${args.problem_type}". ` +
         `Supported problem types: ${WORKFLOW_SUITABILITY.supported_problem_types.join(', ')}. ` +
         `Typical use cases: ${WORKFLOW_SUITABILITY.problem_types.join('; ')}. ` +
         `Reason: ${WORKFLOW_SUITABILITY.reason}`
@@ -87,7 +125,7 @@ function resolveBackendAxis() {
   // triton-only: any resolved backend axis must be triton (supported=[triton]).
   const resolved = b || l || null
   if (resolved && resolved !== 'triton') {
-    throw new Error(`${meta.name} supports only backend="triton" (got "${resolved}"). This workflow is the triton-only "Dx" variant.`)
+    throw new Error(`${WORKFLOW_NAME} supports only backend="triton" (got "${resolved}"). This workflow is the triton-only "Dx" variant.`)
   }
   return resolved
 }
@@ -387,7 +425,7 @@ Return JSON.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"baseline_and_hint_seed","speedup":null,"note":"<eager baseline ms + number of hints seeded + op chain, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Setup","ts":"<ts>","status":"done","technique":"baseline_and_hint_seed","speedup":null,"note":"<eager baseline ms + number of hints seeded + op chain, one line>"}`, {
   label: 'baseline-and-seed',
   phase: 'Setup',
   schema: {
@@ -462,7 +500,7 @@ Return JSON with the code and a short note on the approach.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Init","ts":"<ts>","status":"done","candidate_id":"seed-${i}","technique":"<your initialization decomposition / RAG-guided approach>","speedup":null,"note":"<the seed approach in one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Init","ts":"<ts>","status":"done","candidate_id":"seed-${i}","technique":"<your initialization decomposition / RAG-guided approach>","speedup":null,"note":"<the seed approach in one line>"}`, {
       label: `seed-${i}`,
       phase: 'Init',
       schema: {
@@ -603,7 +641,7 @@ Return JSON with the complete code, the applied hint(s), and a one-line summary 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Evolve","ts":"<ts>","status":"done","candidate_id":"iter${iter}-isl${islIdx}-${island.role.name}","technique":"<the mutation you applied from your island role + hints>","speedup":null,"note":"<what changed vs the parent, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Evolve","ts":"<ts>","status":"done","candidate_id":"iter${iter}-isl${islIdx}-${island.role.name}","technique":"<the mutation you applied from your island role + hints>","speedup":null,"note":"<what changed vs the parent, one line>"}`, {
         label: `mutate-${iter}-isl${islIdx}`,
         phase: 'Evolve',
         schema: {
@@ -655,7 +693,7 @@ Return JSON.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append, using the values you just measured (status="done" if it compiled and ran correctly, else "error"; speedup is the measured speedup vs eager baseline, or null if unmeasured):
-{"workflow":"${meta.name}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"iter${iter}-isl${v.islIdx}-${islands[v.islIdx].role.name}","speedup":<number or null>,"technique":"<launch config / runtime characterization>","note":"<compiles? correct? latency; or the failure reason>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"iter${iter}-isl${v.islIdx}-${islands[v.islIdx].role.name}","speedup":<number or null>,"technique":"<launch config / runtime characterization>","note":"<compiles? correct? latency; or the failure reason>"}`, {
         label: `eval-${iter}-isl${v.islIdx}`,
         phase: 'Evaluate',
         schema: {
@@ -756,7 +794,7 @@ Return JSON.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (status="done" for a performance diagnosis, "error" for a failure diagnosis):
-{"workflow":"${meta.name}","phase":"Diagnose","ts":"<ts>","status":"<done|error>","candidate_id":"iter${iter}-isl${v.islIdx}-${islands[v.islIdx].role.name}","speedup":null,"technique":"<diagnosed limiter or failure_mode>","note":"<the generated hint, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Diagnose","ts":"<ts>","status":"<done|error>","candidate_id":"iter${iter}-isl${v.islIdx}-${islands[v.islIdx].role.name}","speedup":null,"technique":"<diagnosed limiter or failure_mode>","note":"<the generated hint, one line>"}`, {
         label: `diagnose-${iter}-isl${v.islIdx}`,
         phase: 'Diagnose',
         schema: {

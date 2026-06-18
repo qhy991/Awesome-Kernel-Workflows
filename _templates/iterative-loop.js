@@ -54,6 +54,44 @@ export const meta = {
   phases: {{PHASES_ARRAY}},
 }
 
+const WORKFLOW_NAME = '{{META_NAME}}'
+
+
+// --- BEGIN inlined arg_guard (Workflow runtime parses scripts as bare scripts,
+//                              not ES modules; static imports are rejected) ---
+function __unwrapArgs(rawArgs) {
+  if (rawArgs == null) return {}
+  if (typeof rawArgs === 'object' && !Array.isArray(rawArgs)) return rawArgs
+  if (typeof rawArgs === 'string') {
+    const trimmed = rawArgs.trim()
+    if (trimmed === '') return {}
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+        throw new Error('arg_guard: parsed JSON value is not a plain object')
+      } catch (e) { throw new Error(`arg_guard: invalid JSON args: ${e.message}`) }
+    }
+    const out = {}
+    const re = /(\w[\w.-]*)=("(?:\\\\\"|[^"])*"|\'(?:\\\\\'|[^\'])*\'|\S+)/g
+    let m
+    while ((m = re.exec(trimmed)) !== null) {
+      let v = m[2]
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1)
+      }
+      out[m[1]] = v
+    }
+    if (Object.keys(out).length === 0) {
+      throw new Error(`arg_guard: workflow args is a non-empty string but contains no key=value pairs and is not JSON. First 160 chars: ${trimmed.slice(0, 160)}`)
+    }
+    return out
+  }
+  throw new Error(`arg_guard: workflow args has unexpected type: ${typeof rawArgs}`)
+}
+// eslint-disable-next-line no-global-assign
+args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
+// --- END inlined arg_guard ---
 // --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
 // Self-reported, work-plane (forgeable) stage trace for observability + the
 // recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
@@ -99,7 +137,7 @@ async function __genomeReport(phaseName, wfName) {
 // =============================================================================
 // Phase: Setup
 // =============================================================================
-phase('Setup'); await __genomeReport('Setup', meta.name)
+phase('Setup'); await __genomeReport('Setup', WORKFLOW_NAME)
 
 {{SETUP_AGENTS}}
 
@@ -118,7 +156,7 @@ for (let iter = 0; iter < {{MAX_ITER_VAR}}; iter++) {
   // ===========================================================================
   // Phase: Plan — Generate optimization plans
   // ===========================================================================
-  phase('Plan'); await __genomeReport('Plan', meta.name)
+  phase('Plan'); await __genomeReport('Plan', WORKFLOW_NAME)
 
   //[BLOCK:experience_memory]
   const experienceSection = experienceMemory.length > 0
@@ -146,7 +184,7 @@ for (let iter = 0; iter < {{MAX_ITER_VAR}}; iter++) {
   // ===========================================================================
   // Phase: Execute — Implement each plan
   // ===========================================================================
-  phase('Execute'); await __genomeReport('Execute', meta.name)
+  phase('Execute'); await __genomeReport('Execute', WORKFLOW_NAME)
 
   const implementations = await pipeline(
     validPlans,
@@ -186,7 +224,7 @@ Details: ${plan.plan}`, {
   // ===========================================================================
   // Phase: Evaluate — Profile and measure each variant
   // ===========================================================================
-  phase('Evaluate'); await __genomeReport('Evaluate', meta.name)
+  phase('Evaluate'); await __genomeReport('Evaluate', WORKFLOW_NAME)
 
   const evaluations = await parallel(
     allVariants.map((variant, varIdx) => () =>
@@ -234,7 +272,7 @@ ${variant.code.substring(0, 4000)}
   // ===========================================================================
   // Phase: Learn — Extract insights from slow-fast pairs
   // ===========================================================================
-  phase('Learn'); await __genomeReport('Learn', meta.name)
+  phase('Learn'); await __genomeReport('Learn', WORKFLOW_NAME)
 
   const pairsToSummarize = []
 
@@ -289,7 +327,7 @@ ${pair.fast.substring(0, 2500)}
   }
   //[/BLOCK:experience_memory]
 
-  phase('Iterate'); await __genomeReport('Iterate', meta.name)
+  phase('Iterate'); await __genomeReport('Iterate', WORKFLOW_NAME)
   log(`Iteration ${iter + 1} done.`)
 }
 

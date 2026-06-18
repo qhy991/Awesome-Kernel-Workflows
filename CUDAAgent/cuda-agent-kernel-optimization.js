@@ -12,6 +12,44 @@ export const meta = {
   ],
 }
 
+const WORKFLOW_NAME = 'cuda-agent-kernel-optimization'
+
+
+// --- BEGIN inlined arg_guard (Workflow runtime parses scripts as bare scripts,
+//                              not ES modules; static imports are rejected) ---
+function __unwrapArgs(rawArgs) {
+  if (rawArgs == null) return {}
+  if (typeof rawArgs === 'object' && !Array.isArray(rawArgs)) return rawArgs
+  if (typeof rawArgs === 'string') {
+    const trimmed = rawArgs.trim()
+    if (trimmed === '') return {}
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+        throw new Error('arg_guard: parsed JSON value is not a plain object')
+      } catch (e) { throw new Error(`arg_guard: invalid JSON args: ${e.message}`) }
+    }
+    const out = {}
+    const re = /(\w[\w.-]*)=("(?:\\\\\"|[^"])*"|\'(?:\\\\\'|[^\'])*\'|\S+)/g
+    let m
+    while ((m = re.exec(trimmed)) !== null) {
+      let v = m[2]
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1)
+      }
+      out[m[1]] = v
+    }
+    if (Object.keys(out).length === 0) {
+      throw new Error(`arg_guard: workflow args is a non-empty string but contains no key=value pairs and is not JSON. First 160 chars: ${trimmed.slice(0, 160)}`)
+    }
+    return out
+  }
+  throw new Error(`arg_guard: workflow args has unexpected type: ${typeof rawArgs}`)
+}
+// eslint-disable-next-line no-global-assign
+args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
+// --- END inlined arg_guard ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // This workflow does NOT use the generic entry scribe from
 // scripts/patch-genome-report.js (__genomeReport). Instead each phase's doer
@@ -109,7 +147,7 @@ function assertWorkflowSuitability() {
     const supported = WORKFLOW_SUITABILITY.supported_languages.map(normalizeSuitabilityValue)
     if (!supported.includes(requestedLanguage)) {
       throw new Error(
-        `${meta.name} is not suitable for language="${args.language}". ` +
+        `${WORKFLOW_NAME} is not suitable for language="${args.language}". ` +
         `Supported languages/backends: ${WORKFLOW_SUITABILITY.supported_languages.join(', ')}. ` +
         `Reason: ${WORKFLOW_SUITABILITY.reason}`
       )
@@ -121,7 +159,7 @@ function assertWorkflowSuitability() {
     const supportedProblemTypes = (WORKFLOW_SUITABILITY.supported_problem_types || []).map(normalizeSuitabilityValue)
     if (supportedProblemTypes.length && !supportsSuitabilityValue(supportedProblemTypes, requestedProblemType)) {
       throw new Error(
-        `${meta.name} is not suitable for problem_type="${args.problem_type}". ` +
+        `${WORKFLOW_NAME} is not suitable for problem_type="${args.problem_type}". ` +
         `Supported problem types: ${WORKFLOW_SUITABILITY.supported_problem_types.join(', ')}. ` +
         `Typical use cases: ${WORKFLOW_SUITABILITY.problem_types.join('; ')}. ` +
         `Reason: ${WORKFLOW_SUITABILITY.reason}`
@@ -318,7 +356,7 @@ Return the model code and analysis.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create the file if missing; shell append with >>). Get the timestamp first by running: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append this one-line JSON, filling the bracketed parts from your analysis:
-{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"workspace_setup","note":"<critical operators + fusion opportunities, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Setup","ts":"<ts>","status":"done","technique":"workspace_setup","note":"<critical operators + fusion opportunities, one line>"}`, {
   label: 'setup-workspace',
   phase: 'Setup',
   schema: {
@@ -374,7 +412,7 @@ Return profiling results and optimization plan.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Profile","ts":"<ts>","status":"done","technique":"<chosen optimization strategy, e.g. operator_fusion>","speedup":null,"note":"<baseline eager/compile ms + main bottleneck>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Profile","ts":"<ts>","status":"done","technique":"<chosen optimization strategy, e.g. operator_fusion>","speedup":null,"note":"<baseline eager/compile ms + main bottleneck>"}`, {
   label: 'profile-baseline',
   phase: 'Profile',
   schema: {
@@ -476,7 +514,7 @@ Return all three files.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (this is optimization attempt ${currentAttempt}):
-{"workflow":"${meta.name}","phase":"Implement","ts":"<ts>","status":"done","candidate_id":"attempt-${currentAttempt}","technique":"<the main optimization you applied this attempt>","note":"<what changed vs the previous attempt>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Implement","ts":"<ts>","status":"done","candidate_id":"attempt-${currentAttempt}","technique":"<the main optimization you applied this attempt>","note":"<what changed vs the previous attempt>"}`, {
     label: `impl-${currentAttempt}`,
     phase: 'Implement',
     schema: {
@@ -576,7 +614,7 @@ Return results.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append, using the values you just measured (status="done" if correctness passed, else "error"; speedup is the measured speedup_vs_compile number, or null if unavailable):
-{"workflow":"${meta.name}","phase":"Verify","ts":"<ts>","status":"<done|error>","candidate_id":"attempt-${currentAttempt}","speedup":<number or null>,"technique":"<technique under test>","note":"<compiled? correct? reward; or the failure reason>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Verify","ts":"<ts>","status":"<done|error>","candidate_id":"attempt-${currentAttempt}","speedup":<number or null>,"technique":"<technique under test>","note":"<compiled? correct? reward; or the failure reason>"}`, {
     label: `verify-${currentAttempt}`,
     phase: 'Verify',
     schema: {

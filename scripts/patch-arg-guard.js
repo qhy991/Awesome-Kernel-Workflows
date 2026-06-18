@@ -1,21 +1,20 @@
 #!/usr/bin/env node
 // scripts/patch-arg-guard.js
 //
-// Inserts the arg_guard import + unwrap call at the top of every workflow .js
-// in the catalog (one per workflow subdirectory + the _templates/*). Idempotent:
-// re-running it is a no-op.
+// Inserts an inlined arg_guard + unwrap call into every workflow .js in the
+// catalog (one per workflow subdirectory + templates). Idempotent: re-running
+// it is a no-op.
 //
 // Run from repo root:
 //   node scripts/patch-arg-guard.js
 //
 // What it inserts, right after `export const meta = {...}`:
 //
-//   import { unwrapArgs as __unwrapArgs } from '<relative path to _substrate/arg_guard.js>'
+//   function __unwrapArgs(rawArgs) { ... }
 //   args = __unwrapArgs(args)
 //
-// Why right after `meta`: `meta` must be a pure literal (the Workflow tool
-// statically extracts it), so we don't want any imports before it. Any
-// `args.*` access happens later, so it's safe to inject just before that.
+// Why inline instead of import: the Workflow runtime parses workflow files as
+// bare scripts, not ES modules, so static imports are rejected.
 
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
@@ -25,7 +24,8 @@ const SELF_DIR = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.dirname(SELF_DIR)
 
 // Workflow .js files live in <repo>/<workflow>/<workflow>-*.js. Templates live in
-// _templates/. We exclude scripts/, _tools/, _substrate/, _meta/, etc.
+// _templates/ and _meta/templates/. We exclude scripts/, _tools/, _substrate/,
+// _meta/* except _meta/templates, etc.
 const TOP_LEVEL_BLOCKLIST = new Set([
   '_manifests', '_meta', '_substrate', '_templates', '_tools',
   'scripts', 'docs', 'badges', 'node_modules', '.git',
@@ -45,27 +45,58 @@ async function findWorkflowJs() {
     }
   }
   // Also patch templates so newly-generated workflows inherit the guard.
-  const tplDir = path.join(REPO_ROOT, '_templates')
-  try {
-    const tpls = await fs.readdir(tplDir)
-    for (const f of tpls) {
-      if (f.endsWith('.js')) out.push(path.join(tplDir, f))
-    }
-  } catch (_) { /* ok */ }
+  for (const tplDir of [
+    path.join(REPO_ROOT, '_templates'),
+    path.join(REPO_ROOT, '_meta', 'templates'),
+  ]) {
+    try {
+      const tpls = await fs.readdir(tplDir)
+      for (const f of tpls) {
+        if (f.endsWith('.js')) out.push(path.join(tplDir, f))
+      }
+    } catch (_) { /* ok */ }
+  }
   return out
 }
 
 function buildPatch(filePath) {
-  const guardPath = path.join(REPO_ROOT, '_substrate', 'arg_guard.js')
-  let rel = path.relative(path.dirname(filePath), guardPath).split(path.sep).join('/')
-  if (!rel.startsWith('.')) rel = './' + rel
   return [
     '',
-    '// --- BEGIN arg_guard (auto-inserted by scripts/patch-arg-guard.js) ---',
-    `import { unwrapArgs as __unwrapArgs } from '${rel}'`,
+    '// --- BEGIN inlined arg_guard (Workflow runtime parses scripts as bare scripts,',
+    '//                              not ES modules; static imports are rejected) ---',
+    'function __unwrapArgs(rawArgs) {',
+    '  if (rawArgs == null) return {}',
+    "  if (typeof rawArgs === 'object' && !Array.isArray(rawArgs)) return rawArgs",
+    "  if (typeof rawArgs === 'string') {",
+    '    const trimmed = rawArgs.trim()',
+    "    if (trimmed === '') return {}",
+    "    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {",
+    '      try {',
+    '        const parsed = JSON.parse(trimmed)',
+    "        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed",
+    "        throw new Error('arg_guard: parsed JSON value is not a plain object')",
+    "      } catch (e) { throw new Error(`arg_guard: invalid JSON args: ${e.message}`) }",
+    '    }',
+    '    const out = {}',
+    '    const re = /(\\w[\\w.-]*)=("(?:\\\\\\\\\\"|[^"])*"|\\\'(?:\\\\\\\\\\\'|[^\\\'])*\\\'|\\S+)/g',
+    '    let m',
+    '    while ((m = re.exec(trimmed)) !== null) {',
+    '      let v = m[2]',
+    '      if ((v.startsWith(\'"\') && v.endsWith(\'"\')) || (v.startsWith("\'") && v.endsWith("\'"))) {',
+    '        v = v.slice(1, -1)',
+    '      }',
+    '      out[m[1]] = v',
+    '    }',
+    '    if (Object.keys(out).length === 0) {',
+    '      throw new Error(`arg_guard: workflow args is a non-empty string but contains no key=value pairs and is not JSON. First 160 chars: ${trimmed.slice(0, 160)}`)',
+    '    }',
+    '    return out',
+    '  }',
+    "  throw new Error(`arg_guard: workflow args has unexpected type: ${typeof rawArgs}`)",
+    '}',
     '// eslint-disable-next-line no-global-assign',
     'args = __unwrapArgs(typeof args === \'undefined\' ? undefined : args)',
-    '// --- END arg_guard ---',
+    '// --- END inlined arg_guard ---',
     '',
   ].join('\n')
 }
@@ -97,15 +128,19 @@ function findMetaEnd(src) {
 
 async function patchOne(filePath) {
   const src = await fs.readFile(filePath, 'utf8')
-  if (src.includes('arg_guard.js')) {
+  if (src.includes('args = __unwrapArgs')) {
     return { filePath, status: 'already_patched' }
   }
   if (!src.includes('export const meta')) {
     return { filePath, status: 'skipped_no_meta' }
   }
-  const insertAt = findMetaEnd(src)
+  let insertAt = findMetaEnd(src)
   if (insertAt < 0) {
     return { filePath, status: 'skipped_meta_parse_failed' }
+  }
+  const workflowNameMatch = src.match(/\bconst\s+WORKFLOW_NAME\s*=\s*['"][^'"]+['"]\s*\n/)
+  if (workflowNameMatch && workflowNameMatch.index !== undefined) {
+    insertAt = workflowNameMatch.index + workflowNameMatch[0].length
   }
   const patch = buildPatch(filePath)
   const next = src.slice(0, insertAt) + patch + src.slice(insertAt)

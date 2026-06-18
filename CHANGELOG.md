@@ -8,6 +8,26 @@ for the versioning policy.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Workflow runtime meta reference crash.** Top-level workflows and legacy
+  templates now use a body-scope `WORKFLOW_NAME` constant instead of reading the
+  exported `meta` object at runtime, preventing Claude Code Workflow dispatches
+  from failing with `ReferenceError: meta is not defined`. The genome-report
+  codemod now emits the same safe constant for newly patched workflows, and a
+  regression test guards against reintroducing runtime `meta.*` references.
+  (all top-level workflow JS files, `_templates/*.js`,
+  `scripts/patch-genome-report.js`,
+  `_meta/tools/test/runtime-meta-reference.test.js`)
+- **Workflow args string/object drift.** All top-level workflows and workflow
+  templates now inline the bare-script-safe `arg_guard` unwrap before reading
+  `args`, so Workflow dispatches that pass JSON strings or `key=value` strings no
+  longer become empty-arg rounds. `patch-arg-guard.js` now emits the inlined guard
+  instead of a static import, and a regression test keeps generated workflows on
+  the same contract. (all top-level workflow JS files, `_templates/*.js`,
+  `_meta/templates/*.js`, `scripts/patch-arg-guard.js`,
+  `_meta/tools/test/runtime-arg-guard.test.js`)
+
 ### Added
 
 - **WarpSpeed: align with AKW v0.2 genome + KerSor dispatch.** `exp_dir` for

@@ -6,6 +6,24 @@
 
 ## [Unreleased]
 
+### 修复（Fixed）
+
+- **Workflow 运行期 `meta` 引用崩溃。** 顶层 workflow 与旧模板现在使用
+  body-scope 的 `WORKFLOW_NAME` 常量,不再在运行期读取导出的 `meta` 对象,避免
+  Claude Code Workflow dispatch 因 `ReferenceError: meta is not defined` 失败。
+  genome-report codemod 也会为新 patch 的 workflow 生成同样安全的常量,并新增回归
+  测试防止重新引入运行期 `meta.*` 引用。
+  (所有顶层 workflow JS 文件、`_templates/*.js`,
+  `scripts/patch-genome-report.js`,
+  `_meta/tools/test/runtime-meta-reference.test.js`)
+- **Workflow args 字符串/对象漂移。** 所有顶层 workflow 与 workflow 模板现在都会在
+  读取 `args` 前内联裸脚本安全的 `arg_guard` unwrap，因此 Workflow dispatch 传入
+  JSON 字符串或 `key=value` 字符串时不再退化为空参数 round。`patch-arg-guard.js`
+  现在生成内联 guard 而不是 static import，并新增回归测试保证新生成 workflow 也遵守
+  同一契约。(所有顶层 workflow JS 文件、`_templates/*.js`,
+  `_meta/templates/*.js`, `scripts/patch-arg-guard.js`,
+  `_meta/tools/test/runtime-arg-guard.test.js`)
+
 ### 新增（Added）
 
 - **WarpSpeed:对齐 AKW v0.2 genome 与 KerSor 派发。** 支持 `exp_dir` 写入

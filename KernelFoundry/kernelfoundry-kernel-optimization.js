@@ -12,6 +12,44 @@ export const meta = {
   ],
 }
 
+const WORKFLOW_NAME = 'kernelfoundry-kernel-optimization'
+
+
+// --- BEGIN inlined arg_guard (Workflow runtime parses scripts as bare scripts,
+//                              not ES modules; static imports are rejected) ---
+function __unwrapArgs(rawArgs) {
+  if (rawArgs == null) return {}
+  if (typeof rawArgs === 'object' && !Array.isArray(rawArgs)) return rawArgs
+  if (typeof rawArgs === 'string') {
+    const trimmed = rawArgs.trim()
+    if (trimmed === '') return {}
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+        throw new Error('arg_guard: parsed JSON value is not a plain object')
+      } catch (e) { throw new Error(`arg_guard: invalid JSON args: ${e.message}`) }
+    }
+    const out = {}
+    const re = /(\w[\w.-]*)=("(?:\\\\\"|[^"])*"|\'(?:\\\\\'|[^\'])*\'|\S+)/g
+    let m
+    while ((m = re.exec(trimmed)) !== null) {
+      let v = m[2]
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1)
+      }
+      out[m[1]] = v
+    }
+    if (Object.keys(out).length === 0) {
+      throw new Error(`arg_guard: workflow args is a non-empty string but contains no key=value pairs and is not JSON. First 160 chars: ${trimmed.slice(0, 160)}`)
+    }
+    return out
+  }
+  throw new Error(`arg_guard: workflow args has unexpected type: ${typeof rawArgs}`)
+}
+// eslint-disable-next-line no-global-assign
+args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
+// --- END inlined arg_guard ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
@@ -53,7 +91,7 @@ function assertWorkflowSuitability() {
     const supported = WORKFLOW_SUITABILITY.supported_languages.map(normalizeSuitabilityValue)
     if (!supported.includes(requestedLanguage)) {
       throw new Error(
-        `${meta.name} is not suitable for language="${args.language}". ` +
+        `${WORKFLOW_NAME} is not suitable for language="${args.language}". ` +
         `Supported languages/backends: ${WORKFLOW_SUITABILITY.supported_languages.join(', ')}. ` +
         `Reason: ${WORKFLOW_SUITABILITY.reason}`
       )
@@ -65,7 +103,7 @@ function assertWorkflowSuitability() {
     const supportedProblemTypes = (WORKFLOW_SUITABILITY.supported_problem_types || []).map(normalizeSuitabilityValue)
     if (supportedProblemTypes.length && !supportsSuitabilityValue(supportedProblemTypes, requestedProblemType)) {
       throw new Error(
-        `${meta.name} is not suitable for problem_type="${args.problem_type}". ` +
+        `${WORKFLOW_NAME} is not suitable for problem_type="${args.problem_type}". ` +
         `Supported problem types: ${WORKFLOW_SUITABILITY.supported_problem_types.join(', ')}. ` +
         `Typical use cases: ${WORKFLOW_SUITABILITY.problem_types.join('; ')}. ` +
         `Reason: ${WORKFLOW_SUITABILITY.reason}`
@@ -275,7 +313,7 @@ Return operator analysis and baseline.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${meta.name}","phase":"Setup","ts":"<ts>","status":"done","technique":"map_elites_setup","note":"<operator type + baseline ms + feasible behavioral cells, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Setup","ts":"<ts>","status":"done","technique":"map_elites_setup","note":"<operator type + baseline ms + feasible behavioral cells, one line>"}`, {
   label: 'setup',
   phase: 'Setup',
   schema: {
@@ -399,7 +437,7 @@ Return the kernel code and its optimization strategy description.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (this is generation ${generation}):
-{"workflow":"${meta.name}","phase":"Vary","ts":"<ts>","status":"done","candidate_id":"gen${generation}","technique":"<the mutation/variation strategy you applied: memory pattern, algorithm, or parallelism change>","note":"<how this offspring differs from the parent>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Vary","ts":"<ts>","status":"done","candidate_id":"gen${generation}","technique":"<the mutation/variation strategy you applied: memory pattern, algorithm, or parallelism change>","note":"<how this offspring differs from the parent>"}`, {
     label: `vary-${generation}`,
     phase: 'Vary',
     schema: {
@@ -469,7 +507,7 @@ Return evaluation results.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (this is generation ${generation}; status="done" if it compiled AND was correct, else "error"; speedup is the measured speedup number, or null if unavailable):
-{"workflow":"${meta.name}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"gen${generation}","speedup":<number or null>,"technique":"<behavioral cell d_mem,d_algo,d_sync you classified>","note":"<compiled? correct? speedup; or the failure reason>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"gen${generation}","speedup":<number or null>,"technique":"<behavioral cell d_mem,d_algo,d_sync you classified>","note":"<compiled? correct? speedup; or the failure reason>"}`, {
     label: `eval-${generation}`,
     phase: 'Evaluate',
     schema: {
@@ -613,7 +651,7 @@ Return updated prompt sections.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (this meta-evolution ran at generation ${generation}):
-{"workflow":"${meta.name}","phase":"Evolve-Prompts","ts":"<ts>","status":"done","candidate_id":"gen${generation}","technique":"meta_prompt_evolution","note":"<which evolvable sections changed and why, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Evolve-Prompts","ts":"<ts>","status":"done","candidate_id":"gen${generation}","technique":"meta_prompt_evolution","note":"<which evolvable sections changed and why, one line>"}`, {
       label: `meta-prompt-${generation}`,
       phase: 'Evolve-Prompts',
       schema: {
@@ -682,7 +720,7 @@ Write:
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (final report; speedup is the best speedup found, or null if none):
-{"workflow":"${meta.name}","phase":"Evaluate","ts":"<ts>","status":"done","candidate_id":"final","speedup":<number or null>,"technique":"<best cell strategy>","note":"<archive coverage + best speedup + most effective strategy, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Evaluate","ts":"<ts>","status":"done","candidate_id":"final","speedup":<number or null>,"technique":"<best cell strategy>","note":"<archive coverage + best speedup + most effective strategy, one line>"}`, {
   label: 'final-report',
   phase: 'Evaluate',
 })
