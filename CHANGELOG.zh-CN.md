@@ -8,6 +8,11 @@
 
 ### 修复（Fixed）
 
+- **移除迁移后的旧文档引用。** Substrate 文档现在使用 `/kersor:optimize`
+  命令名和 `KerSor/docs/transfer-object.md`；agent 指南把 manifest 作者指向
+  `docs/manifest-schema.yaml`，不再指向已删除的 `_manifests/schema.yaml`。
+  (`_substrate/ARCHITECTURE.md`, `_substrate/SOLVER-SDK.md`, `Agent.md`)
+
 - **Workflow 运行期 `meta` 引用崩溃。** 顶层 workflow 与旧模板现在使用
   body-scope 的 `WORKFLOW_NAME` 常量,不再在运行期读取导出的 `meta` 对象,避免
   Claude Code Workflow dispatch 因 `ReferenceError: meta is not defined` 失败。

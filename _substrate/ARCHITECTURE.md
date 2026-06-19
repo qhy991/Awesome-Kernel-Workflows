@@ -27,7 +27,7 @@ monolith and the substrate approach — both produce directly-callable solvers.
 
 | | Monolith mega-workflow | Substrate → generalist solver | Substrate → KerSor |
 |---|---|---|---|
-| How to call | `Workflow({name:'apex-...', args})` | `Workflow({name:'generalist-...', args})` | `/kernelnav:optimize kernel.cu` |
+| How to call | `Workflow({name:'apex-...', args})` | `Workflow({name:'generalist-...', args})` | `/kersor:optimize kernel.cu` |
 | Directly callable? | yes | **yes (identical call shape)** | yes (call the orchestrator) |
 | Internals | all components hardcoded in one file | same file; agent steps call `_substrate/` shared scripts | routes substrate-conformant solvers + transfer |
 | Topology | all stacked (category error) | one controller + substrate | heterogeneous, routed per round |
@@ -115,7 +115,7 @@ which is what the complementarity experiment wants to measure.
 | Goal | Call |
 |---|---|
 | One kernel, simplest path, no orchestration overhead | **Generalist** (`Workflow({name:'generalist-...'})`) |
-| Cross-family coverage / the portfolio story | **KerSor** (`/kernelnav:optimize`) |
+| Cross-family coverage / the portfolio story | **KerSor** (`/kersor:optimize`) |
 | Measure how much orchestration beats the best single solver | run both; generalist as the baseline |
 
 ## "集大成" exists at two levels

@@ -85,7 +85,7 @@
 
 - 每个 workflow 目录应自包含：source link、required args、expected artifacts、example invocation。
 - 英文和中文 README 的 taxonomy 必须一致。
-- 描述 category、topology、feedback、correctness、return fields 时，优先使用 `_manifests/schema.yaml` 的词汇。
+- 描述 category、topology、feedback、correctness、return fields 时，优先使用 `docs/manifest-schema.yaml` 的词汇。
 - 方法声明要保守。宁可写 "inspired by"，也不要夸大 fidelity。
 - 添加 workflow 时不要混入无关重构。
 

@@ -6,8 +6,8 @@
 // embedded mode. Mirrors scripts/patch-arg-guard.js, with two differences:
 //
 //   1. Opt-in, not blanket: only workflows in EMBEDDED_WORKFLOWS (below) are
-//      patched. This is the AKW-side opt-in list; KerSor's
-//      config/workflow_metadata.json carries the matching `integration_patterns`.
+//      patched. This AKW-side opt-in list must match each workflow manifest's
+//      `routing.integration_patterns`.
 //   2. Update-in-place: the inlined block is delimited by markers, so re-running
 //      after editing the substrate source REPLACES the block instead of skipping.
 //      Idempotent: identical source => no change.
@@ -26,7 +26,7 @@ const SELF_DIR = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.dirname(SELF_DIR)
 
 // Workflows that support embedded-dispatch evaluation. Keep in sync with the
-// `integration_patterns` entries in KerSor config/workflow_metadata.json.
+// `integration_patterns` entries in the matching workflow manifest `routing:` block.
 const EMBEDDED_WORKFLOWS = [
   'GPUForecasters',
   'FACT',
