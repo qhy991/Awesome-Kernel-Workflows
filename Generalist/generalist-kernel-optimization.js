@@ -438,7 +438,9 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
       `Propose ONE optimization plan that uses ONLY an allowed method. Mark the exact code region to change with ` +
       `grounded anchors <<<IMPROVE BEGINS>>> ... <<<IMPROVE ENDS>>>. Pick the highest-confidence prior technique ` +
       `that fits, unless a dead-end forbids it. Return {method, plan, anchors}.` +
-      `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\n` +
+      `\n\n# Recent genome trajectory (read BEFORE picking the method)\n` +
+      `Run \`tail -20 ${EXP_DIR}/genome.jsonl 2>/dev/null\` to see prior attempts this session. Use it to: (a) avoid picking a method already tried with regression in earlier rounds, (b) spot multi-round patterns the persistent memory may not surface yet. If the file is empty or missing, ignore this.\n` +
+      `\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\n` +
       `Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\n` +
       `Then append:\n` +
       `{"workflow":"${WORKFLOW_NAME}","phase":"Plan","ts":"<ts>","status":"done","candidate_id":"iter-${iter}-plan-${i + 1}","technique":"<the allowed method you chose>","speedup":null,"note":"<one-line summary of the plan + why this method fits bottleneck ${bclass}>"}`,

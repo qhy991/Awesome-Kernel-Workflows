@@ -447,6 +447,9 @@ ${gradientHints ? `# Gradient Hints (from evolutionary history):\n${gradientHint
 
 Return the kernel code and its optimization strategy description.
 
+# Recent genome trajectory (read BEFORE varying)
+Run \`tail -20 ${EXP_DIR}/genome.jsonl 2>/dev/null\` to see prior generations this session (every Vary/Evaluate step has self-reported). Use it to: (a) avoid producing an offspring whose strategy matches a recently-regressed sibling, (b) spot evolutionary patterns the gradientHints summary may have lost. If the file is empty or missing, ignore this and rely on the parent context above.
+
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (this is generation ${generation}):

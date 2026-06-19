@@ -759,6 +759,9 @@ Return a JSON object with:
 - anchors: array of {name, begin_line, end_line, description}
 - rationale: string
 
+# Recent genome trajectory (read BEFORE proposing)
+Run \`tail -20 ${EXP_DIR}/genome.jsonl 2>/dev/null\` to see prior attempts across the tree this session. Use it to: (a) avoid re-proposing optimizations that already regressed on sibling or ancestor nodes, (b) spot patterns the per-node sibling summary may have missed. If the file is empty or missing, ignore this and rely on the tree context above.
+
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
