@@ -53,6 +53,23 @@ function __unwrapArgs(rawArgs) {
 }
 // eslint-disable-next-line no-global-assign
 args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
+
+// --- BEGIN typed-args (channel ② experience_excerpts) ---
+// Cross-session priors travel here as a typed array (see KerSor
+// agents/dispatch-arg-synthesizer.md), independent of op_description so the
+// solver can treat them as distinct lower-authority signals.
+const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+function __experienceBlock() {
+  if (!EXPERIENCE_EXCERPTS.length) return ''
+  const lines = EXPERIENCE_EXCERPTS.map(e => {
+    const kind = (e && e.kind) || 'note'
+    const directive = (e && e.directive) || 'inform'
+    const claim = (e && e.claim) || (typeof e === 'string' ? e : JSON.stringify(e))
+    return `- [${kind}/${directive}] ${claim}`
+  })
+  return `\n# Cross-session experience excerpts (channel ② — priors from past sessions; LOWER authority than current-round evidence):\n${lines.join('\n')}\n`
+}
+// --- END typed-args ---
 // --- END inlined arg_guard ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
@@ -438,6 +455,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
       `Propose ONE optimization plan that uses ONLY an allowed method. Mark the exact code region to change with ` +
       `grounded anchors <<<IMPROVE BEGINS>>> ... <<<IMPROVE ENDS>>>. Pick the highest-confidence prior technique ` +
       `that fits, unless a dead-end forbids it. Return {method, plan, anchors}.` +
+      __experienceBlock() +
       `\n\n# Recent genome trajectory (read BEFORE picking the method)\n` +
       `Run \`tail -20 ${EXP_DIR}/genome.jsonl 2>/dev/null\` to see prior attempts this session. Use it to: (a) avoid picking a method already tried with regression in earlier rounds, (b) spot multi-round patterns the persistent memory may not surface yet. If the file is empty or missing, ignore this.\n` +
       `\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\n` +
