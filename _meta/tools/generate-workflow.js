@@ -281,7 +281,7 @@ At least one of kernel_path, problem_definition, or problem_path must be availab
 Do not emit old aliases such as gpu_target, bench_command, eval_command, rounds, problem_description, task_spec, or task_path.
 Do not emit concrete default commands such as python ..., nvcc ..., bash ..., or ncu --.... Commands must be user-provided through compile_command, test_command, benchmark_command, profile_command, or method-specific tool args. The legacy ncu_command is a deprecated alias for profile_command (scheduled for removal in manifest schema v1.3); emit it only when the source paper or manifest explicitly names it for back-compat, and mark it deprecated in the arg description. If a command is missing, the workflow must mark measured evidence as unavailable instead of inventing an evaluator/harness.
 
-# Backend-axis args (v1.1 contract; see _meta/manifests/schema.yaml \`backend:\` block):
+# Backend-axis args (v1.1 contract; see docs/manifest-schema.yaml \`backend:\` block):
 - backend: backend id (matches a directory under _substrate/backends/). Use the manifest's \`backend.default\` when present; null forces explicit --backend.
 - backend_dir: optional driver-dir path; empty string → legacy inline-prompt path. Required for any driver-shaped emission.
 - profile_command: neutral profile-command template; preferred over the legacy ncu_command alias.
@@ -398,7 +398,7 @@ const methodName = METHOD_NAME || (paperResearch?.paper_title || 'unknown')
 const manifestResult = await agent(`You are a YAML generator. Assemble a complete manifest YAML for Awesome-Kernel-Workflows from the structured data below.
 
 # Schema Reference
-The manifest must conform to the schema at _meta/manifests/schema.yaml. Fill ALL required fields.
+The manifest must conform to the schema at docs/manifest-schema.yaml. Fill ALL required fields.
 
 # Data to assemble:
 
@@ -431,7 +431,7 @@ The manifest must conform to the schema at _meta/manifests/schema.yaml. Fill ALL
 - max_iterations_arg: ${topologyModel?.max_iterations_arg || 'iterations'}
 - convergence_condition: ${topologyModel?.convergence_condition || ''}
 
-## Backend posture (v1.1; see _meta/manifests/schema.yaml \`backend:\` block):
+## Backend posture (v1.1; see docs/manifest-schema.yaml \`backend:\` block):
 - supported: ${JSON.stringify(paperResearch?.supported_backends || ['any'])}
 - default: ${paperResearch?.default_backend || 'null'}
 - matrix_eligible: ${paperResearch?.matrix_eligible !== false}
@@ -659,7 +659,7 @@ if (!validationResult.passed && validationResult.corrected_code) {
 const outputFilename = workflowCode.filename || `${manifestResult.workflow_name}.js`
 const outputDirectory = workflowCode.directory || manifestResult.method_name || 'GeneratedMethod'
 const workflowPath = `${OUTPUT_DIR}/${outputDirectory}/${outputFilename}`
-const manifestPath = `${OUTPUT_DIR}/_manifests/${manifestResult.workflow_name || 'generated'}.yaml`
+const manifestPath = `${OUTPUT_DIR}/${outputDirectory}/manifest.yaml`
 
 // The caller (Claude Code) will write these files based on our return value
 log(`Output: ${workflowPath}`)

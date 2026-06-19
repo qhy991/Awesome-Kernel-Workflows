@@ -273,7 +273,7 @@ Return violations found.`, {
 # Workflow body excerpt + agent prompt bodies (search target):
 ${JSON.stringify(parseResult.agent_calls || [], null, 2)}
 
-# Manifest backend block (if known to caller): see _meta/manifests/<workflow>.yaml \`backend:\` block.
+# Manifest backend block (if known to caller): see <Workflow>/manifest.yaml `backend:` block.
 
 # Rules (all warning-level; this is an LLM checklist, not a deterministic gate):
 - **backend-axis: clean-tier vendor-token leak (warning).** If

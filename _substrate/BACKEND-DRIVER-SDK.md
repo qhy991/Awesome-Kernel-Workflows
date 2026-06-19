@@ -31,8 +31,8 @@ under `_schema/`. The Python validator + this document ARE the contract.
 
 ## Manifest v1.1: the `backend:` block in workflow manifests
 
-Manifest schema `_meta/manifests/schema.yaml` was bumped to **v1.1** (additive; v1.0
-manifests still parse). The new top-level `backend:` block declares a workflow's
+Manifest schema [`docs/manifest-schema.yaml`](../docs/manifest-schema.yaml) is at **v1.1+**
+(additive; older generation manifests still parse). The top-level `backend:` block declares a workflow's
 `(language x vendor)` posture:
 
 ```yaml
@@ -45,8 +45,7 @@ backend:
   requires_capability: {}     # capability floor (metrics, problem_types)
 ```
 
-See `_meta/manifests/schema.yaml` for the full annotated reference and the v1.1 changelog
-comment.
+See [`docs/manifest-schema.yaml`](../docs/manifest-schema.yaml) for the full annotated reference and the v1.1 changelog comment.
 
 Neutral backend-axis args added to `args.optional[]`: `backend`, `backend_dir`,
 `profile_command`. `ncu_command` is retained as a DEPRECATED alias for `profile_command`

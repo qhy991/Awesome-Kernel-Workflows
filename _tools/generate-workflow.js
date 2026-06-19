@@ -633,7 +633,7 @@ if (!validationResult.passed && validationResult.corrected_code) {
 const outputFilename = workflowCode.filename || `${manifestResult.workflow_name}.js`
 const outputDirectory = workflowCode.directory || manifestResult.method_name || 'GeneratedMethod'
 const workflowPath = `${OUTPUT_DIR}/${outputDirectory}/${outputFilename}`
-const manifestPath = `${OUTPUT_DIR}/_manifests/${manifestResult.workflow_name || 'generated'}.yaml`
+const manifestPath = `${OUTPUT_DIR}/${outputDirectory}/manifest.yaml`
 
 // The caller (Claude Code) will write these files based on our return value
 log(`Output: ${workflowPath}`)
