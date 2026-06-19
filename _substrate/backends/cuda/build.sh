@@ -21,6 +21,21 @@ die3() {
 }
 
 SOURCE="" OUT="" ARCH="sm_80" BUILD_CMD="" EXTRA=""
+
+# Auto-detect NVIDIA arch when caller left the default sm_80.
+detect_cuda_arch() {
+  command -v nvidia-smi >/dev/null 2>&1 || return 0
+  local cc
+  cc="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')"
+  case "$cc" in
+    10.*) echo "sm_100" ;;
+    9.*)  echo "sm_90" ;;
+    8.9*) echo "sm_89" ;;
+    8.*)  echo "sm_80" ;;
+    *)    echo "sm_80" ;;
+  esac
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --source)    SOURCE="${2:-}"; shift 2 ;;
@@ -35,6 +50,13 @@ done
 [ -n "$SOURCE" ] || die3 "missing --source"
 [ -n "$OUT" ]    || die3 "missing --out"
 [ -f "$SOURCE" ] || die3 "source not found: $SOURCE"
+
+if [ "$ARCH" = "sm_80" ]; then
+  DETECTED="$(detect_cuda_arch)"
+  if [ -n "$DETECTED" ]; then
+    ARCH="$DETECTED"
+  fi
+fi
 
 # Resolve the build command. Default: nvcc -shared -Xcompiler -fPIC -lineinfo -arch=... -o OUT SOURCE
 if [ -n "$BUILD_CMD" ]; then
