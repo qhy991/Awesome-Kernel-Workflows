@@ -27,6 +27,36 @@
 # =============================================================================
 
 # ---------------------------------------------------------------------------
+# ROUTING (v1.2) — KerSor selector contract; merged from legacy workflow_metadata.json
+# ---------------------------------------------------------------------------
+# Top-level `routing:` on the primary entrypoint, or `variants[].routing` for
+# additional .js files in the same directory. Consumed by KerSor generate-catalog.sh.
+routing:
+  method_category: ""        # [R for routing] iterative_self_improving | tree_exploration | ...
+  topology: ""               # [R for routing] iterative | tree | mcts | ...
+  languages: []              # [R for routing] cuda, triton, rocm, ...
+  backends: []               # [O] explicit backend ids (defaults to languages)
+  requires_ncu: false
+  requires_harness: false
+  role: optimizer            # optimizer | generator | diagnostic
+  fidelity_boundary: ""
+  speedup_field: null
+  best_kernel_field: null
+  required_one_of: []        # e.g. [[kernel_path, problem_definition, problem_path]]
+  integration_patterns: []   # standalone | embedded_dispatch | embedded_inplace
+  required_args: []
+  all_args: []
+  known_broken: null
+  requires_embedded_registration: false
+  framework_integrator_fallback: false
+
+# Optional additional entrypoints in the same directory (each needs variants[].routing)
+variants: []
+#   - name: ""
+#     entrypoint: ""
+#     routing: { ... same shape as above ... }
+
+# ---------------------------------------------------------------------------
 # SOURCE METADATA — Where does this method come from?
 # ---------------------------------------------------------------------------
 source:

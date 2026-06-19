@@ -17,7 +17,8 @@ backend:
 
     '
 source:
-  paper_title: 'AKW design note: WarpSpeed — rewindable parallel kernel-optimization search'
+  paper_title: 'AKW design note: WarpSpeed — rewindable parallel kernel-optimization
+    search'
   paper_url: WarpSpeed/README.md
   paper_venue: AKW design notes 2026
   repo_url: ''
@@ -67,17 +68,20 @@ method:
   - 'Init: materialize config (render_config), preflight tools, scaffold/lock harness'
   - 'Calibrate: one-time cross-device sigma defining the significance margin'
   - 'Seed: baseline checkpoint with tier-2 latency + cached NCU profile'
-  - 'Plan: orphan recovery, tree snapshot, exploit/explore/wildcard allocation, soft dedup'
+  - 'Plan: orphan recovery, tree snapshot, exploit/explore/wildcard allocation, soft
+    dedup'
   - 'Generate: worktree implementor ↔ fresh-clone codex reviewer (≤3 iterations)'
   - 'Screen: interleaved A/B vs parent on a pool device (device-unbiased)'
   - 'Confirm: locked-clock canonical device when decision-relevant'
   - 'Profile: curated NCU sections, parents cached once ever, analyst diagnosis'
-  - 'Record: hard dedup (noise + fingerprint), checkpoint promotion, blocked counting, BitLessons'
+  - 'Record: hard dedup (noise + fingerprint), checkpoint promotion, blocked counting,
+    BitLessons'
   - 'Postmortem: blame → single ablation → rewind + replay queue, or refutation lesson'
   - 'Maintain: worktree cleanup, lesson compaction'
   - 'Report: leaderboard, lessons, rewinds, stop reason'
   carried_state:
-  - SQLite checkpoint tree + experiment ledger + GPU-minutes ledger (per-project state dir)
+  - SQLite checkpoint tree + experiment ledger + GPU-minutes ledger (per-project state
+    dir)
   - Append-only bitlessons.jsonl (+ md mirror) surviving rewinds
   - NCU profile cache per checkpoint commit (profiled once, ever)
   - Per-experiment git branches kept as evidence (worktrees pruned per round)
@@ -87,8 +91,10 @@ topology:
   tree:
     branching_factor_arg: parallel_agents
     max_depth_arg: iterations
-    scoring_function: significance-gated relative speedup vs parent; hard dedup on latency + NCU fingerprint
-    backtrack_condition: blocked checkpoint subtree for K rounds -> postmortem ablation -> frontier rewind on confirmed blame
+    scoring_function: significance-gated relative speedup vs parent; hard dedup on
+      latency + NCU fingerprint
+    backtrack_condition: blocked checkpoint subtree for K rounds -> postmortem ablation
+      -> frontier rewind on confirmed blame
 inputs:
   supports_existing_kernel: true
   supports_problem_definition: false
@@ -96,12 +102,14 @@ inputs:
   - project_dir
   generation:
     enabled: false
-    notes: WarpSpeed optimizes an existing kernel repo via checkpoint tree; it does not synthesize a first kernel from a problem definition alone.
+    notes: WarpSpeed optimizes an existing kernel repo via checkpoint tree; it does
+      not synthesize a first kernel from a problem definition alone.
 args:
   required:
   - name: project_dir
     type: string
-    description: Path to the target kernel git repo to optimize. All run state lives under its state dir.
+    description: Path to the target kernel git repo to optimize. All run state lives
+      under its state dir.
     example: /home/user/my-kernel-project
   - name: build_command
     type: string
@@ -117,23 +125,27 @@ args:
     example: src/gemm.cu
   - name: target_gpu
     type: string
-    description: Canonical confirm-device identifier (locked-clock measurements run here).
-    example: 'cuda:0'
+    description: Canonical confirm-device identifier (locked-clock measurements run
+      here).
+    example: cuda:0
   optional:
   - name: exp_dir
     type: string
     default: ''''''
-    description: KerSor session run directory for genome.jsonl observability and report mirror; search state remains under state_dir.
+    description: KerSor session run directory for genome.jsonl observability and report
+      mirror; search state remains under state_dir.
     example: /path/to/.kersor/session/run-1
   - name: warpspeed_dir
     type: string
     default: ''''''
-    description: Path to the WarpSpeed workflow directory (code + templates). Defaults to the workflow's own directory.
+    description: Path to the WarpSpeed workflow directory (code + templates). Defaults
+      to the workflow's own directory.
     example: WarpSpeed/
   - name: state_dir
     type: string
     default: '''<project_dir>/.warpspeed'''
-    description: Per-project state directory for SQLite tree, ledger, BitLessons, worktrees.
+    description: Per-project state directory for SQLite tree, ledger, BitLessons,
+      worktrees.
     example: /home/user/my-kernel-project/.warpspeed
   - name: harness_dir
     type: string
@@ -163,7 +175,8 @@ args:
   - name: reviewer_cmd
     type: string
     default: ''''''
-    description: Cross-model reviewer CLI command (codex). Reviewer-unavailable is a rejection, never a silent pass.
+    description: Cross-model reviewer CLI command (codex). Reviewer-unavailable is
+      a rejection, never a silent pass.
     example: codex review
   - name: bench_shape
     type: string
@@ -206,6 +219,58 @@ outputs:
   - Holds machine-global GPU locks under /tmp/warpspeed/locks during measurements
   - chmod -R a-w on the project harness dir at Init
 testing:
-  mock_suite: WarpSpeed/tests/mock/run_mock_tests.sh (T1–T13; PATH-injected fake GPU tools; no GPUs needed)
-  dryrun: node WarpSpeed/tests/workflow/dryrun.test.mjs (vm harness, fixture agents, routing/rewind logic)
-  node_suite: WarpSpeed/tests/node/run_node_tests.sh (real flock/calibrate/screen/confirm/NCU on the GPU node)
+  mock_suite: WarpSpeed/tests/mock/run_mock_tests.sh (T1–T13; PATH-injected fake GPU
+    tools; no GPUs needed)
+  dryrun: node WarpSpeed/tests/workflow/dryrun.test.mjs (vm harness, fixture agents,
+    routing/rewind logic)
+  node_suite: WarpSpeed/tests/node/run_node_tests.sh (real flock/calibrate/screen/confirm/NCU
+    on the GPU node)
+routing:
+  best_kernel_field: best_commit
+  all_args:
+  - exp_dir
+  - project_dir
+  - ggml_root
+  - kernel_path
+  - build_command
+  - compile_command
+  - binary_path
+  - kernel_paths
+  - target_gpu
+  - warpspeed_dir
+  - state_dir
+  - harness_dir
+  - iterations
+  - budget_gpu_minutes
+  - target_latency_us
+  - parallel_agents
+  - reviewer_cmd
+  - bench_shape
+  - op_description
+  - single_spec_json
+  - config_overrides
+  - language
+  - problem_type
+  - note
+  - notes
+  - test_command
+  - benchmark_command
+  topology: tree
+  requires_harness: true
+  languages:
+  - cuda
+  method_category: tree_exploration
+  role: optimizer
+  speedup_field: speedup
+  backends:
+  - cuda
+  fidelity_boundary: workflow_adaptation
+  required_args:
+  - project_dir
+  - build_command
+  - binary_path
+  - kernel_paths
+  - target_gpu
+  integration_patterns:
+  - standalone
+  requires_ncu: true

@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Workflow count + badge sync
+        run: |
+          ./scripts/count-workflows.sh
+          git diff --exit-code badges/workflows.json
+
+      - name: Manifest coverage
+        run: |
+          pip install pyyaml --quiet
+          ./scripts/validate-manifests.sh

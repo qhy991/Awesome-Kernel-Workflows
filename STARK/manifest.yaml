@@ -499,3 +499,15 @@ template:
   customizations:
   - backtracking
   - early_stopping
+routing:
+  best_kernel_field: best_kernel_code
+  topology: tree
+  requires_harness: false
+  languages:
+  - cuda
+  - metax
+  method_category: tree_exploration
+  role: optimizer
+  speedup_field: speedup
+  fidelity_boundary: faithful_but_simplified
+  requires_ncu: false

@@ -365,3 +365,17 @@ template:
   customizations:
   - custom_profiling
   - early_stopping
+routing:
+  best_kernel_field: best_kernel_code
+  topology: iterative
+  requires_harness: true
+  languages:
+  - cuda
+  - ascend
+  - python_reference
+  - metax
+  method_category: iterative_self_improving
+  role: generator
+  speedup_field: best_speedup
+  fidelity_boundary: workflow_adaptation
+  requires_ncu: false

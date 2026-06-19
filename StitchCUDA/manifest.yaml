@@ -307,3 +307,15 @@ template:
   customizations:
   - adaptive_replanning
   - early_termination
+routing:
+  best_kernel_field: null
+  topology: iterative
+  requires_harness: true
+  languages:
+  - cuda
+  - metax
+  method_category: iterative_self_improving
+  role: optimizer
+  speedup_field: speedup
+  fidelity_boundary: faithful_but_simplified
+  requires_ncu: false

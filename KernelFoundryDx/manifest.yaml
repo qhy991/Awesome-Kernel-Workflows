@@ -492,3 +492,15 @@ template:
   - diagnosis_driven_feedback
   - hint_library_reinforcement
   - anti_cheating_validation
+routing:
+  best_kernel_field: best_kernel_code
+  topology: evolutionary
+  requires_harness: true
+  languages:
+  - triton
+  - metax
+  method_category: evolutionary_quality_diversity
+  role: optimizer
+  speedup_field: avg_speedup
+  fidelity_boundary: algorithm_sketch_execution_risk
+  requires_ncu: false

@@ -1,29 +1,49 @@
-schema_version: "1.1"
+schema_version: '1.1'
 name: kernelblaster-kernel-optimization
 entrypoint: kernelblaster-kernel-optimization.js
-
 backend:
   portability: vendor_locked
   matrix_eligible: partial
   intrinsic_to: NVIDIA NCU
-  method_supported_backends: [cuda]
-  supported: [cuda]
+  method_supported_backends:
+  - cuda
+  supported:
+  - cuda
   default: cuda
   requires_capability:
-    metrics: [dram_pct, sm_pct]
-  notes: >
-    Tier per spec §7.2 (vendor_locked, intrinsic to NCU). Method anchored
-    on NCU elapsed-cycles feedback and CUDA optimization memory. Legacy
-    WORKFLOW_SUITABILITY=['cuda'].
+    metrics:
+    - dram_pct
+    - sm_pct
+  notes: 'Tier per spec §7.2 (vendor_locked, intrinsic to NCU). Method anchored on
+    NCU elapsed-cycles feedback and CUDA optimization memory. Legacy WORKFLOW_SUITABILITY=[''cuda''].
 
+    '
 source:
-  paper_title: "KernelBlaster: Memory-Augmented In-Context RL for CUDA Kernel Optimization"
-  paper_url: ""
-  notes: "vendor_locked; full phase spec deferred."
-
+  paper_title: 'KernelBlaster: Memory-Augmented In-Context RL for CUDA Kernel Optimization'
+  paper_url: ''
+  notes: vendor_locked; full phase spec deferred.
 workflow:
   name: kernelblaster-kernel-optimization
-  description: "Memory-augmented in-context RL loop for CUDA kernel optimization with a persistent, state-keyed optimization knowledge base (KernelBlaster / MAIC-RL methodology)"
-  when_to_use: "When you want to optimize a CUDA kernel via profile-guided RL rollouts that ACCUMULATE experience across kernels and runs. KernelBlaster classifies each kernel into a hardware performance state (memory / compute / latency bound), retrieves the best-known optimization for that state from a persistent knowledge base keyed by bottleneck pattern, applies it, measures the real reward (Elapsed Cycles delta via NCU), and updates the database so future rollouts and future kernels reuse what worked. Pass optimization_db_path to carry the knowledge base across invocations."
-  output_filename: "kernelblaster-kernel-optimization.js"
-  directory: "KernelBlaster/"
+  description: Memory-augmented in-context RL loop for CUDA kernel optimization with
+    a persistent, state-keyed optimization knowledge base (KernelBlaster / MAIC-RL
+    methodology)
+  when_to_use: When you want to optimize a CUDA kernel via profile-guided RL rollouts
+    that ACCUMULATE experience across kernels and runs. KernelBlaster classifies each
+    kernel into a hardware performance state (memory / compute / latency bound), retrieves
+    the best-known optimization for that state from a persistent knowledge base keyed
+    by bottleneck pattern, applies it, measures the real reward (Elapsed Cycles delta
+    via NCU), and updates the database so future rollouts and future kernels reuse
+    what worked. Pass optimization_db_path to carry the knowledge base across invocations.
+  output_filename: kernelblaster-kernel-optimization.js
+  directory: KernelBlaster/
+routing:
+  best_kernel_field: best_kernel_code
+  topology: iterative
+  requires_harness: true
+  languages:
+  - cuda
+  method_category: iterative_self_improving
+  role: optimizer
+  speedup_field: overall_speedup
+  fidelity_boundary: strict_high_fidelity
+  requires_ncu: true

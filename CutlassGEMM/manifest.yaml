@@ -1,27 +1,43 @@
-schema_version: "1.1"
+schema_version: '1.1'
 name: cutlassgemm-gemm-optimization
 entrypoint: cutlassgemm-gemm-optimization.js
-
 backend:
   portability: method_intrinsic
   matrix_eligible: false
   intrinsic_to: CUTLASS device-level API
-  method_supported_backends: [cutlass]
-  supported: [cutlass]
+  method_supported_backends:
+  - cutlass
+  supported:
+  - cutlass
   default: cutlass
-  notes: >
-    Tier per spec §7.2 (method_intrinsic, CUTLASS). Targets SOL-ExecBench
-    GEMM problems on Ampere/Hopper. Legacy WORKFLOW_SUITABILITY=['cutlass',
-    'cuda', 'cpp'].
+  notes: 'Tier per spec §7.2 (method_intrinsic, CUTLASS). Targets SOL-ExecBench GEMM
+    problems on Ampere/Hopper. Legacy WORKFLOW_SUITABILITY=[''cutlass'', ''cuda'',
+    ''cpp''].
 
+    '
 source:
-  paper_title: "CUTLASS GEMM Optimization with NCU Profiling and cuBLAS Fallback"
-  paper_url: ""
-  notes: "method_intrinsic; full phase spec deferred."
-
+  paper_title: CUTLASS GEMM Optimization with NCU Profiling and cuBLAS Fallback
+  paper_url: ''
+  notes: method_intrinsic; full phase spec deferred.
 workflow:
   name: cutlassgemm-gemm-optimization
-  description: "CUTLASS-based GEMM optimization with NCU profiling, ceiling detection, split-K, and cuBLAS hybrid fallback for SOL-ExecBench"
-  when_to_use: "When optimizing dense GEMM kernels (C = A @ B or C = A @ B.T) using NVIDIA CUTLASS on Ampere/Hopper GPUs. Targets SOL-ExecBench problems with variable M dimension. Uses NCU profiling for root-cause analysis, split-K for small M parallelism, and cuBLAS fallback when CUTLASS overhead dominates."
-  output_filename: "cutlassgemm-gemm-optimization.js"
-  directory: "CutlassGEMM/"
+  description: CUTLASS-based GEMM optimization with NCU profiling, ceiling detection,
+    split-K, and cuBLAS hybrid fallback for SOL-ExecBench
+  when_to_use: When optimizing dense GEMM kernels (C = A @ B or C = A @ B.T) using
+    NVIDIA CUTLASS on Ampere/Hopper GPUs. Targets SOL-ExecBench problems with variable
+    M dimension. Uses NCU profiling for root-cause analysis, split-K for small M parallelism,
+    and cuBLAS fallback when CUTLASS overhead dominates.
+  output_filename: cutlassgemm-gemm-optimization.js
+  directory: CutlassGEMM/
+routing:
+  best_kernel_field: null
+  topology: iterative
+  requires_harness: true
+  languages:
+  - cuda
+  - cutlass
+  method_category: iterative_self_improving
+  role: optimizer
+  speedup_field: baseline_avg_speedup
+  fidelity_boundary: strict_high_fidelity
+  requires_ncu: true

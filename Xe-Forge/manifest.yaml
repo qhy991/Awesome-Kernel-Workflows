@@ -1,29 +1,41 @@
-schema_version: "1.1"
+schema_version: '1.1'
 name: xe-forge-kernel-optimization
 entrypoint: xe-forge-kernel-optimization.js
-
 backend:
   portability: vendor_locked
   matrix_eligible: false
   intrinsic_to: Intel XPU
-  method_supported_backends: [xpu]
-  supported: [xpu]
+  method_supported_backends:
+  - xpu
+  supported:
+  - xpu
   default: xpu
-  notes: >
-    Tier per spec §7.2 (vendor_locked-single, Intel XPU). User review 6/15
-    argues method_intrinsic is more accurate (VTune/XMX/SPIR-V anchor) —
-    see tier-revision-proposal.md. .js WORKFLOW_SUITABILITY=['triton',
-    'sycl', 'xpu'] — triton/sycl are compilation frontends, the hardware
-    anchor is xpu.
+  notes: 'Tier per spec §7.2 (vendor_locked-single, Intel XPU). User review 6/15 argues
+    method_intrinsic is more accurate (VTune/XMX/SPIR-V anchor) — see tier-revision-proposal.md.
+    .js WORKFLOW_SUITABILITY=[''triton'', ''sycl'', ''xpu''] — triton/sycl are compilation
+    frontends, the hardware anchor is xpu.
 
+    '
 source:
-  paper_title: "Xe-Forge: Multi-Stage CoVeR Optimization for Intel XPU Kernels"
-  paper_url: ""
-  notes: "vendor_locked; full phase spec deferred."
-
+  paper_title: 'Xe-Forge: Multi-Stage CoVeR Optimization for Intel XPU Kernels'
+  paper_url: ''
+  notes: vendor_locked; full phase spec deferred.
 workflow:
   name: xe-forge-kernel-optimization
-  description: "Multi-stage CoVeR optimization for Intel XPU kernels"
-  when_to_use: "Use for optimizing kernels on Intel XPUs (Data Center GPU Max) with Triton and SYCL"
-  output_filename: "xe-forge-kernel-optimization.js"
-  directory: "Xe-Forge/"
+  description: Multi-stage CoVeR optimization for Intel XPU kernels
+  when_to_use: Use for optimizing kernels on Intel XPUs (Data Center GPU Max) with
+    Triton and SYCL
+  output_filename: xe-forge-kernel-optimization.js
+  directory: Xe-Forge/
+routing:
+  best_kernel_field: null
+  topology: refinement
+  requires_harness: true
+  languages:
+  - triton
+  - sycl
+  method_category: multi_stage_refinement
+  role: optimizer
+  speedup_field: speedup
+  fidelity_boundary: faithful_but_simplified
+  requires_ncu: false

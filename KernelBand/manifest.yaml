@@ -443,3 +443,16 @@ template:
   - hardware_aware_pruning
   - behavioral_clustering
   - ncu_profiling
+routing:
+  best_kernel_field: best_kernel_code
+  topology: bandit
+  requires_harness: true
+  languages:
+  - cuda
+  - triton
+  - metax
+  method_category: search_based
+  role: optimizer
+  speedup_field: best_speedup
+  fidelity_boundary: algorithm_sketch_execution_risk
+  requires_ncu: true

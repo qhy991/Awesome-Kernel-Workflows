@@ -1,27 +1,39 @@
-schema_version: "1.1"
+schema_version: '1.1'
 name: archagent-cache-policy-search
 entrypoint: archagent-cache-policy-search.js
-
 backend:
   portability: method_intrinsic
   matrix_eligible: false
   intrinsic_to: cpu-champsim
-  method_supported_backends: [cpp]
-  supported: [cpp]
+  method_supported_backends:
+  - cpp
+  supported:
+  - cpp
   default: cpp
-  notes: >
-    Tier per spec §7.2 (method_intrinsic, ChampSim IPC). Not a GPU kernel
-    workflow — cache replacement policy search using ChampSim. Bypasses
-    diagnose.py entirely. Legacy WORKFLOW_SUITABILITY=['cpp'].
+  notes: 'Tier per spec §7.2 (method_intrinsic, ChampSim IPC). Not a GPU kernel workflow
+    — cache replacement policy search using ChampSim. Bypasses diagnose.py entirely.
+    Legacy WORKFLOW_SUITABILITY=[''cpp''].
 
+    '
 source:
-  paper_title: "AlphaEvolve: Evolutionary Search for Cache Replacement Policies"
-  paper_url: ""
-  notes: "method_intrinsic; full phase spec deferred."
-
+  paper_title: 'AlphaEvolve: Evolutionary Search for Cache Replacement Policies'
+  paper_url: ''
+  notes: method_intrinsic; full phase spec deferred.
 workflow:
   name: archagent-cache-policy-search
-  description: "Evolutionary search for cache replacement policies using AlphaEvolve"
-  when_to_use: "Use for discovering novel cache replacement policies through evolutionary search"
-  output_filename: "archagent-cache-policy-search.js"
-  directory: "ArchAgent/"
+  description: Evolutionary search for cache replacement policies using AlphaEvolve
+  when_to_use: Use for discovering novel cache replacement policies through evolutionary
+    search
+  output_filename: archagent-cache-policy-search.js
+  directory: ArchAgent/
+routing:
+  best_kernel_field: null
+  topology: evolutionary
+  requires_harness: true
+  languages:
+  - cpp
+  method_category: evolutionary_quality_diversity
+  role: optimizer
+  speedup_field: best_speedup
+  fidelity_boundary: strict_high_fidelity
+  requires_ncu: false
