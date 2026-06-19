@@ -62,6 +62,23 @@ function __unwrapArgs(rawArgs) {
 }
 // eslint-disable-next-line no-global-assign
 args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
+
+// --- BEGIN typed-args (channel ② experience_excerpts) ---
+// Cross-session priors travel here as a typed array (see KerSor
+// agents/dispatch-arg-synthesizer.md), independent of op_description so the
+// solver can treat them as distinct lower-authority signals.
+const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+function __experienceBlock() {
+  if (!EXPERIENCE_EXCERPTS.length) return ''
+  const lines = EXPERIENCE_EXCERPTS.map(e => {
+    const kind = (e && e.kind) || 'note'
+    const directive = (e && e.directive) || 'inform'
+    const claim = (e && e.claim) || (typeof e === 'string' ? e : JSON.stringify(e))
+    return `- [${kind}/${directive}] ${claim}`
+  })
+  return `\n# Cross-session experience excerpts (channel ② — priors from past sessions; LOWER authority than current-round evidence):\n${lines.join('\n')}\n`
+}
+// --- END typed-args ---
 // --- END inlined arg_guard ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
@@ -446,7 +463,7 @@ ${gradientHints ? `# Gradient Hints (from evolutionary history):\n${gradientHint
 5. You may optionally produce a TEMPLATED kernel with configurable parameters (tile_size, work_group_size, unroll_factor) alongside a dispatch function
 
 Return the kernel code and its optimization strategy description.
-
+${__experienceBlock()}
 # Recent genome trajectory (read BEFORE varying)
 Run \`tail -20 ${EXP_DIR}/genome.jsonl 2>/dev/null\` to see prior generations this session (every Vary/Evaluate step has self-reported). Use it to: (a) avoid producing an offspring whose strategy matches a recently-regressed sibling, (b) spot evolutionary patterns the gradientHints summary may have lost. If the file is empty or missing, ignore this and rely on the parent context above.
 

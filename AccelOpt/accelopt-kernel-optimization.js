@@ -62,6 +62,23 @@ function __unwrapArgs(rawArgs) {
 }
 // eslint-disable-next-line no-global-assign
 args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
+
+// --- BEGIN typed-args (channel ② experience_excerpts) ---
+// Cross-session priors travel here as a typed array (see KerSor
+// agents/dispatch-arg-synthesizer.md), independent of op_description so the
+// solver can treat them as distinct lower-authority signals.
+const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+function __experienceBlock() {
+  if (!EXPERIENCE_EXCERPTS.length) return ''
+  const lines = EXPERIENCE_EXCERPTS.map(e => {
+    const kind = (e && e.kind) || 'note'
+    const directive = (e && e.directive) || 'inform'
+    const claim = (e && e.claim) || (typeof e === 'string' ? e : JSON.stringify(e))
+    return `- [${kind}/${directive}] ${claim}`
+  })
+  return `\n# Cross-session experience excerpts (channel ② — priors from past sessions; LOWER authority than current-round evidence):\n${lines.join('\n')}\n`
+}
+// --- END typed-args ---
 // --- END inlined arg_guard ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
@@ -969,7 +986,7 @@ ${IDIOMS.read_metric_guide}
   const plans = await parallel(
     Array.from({length: BREADTH}, (_, i) => () =>
       agent(`${planPromptBase}\n\n# YOUR FOCUS AREA: ${planAngles[i % planAngles.length]}\nYou are planner #${i + 1}/${BREADTH}. Focus on: ${planAngles[i % planAngles.length]}.
-
+${__experienceBlock()}
 # Recent genome trajectory (read BEFORE planning)
 Run \`tail -20 ${EXP_DIR}/genome.jsonl 2>/dev/null\` to see prior attempts this session (every Plan/Execute/Evaluate/Learn step has self-reported here). Use it to: (a) avoid retrying any technique already attempted with a regression or null speedup, (b) spot multi-round patterns the per-iteration experience summary may have lost. If the file is empty or missing, ignore this and proceed with the inputs above.
 
@@ -1342,7 +1359,7 @@ Optimized code:
 Why: {hardware-level explanation}
 
 Make the rule GENERAL enough to apply to other kernels (not specific to this one kernel).
-
+${__experienceBlock()}
 # Recent genome trajectory (read BEFORE extracting the rule)
 Run \`tail -30 ${EXP_DIR}/genome.jsonl 2>/dev/null\` to see prior attempts this session. Cross-check your candidate rule against the broader trajectory: does the pattern hold across multiple iterations, or is this slow/fast pair an outlier? Cite a second supporting (or contradicting) example if you find one. If the file is empty or missing, ignore this and rely on the slow/fast pair above.
 
