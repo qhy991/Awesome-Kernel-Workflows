@@ -458,6 +458,9 @@ The draft MUST include:
 
 Write the draft to docs/draft.md. Then return the draft content.
 
+# Recent genome trajectory (read BEFORE drafting)
+Run \`tail -20 ${EXP_DIR}/genome.jsonl 2>/dev/null\` to see prior attempts this session. Use it to: (a) avoid proposing candidate directions that already regressed in earlier rounds, (b) spot multi-round patterns the inspection summary may have missed. If the file is empty or missing, ignore this and proceed with the inputs above.
+
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:

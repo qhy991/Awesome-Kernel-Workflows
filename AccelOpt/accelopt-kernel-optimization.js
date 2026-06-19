@@ -970,6 +970,9 @@ ${IDIOMS.read_metric_guide}
     Array.from({length: BREADTH}, (_, i) => () =>
       agent(`${planPromptBase}\n\n# YOUR FOCUS AREA: ${planAngles[i % planAngles.length]}\nYou are planner #${i + 1}/${BREADTH}. Focus on: ${planAngles[i % planAngles.length]}.
 
+# Recent genome trajectory (read BEFORE planning)
+Run \`tail -20 ${EXP_DIR}/genome.jsonl 2>/dev/null\` to see prior attempts this session (every Plan/Execute/Evaluate/Learn step has self-reported here). Use it to: (a) avoid retrying any technique already attempted with a regression or null speedup, (b) spot multi-round patterns the per-iteration experience summary may have lost. If the file is empty or missing, ignore this and proceed with the inputs above.
+
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (this is iteration ${iter}, planner ${i}):
@@ -1339,6 +1342,9 @@ Optimized code:
 Why: {hardware-level explanation}
 
 Make the rule GENERAL enough to apply to other kernels (not specific to this one kernel).
+
+# Recent genome trajectory (read BEFORE extracting the rule)
+Run \`tail -30 ${EXP_DIR}/genome.jsonl 2>/dev/null\` to see prior attempts this session. Cross-check your candidate rule against the broader trajectory: does the pattern hold across multiple iterations, or is this slow/fast pair an outlier? Cite a second supporting (or contradicting) example if you find one. If the file is empty or missing, ignore this and rely on the slow/fast pair above.
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
