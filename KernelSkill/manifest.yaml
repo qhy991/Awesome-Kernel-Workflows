@@ -34,3 +34,18 @@ workflow:
     in profiling evidence rather than relying on the model
   output_filename: kernelskill-kernel-optimization.js
   directory: KernelSkill/
+routing:
+  best_kernel_field: best_kernel_code
+  topology: iterative
+  requires_harness: true
+  languages:
+  - cuda
+  - metax
+  method_category: iterative_self_improving
+  role: optimizer
+  speedup_field: best_speedup
+  required_one_of:
+  - - problem_path
+    - problem_definition
+  fidelity_boundary: strict_high_fidelity
+  requires_ncu: true

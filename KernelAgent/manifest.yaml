@@ -497,3 +497,17 @@ template:
   base: single-pass
   customizations:
   - iterative_refinement
+routing:
+  best_kernel_field: best_kernel_code
+  topology: refinement
+  requires_harness: true
+  languages:
+  - triton
+  - ascend
+  - python_reference
+  - metax
+  method_category: multi_stage_refinement
+  role: generator
+  speedup_field: null
+  fidelity_boundary: faithful_but_simplified
+  requires_ncu: false

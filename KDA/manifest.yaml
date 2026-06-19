@@ -14,3 +14,17 @@ backend:
     triton-dryrun.test.js contract-tests the driver path.
 
     '
+routing:
+  best_kernel_field: best_candidate
+  topology: iterative
+  requires_harness: false
+  languages:
+  - cuda
+  - cutlass
+  - rocm
+  - metax
+  method_category: iterative_self_improving
+  role: optimizer
+  speedup_field: best_score
+  fidelity_boundary: strict_high_fidelity
+  requires_ncu: false

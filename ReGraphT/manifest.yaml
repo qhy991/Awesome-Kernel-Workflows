@@ -372,3 +372,15 @@ template:
   - backtracking
   - custom_profiling
   - early_stopping
+routing:
+  best_kernel_field: best_kernel_code
+  topology: graph_search
+  requires_harness: true
+  languages:
+  - cuda
+  - metax
+  method_category: tree_exploration
+  role: optimizer
+  speedup_field: best_speedup
+  fidelity_boundary: training_free_inference
+  requires_ncu: false

@@ -1,29 +1,52 @@
-schema_version: "1.1"
+schema_version: '1.1'
 name: inplacepatch-kernel-optimization
 entrypoint: inplacepatch-kernel-optimization.js
-
 backend:
   portability: vendor_locked
   matrix_eligible: false
   intrinsic_to: nvcc/hipcc
-  method_supported_backends: [cuda, rocm]
-  supported: [cuda, rocm]
+  method_supported_backends:
+  - cuda
+  - rocm
+  supported:
+  - cuda
+  - rocm
   default: cuda
-  notes: >
-    Not in spec §7.2 (needs backfill). Byte-exact in-place patch workflow
-    — nvcc/hipcc compile single .so, dlopen via Python harness. No driver
-    directory; uses project-native build/test/benchmark commands verbatim.
-    Every iteration snapshots the original file, proposes one focused Edit,
-    runs build/test/benchmark, keeps if (correct AND faster) else reverts.
+  notes: 'Not in spec §7.2 (needs backfill). Byte-exact in-place patch workflow —
+    nvcc/hipcc compile single .so, dlopen via Python harness. No driver directory;
+    uses project-native build/test/benchmark commands verbatim. Every iteration snapshots
+    the original file, proposes one focused Edit, runs build/test/benchmark, keeps
+    if (correct AND faster) else reverts.
 
+    '
 source:
-  paper_title: "In-Place Patch: Iterative Kernel Optimization for Embedded Kernels"
-  paper_url: ""
-  notes: "vendor_locked; not in spec §7.2. Full phase spec deferred."
-
+  paper_title: 'In-Place Patch: Iterative Kernel Optimization for Embedded Kernels'
+  paper_url: ''
+  notes: vendor_locked; not in spec §7.2. Full phase spec deferred.
 workflow:
   name: inplacepatch-kernel-optimization
-  description: "Iterative in-place patch -> project-native build -> test -> benchmark loop for kernels embedded in a larger codebase (no exp_dir variant materialization)"
-  when_to_use: "When the kernel under optimization cannot be compiled standalone (depends on project headers, template instantiation, or dispatch tables - e.g. llama.cpp ggml-cuda kernels). Uses the project build/test/benchmark commands verbatim. Each iteration: snapshot original, propose ONE focused patch via Edit, run project build, run project test, run project benchmark, keep if (correct AND faster) else revert."
-  output_filename: "inplacepatch-kernel-optimization.js"
-  directory: "InPlacePatch/"
+  description: Iterative in-place patch -> project-native build -> test -> benchmark
+    loop for kernels embedded in a larger codebase (no exp_dir variant materialization)
+  when_to_use: 'When the kernel under optimization cannot be compiled standalone (depends
+    on project headers, template instantiation, or dispatch tables - e.g. llama.cpp
+    ggml-cuda kernels). Uses the project build/test/benchmark commands verbatim. Each
+    iteration: snapshot original, propose ONE focused patch via Edit, run project
+    build, run project test, run project benchmark, keep if (correct AND faster) else
+    revert.'
+  output_filename: inplacepatch-kernel-optimization.js
+  directory: InPlacePatch/
+routing:
+  best_kernel_field: best_kernel_code
+  topology: iterative
+  requires_harness: true
+  languages:
+  - cuda
+  - rocm
+  - cpp
+  method_category: iterative_self_improving
+  role: optimizer
+  speedup_field: speedup
+  fidelity_boundary: strict_high_fidelity
+  integration_patterns:
+  - embedded_inplace
+  requires_ncu: false

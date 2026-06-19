@@ -1,29 +1,61 @@
-schema_version: "1.1"
+schema_version: '1.1'
 name: cudaagent-kernel-optimization
 entrypoint: cudaagent-kernel-optimization.js
-
 backend:
   portability: vendor_locked
   matrix_eligible: partial
   intrinsic_to: NVIDIA NCU
-  method_supported_backends: [cuda]
-  supported: [cuda]
+  method_supported_backends:
+  - cuda
+  supported:
+  - cuda
   default: cuda
   requires_capability:
-    metrics: [dram_pct, sm_pct]
-  notes: >
-    Tier per spec §7.2 (vendor_locked, intrinsic to NCU). Legacy
-    WORKFLOW_SUITABILITY=['cuda']; cudaagent-guard.test.js validates.
+    metrics:
+    - dram_pct
+    - sm_pct
+  notes: 'Tier per spec §7.2 (vendor_locked, intrinsic to NCU). Legacy WORKFLOW_SUITABILITY=[''cuda''];
+    cudaagent-guard.test.js validates.
 
+    '
 source:
-  paper_title: "CUDA-Agent: RL-Trained LLM Agents for GPU Kernel Optimization"
-  paper_url: "https://arxiv.org/abs/2602.24286"
-  paper_venue: "arXiv 2026 (ByteDance/Tsinghua)"
-  notes: "vendor_locked; full phase spec deferred."
-
+  paper_title: 'CUDA-Agent: RL-Trained LLM Agents for GPU Kernel Optimization'
+  paper_url: https://arxiv.org/abs/2602.24286
+  paper_venue: arXiv 2026 (ByteDance/Tsinghua)
+  notes: vendor_locked; full phase spec deferred.
 workflow:
   name: cudaagent-kernel-optimization
-  description: "Skill-integrated multi-turn CUDA kernel optimization with profiling-driven iterative refinement (CUDA Agent methodology)"
-  when_to_use: "When optimizing CUDA kernels from PyTorch operator specifications through iterative code generation, compilation, correctness testing, and profiling feedback. Follows the CUDA Agent skill-based workflow: profile baseline → identify bottlenecks → implement kernel + bindings → compile → verify correctness → measure speedup → refine until target met."
-  output_filename: "cudaagent-kernel-optimization.js"
-  directory: "CUDAAgent/"
+  description: Skill-integrated multi-turn CUDA kernel optimization with profiling-driven
+    iterative refinement (CUDA Agent methodology)
+  when_to_use: 'When optimizing CUDA kernels from PyTorch operator specifications
+    through iterative code generation, compilation, correctness testing, and profiling
+    feedback. Follows the CUDA Agent skill-based workflow: profile baseline → identify
+    bottlenecks → implement kernel + bindings → compile → verify correctness → measure
+    speedup → refine until target met.'
+  output_filename: cudaagent-kernel-optimization.js
+  directory: CUDAAgent/
+routing:
+  best_kernel_field: best_kernel_code
+  topology: iterative
+  requires_harness: false
+  languages:
+  - cuda
+  - metal
+  - python_reference
+  method_category: iterative_self_improving
+  role: optimizer
+  speedup_field: best_speedup_vs_compile
+  required_one_of:
+  - - kernel_path
+    - problem_definition
+    - problem_path
+  backends:
+  - cuda
+  - cutlass
+  - rocm
+  - metal
+  fidelity_boundary: inference_time_adaptation
+  integration_patterns:
+  - standalone
+  - embedded_dispatch
+  requires_ncu: false

@@ -516,3 +516,16 @@ template:
   - experience_memory
   - early_stopping
   - custom_profiling
+routing:
+  best_kernel_field: best_kernel_code
+  topology: iterative
+  requires_harness: true
+  languages:
+  - cuda
+  - triton
+  - metax
+  method_category: iterative_self_improving
+  role: optimizer
+  speedup_field: overall_speedup
+  fidelity_boundary: substrate_reference
+  requires_ncu: false

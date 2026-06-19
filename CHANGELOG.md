@@ -8,6 +8,23 @@ for the versioning policy.
 
 ## [Unreleased]
 
+### Added
+
+- **Manifest `routing:` blocks (KerSor metadata consolidation).** All 31 routable
+  `.js` entrypoints now declare selector routing in `<Workflow>/manifest.yaml`
+  (`variants[].routing` for multi-entrypoint dirs). Schema documented in
+  `docs/manifest-schema.yaml`.
+- **`scripts/validate-manifests.sh`** — every workflow `.js` must have manifest
+  coverage; **`scripts/count-workflows.sh`** counts `.js` entrypoints (badge **31**).
+- **GitHub CI** (`.github/workflows/ci.yml`) — count/badge sync + manifest validation.
+
+### Changed
+
+- **Workflow count unified to 31** — badge matches `generate-catalog.sh` scan
+  (was 30 directory-based count; `LlamacppEmbeddedSearch` has two entrypoints).
+- **Deprecated `_meta/manifests/*.yaml` and `_manifests/*.yaml` removed**; SoT is
+  per-workflow `manifest.yaml`. Schema reference moved to `docs/manifest-schema.yaml`.
+
 ### Fixed
 
 - **Workflow runtime meta reference crash.** Top-level workflows and legacy

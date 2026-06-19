@@ -1,28 +1,83 @@
-schema_version: "1.1"
+schema_version: '1.1'
 name: gpuforecasters-kernel-optimization
 entrypoint: gpuforecasters-kernel-optimization.js
-
 backend:
   portability: vendor_locked
   matrix_eligible: partial
   intrinsic_to: NVIDIA NCU
-  method_supported_backends: [cuda]
-  supported: [cuda]
+  method_supported_backends:
+  - cuda
+  supported:
+  - cuda
   default: cuda
   requires_capability:
-    metrics: [dram_pct, sm_pct]
-  notes: >
-    Tier per spec §7.2 (vendor_locked, intrinsic to NCU). Legacy
-    WORKFLOW_SUITABILITY=['cuda'].
+    metrics:
+    - dram_pct
+    - sm_pct
+  notes: 'Tier per spec §7.2 (vendor_locked, intrinsic to NCU). Legacy WORKFLOW_SUITABILITY=[''cuda''].
 
+    '
 source:
-  paper_title: "GPU Forecasters: Learned Speedup Forecasting for Kernel Optimization"
-  paper_url: ""
-  notes: "vendor_locked; full phase spec deferred."
-
+  paper_title: 'GPU Forecasters: Learned Speedup Forecasting for Kernel Optimization'
+  paper_url: ''
+  notes: vendor_locked; full phase spec deferred.
 workflow:
   name: gpuforecasters-kernel-optimization
-  description: "Kernel optimization with learned speedup forecasting and PUCT search"
-  when_to_use: "Use for kernel optimization guided by learned performance forecasting models"
-  output_filename: "gpuforecasters-kernel-optimization.js"
-  directory: "GPUForecasters/"
+  description: Kernel optimization with learned speedup forecasting and PUCT search
+  when_to_use: Use for kernel optimization guided by learned performance forecasting
+    models
+  output_filename: gpuforecasters-kernel-optimization.js
+  directory: GPUForecasters/
+routing:
+  best_kernel_field: null
+  known_broken: 'Script bug: ''meta is not defined'' at runtime (reproduced on AMD-395
+    20260612-195934 run-4). Also reported ML-simulated speedups without compiling.
+    Unblock after fixing the meta reference and enforcing real compile+correctness
+    gating.'
+  all_args:
+  - problem_definition
+  - problem_path
+  - kernel_path
+  - op_description
+  - language
+  - problem_type
+  - target_gpu
+  - note
+  - notes
+  - baseline
+  - baseline_description
+  - baseline_notes
+  - baseline_latency_ms
+  - baseline_perf
+  - baseline_perf_ms
+  - baseline_time_ms
+  - baseline_result_path
+  - test_command
+  - benchmark_command
+  - exp_dir
+  - curriculum_size
+  - training_budget
+  - gpu_budget
+  - iterations
+  - puct_c
+  - puct_exploration_constant
+  - tree_depth
+  - tree_depth_limit
+  topology: tree
+  requires_harness: true
+  languages:
+  - cuda
+  - metal
+  method_category: tree_exploration
+  role: optimizer
+  speedup_field: best_speedup
+  backends:
+  - cuda
+  - cutlass
+  - rocm
+  - metal
+  fidelity_boundary: faithful_but_simplified
+  integration_patterns:
+  - standalone
+  - embedded_dispatch
+  requires_ncu: false

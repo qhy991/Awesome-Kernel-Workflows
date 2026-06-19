@@ -15,3 +15,17 @@ backend:
     contract-tests the driver path.
 
     '
+routing:
+  best_kernel_field: best_kernel_code
+  topology: mcts
+  requires_harness: true
+  languages:
+  - triton
+  - ascend
+  - python_reference
+  - metax
+  method_category: tree_exploration
+  role: optimizer
+  speedup_field: best_speedup
+  fidelity_boundary: high_fidelity_method_translation
+  requires_ncu: false

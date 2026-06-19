@@ -189,3 +189,19 @@ template:
   - pre_archive_gates
   - cross_round_memory
   - harness_retrospective_mode3
+routing:
+  best_kernel_field: best_kernel_code
+  topology: iterative
+  requires_harness: false
+  languages:
+  - cuda
+  - triton
+  - cutlass
+  - tilelang
+  - cpp
+  - metax
+  method_category: iterative_self_improving
+  role: optimizer
+  speedup_field: overall_speedup
+  fidelity_boundary: strict_high_fidelity
+  requires_ncu: false

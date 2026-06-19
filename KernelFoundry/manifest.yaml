@@ -34,3 +34,19 @@ workflow:
     generation.
   output_filename: kernelfoundry-kernel-optimization.js
   directory: KernelFoundry/
+routing:
+  best_kernel_field: best_kernel_code
+  topology: evolutionary
+  requires_harness: false
+  languages:
+  - cuda
+  - triton
+  - sycl
+  - ascend
+  - python_reference
+  - metax
+  method_category: search_based
+  role: optimizer
+  speedup_field: best_speedup
+  fidelity_boundary: algorithm_sketch_execution_risk
+  requires_ncu: false

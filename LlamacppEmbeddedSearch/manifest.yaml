@@ -1,28 +1,89 @@
-schema_version: "1.1"
+schema_version: '1.1'
 name: llamacpp-embedded-search
 entrypoint: llamacpp-embedded-search.js
-
 backend:
   portability: method_intrinsic
   matrix_eligible: false
   intrinsic_to: llama.cpp ggml-cuda
-  method_supported_backends: [llama.cpp]
-  supported: [llama.cpp]
+  method_supported_backends:
+  - llama.cpp
+  supported:
+  - llama.cpp
   default: llama.cpp
-  notes: >
-    Not in spec §7.2 (needs backfill). Multi-variant fan-out search for
-    kernels embedded in llama.cpp ggml-cuda dispatch — cannot be compiled
-    standalone. Each subagent authors a new .cuh; workflow registers it
-    into fattn.cu, runs project build/test/bench, then unregisters.
+  notes: 'Not in spec §7.2 (needs backfill). Multi-variant fan-out search for kernels
+    embedded in llama.cpp ggml-cuda dispatch — cannot be compiled standalone. Each
+    subagent authors a new .cuh; workflow registers it into fattn.cu, runs project
+    build/test/bench, then unregisters.
 
+    '
 source:
-  paper_title: "Llama.cpp Embedded Kernel Search: Multi-Variant Fan-Out for ggml-cuda Kernels"
-  paper_url: ""
-  notes: "method_intrinsic; not in spec §7.2. Full phase spec deferred."
-
+  paper_title: 'Llama.cpp Embedded Kernel Search: Multi-Variant Fan-Out for ggml-cuda
+    Kernels'
+  paper_url: ''
+  notes: method_intrinsic; not in spec §7.2. Full phase spec deferred.
 workflow:
   name: llamacpp-embedded-search
-  description: "Multi-variant fan-out search for kernels embedded in llama.cpp ggml-cuda dispatch (each variant = new .cuh + register + project build + test + bench + unregister)"
-  when_to_use: "When the kernel under optimization is embedded in llama.cpp ggml-cuda (cannot be compiled standalone) AND the bottleneck is structural enough that you want to fan out N independent kernel designs rather than iteratively patch one. Each subagent authors a complete new .cuh; the workflow registers it into fattn.cu via scripts/llamacpp_register_variant.py, runs the project build/test/bench, then unregisters. Variants are evaluated SERIALLY (project build is the bottleneck) but proposals are drafted in parallel."
-  output_filename: "llamacpp-embedded-search.js"
-  directory: "LlamacppEmbeddedSearch/"
+  description: Multi-variant fan-out search for kernels embedded in llama.cpp ggml-cuda
+    dispatch (each variant = new .cuh + register + project build + test + bench +
+    unregister)
+  when_to_use: When the kernel under optimization is embedded in llama.cpp ggml-cuda
+    (cannot be compiled standalone) AND the bottleneck is structural enough that you
+    want to fan out N independent kernel designs rather than iteratively patch one.
+    Each subagent authors a complete new .cuh; the workflow registers it into fattn.cu
+    via scripts/llamacpp_register_variant.py, runs the project build/test/bench, then
+    unregisters. Variants are evaluated SERIALLY (project build is the bottleneck)
+    but proposals are drafted in parallel.
+  output_filename: llamacpp-embedded-search.js
+  directory: LlamacppEmbeddedSearch/
+routing:
+  requires_embedded_registration: true
+  best_kernel_field: best_kernel_code
+  framework_integrator_fallback: true
+  topology: graph_search
+  requires_harness: true
+  languages:
+  - cuda
+  - cpp
+  method_category: search_based
+  role: optimizer
+  speedup_field: overall_speedup
+  backends:
+  - cuda
+  - rocm
+  fidelity_boundary: strict_high_fidelity
+  required_args:
+  - ggml_root
+  - build_command
+  - test_command
+  - benchmark_command
+  - reference_cuh
+  integration_patterns:
+  - embedded_dispatch
+  requires_ncu: false
+variants:
+- name: llamacpp-metal-embedded-search
+  entrypoint: llamacpp-metal-embedded-search.js
+  routing:
+    best_kernel_field: best_kernel_code
+    framework_integrator_fallback: true
+    topology: graph_search
+    requires_harness: true
+    languages:
+    - metal
+    - cpp
+    method_category: search_based
+    role: optimizer
+    speedup_field: overall_speedup
+    backends:
+    - metal
+    fidelity_boundary: strict_high_fidelity
+    required_args:
+    - ggml_root
+    - build_command
+    - test_command
+    - benchmark_command
+    - reference_metal
+    - kernel_family
+    integration_patterns:
+    - embedded_dispatch
+    requires_ncu: false

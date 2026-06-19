@@ -36,3 +36,19 @@ workflow:
     cycles. Uses the backend driver
   output_filename: accelopt-kernel-optimization.js
   directory: AccelOpt/
+routing:
+  best_kernel_field: best_kernel_code
+  topology: iterative
+  requires_harness: false
+  languages:
+  - cuda
+  - metax
+  method_category: iterative_self_improving
+  role: optimizer
+  speedup_field: overall_speedup
+  required_one_of:
+  - - kernel_path
+    - problem_definition
+    - problem_path
+  fidelity_boundary: faithful_cuda_ncu_adaptation
+  requires_ncu: true
