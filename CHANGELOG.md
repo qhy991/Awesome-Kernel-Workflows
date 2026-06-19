@@ -27,6 +27,12 @@ for the versioning policy.
 
 ### Fixed
 
+- **Removed stale post-migration doc references.** Substrate docs now use the
+  `/kersor:optimize` command name and `KerSor/docs/transfer-object.md`; the agent
+  guide points manifest authors at `docs/manifest-schema.yaml` instead of the
+  removed `_manifests/schema.yaml`.
+  (`_substrate/ARCHITECTURE.md`, `_substrate/SOLVER-SDK.md`, `Agent.md`)
+
 - **Workflow runtime meta reference crash.** Top-level workflows and legacy
   templates now use a body-scope `WORKFLOW_NAME` constant instead of reading the
   exported `meta` object at runtime, preventing Claude Code Workflow dispatches

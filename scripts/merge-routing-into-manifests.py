@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Merge KerSor workflow_metadata.json routing fields into AKW manifest.yaml files.
+"""Merge a legacy KerSor workflow_metadata.json into AKW manifest.yaml files.
 
 One-time / idempotent: writes or updates the top-level `routing:` block per workflow.
 For multi-js directories, adds `variants[]` when needed.
+
+This archived migration tool is intentionally not wired to a current default
+metadata path; pass the legacy JSON path explicitly when replaying the migration.
 """
 from __future__ import annotations
 
@@ -17,7 +20,6 @@ except ImportError:
     sys.exit(1)
 
 AKW = Path(__file__).resolve().parents[1]
-KERSOR_META = AKW.parent / "KerSor" / "config" / "workflow_metadata.json"
 
 SKIP_PARTS = {
     "_templates", "_tools", "_substrate", "_manifests", "_meta",
@@ -80,7 +82,13 @@ def build_routing(entry: dict) -> dict:
 
 
 def main() -> int:
-    meta_path = Path(sys.argv[1]) if len(sys.argv) > 1 else KERSOR_META
+    if len(sys.argv) != 2:
+        print(
+            "Usage: scripts/merge-routing-into-manifests.py /path/to/legacy/workflow_metadata.json",
+            file=sys.stderr,
+        )
+        return 2
+    meta_path = Path(sys.argv[1])
     if not meta_path.is_file():
         print(f"ERROR: metadata not found: {meta_path}", file=sys.stderr)
         return 1
@@ -153,7 +161,7 @@ def main() -> int:
         )
 
     if missing_meta:
-        print("WARN: no workflow_metadata entry for:", file=sys.stderr)
+        print("WARN: no legacy routing metadata entry for:", file=sys.stderr)
         for js in missing_meta:
             print(f"  {js.relative_to(AKW)}", file=sys.stderr)
 

@@ -46,7 +46,7 @@ solver feeds KerSor natively, with no prose reverse-engineering.
 ```
 
 `insights`/`failed_strategies` are typed transfer items
-(`KernelNav/docs/transfer-object.md`). A solver that emits these natively makes
+(`KerSor/docs/transfer-object.md`). A solver that emits these natively makes
 cross-solver transfer free.
 
 ## Layer B — Anti-cheat gate  *(deterministic; CUDAAgent + CUDALLM + TritorX + AKO4X)*

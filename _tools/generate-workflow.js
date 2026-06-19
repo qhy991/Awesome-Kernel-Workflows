@@ -391,7 +391,7 @@ const methodName = METHOD_NAME || (paperResearch?.paper_title || 'unknown')
 const manifestResult = await agent(`You are a YAML generator. Assemble a complete manifest YAML for Awesome-Kernel-Workflows from the structured data below.
 
 # Schema Reference
-The manifest must conform to the schema at _manifests/schema.yaml. Fill ALL required fields.
+The manifest must conform to the schema at docs/manifest-schema.yaml. Fill ALL required fields.
 
 # Data to assemble:
 
