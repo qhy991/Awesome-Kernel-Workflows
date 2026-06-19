@@ -14,6 +14,19 @@ export const meta = {
   ],
 }
 
+// --- BEGIN model-tier (auto-inserted by scripts/patch-model-tier.js) ---
+// Tier-based model routing: mechanical steps (run substrate scripts, parse
+// JSON) use cheaper models; profile steps (run eval/ncu) use mid-tier;
+// judgment steps (plan/implement/report) use the top tier. Tuneable via
+// args.model_{mechanical,profile,judgment}.
+const MODEL = {
+  mechanical: (typeof args !== 'undefined' && args && args.model_mechanical) || 'haiku',
+  profile: (typeof args !== 'undefined' && args && args.model_profile) || 'sonnet',
+  judgment: (typeof args !== 'undefined' && args && args.model_judgment) || 'opus',
+}
+// __modelTierApplied
+// --- END model-tier ---
+
 const WORKFLOW_NAME = 'cudallm-fsr-kernel-generation'
 
 
@@ -330,7 +343,7 @@ if (USE_DRIVER) {
     `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods, feature_catalog, ` +
     `hw_vendor, profiler_name, profiler_format}. ` +
     `Set profiler_name/profiler_format from manifest.profiler when present.`,
-    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.mechanical, label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
   if (!DRIVER || DRIVER.present === false) {
     throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
   }
@@ -661,27 +674,27 @@ Then append, using the values you just measured (status="done" only if compiled 
       await agent(
         `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
         `Return its stdout JSON verbatim.`,
-        { label: `driver-build-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+        { model: MODEL.mechanical, label: `driver-build-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
       const runOut = await agent(
         `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath} --result ${rPath}`)}\n` +
         `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
-        { label: `driver-run-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+        { model: MODEL.profile, label: `driver-run-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
       const profilePointer = await agent(
         `${driverSh('profile.sh', buildProfileShArgs(buildOut, iteration, sample))}\n` +
         profileStepFooter() +
         `Return stdout JSON verbatim {ok, profiler, native_profile, format, error}.`,
-        { label: `driver-profile-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+        { model: MODEL.profile, label: `driver-profile-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
       const evidenceOut = await agent(
         buildToEvidencePrompt(profilePointer),
-        { label: `driver-to-evidence-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+        { model: MODEL.mechanical, label: `driver-to-evidence-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
       const diagOut = await agent(
         `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
         `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
-        { label: `driver-diagnose-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+        { model: MODEL.mechanical, label: `driver-diagnose-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
       const antiCheatOut = await agent(
         `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${rPath}\`.\n` +
         `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
-        { label: `driver-anti-cheat-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+        { model: MODEL.mechanical, label: `driver-anti-cheat-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
       candidate.driver_envelope = {
         anti_cheat: antiCheatOut || {},
         metrics: (evidenceOut && evidenceOut.metrics) || {},

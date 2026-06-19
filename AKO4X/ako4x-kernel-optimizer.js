@@ -22,6 +22,8 @@ export const meta = {
   skill_binding_mode: 'prompt_reference_only',
 }
 
+// __modelTierApplied (declaration pre-existing)
+
 const WORKFLOW_NAME = 'ako4x-kernel-optimizer'
 
 
@@ -422,7 +424,7 @@ if (USE_DRIVER) {
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
-    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.mechanical, label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
   if (!DRIVER || DRIVER.present === false) {
     throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
   }
@@ -565,7 +567,7 @@ ${baselineKernelCode.substring(0, 4000)}
 3. Profile only if ncu_binary and a runnable harness contract are provided; do not invent profiler flags, benchmark binaries, or harness code.
 4. Extract: gpu__time_duration.sum, sm__throughput, dram__throughput, achieved_occupancy, registers_per_thread, top_stall_reason, sectors_per_request, ncu_rule_suggestions when available; otherwise mark profiler evidence as missing.
 
-Return structured profile results.`, {
+Return structured profile results.`, { model: MODEL.profile,
     label: 'ncu-baseline',
     phase: 'Setup',
     model: MODEL.profile,
@@ -899,27 +901,27 @@ Return benchmark results.`, {
         await agent(
           `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
           `Return its stdout JSON verbatim.`,
-          { label: `driver-build-${envIdx}`, phase: 'Iterate', schema: JSON_PASSTHROUGH })
+          { model: MODEL.mechanical, label: `driver-build-${envIdx}`, phase: 'Iterate', schema: JSON_PASSTHROUGH })
         const runOut = await agent(
           `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
           `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
-          { label: `driver-run-${envIdx}`, phase: 'Iterate', schema: JSON_PASSTHROUGH })
+          { model: MODEL.profile, label: `driver-run-${envIdx}`, phase: 'Iterate', schema: JSON_PASSTHROUGH })
         await agent(
           `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
           `Return {ok, native_path}.`,
-          { label: `driver-profile-${envIdx}`, phase: 'Iterate', schema: JSON_PASSTHROUGH })
+          { model: MODEL.profile, label: `driver-profile-${envIdx}`, phase: 'Iterate', schema: JSON_PASSTHROUGH })
         const evidenceOut = await agent(
           `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
           `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-          { label: `driver-to-evidence-${envIdx}`, phase: 'Iterate', schema: JSON_PASSTHROUGH })
+          { model: MODEL.mechanical, label: `driver-to-evidence-${envIdx}`, phase: 'Iterate', schema: JSON_PASSTHROUGH })
         const diagOut = await agent(
           `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
           `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
-          { label: `driver-diagnose-${envIdx}`, phase: 'Iterate', schema: JSON_PASSTHROUGH })
+          { model: MODEL.mechanical, label: `driver-diagnose-${envIdx}`, phase: 'Iterate', schema: JSON_PASSTHROUGH })
         await agent(
           `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/variants/r${round + 1}_iter${iterCount}/result.json\`.\n` +
           `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
-          { label: `driver-anti-cheat-${envIdx}`, phase: 'Iterate', schema: JSON_PASSTHROUGH })
+          { model: MODEL.mechanical, label: `driver-anti-cheat-${envIdx}`, phase: 'Iterate', schema: JSON_PASSTHROUGH })
         benchResult.driver_envelope = {
           latency_ms: Number((runOut && runOut.latency_ms) || 0),
           metrics: (evidenceOut && evidenceOut.metrics) || {},

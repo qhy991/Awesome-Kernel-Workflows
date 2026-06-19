@@ -11,6 +11,19 @@ export const meta = {
   ],
 }
 
+// --- BEGIN model-tier (auto-inserted by scripts/patch-model-tier.js) ---
+// Tier-based model routing: mechanical steps (run substrate scripts, parse
+// JSON) use cheaper models; profile steps (run eval/ncu) use mid-tier;
+// judgment steps (plan/implement/report) use the top tier. Tuneable via
+// args.model_{mechanical,profile,judgment}.
+const MODEL = {
+  mechanical: (typeof args !== 'undefined' && args && args.model_mechanical) || 'haiku',
+  profile: (typeof args !== 'undefined' && args && args.model_profile) || 'sonnet',
+  judgment: (typeof args !== 'undefined' && args && args.model_judgment) || 'opus',
+}
+// __modelTierApplied
+// --- END model-tier ---
+
 const WORKFLOW_NAME = 'keet-kernel-explanation'
 
 
@@ -495,7 +508,7 @@ Do not hallucinate metric values. If a metric is not available, say so.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${WORKFLOW_NAME}","phase":"Profile Inspection","ts":"<ts>","status":"done","technique":"metric_grounded_profile_analysis","speedup":null,"note":"<primary bottleneck + the cited metric, one line>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Profile Inspection","ts":"<ts>","status":"done","technique":"metric_grounded_profile_analysis","speedup":null,"note":"<primary bottleneck + the cited metric, one line>"}`, { model: MODEL.profile,
       label: `profile-analysis-${profile.label}`,
       phase: 'Profile Inspection',
       schema: {
