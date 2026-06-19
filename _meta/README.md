@@ -128,7 +128,7 @@ Each template uses `{{TOKEN}}` placeholders that the generate-workflow fills fro
 
 ## Manifest Schema
 
-The manifest (`_meta/manifests/schema.yaml`) is the structured description of a kernel optimization method. It has these sections:
+The manifest schema lives at [`docs/manifest-schema.yaml`](../docs/manifest-schema.yaml); each workflow's SoT is `<Workflow>/manifest.yaml`. A generation manifest has these sections:
 
 | Section | Purpose |
 |---------|---------|

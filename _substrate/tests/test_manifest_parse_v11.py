@@ -8,18 +8,18 @@ except ImportError:
     yaml = None
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-MANIFEST_DIR = os.path.join(REPO_ROOT, '_meta', 'manifests')
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), 'fixtures')
 
-V10_REQUIRED_KEYS = {'source', 'workflow', 'method', 'topology', 'phases', 'args'}
 VALID_PORTABILITY = {'clean', 'vendor_locked', 'method_intrinsic'}
 VALID_MATRIX = {True, False, 'partial'}
 
 
-def _existing_manifests():
+def _workflow_manifests():
+    """Per-workflow manifest.yaml files (SoT since manifest consolidation)."""
     paths = []
-    for p in sorted(glob.glob(os.path.join(MANIFEST_DIR, '*.yaml'))):
-        if os.path.basename(p) == 'schema.yaml':
+    for p in sorted(glob.glob(os.path.join(REPO_ROOT, '*', 'manifest.yaml'))):
+        parent = os.path.basename(os.path.dirname(p))
+        if parent.startswith('_'):
             continue
         paths.append(p)
     return paths
@@ -43,18 +43,16 @@ def _check_backend_block_shape(testcase, manifest, source_path):
 @unittest.skipIf(yaml is None, "pyyaml not installed")
 class TestManifestParseV11(unittest.TestCase):
 
-    def test_all_existing_manifests_parse_under_v11(self):
-        manifests = _existing_manifests()
-        self.assertGreater(len(manifests), 0, "expected at least one manifest")
+    def test_all_workflow_manifests_parse_under_v11(self):
+        manifests = _workflow_manifests()
+        self.assertGreater(len(manifests), 0, "expected at least one workflow manifest.yaml")
         for p in manifests:
             with self.subTest(manifest=p):
                 with open(p) as f:
                     data = yaml.safe_load(f)
                 self.assertIsInstance(data, dict, f"{p}: top-level must be a mapping")
-                missing = V10_REQUIRED_KEYS - set(data.keys())
-                self.assertFalse(missing, f"{p}: missing v1.0 keys {missing}")
-                if 'backend' in data:
-                    _check_backend_block_shape(self, data, p)
+                self.assertIn('backend', data, f"{p}: backend: block required")
+                _check_backend_block_shape(self, data, p)
 
     def test_v11_minimal_fixture_parses_and_validates(self):
         p = os.path.join(FIXTURE_DIR, 'manifest_v11_minimal.yaml')
@@ -66,18 +64,6 @@ class TestManifestParseV11(unittest.TestCase):
         self.assertEqual(data['backend']['default'], 'cuda')
         self.assertEqual(data['backend']['portability'], 'clean')
         self.assertTrue(data['backend']['matrix_eligible'])
-
-    def test_accelopt_yaml_v10_still_parses_under_v11(self):
-        p = os.path.join(MANIFEST_DIR, 'accelopt.yaml')
-        self.assertTrue(os.path.exists(p), "AccelOpt manifest must exist as pinned fixture")
-        with open(p) as f:
-            data = yaml.safe_load(f)
-        self.assertIsInstance(data, dict)
-        for key in V10_REQUIRED_KEYS:
-            self.assertIn(key, data, f"AccelOpt manifest missing v1.0 key {key}")
-        self.assertNotIn('backend', data,
-                         "AccelOpt pinned as legacy back-compat fixture; "
-                         "no backend: block until its P5b retrofit lands")
 
 
 if __name__ == '__main__':
