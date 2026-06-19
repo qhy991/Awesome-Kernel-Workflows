@@ -12,6 +12,8 @@ export const meta = {
   ],
 }
 
+// __modelTierApplied (declaration pre-existing)
+
 const WORKFLOW_NAME = 'cupilot-kernel-optimization'
 
 

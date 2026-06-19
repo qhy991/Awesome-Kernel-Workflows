@@ -12,6 +12,19 @@ export const meta = {
   ],
 }
 
+// --- BEGIN model-tier (auto-inserted by scripts/patch-model-tier.js) ---
+// Tier-based model routing: mechanical steps (run substrate scripts, parse
+// JSON) use cheaper models; profile steps (run eval/ncu) use mid-tier;
+// judgment steps (plan/implement/report) use the top tier. Tuneable via
+// args.model_{mechanical,profile,judgment}.
+const MODEL = {
+  mechanical: (typeof args !== 'undefined' && args && args.model_mechanical) || 'haiku',
+  profile: (typeof args !== 'undefined' && args && args.model_profile) || 'sonnet',
+  judgment: (typeof args !== 'undefined' && args && args.model_judgment) || 'opus',
+}
+// __modelTierApplied
+// --- END model-tier ---
+
 const WORKFLOW_NAME = 'accelopt-kernel-optimization'
 
 
@@ -621,7 +634,7 @@ if (USE_DRIVER) {
     `  requires_tools, impl_requirements, read_metric_guide,\n` +
     `  plan_angles:[...], unsupported_methods:[...],\n` +
     `  idioms:{<method>:{idiom,prompt_guidance}}}.`,
-    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.mechanical, label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
 
   if (!driver.present) {
     throw new Error(`No backend driver present for backend="${BACKEND}". Provide ${DRIVER_DIR}/ or pick a supported backend.`)
@@ -756,13 +769,13 @@ if (USE_DRIVER) {
         `Build via ` + driverSh('build.sh', `--source ${KERNEL_PATH} --out ${EXP_DIR}/baseline/artifact`) + ` then ` +
         driverSh('run.sh', `--artifact ${EXP_DIR}/baseline/artifact --problem ${PROBLEM_PATH || KERNEL_PATH} --out ${EXP_DIR}/baseline/result.json`) + ` for latency only. ` +
         `Return {ok:true, metrics:{latency_ms:<from run.sh>,dram_pct:null,sm_pct:null,occupancy:null}, coverage:["latency_ms"], profiler_available:false}.`,
-    { label: 'ncu-baseline', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.profile, label: 'ncu-baseline', phase: 'Setup', schema: JSON_PASSTHROUGH })
 
   const metrics = profileResult.metrics || {}
   const diag = await agent(
     `Write these metrics to ${EXP_DIR}/baseline/metrics.json:\n${JSON.stringify(metrics)}\n` +
     `${substrateInstruction('diagnose.py', `--metrics ${EXP_DIR}/baseline/metrics.json`)} Return stdout JSON verbatim {bottleneck_class, evidence}.`,
-    { label: 'diagnose-baseline', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.mechanical, label: 'diagnose-baseline', phase: 'Setup', schema: JSON_PASSTHROUGH })
   bottleneckClass = diag.bottleneck_class || 'unknown'
 
   ncuSetup = {
@@ -780,7 +793,7 @@ if (USE_DRIVER) {
     _coverage: profileResult.coverage || [],
   }
 } else {
-  ncuSetup = await agent(legacyNcuBaselinePrompt(baselineKernel), {
+  ncuSetup = await agent(legacyNcuBaselinePrompt(baselineKernel), { model: MODEL.profile,
     label: 'ncu-baseline',
     phase: 'Setup',
     schema: LEGACY_NCU_BASELINE_SCHEMA,

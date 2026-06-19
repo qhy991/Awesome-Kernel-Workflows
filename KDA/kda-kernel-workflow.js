@@ -26,6 +26,19 @@ export const meta = {
   skill_binding_mode: 'local_skills_plus_external_resources',
 }
 
+// --- BEGIN model-tier (auto-inserted by scripts/patch-model-tier.js) ---
+// Tier-based model routing: mechanical steps (run substrate scripts, parse
+// JSON) use cheaper models; profile steps (run eval/ncu) use mid-tier;
+// judgment steps (plan/implement/report) use the top tier. Tuneable via
+// args.model_{mechanical,profile,judgment}.
+const MODEL = {
+  mechanical: (typeof args !== 'undefined' && args && args.model_mechanical) || 'haiku',
+  profile: (typeof args !== 'undefined' && args && args.model_profile) || 'sonnet',
+  judgment: (typeof args !== 'undefined' && args && args.model_judgment) || 'opus',
+}
+// __modelTierApplied
+// --- END model-tier ---
+
 const WORKFLOW_NAME = 'kda-kernel-workflow'
 
 
@@ -284,7 +297,7 @@ if (USE_DRIVER) {
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
-    { label: 'load-driver', phase: 'Inspect', schema: JSON_PASSTHROUGH })
+    { model: MODEL.mechanical, label: 'load-driver', phase: 'Inspect', schema: JSON_PASSTHROUGH })
   if (!DRIVER || DRIVER.present === false) {
     throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
   }
@@ -669,27 +682,27 @@ Then append, using the values you just measured (status="done" if correctness pa
     await agent(
       `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
       `Return its stdout JSON verbatim.`,
-      { label: `driver-build-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+      { model: MODEL.mechanical, label: `driver-build-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
     const runOut = await agent(
       `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
       `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
-      { label: `driver-run-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+      { model: MODEL.profile, label: `driver-run-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
     await agent(
       `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
       `Return {ok, native_path}.`,
-      { label: `driver-profile-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+      { model: MODEL.profile, label: `driver-profile-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
     const evidenceOut = await agent(
       `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
       `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-      { label: `driver-to-evidence-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+      { model: MODEL.mechanical, label: `driver-to-evidence-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
     const diagOut = await agent(
       `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
       `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
-      { label: `driver-diagnose-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+      { model: MODEL.mechanical, label: `driver-diagnose-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
     await agent(
       `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/${candidateId}.result.json\`.\n` +
       `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
-      { label: `driver-anti-cheat-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+      { model: MODEL.mechanical, label: `driver-anti-cheat-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
     validation.driver_envelope = {
       latency_ms: Number((runOut && runOut.latency_ms) || 0),
       metrics: (evidenceOut && evidenceOut.metrics) || {},
