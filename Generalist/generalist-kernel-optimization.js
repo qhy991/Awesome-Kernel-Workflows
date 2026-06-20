@@ -280,8 +280,10 @@ const SEED_CANDIDATES = args.seed_candidates || 3
 const STAGNATION_EPS = 0.02   // < 2% improvement counts as no progress (Xe-Forge/KSearch)
 const STAGNATION_LIMIT = 2    // consecutive stagnant rounds -> stop
 
-// --- Project-native integration (llama.cpp embedded kernels via integration-strategist) ---
-const PROJECT_ROOT = args.project_root || args.ggml_root || ''
+// --- Project-native integration (embedded kernels, e.g. llama.cpp / PyTorch aten / vLLM,
+//     via integration-strategist). Backend- and framework-agnostic: the strategist routes
+//     on can_compile_standalone + host caps; nothing here is llama.cpp-specific. ---
+const PROJECT_ROOT = args.project_root || args.ggml_root || ''  // ggml_root is a llama.cpp compat alias; project_root is canonical
 const BUILD_CMD = args.build_command || ''
 const TEST_CMD = args.test_command || ''
 const BENCH_CMD = args.benchmark_command || EVAL_CMD || ''
@@ -518,12 +520,17 @@ let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', r
   const decisionPath = `${EXP_DIR}/integration_decision.json`
   const cachePath = `${EXP_DIR}/integ_cache.json`
 
-  // (1) Decide can_standalone deterministically when context permits; else classify.
-  // Heuristic: a .cuh / .cu.h kernel WITH project_root + build_command + test_command
-  // present cannot compile as a single TU (e.g. llama.cpp mmq.cuh). Force 'no'.
+  // (1) Decide can_standalone. Order: explicit user override (args.can_standalone) >
+  // heuristic (header-like kernel WITH project build/test/root cannot be a single TU) >
+  // classify agent. The override is the escape hatch for the rare standalone-compilable
+  // .cuh that the heuristic would otherwise force to embedded_inplace.
   let canStandalone = 'uncertain'
   const cuhLike = /\.(cuh|cu\.h|inl|hpp|hh)$/i.test(KERNEL_PATH || '')
-  if (cuhLike && PROJECT_ROOT && BUILD_CMD && TEST_CMD) {
+  const _userCS = typeof args.can_standalone === 'string' ? args.can_standalone.trim().toLowerCase() : ''
+  if (_userCS === 'yes' || _userCS === 'no' || _userCS === 'uncertain') {
+    canStandalone = _userCS
+    log(`integration: can_standalone=${canStandalone} (user override via args.can_standalone)`)
+  } else if (cuhLike && PROJECT_ROOT && BUILD_CMD && TEST_CMD) {
     canStandalone = 'no'
     log(`integration: heuristic forces can_standalone=no (header-like kernel + project build/test/root present)`)
   } else {
