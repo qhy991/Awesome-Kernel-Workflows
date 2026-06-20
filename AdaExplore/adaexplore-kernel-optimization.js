@@ -21,6 +21,8 @@ export const meta = {
   },
 }
 
+// __modelTierApplied (declaration pre-existing)
+
 const WORKFLOW_NAME = 'adaexplore-kernel-optimization'
 
 
@@ -459,7 +461,7 @@ if (USE_DRIVER) {
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, lang_fence, impl_requirements, methods}.`,
-    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.mechanical, label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
   if (!DRIVER || DRIVER.present === false) {
     throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
   }
@@ -802,27 +804,27 @@ Then append, using the values you just measured (status="done" if the candidate 
     await agent(
       `${driverSh('build.sh', `--source ${kernelPath} --out ${buildOut}`)}\n` +
       `Return its stdout JSON verbatim.`,
-      { label: `driver-build-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      { model: MODEL.mechanical, label: `driver-build-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
     const runOut = await agent(
       `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kernelPath} --result ${resultPath}`)}\n` +
       `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
-      { label: `driver-run-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      { model: MODEL.profile, label: `driver-run-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
     const profileOut = await agent(
       `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kernelPath} --out ${profOut}`)}\n` +
       `Return {ok, native_path}.`,
-      { label: `driver-profile-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      { model: MODEL.profile, label: `driver-profile-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
     const evidenceOut = await agent(
       `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
       `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-      { label: `driver-to-evidence-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      { model: MODEL.mechanical, label: `driver-to-evidence-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
     const diagOut = await agent(
       `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
       `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
-      { label: `driver-diagnose-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      { model: MODEL.mechanical, label: `driver-diagnose-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
     const antiCheatOut = await agent(
       `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kernelPath} --result ${resultPath}\`.\n` +
       `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
-      { label: `driver-anti-cheat-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      { model: MODEL.mechanical, label: `driver-anti-cheat-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
     const measuredLatency = Number((runOut && runOut.latency_ms) || (evidenceOut && evidenceOut.metrics && evidenceOut.metrics.latency_ms) || 0)
     const baselineLatency = Number(args.baseline_latency_ms || 0)
     const driverSpeedup = (baselineLatency > 0 && measuredLatency > 0) ? baselineLatency / measuredLatency : 0

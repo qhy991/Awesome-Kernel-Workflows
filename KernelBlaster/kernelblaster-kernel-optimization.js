@@ -14,6 +14,19 @@ export const meta = {
   ],
 }
 
+// --- BEGIN model-tier (auto-inserted by scripts/patch-model-tier.js) ---
+// Tier-based model routing: mechanical steps (run substrate scripts, parse
+// JSON) use cheaper models; profile steps (run eval/ncu) use mid-tier;
+// judgment steps (plan/implement/report) use the top tier. Tuneable via
+// args.model_{mechanical,profile,judgment}.
+const MODEL = {
+  mechanical: (typeof args !== 'undefined' && args && args.model_mechanical) || 'haiku',
+  profile: (typeof args !== 'undefined' && args && args.model_profile) || 'sonnet',
+  judgment: (typeof args !== 'undefined' && args && args.model_judgment) || 'opus',
+}
+// __modelTierApplied
+// --- END model-tier ---
+
 const WORKFLOW_NAME = 'kernelblaster-kernel-optimization'
 
 
@@ -481,7 +494,7 @@ ${baselineKernel.substring(0, 4000)}
    Do not invent a profiler command, harness, or benchmark binary.
 4. If profiling is unavailable, fall back to user-provided test_command/benchmark_command if present; otherwise use static analysis and mark cycles as missing evidence.
 
-Return the parsed metrics.`, {
+Return the parsed metrics.`, { model: MODEL.profile,
   label: 'ncu-baseline',
   phase: 'Setup',
   schema: {

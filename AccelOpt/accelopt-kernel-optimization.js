@@ -12,6 +12,19 @@ export const meta = {
   ],
 }
 
+// --- BEGIN model-tier (auto-inserted by scripts/patch-model-tier.js) ---
+// Tier-based model routing: mechanical steps (run substrate scripts, parse
+// JSON) use cheaper models; profile steps (run eval/ncu) use mid-tier;
+// judgment steps (plan/implement/report) use the top tier. Tuneable via
+// args.model_{mechanical,profile,judgment}.
+const MODEL = {
+  mechanical: (typeof args !== 'undefined' && args && args.model_mechanical) || 'haiku',
+  profile: (typeof args !== 'undefined' && args && args.model_profile) || 'sonnet',
+  judgment: (typeof args !== 'undefined' && args && args.model_judgment) || 'opus',
+}
+// __modelTierApplied
+// --- END model-tier ---
+
 const WORKFLOW_NAME = 'accelopt-kernel-optimization'
 
 
@@ -49,6 +62,48 @@ function __unwrapArgs(rawArgs) {
 }
 // eslint-disable-next-line no-global-assign
 args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
+
+// --- BEGIN typed-args (channel ② experience_excerpts) ---
+// Cross-session priors travel here as a typed array (see KerSor
+// agents/dispatch-arg-synthesizer.md), independent of op_description so the
+// solver can treat them as distinct lower-authority signals.
+const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+function __experienceBlock() {
+  if (!EXPERIENCE_EXCERPTS.length) return ''
+  const lines = EXPERIENCE_EXCERPTS.map(e => {
+    const kind = (e && e.kind) || 'note'
+    const directive = (e && e.directive) || 'inform'
+    const claim = (e && e.claim) || (typeof e === 'string' ? e : JSON.stringify(e))
+    return `- [${kind}/${directive}] ${claim}`
+  })
+  return `\n# Cross-session experience excerpts (channel ② — priors from past sessions; LOWER authority than current-round evidence):\n${lines.join('\n')}\n`
+}
+
+// Channel ③: typed prior-attempt context (attempt_evidence + attempt_plan).
+// KerSor's dispatch-arg-synthesizer reads run-{N-1}/analysis.json and
+// round-{N}-selection.json and emits both as typed JSON objects on args.
+// Solvers consume them as a HIGHER-authority signal than HANDOFF prose.
+const ATTEMPT_EVIDENCE = (args.attempt_evidence && typeof args.attempt_evidence === 'object') ? args.attempt_evidence : null
+const ATTEMPT_PLAN = (args.attempt_plan && typeof args.attempt_plan === 'object') ? args.attempt_plan : null
+const FAILED_STRATEGY_IDS = (ATTEMPT_EVIDENCE && Array.isArray(ATTEMPT_EVIDENCE.transfer_items))
+  ? ATTEMPT_EVIDENCE.transfer_items.filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
+  : []
+function __attemptBlock() {
+  if (!ATTEMPT_EVIDENCE && !ATTEMPT_PLAN) return ''
+  const parts = ['\n# Prior attempt context (channel ③ — TYPED, machine-verified; HIGHER authority than handoff prose):']
+  if (FAILED_STRATEGY_IDS.length > 0) {
+    parts.push(`## HARD CONSTRAINT — do NOT re-propose any of these failed-strategy ids: ${FAILED_STRATEGY_IDS.join(', ')}`)
+  }
+  if (ATTEMPT_EVIDENCE) {
+    const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+  }
+  if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
+    parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
+  }
+  return parts.join('\n') + '\n'
+}
+// --- END typed-args ---
 // --- END inlined arg_guard ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
@@ -621,7 +676,7 @@ if (USE_DRIVER) {
     `  requires_tools, impl_requirements, read_metric_guide,\n` +
     `  plan_angles:[...], unsupported_methods:[...],\n` +
     `  idioms:{<method>:{idiom,prompt_guidance}}}.`,
-    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.mechanical, label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
 
   if (!driver.present) {
     throw new Error(`No backend driver present for backend="${BACKEND}". Provide ${DRIVER_DIR}/ or pick a supported backend.`)
@@ -756,13 +811,13 @@ if (USE_DRIVER) {
         `Build via ` + driverSh('build.sh', `--source ${KERNEL_PATH} --out ${EXP_DIR}/baseline/artifact`) + ` then ` +
         driverSh('run.sh', `--artifact ${EXP_DIR}/baseline/artifact --problem ${PROBLEM_PATH || KERNEL_PATH} --out ${EXP_DIR}/baseline/result.json`) + ` for latency only. ` +
         `Return {ok:true, metrics:{latency_ms:<from run.sh>,dram_pct:null,sm_pct:null,occupancy:null}, coverage:["latency_ms"], profiler_available:false}.`,
-    { label: 'ncu-baseline', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.profile, label: 'ncu-baseline', phase: 'Setup', schema: JSON_PASSTHROUGH })
 
   const metrics = profileResult.metrics || {}
   const diag = await agent(
     `Write these metrics to ${EXP_DIR}/baseline/metrics.json:\n${JSON.stringify(metrics)}\n` +
     `${substrateInstruction('diagnose.py', `--metrics ${EXP_DIR}/baseline/metrics.json`)} Return stdout JSON verbatim {bottleneck_class, evidence}.`,
-    { label: 'diagnose-baseline', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.mechanical, label: 'diagnose-baseline', phase: 'Setup', schema: JSON_PASSTHROUGH })
   bottleneckClass = diag.bottleneck_class || 'unknown'
 
   ncuSetup = {
@@ -780,7 +835,7 @@ if (USE_DRIVER) {
     _coverage: profileResult.coverage || [],
   }
 } else {
-  ncuSetup = await agent(legacyNcuBaselinePrompt(baselineKernel), {
+  ncuSetup = await agent(legacyNcuBaselinePrompt(baselineKernel), { model: MODEL.profile,
     label: 'ncu-baseline',
     phase: 'Setup',
     schema: LEGACY_NCU_BASELINE_SCHEMA,
@@ -956,6 +1011,9 @@ ${IDIOMS.read_metric_guide}
   const plans = await parallel(
     Array.from({length: BREADTH}, (_, i) => () =>
       agent(`${planPromptBase}\n\n# YOUR FOCUS AREA: ${planAngles[i % planAngles.length]}\nYou are planner #${i + 1}/${BREADTH}. Focus on: ${planAngles[i % planAngles.length]}.
+${__attemptBlock()}${__experienceBlock()}
+# Recent genome trajectory (read BEFORE planning)
+Run \`tail -20 ${EXP_DIR}/genome.jsonl 2>/dev/null\` to see prior attempts this session (every Plan/Execute/Evaluate/Learn step has self-reported here). Use it to: (a) avoid retrying any technique already attempted with a regression or null speedup, (b) spot multi-round patterns the per-iteration experience summary may have lost. If the file is empty or missing, ignore this and proceed with the inputs above.
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -1326,6 +1384,9 @@ Optimized code:
 Why: {hardware-level explanation}
 
 Make the rule GENERAL enough to apply to other kernels (not specific to this one kernel).
+${__experienceBlock()}
+# Recent genome trajectory (read BEFORE extracting the rule)
+Run \`tail -30 ${EXP_DIR}/genome.jsonl 2>/dev/null\` to see prior attempts this session. Cross-check your candidate rule against the broader trajectory: does the pattern hold across multiple iterations, or is this slow/fast pair an outlier? Cite a second supporting (or contradicting) example if you find one. If the file is empty or missing, ignore this and rely on the slow/fast pair above.
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ

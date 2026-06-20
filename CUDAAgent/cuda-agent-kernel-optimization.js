@@ -12,6 +12,19 @@ export const meta = {
   ],
 }
 
+// --- BEGIN model-tier (auto-inserted by scripts/patch-model-tier.js) ---
+// Tier-based model routing: mechanical steps (run substrate scripts, parse
+// JSON) use cheaper models; profile steps (run eval/ncu) use mid-tier;
+// judgment steps (plan/implement/report) use the top tier. Tuneable via
+// args.model_{mechanical,profile,judgment}.
+const MODEL = {
+  mechanical: (typeof args !== 'undefined' && args && args.model_mechanical) || 'haiku',
+  profile: (typeof args !== 'undefined' && args && args.model_profile) || 'sonnet',
+  judgment: (typeof args !== 'undefined' && args && args.model_judgment) || 'opus',
+}
+// __modelTierApplied
+// --- END model-tier ---
+
 const WORKFLOW_NAME = 'cuda-agent-kernel-optimization'
 
 
@@ -412,7 +425,7 @@ Return profiling results and optimization plan.
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append:
-{"workflow":"${WORKFLOW_NAME}","phase":"Profile","ts":"<ts>","status":"done","technique":"<chosen optimization strategy, e.g. operator_fusion>","speedup":null,"note":"<baseline eager/compile ms + main bottleneck>"}`, {
+{"workflow":"${WORKFLOW_NAME}","phase":"Profile","ts":"<ts>","status":"done","technique":"<chosen optimization strategy, e.g. operator_fusion>","speedup":null,"note":"<baseline eager/compile ms + main bottleneck>"}`, { model: MODEL.profile,
   label: 'profile-baseline',
   phase: 'Profile',
   schema: {

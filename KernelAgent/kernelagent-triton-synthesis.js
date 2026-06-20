@@ -13,6 +13,8 @@ export const meta = {
   ],
 }
 
+// __modelTierApplied (declaration pre-existing)
+
 const WORKFLOW_NAME = 'kernelagent-triton-synthesis'
 
 
@@ -331,7 +333,7 @@ if (USE_DRIVER) {
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
-    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.mechanical, label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
   if (!DRIVER || DRIVER.present === false) {
     throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
   }
@@ -744,27 +746,27 @@ Then append, using the result you just measured (status="done" if the kernel pas
       await agent(
         `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
         `Return its stdout JSON verbatim.`,
-        { label: `driver-build-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
+        { model: MODEL.mechanical, label: `driver-build-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
       const runOut = await agent(
         `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath} --test ${tPath} --result ${resultPath}`)}\n` +
         `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
-        { label: `driver-run-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
+        { model: MODEL.profile, label: `driver-run-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
       await agent(
         `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
         `Return {ok, native_path}.`,
-        { label: `driver-profile-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
+        { model: MODEL.profile, label: `driver-profile-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
       const evidenceOut = await agent(
         `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
         `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-        { label: `driver-to-evidence-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
+        { model: MODEL.mechanical, label: `driver-to-evidence-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
       const diagOut = await agent(
         `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
         `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
-        { label: `driver-diagnose-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
+        { model: MODEL.mechanical, label: `driver-diagnose-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
       const antiCheatOut = await agent(
         `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${resultPath}\`.\n` +
         `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
-        { label: `driver-anti-cheat-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
+        { model: MODEL.mechanical, label: `driver-anti-cheat-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
       candidate.driver_envelope = {
         anti_cheat: antiCheatOut || {},
         metrics: (evidenceOut && evidenceOut.metrics) || {},
