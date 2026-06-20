@@ -588,11 +588,15 @@ if (ORIGINAL_BACKUP) {
 // confidence by method (measured/inferred/hypothesized) — not the agent. See
 // _substrate/profiling/README.md. Falls back to native_profiler if undecided. ---
 let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
-if (USE_DRIVER) {
+{
+  // Resolve for ALL integration modes (not only driver-path) so the per-iteration
+  // Profile below honors the substrate ladder even on embedded/legacy runs. Default
+  // the manifest to the cuda backend when no driver dir is present.
+  const _profManifest = (USE_DRIVER && BACKEND_DIR) ? `${BACKEND_DIR}/manifest.json` : `${SUBSTRATE}/backends/cuda/manifest.json`
   const _pd = await agent(
     `Read ${KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
     substrateInstruction('profiling/profiling_strategist.py',
-      `resolve --backend-manifest ${BACKEND_DIR}/manifest.json --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
+      `resolve --backend-manifest ${_profManifest} --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
     ` Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
     { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
   if (_pd && _pd.method) PROFILING_DECISION = _pd
@@ -661,9 +665,13 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
   const metrics = await agent(
     `Profile the current best kernel and produce normalized metrics.\n` +
     `Kernel: ${best.code_path}\nOp: ${OP}\n` +
-    (NCU_CMD && EVAL_CMD ? `Run the user-provided ncu_command: \`${NCU_CMD}\` and the benchmark command \`${EVAL_CMD}\`.\n`
-      : EVAL_CMD ? `Run the benchmark command \`${EVAL_CMD}\` (writes a JSON result file).\n`
-        : `No benchmark_command provided; do not invent an evaluator. Return missing/null measured metrics.\n`) +
+    (PROFILING_DECISION.method === 'native_profiler' && NCU_CMD && EVAL_CMD
+      ? `Run the user-provided ncu_command: \`${NCU_CMD}\` and the benchmark command \`${EVAL_CMD}\`.\n`
+      : PROFILING_DECISION.method === 'perf_heuristic' && EVAL_CMD
+        ? `Profiling-strategist chose method='perf_heuristic' (confidence='${PROFILING_DECISION.confidence}'); do NOT run ncu. Run the benchmark command \`${EVAL_CMD}\` for throughput and derive memory-vs-compute-bound hints from it; tag any bottleneck evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'.\n`
+        : EVAL_CMD
+          ? `Run the benchmark command \`${EVAL_CMD}\` (writes a JSON result file).\n`
+          : `No benchmark_command provided; do not invent an evaluator. Return missing/null measured metrics.\n`) +
     `Return the JSON exactly per the schema: compiled, correct, candidate_latency_ms, ` +
     `eager_latency_ms, compile_latency_ms, speedup, and metrics{dram_pct, sm_pct, occupancy, latency_ms}. ` +
     `Use null for unknown numbers. Do not fabricate; missing => null.` +

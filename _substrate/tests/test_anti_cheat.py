@@ -80,6 +80,28 @@ class TestAntiCheatGolden(unittest.TestCase):
         self.assertEqual(res["recorded_speedup"], 0.0)
         self.assertEqual(res["blocking_flags"], ["library_fallback"])
 
+    def test_measured_speedup_separate_from_recorded(self):
+        # O3: a valid compile+correct run that merely doesn't beat the reward
+        # threshold (e.g. ~1.0x SMOKE, or a sub-path win losing on aggregate)
+        # must still report its measured speedup, so consumers don't misread a
+        # valid run as a 0/failure. recorded_speedup stays 0 (beam gate intact).
+        no_win = {**GOOD_METRICS, "candidate_latency_ms": 1.1, "eager_latency_ms": 1.0,
+                  "compile_latency_ms": 1.2, "claimed_speedup": 1.02}
+        res = anti_cheat.evaluate("__global__ void k(){}", no_win)
+        self.assertTrue(res["valid"])
+        self.assertEqual(res["reward"], 0)            # no real win over baselines
+        self.assertEqual(res["recorded_speedup"], 0.0)  # beam/memory gate intact
+        self.assertEqual(res["measured_speedup"], 1.02)  # but the measured value is preserved
+        # A real win sets both.
+        win = {**GOOD_METRICS, "claimed_speedup": 2.0}
+        res_win = anti_cheat.evaluate("__global__ void k(){}", win)
+        self.assertEqual(res_win["recorded_speedup"], 2.0)
+        self.assertEqual(res_win["measured_speedup"], 2.0)
+        # An invalid run zeros both.
+        res_bad = anti_cheat.evaluate("cublasSgemm(h);", GOOD_METRICS)
+        self.assertEqual(res_bad["recorded_speedup"], 0.0)
+        self.assertEqual(res_bad["measured_speedup"], 0.0)
+
     def test_metal_source_not_flagged_by_default(self):
         # Today the CUDA/Python defaults never match MPS or a C++ return; stub.
         self.assertEqual(anti_cheat.static_flags(METAL_SRC), [])
