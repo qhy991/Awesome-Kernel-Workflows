@@ -298,23 +298,22 @@ function integrationHostProbeJson() {
   })
 }
 
-function embeddedInplaceEvalBlock(kernelPath, runDir) {
+function embeddedInplaceEvalBlock(kernelPath, runDir, originalBackup) {
   if (!BUILD_CMD || !TEST_CMD) {
     return '\n# embedded_inplace requires build_command and test_command; cannot eval without them.\n'
   }
-  const backup = `${runDir}/orig.backup`
   const bench = BENCH_CMD || TEST_CMD
   return [
     '',
-    '# EMBEDDED-INPLACE EVALUATION (integration-strategist -> embedded_inplace)',
-    `Candidate: ${runDir}/kernel | project kernel file: ${kernelPath}`,
+    '# EMBEDDED-INPLACE EVALUATION (integration-strategist -> embedded_inplace; SERIAL — never run concurrently with another candidate)',
+    `Candidate: ${runDir}/kernel | project kernel file: ${kernelPath} | pristine backup: ${originalBackup}`,
     'Run IN ORDER:',
-    `1. cp -a ${kernelPath} ${backup}`,
-    `2. cp ${runDir}/kernel ${kernelPath}`,
+    `1. Restore pristine FIRST (recovers if a prior candidate left the file dirty): cp -a ${originalBackup} ${kernelPath}`,
+    `2. Apply candidate: cp ${runDir}/kernel ${kernelPath}`,
     `3. Build: ${BUILD_CMD}`,
     `4. Test: ${TEST_CMD}`,
     `5. Benchmark: ${bench}`,
-    `6. ALWAYS restore: cp -a ${backup} ${kernelPath} (project must be byte-exact pristine after eval)`,
+    `6. ALWAYS restore pristine: cp -a ${originalBackup} ${kernelPath} (project must be byte-exact pristine after eval)`,
     'Parse compiled/correct/latency/speedup strictly from command output; do NOT fabricate.',
   ].join('\n')
 }
@@ -350,9 +349,9 @@ function embeddedDispatchEvalBlock(kernelPath, runDir, variant) {
   ].join('\n')
 }
 
-function integrationEvalBlock(integMethod, kernelPath, runDir, variant) {
+function integrationEvalBlock(integMethod, kernelPath, runDir, variant, originalBackup) {
   if (integMethod === 'embedded_dispatch') return embeddedDispatchEvalBlock(kernelPath, runDir, variant)
-  if (integMethod === 'embedded_inplace') return embeddedInplaceEvalBlock(kernelPath, runDir)
+  if (integMethod === 'embedded_inplace') return embeddedInplaceEvalBlock(kernelPath, runDir, originalBackup)
   return ''
 }
 
@@ -530,6 +529,17 @@ if (INTEGRATION_DECISION.method === 'derive_adapter') {
 }
 const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'standalone'
 
+// embedded_inplace mutates the SHARED KERNEL_PATH (e.g. llama.cpp mmq.cuh). Back up the
+// ORIGINAL once here so every candidate restores to pristine — never to a prior candidate's
+// leftover. Serialized eval (Evaluate phase) + restore-pristine-first make this race-free.
+const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
+if (ORIGINAL_BACKUP) {
+  await agent(
+    `Byte-exact backup of the original embedded kernel: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm it succeeded. ` +
+    `This backup is the pristine restore target for every candidate eval and the final exit restore. Do not modify it.`,
+    { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH })
+}
+
 // --- profiling-strategist: pick the analysis METHOD per backend×task×host, then
 // honor it below. The agent only classifies the task (fuzzy); the substrate stamps
 // confidence by method (measured/inferred/hypothesized) — not the agent. See
@@ -673,10 +683,10 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
 
   // ---- Evaluate each plan: implement -> eval -> anti-cheat (Layers B, A) ----
   phase('Evaluate')
-  const evaluated = (await parallel(plans.map((p, i) => () => (async () => {
+  const evalOne = async (p, i) => {
     const runDir = `${EXP_DIR}/run-${iter}/cand-${i + 1}`
     const variant = `gen_${iter}_${i + 1}`.replace(/[^A-Za-z0-9_]/g, '_')
-    const integBlock = integrationEvalBlock(INTEGRATION_DECISION.method, KERNEL_PATH, runDir, variant)
+    const integBlock = integrationEvalBlock(INTEGRATION_DECISION.method, KERNEL_PATH, runDir, variant, ORIGINAL_BACKUP)
     const embeddedProposal = INTEGRATION_DECISION.method === 'embedded_dispatch'
       ? `\n\n${EMBEDDING_CONTRACT}\nMatch dispatch signature of ${KERNEL_PATH} exactly.\n`
       : ''
@@ -702,7 +712,21 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
       { label: `anticheat-${iter}-${i + 1}`, phase: 'Evaluate', schema: ANTICHEAT_SCHEMA, model: MODEL.mechanical })
     return { plan: p, metrics: m, anticheat: ac, code_path: `${runDir}/kernel`,
              recorded_speedup: ac.valid ? ac.recorded_speedup : 0 }
-  })()))).filter(Boolean)
+  }
+  // Embedded modes mutate a shared file (inplace) or share a project build (dispatch):
+  // they MUST evaluate SERIALLY — parallel candidates would clobber KERNEL_PATH / collide
+  // on the project build. Standalone candidates are isolated (per-candidate .so) -> parallel.
+  const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+  let evaluated
+  if (IS_EMBEDDED) {
+    evaluated = []
+    for (let i = 0; i < plans.length; i++) {
+      try { const r = await evalOne(plans[i], i); if (r) evaluated.push(r) }
+      catch (e) { log(`iter ${iter} cand ${i + 1} embedded eval failed: ${(e && e.message) || e}`) }
+    }
+  } else {
+    evaluated = (await parallel(plans.map((p, i) => () => evalOne(p, i)))).filter(Boolean)
+  }
 
   // --- Per-iteration driver envelope (Layer-A, standalone driver-path only) ---
   if (USE_DRIVER_STANDALONE) {
@@ -791,6 +815,17 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
   if (bestSpeedup >= TARGET) { log(`target ${TARGET}x reached — stop (COMPLETE)`); break }
   if (stagnantRounds >= STAGNATION_LIMIT) { log(`stagnation limit reached — stop (STALLED)`); break }
   if (dryRounds >= DRY_LIMIT) { log(`loop-until-dry: ${DRY_LIMIT} rounds with no new measured insight — stop (STALLED)`); break }
+}
+
+// embedded_inplace exit safety net: unconditionally restore the pristine original so the
+// project worktree is byte-exact on exit regardless of any candidate that failed to restore
+// mid-eval. (Serialized eval + restore-pristine-first already keep it clean candidate-to-
+// candidate; this guarantees a clean exit. Best kernel is persisted via best_kernel_code path.)
+if (ORIGINAL_BACKUP) {
+  await agent(
+    `Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm the ` +
+    `project kernel is now byte-equal to the pristine original backup. This always runs on exit.`,
+    { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH })
 }
 
 // ---- Report + Layer A evidence envelope ----
