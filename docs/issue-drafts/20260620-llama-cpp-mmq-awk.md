@@ -43,7 +43,7 @@ exposed workflow/solver/profiling gaps below.
 
 ## Open — Workflow / solver
 
-### O1. Generalist Profile phase ignores `profiling-strategist` on embedded path (High) — **FIXED** (`9220923`)
+### A-O1. Generalist Profile phase ignores `profiling-strategist` on embedded path (High) — **FIXED** (`9220923`)
 
 **Symptom**: Session `20260620-173848` selected `native_profiler/ncu` at Setup
 (`prof_cache.json`), but per-iteration Profile uses hardcoded
@@ -65,7 +65,7 @@ This is non-deterministic and bypasses the substrate ladder
 
 ---
 
-### O2. nsys on no-ncu hosts: A/B design decision, gated on GPU nsys output (Medium — needs design + GPU)
+### A-O2. nsys on no-ncu hosts: A/B design decision, gated on GPU nsys output (Medium — needs design + GPU)
 
 **Symptom**: `_substrate/backends/cuda/manifest.json` declares `profiler.name=ncu`
 only. `nsys` is `optional_tools` but not in the ladder. Hosts with nsys but no
@@ -116,7 +116,7 @@ mmq `20260620-173848` genome Profile (agent-improvised nsys path).
 
 ---
 
-### O3. `anti_cheat.py` zeros `recorded_speedup` for valid compile+correct ~1.0x runs (Medium) — **FIXED** (`9220923`)
+### A-O3. `anti_cheat.py` zeros `recorded_speedup` for valid compile+correct ~1.0x runs (Medium) — **FIXED** (`9220923`)
 
 **Symptom**: SMOKE and real runs show `genome.jsonl` speedup ~1.0–1.02x but
 `output.json attempts[].speedup=0`, `reward=0`. Beam keeps baseline only when
@@ -137,7 +137,7 @@ q4K/q6K.
 
 ---
 
-### O4. Solver optimizes wrong quant sub-path when note focuses q8_0 (Medium — solver behavior)
+### A-O4. Solver optimizes wrong quant sub-path when note focuses q8_0 (Medium — solver behavior)
 
 **Symptom**: Real run (`mmq-real-opt-1`) note required q8_0 focus + 1.05x geomean.
 All four candidates improved q4K/q6K decode (1.017–1.020x) via y-tile load
@@ -156,7 +156,7 @@ decode load-width vs q8_0 batch occupancy, (3) no harness filter for q8_0-only g
 
 ---
 
-### O5. `integration-strategist` fully wired only in Generalist (Medium — scope)
+### A-O5. `integration-strategist` fully wired only in Generalist (Medium — scope)
 
 **Symptom**: Only `Generalist/generalist-kernel-optimization.js` calls
 `integration_strategist.py` with eval branching. Other ~27 workflows got
@@ -170,7 +170,7 @@ profiling-strategist INJECT but not integration wiring per
 
 ---
 
-### O6. Integration decision still agent-`cat` mediated (Low — hardening)
+### A-O6. Integration decision still agent-`cat` mediated (Low — hardening)
 
 **Symptom**: Mechanical agent runs python + `cat integration_decision.json`; workflow
 sets `INTEGRATION_DECISION` from agent return JSON, not direct file read.
@@ -180,7 +180,7 @@ directly after mechanical runner (mirrors KerSor validate-run file-first discipl
 
 ---
 
-### O7. InPlacePatch SMOKE not re-validated post-fix (Low)
+### A-O7. InPlacePatch SMOKE not re-validated post-fix (Low)
 
 **Symptom**: Session `20260620-152944` dispatched but no `output.json`; prior
 `20260620-145823` failed on propose gate before `de52cd0`.
@@ -204,7 +204,7 @@ Analysis: `LlamaCpp-Exp/.kersor/20260620-173848/run-1/analysis.json`
 ## Acceptance criteria (for closing this meta-issue)
 
 - [x] Generalist embedded Profile honors `profiling-strategist` decision end-to-end — **FIXED** (`9220923`; code, GPU-behavior confirm pending)
-- [ ] No-ncu / nsys-only hosts degrade deterministically to perf_heuristic (no ad-hoc nsys) — **blocked on O2 A/B decision** (needs GPU nsys output)
+- [ ] No-ncu / nsys-only hosts degrade deterministically to perf_heuristic (no ad-hoc nsys) — **blocked on A-O2 A/B decision** (needs GPU nsys output)
 - [x] `attempts[]` reporting distinguishes valid+measured from beam-recorded speedup — **FIXED** (`9220923`; `anti_cheat.measured_speedup`, GPU-behavior confirm pending)
-- [ ] Document or implement dtype/subtest-focused benchmark gate for embedded GEMM — O4, needs GPU 对照
-- [ ] InPlacePatch SMOKE PASS on mmq.cuh — O7, needs GPU
+- [ ] Document or implement dtype/subtest-focused benchmark gate for embedded GEMM — A-O4, needs GPU 对照
+- [ ] InPlacePatch SMOKE PASS on mmq.cuh — A-O7, needs GPU
