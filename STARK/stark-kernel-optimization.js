@@ -14,6 +14,19 @@ export const meta = {
   ],
 }
 
+// --- BEGIN model-tier (auto-inserted by scripts/patch-model-tier.js) ---
+// Tier-based model routing: mechanical steps (run substrate scripts, parse
+// JSON) use cheaper models; profile steps (run eval/ncu) use mid-tier;
+// judgment steps (plan/implement/report) use the top tier. Tuneable via
+// args.model_{mechanical,profile,judgment}.
+const MODEL = {
+  mechanical: (typeof args !== 'undefined' && args && args.model_mechanical) || 'haiku',
+  profile: (typeof args !== 'undefined' && args && args.model_profile) || 'sonnet',
+  judgment: (typeof args !== 'undefined' && args && args.model_judgment) || 'opus',
+}
+// __modelTierApplied
+// --- END model-tier ---
+
 const WORKFLOW_NAME = 'stark-kernel-optimization'
 
 
@@ -51,6 +64,48 @@ function __unwrapArgs(rawArgs) {
 }
 // eslint-disable-next-line no-global-assign
 args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
+
+// --- BEGIN typed-args (channel ② experience_excerpts) ---
+// Cross-session priors travel here as a typed array (see KerSor
+// agents/dispatch-arg-synthesizer.md), independent of op_description so the
+// solver can treat them as distinct lower-authority signals.
+const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+function __experienceBlock() {
+  if (!EXPERIENCE_EXCERPTS.length) return ''
+  const lines = EXPERIENCE_EXCERPTS.map(e => {
+    const kind = (e && e.kind) || 'note'
+    const directive = (e && e.directive) || 'inform'
+    const claim = (e && e.claim) || (typeof e === 'string' ? e : JSON.stringify(e))
+    return `- [${kind}/${directive}] ${claim}`
+  })
+  return `\n# Cross-session experience excerpts (channel ② — priors from past sessions; LOWER authority than current-round evidence):\n${lines.join('\n')}\n`
+}
+
+// Channel ③: typed prior-attempt context (attempt_evidence + attempt_plan).
+// KerSor's dispatch-arg-synthesizer reads run-{N-1}/analysis.json and
+// round-{N}-selection.json and emits both as typed JSON objects on args.
+// Solvers consume them as a HIGHER-authority signal than HANDOFF prose.
+const ATTEMPT_EVIDENCE = (args.attempt_evidence && typeof args.attempt_evidence === 'object') ? args.attempt_evidence : null
+const ATTEMPT_PLAN = (args.attempt_plan && typeof args.attempt_plan === 'object') ? args.attempt_plan : null
+const FAILED_STRATEGY_IDS = (ATTEMPT_EVIDENCE && Array.isArray(ATTEMPT_EVIDENCE.transfer_items))
+  ? ATTEMPT_EVIDENCE.transfer_items.filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
+  : []
+function __attemptBlock() {
+  if (!ATTEMPT_EVIDENCE && !ATTEMPT_PLAN) return ''
+  const parts = ['\n# Prior attempt context (channel ③ — TYPED, machine-verified; HIGHER authority than handoff prose):']
+  if (FAILED_STRATEGY_IDS.length > 0) {
+    parts.push(`## HARD CONSTRAINT — do NOT re-propose any of these failed-strategy ids: ${FAILED_STRATEGY_IDS.join(', ')}`)
+  }
+  if (ATTEMPT_EVIDENCE) {
+    const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+  }
+  if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
+    parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
+  }
+  return parts.join('\n') + '\n'
+}
+// --- END typed-args ---
 // --- END inlined arg_guard ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
@@ -463,7 +518,7 @@ if (USE_DRIVER) {
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
-    { label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.mechanical, label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
   if (!DRIVER || DRIVER.present === false) {
     throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
   }
@@ -593,27 +648,27 @@ if (USE_DRIVER) {
   await agent(
     `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
     `Return its stdout JSON verbatim.`,
-    { label: 'driver-build-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.mechanical, label: 'driver-build-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
   const runOut = await agent(
     `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
     `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
-    { label: 'driver-run-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.profile, label: 'driver-run-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
   await agent(
     `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
     `Return {ok, native_path}.`,
-    { label: 'driver-profile-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.profile, label: 'driver-profile-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
   const evidenceOut = await agent(
     `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
     `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-    { label: 'driver-to-evidence-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.mechanical, label: 'driver-to-evidence-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
   await agent(
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
     `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
-    { label: 'driver-diagnose-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.mechanical, label: 'driver-diagnose-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
   await agent(
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/stark_root.result.json\`.\n` +
     `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
-    { label: 'driver-anti-cheat-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.mechanical, label: 'driver-anti-cheat-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
   rootEval.driver_envelope = {
     latency_ms: Number((runOut && runOut.latency_ms) || 0),
     metrics: (evidenceOut && evidenceOut.metrics) || {},
@@ -745,6 +800,9 @@ Return a JSON object with:
 - anchored_scaffold: string (kernel code with <<<IMPROVE BEGINS/ENDS>>> anchors)
 - anchors: array of {name, begin_line, end_line, description}
 - rationale: string
+${__attemptBlock()}${__experienceBlock()}
+# Recent genome trajectory (read BEFORE proposing)
+Run \`tail -20 ${EXP_DIR}/genome.jsonl 2>/dev/null\` to see prior attempts across the tree this session. Use it to: (a) avoid re-proposing optimizations that already regressed on sibling or ancestor nodes, (b) spot patterns the per-node sibling summary may have missed. If the file is empty or missing, ignore this and rely on the tree context above.
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -890,27 +948,27 @@ Then append, using the values you just measured (status="done" if compiled AND c
     await agent(
       `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
       `Return its stdout JSON verbatim.`,
-      { label: `driver-build-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      { model: MODEL.mechanical, label: `driver-build-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
     const runOut = await agent(
       `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
       `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
-      { label: `driver-run-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      { model: MODEL.profile, label: `driver-run-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
     await agent(
       `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
       `Return {ok, native_path}.`,
-      { label: `driver-profile-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      { model: MODEL.profile, label: `driver-profile-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
     const evidenceOut = await agent(
       `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
       `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-      { label: `driver-to-evidence-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      { model: MODEL.mechanical, label: `driver-to-evidence-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
     const diagOut = await agent(
       `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
       `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
-      { label: `driver-diagnose-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      { model: MODEL.mechanical, label: `driver-diagnose-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
     await agent(
       `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/node_${attemptCount}.result.json\`.\n` +
       `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
-      { label: `driver-anti-cheat-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      { model: MODEL.mechanical, label: `driver-anti-cheat-${attemptCount}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
     evalResult.driver_envelope = {
       latency_ms: Number((runOut && runOut.latency_ms) || 0),
       metrics: (evidenceOut && evidenceOut.metrics) || {},
