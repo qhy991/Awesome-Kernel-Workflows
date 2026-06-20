@@ -505,20 +505,56 @@ const DRY_LIMIT = 2               // P1.5 — loop-until-dry stop threshold
 const allAttempts = []
 const verifiedInsights = []       // P1.4 — verified typed insights for the Layer A envelope
 
-// --- integration-strategist: route build/test mode (standalone vs embedded_*). Agent
-// classifies can_compile_standalone; substrate stamps build_fidelity + reversible. ---
+// --- integration-strategist: route build/test mode (standalone vs embedded_*).
+// TRUST BOUNDARY (was bug 20260620-153001): the agent must NOT both classify AND
+// "report" the script's decision in one shot — it can lie about either. Split into:
+//   (1) heuristic OR classify-only agent  -> a fixed can_standalone value
+//   (2) mechanical agent runs the python with that fixed CLI; stdout is parroted
+//       AND the resulting integ_cache.json is read as authoritative.
 let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
 {
   const probe = integrationHostProbeJson()
   const rootCli = PROJECT_ROOT ? ` --project-root "${PROJECT_ROOT}"` : ''
-  const _integ = await agent(
-    `Read ${KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
-    `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
-    substrateInstruction('integration/integration_strategist.py',
-      `resolve --kernel "${KERNEL_PATH}"${rootCli} --can-standalone <yes|no|uncertain> --host-probe '${probe}' --cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
-    ` Return stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
-    { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
-  if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+  const decisionPath = `${EXP_DIR}/integration_decision.json`
+  const cachePath = `${EXP_DIR}/integ_cache.json`
+
+  // (1) Decide can_standalone deterministically when context permits; else classify.
+  // Heuristic: a .cuh / .cu.h kernel WITH project_root + build_command + test_command
+  // present cannot compile as a single TU (e.g. llama.cpp mmq.cuh). Force 'no'.
+  let canStandalone = 'uncertain'
+  const cuhLike = /\.(cuh|cu\.h|inl|hpp|hh)$/i.test(KERNEL_PATH || '')
+  if (cuhLike && PROJECT_ROOT && BUILD_CMD && TEST_CMD) {
+    canStandalone = 'no'
+    log(`integration: heuristic forces can_standalone=no (header-like kernel + project build/test/root present)`)
+  } else {
+    const cls = await agent(
+      `Read ${KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+      `(use 'no' when the file cannot compile as a single translation unit — e.g. a llama.cpp .cuh ` +
+      `with project-only deps, template-only headers, or kernels referenced through dispatch tables). ` +
+      `Return ONLY the JSON {"can_standalone":"yes|no|uncertain","reason":"<one line>"}. ` +
+      `Do not run any script; do not invent any other field.`,
+      { model: MODEL.mechanical, label: 'integration-classify', phase: 'Setup',
+        schema: { type: 'object',
+                  properties: { can_standalone: { type: 'string' }, reason: { type: 'string' } },
+                  required: ['can_standalone'] } })
+    canStandalone = (cls && cls.can_standalone) || 'uncertain'
+  }
+  log(`integration: can_standalone=${canStandalone}`)
+
+  // (2) Mechanical runner — fixed CLI value; agent has no judgment surface.
+  if (PY) {
+    const _integ = await agent(
+      `Run exactly: \`${PY} ${SUBSTRATE}/integration/integration_strategist.py resolve ` +
+      `--kernel "${KERNEL_PATH}"${rootCli} --can-standalone ${canStandalone} ` +
+      `--host-probe '${probe}' --cache ${cachePath} --trajectory ${EXP_DIR}/genome.jsonl ` +
+      `> ${decisionPath}\`. ` +
+      `Then run exactly: \`cat ${decisionPath}\` and return its stdout JSON verbatim. ` +
+      `Do not modify, summarize, or invent any field.`,
+      { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+  } else {
+    log('integration: no substrate_command_prefix set; keeping default standalone routing')
+  }
 }
 log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
 if (INTEGRATION_DECISION.method === 'derive_adapter') {
@@ -682,6 +718,13 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
   ).filter(Boolean)
 
   // ---- Evaluate each plan: implement -> eval -> anti-cheat (Layers B, A) ----
+  // worktree isolation is only safe for STANDALONE eval. For embedded_inplace/dispatch
+  // the candidate must mutate the project tree (or the registry) at PROJECT_ROOT, and
+  // a worktree of cwd (often a non-git scratch dir like LlamaCpp-Exp/) breaks both:
+  // (a) cwd may not be a git repo -> "Cannot create agent worktree" hard-fail; (b)
+  // even if it were, the worktree is the WRONG tree — build/test still target the
+  // real project_root, so the swap+restore would happen to a copy nobody compiles.
+  const useWorktree = INTEGRATION_DECISION.method === 'standalone'
   phase('Evaluate')
   const evalOne = async (p, i) => {
     const runDir = `${EXP_DIR}/run-${iter}/cand-${i + 1}`
@@ -703,7 +746,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
       `Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\n` +
       `Then append, using the values you just measured (status="done" if compiled AND correct, else "error"; speedup is the measured speedup number, or null if unavailable):\n` +
       `{"workflow":"${WORKFLOW_NAME}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"iter-${iter}-cand-${i + 1}","technique":"${p.method}","speedup":<number or null>,"note":"<compiled? correct? + the failure reason if any, one line>"}`,
-      { label: `impl-${iter}-${i + 1}`, phase: 'Evaluate', schema: METRICS_SCHEMA, model: MODEL.judgment, isolation: 'worktree' })
+      { label: `impl-${iter}-${i + 1}`, phase: 'Evaluate', schema: METRICS_SCHEMA, model: MODEL.judgment, ...(useWorktree ? { isolation: 'worktree' } : {}) })
     const ac = await agent(
       `Write these metrics to ${runDir}/metrics.json:\n${JSON.stringify({ ...m, claimed_speedup: m.speedup })}\n` +
       `${substrateInstruction('anti_cheat.py', `--source ${runDir}/kernel --metrics ${runDir}/metrics.json`)} ` +
