@@ -265,6 +265,17 @@ function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
 function driverSh(script, cliArgs) {
   return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
 }
+function substrateInstruction(script, cliArgs) {
+  const p = `${SUBSTRATE}/${script}`
+  return PY ? `Run exactly: \`${PY} ${p} ${cliArgs}\`.`
+            : `No substrate_command_prefix for ${p} ${cliArgs}; do not invent an interpreter.`
+}
+
+// --- profiling-strategist: pick the analysis METHOD per backend×task×host, then
+// honor it below. The agent only classifies the task (fuzzy); the substrate stamps
+// confidence by method (measured/inferred/hypothesized) -- not the agent. See
+// _substrate/profiling/README.md. Falls back to native_profiler if undecided. ---
+let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
 
 let DRIVER = null
 let DRIVER_LANG_FENCE = LEGACY_FENCE_TOKEN
@@ -337,6 +348,20 @@ if (USE_DRIVER) {
   DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT
   DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID
   log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
+}
+
+// profiling-strategist: classify the task once and let the substrate stamp the
+// method+confidence. Honored in the per-generation Evaluate driver-profile branch.
+if (USE_DRIVER) {
+  const _pd = await agent(
+    `${KERNEL_PATH ? `Read ${KERNEL_PATH}; ` : 'Read the operator spec below; '}` +
+    `classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
+    substrateInstruction('profiling/profiling_strategist.py',
+      `resolve --backend-manifest ${driverPath('manifest.json')} --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
+    ` Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
+    { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (_pd && _pd.method) PROFILING_DECISION = _pd
+  log(`Profiling-strategist: method=${PROFILING_DECISION.method} confidence=${PROFILING_DECISION.confidence} normalizer=${PROFILING_DECISION.normalizer}`)
 }
 
 const setupResult = await agent(`You are a GPU kernel optimization expert setting up the KernelFoundry evolutionary search.
@@ -599,14 +624,29 @@ Then append (this is generation ${generation}; status="done" if it compiled AND 
       `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath} --result ${resultPath}`)}\n` +
       `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
       { model: MODEL.profile, label: `driver-run-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
-    await agent(
-      `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
-      `Return {ok, native_path}.`,
-      { model: MODEL.profile, label: `driver-profile-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
-    const evidenceOut = await agent(
-      `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
-      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-      { model: MODEL.mechanical, label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    let evidenceOut
+    if (PROFILING_DECISION.method === 'native_profiler') {
+      await agent(
+        `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+        `Return {ok, native_path}.`,
+        { model: MODEL.profile, label: `driver-profile-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      evidenceOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+        `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+        { model: MODEL.mechanical, label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    } else {
+      // profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}');
+      // do NOT run profile.sh. run.sh above already produced throughput. If perf_heuristic,
+      // normalize that throughput into canonical metrics via the strategist normalizer.
+      if (PROFILING_DECISION.method === 'perf_heuristic') {
+        evidenceOut = await agent(
+          `Throughput is in ${resultPath} from run.sh. Normalize it into canonical metrics via ` +
+          substrateInstruction('profiling/' + (PROFILING_DECISION.normalizer || 'perf_to_evidence.py'), `--baseline ${resultPath} --peak-gflops <device_peak_gflops> --peak-gbs <device_peak_gbs>`) +
+          ` Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. ` +
+          `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+          { model: MODEL.mechanical, label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      }
+    }
     const diagOut = await agent(
       `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
       `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
@@ -619,6 +659,8 @@ Then append (this is generation ${generation}; status="done" if it compiled AND 
       latency_ms: Number((runOut && runOut.latency_ms) || 0),
       bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',
       backend_id: DRIVER_BACKEND_ID,
+      profiling_method: PROFILING_DECISION.method,
+      profiling_confidence: PROFILING_DECISION.confidence,
     }
   }
 

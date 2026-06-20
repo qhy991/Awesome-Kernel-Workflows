@@ -177,6 +177,5 @@ Workflow({
 
 ## 相关工作流
 
-- **ArchAgent**: 带短-长级联的进化式缓存策略优化
 - **StitchCUDA**: 带自适应重规划的三智能体编排
 - **KernelBlaster**: 基于 MAIC-RL 的知识库方法

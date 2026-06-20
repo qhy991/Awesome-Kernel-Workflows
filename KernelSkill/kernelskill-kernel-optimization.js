@@ -526,6 +526,25 @@ const referenceCode = setup.reference_code
 const opType = setup.op_type
 log(`Reference: ${opType} — ${setup.forward_summary}`)
 
+// --- profiling-strategist: pick the analysis METHOD per backend×task×host, then
+// honor it in the Evaluate phase below. The agent only classifies the task (fuzzy
+// op_class/size); the substrate DETERMINISTICALLY picks the method and stamps
+// confidence by method (measured/inferred/hypothesized) -- NOT the agent. See
+// _substrate/profiling/README.md. Falls back to native_profiler if undecided.
+let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
+if (USE_DRIVER) {
+  const _pd = await agent(
+    `Read the PyTorch reference task (op_type="${opType}", inputs=${setup.input_shapes || 'see get_inputs()'}); ` +
+    `classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve ` +
+    `--backend-manifest ${driverPath('manifest.json')} --task <op_class> --size <size> ` +
+    `--cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.\n` +
+    `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
+    { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (_pd && _pd.method) PROFILING_DECISION = _pd
+  log(`Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}')`)
+}
+
 const baseline = await agent(`You are a GPU benchmarking expert. Establish the Torch Eager baseline latency for this PyTorch reference, which is the denominator for speedup (speedup = baseline_latency / kernel_latency).
 
 # Reference task: ${REFERENCE_PATH}
@@ -770,14 +789,33 @@ Then append, using the values you just measured (status="done" if compiles AND c
       `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath} --result ${resultPath}`)}\n` +
       `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
       { model: MODEL.profile, label: `driver-run-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
-    await agent(
-      `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
-      `Return {ok, native_path}.`,
-      { model: MODEL.profile, label: `driver-profile-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
-    const evidenceOut = await agent(
-      `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
-      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-      { model: MODEL.mechanical, label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    // Gate the native profiler on the profiling-strategist's deterministic method.
+    // native_profiler: run profile.sh (ncu/native) -> to_evidence.py (measured metrics).
+    // else (perf_heuristic/static/derive_adapter): SKIP the native profiler; derive
+    // metrics from run.sh throughput via the strategist's normalizer, tagging every
+    // emitted bottleneck evidence='profile_heuristic' with the stamped confidence.
+    let evidenceOut
+    if (PROFILING_DECISION.method === 'native_profiler') {
+      await agent(
+        `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+        `Return {ok, native_path}.`,
+        { model: MODEL.profile, label: `driver-profile-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      evidenceOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+        `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+        { model: MODEL.mechanical, label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    } else {
+      evidenceOut = await agent(
+        `Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'); do NOT run the native profiler (profile.sh).\n` +
+        (PROFILING_DECISION.method === 'perf_heuristic'
+          ? `Normalize the run.sh throughput into canonical metrics via ` +
+            `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/${PROFILING_DECISION.normalizer || 'perf_to_evidence.py'} --baseline ${resultPath} --peak-gflops <device_peak_gflops> --peak-gbs <device_peak_gbs>\`.\n` +
+            `Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'.\n`
+          : `Derive metrics statically from the run.sh result at ${resultPath} only; do not invent profiler counters. ` +
+            `Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'.\n`) +
+        `Return JSON {ok:true, metrics:{latency_ms:<from run.sh>,dram_pct:<from normalizer or null>,sm_pct:<from normalizer or null>,occupancy:null}, coverage:[...], source_backend:'${DRIVER_BACKEND_ID}'}.`,
+        { model: MODEL.mechanical, label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    }
     const diagOut = await agent(
       `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
       `Return stdout JSON verbatim {bottleneck_class, evidence}.`,

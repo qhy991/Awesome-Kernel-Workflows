@@ -27,6 +27,15 @@ const MODEL = {
 
 const WORKFLOW_NAME = 'tritorx-operator-generation'
 
+// --- verification-strategist wiring (GENERATOR: no performance signal; routes
+// verification DEPTH, not a profiler). The agent classifies the verification NEED
+// (prune for early screening at Lint, confirm for final acceptance at Compile-Test);
+// the substrate DETERMINISTICALLY maps (need × host) to a method and STAMPS
+// confidence by method -- not the agent. See _substrate/verification/README.md. ---
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const PY = args.substrate_command_prefix || ''
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+
 
 // --- BEGIN inlined arg_guard (Workflow runtime parses scripts as bare scripts,
 //                              not ES modules; static imports are rejected) ---
@@ -211,6 +220,12 @@ const operators = OPERATOR_LIST.length > 0
   ? OPERATOR_LIST
   : [{ name: OP_NAME, docstring: OP_DOCSTRING }]
 
+// --- verification-strategist decisions (resolved once, before the operator loop).
+// Lint = early screening (prune); Compile-Test = final acceptance (confirm).
+// Defaults keep the happy path unchanged if the resolve is ignored. ---
+let VERIFICATION_PRUNE = { method: 'compile_lint', confidence: 'inferred', evidence_source: 'compile' }
+let VERIFICATION_CONFIRM = { method: 'compile_lint', confidence: 'inferred', evidence_source: 'compile' }
+
 // =============================================================================
 // Phase 1: Setup — Parse operators, prepare harness
 // =============================================================================
@@ -262,6 +277,22 @@ Then append:
 })
 
 log(`Setup: ${TARGET_PLATFORM} | ${operators.length} operator(s) | Dtypes: ${SUPPORTED_DTYPES.join(', ')}`)
+
+// --- verification-strategist resolve (once, at Setup): classify the verification
+// NEED per phase (prune for Lint screening, confirm for Compile-Test acceptance)
+// and let the substrate pick the method + stamp confidence. The agent only
+// classifies (fuzzy need × host probe); the strategist owns method+confidence.
+// Honored in the Lint and Compile-Test prompts below. ---
+const _vsp = await agent(
+  `Classify the host verification capability for this TritorX session on ${TARGET_PLATFORM} (${TRITON_DIALECT}). ` +
+  `Probe: is a Triton compiler available (compiler=true)? is the test harness runnable (harness_runnable=${!!TEST_CMD || STRICT_HARNESS})? is a numerical reference available (reference_available=${!!TEST_CMD})? ` +
+  `Then run the strategist TWICE with the same host probe and write both results to the trajectory:\n` +
+  `1. Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/verification/verification_strategist.py resolve --need prune --host-probe '<probe json>' --cache ${EXP_DIR}/verify_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`\n` +
+  `2. Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/verification/verification_strategist.py resolve --need confirm --host-probe '<probe json>' --cache ${EXP_DIR}/verify_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`\n` +
+  `Return JSON {prune: <stdout1 verbatim>, confirm: <stdout2 verbatim>} where each value has {method, confidence, evidence_source, requires, abstained_from, rationale}.`,
+  { model: MODEL.mechanical, label: 'verification-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+if (_vsp && _vsp.prune && _vsp.prune.method) VERIFICATION_PRUNE = _vsp.prune
+if (_vsp && _vsp.confirm && _vsp.confirm.method) VERIFICATION_CONFIRM = _vsp.confirm
 
 // =============================================================================
 // Per-Operator Generation Loop
@@ -373,6 +404,8 @@ ${TARGET_PLATFORM === 'MTIA' ? '6. Memory access must be 32-byte aligned\n7. Onl
 
 ${LINT_CMD ? `Also run: ${LINT_CMD}` : ''}
 
+Verification-strategist selected method='${VERIFICATION_PRUNE.method}' (confidence='${VERIFICATION_PRUNE.confidence}', evidence='${VERIFICATION_PRUNE.evidence_source}'). Honor it: if method==='reference_test', run the full reference numerical comparison and tag the verdict evidence='correctness'. If 'smoke_test', compile+run for shape/finiteness only, tag evidence='runtime'. If 'compile_lint', compile+lint only (no execution), tag evidence='compile'. If 'static', reason from source only (evidence='llm_inferred'). Never fabricate a pass verdict you did not actually run.
+
 Return lint results.
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
@@ -427,6 +460,8 @@ ${currentWrapper.substring(0, 2000)}
    - Execute on ${TARGET_PLATFORM}
    - Compare output against PyTorch reference (CPU ATen)
    - Check numerical tolerance (dtype-dependent)
+
+Verification-strategist selected method='${VERIFICATION_CONFIRM.method}' (confidence='${VERIFICATION_CONFIRM.confidence}', evidence='${VERIFICATION_CONFIRM.evidence_source}'). Honor it: if method==='reference_test', run the full reference numerical comparison and tag the verdict evidence='correctness'. If 'smoke_test', compile+run for shape/finiteness only, tag evidence='runtime'. If 'compile_lint', compile+lint only (no execution), tag evidence='compile'. If 'static', reason from source only (evidence='llm_inferred'). Never fabricate a pass verdict you did not actually run.
 
 Report: compilation status, tests passed/failed, error details.
 

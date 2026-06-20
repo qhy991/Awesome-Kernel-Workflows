@@ -1,0 +1,36 @@
+{
+  "schema_version": 2,
+  "_doc": "GENERIC profiling ladder + stamping. The per-backend native profiler is NOT listed here -- it is read from each backend's manifest.json (the SSOT: profiler.name + capabilities.metrics + profiler.to_evidence), so this file never drifts from the backends. This registry only defines: the fallback methods, the order to try them, how to stamp each kind, and probe-tool aliases for backends whose profiler name != host binary.",
+  "ladder": ["native", "perf_heuristic", "static"],
+  "native_stamp": {
+    "kind": "native_profiler",
+    "evidence": "native_profiler",
+    "confidence": "measured",
+    "_note": "Generic stamp for a native hw profiler. The strategist overrides evidence to 'ncu' when profiler_name is literally ncu (Nsight Compute); other native profilers (rocprof/msprof/vtune/metal-capture) keep 'native_profiler' so provenance is honest rather than借用 ncu."
+  },
+  "fallback_methods": {
+    "perf_heuristic": {
+      "kind": "throughput",
+      "profiler": "test-harness-perf",
+      "evidence": "profile_heuristic",
+      "confidence": "inferred",
+      "metrics": ["latency_ms", "dram_pct", "sm_pct"],
+      "normalizer": "perf_to_evidence.py",
+      "requires": "throughput_runnable"
+    },
+    "static": {
+      "kind": "static",
+      "profiler": "source-read",
+      "evidence": "llm_inferred",
+      "confidence": "hypothesized",
+      "metrics": [],
+      "normalizer": null
+    }
+  },
+  "probe_tool_alias": {
+    "metal-capture": "xcrun",
+    "rocprofv3": "rocprofv3",
+    "proton": "python3",
+    "mcProfiler": "mcProfiler"
+  }
+}

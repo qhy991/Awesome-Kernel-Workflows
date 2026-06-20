@@ -440,6 +440,22 @@ Then append:
   },
 })
 
+// --- profiling-strategist: pick the analysis METHOD per backend×task×host, then
+// honor it below. The agent only classifies the task (fuzzy op_class/size); the
+// substrate strategist DETERMINISTICALLY picks the method and STAMPS confidence by
+// method (measured/inferred/hypothesized) -- the model must NOT assign confidence.
+// Falls back to native_profiler so the happy path is unchanged if the call returns
+// nothing. Downstream diagnose.py bottleneck classification stays unchanged. ---
+let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
+if (USE_DRIVER) {
+  const _pd = await agent(
+    `Read ${KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
+    `run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${driverPath('manifest.json')} --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.\n` +
+    `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
+    { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (_pd && _pd.method) PROFILING_DECISION = _pd
+}
+
 if (USE_DRIVER) {
   const kPath = KERNEL_PATH || `${EXP_DIR}/baseline.kernel`
   const buildOut = `${EXP_DIR}/baseline.artifact`
@@ -452,14 +468,26 @@ if (USE_DRIVER) {
     `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
     `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
     { model: MODEL.profile, label: 'driver-run-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
-  await agent(
-    `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
-    `Return {ok, native_path}.`,
-    { model: MODEL.profile, label: 'driver-profile-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
-  const evidenceOut = await agent(
-    `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
-    `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-    { model: MODEL.mechanical, label: 'driver-to-evidence-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  let evidenceOut
+  if (PROFILING_DECISION.method === 'native_profiler') {
+    await agent(
+      `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+      `Return {ok, native_path}.`,
+      { model: MODEL.profile, label: 'driver-profile-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    evidenceOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+      { model: MODEL.mechanical, label: 'driver-to-evidence-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  } else {
+    evidenceOut = await agent(
+      `Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'); do NOT run a native profiler (profile.sh). ` +
+      `Use the run.sh latency/throughput from above. ` +
+      (PROFILING_DECISION.method === 'perf_heuristic'
+        ? `Normalize that throughput into canonical metrics via \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/${PROFILING_DECISION.normalizer || 'perf_to_evidence.py'} --artifact ${buildOut} --kernel ${kPath} --out ${profOut}\`. Tag every emitted bottleneck with evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. `
+        : ``) +
+      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend, profiler_available:false}.`,
+      { model: MODEL.profile, label: 'driver-perf-evidence-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  }
   await agent(
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
     `Return stdout JSON verbatim {bottleneck_class, evidence}.`,

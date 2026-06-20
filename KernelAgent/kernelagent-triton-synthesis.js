@@ -239,6 +239,13 @@ let composedKernel = null         // Final composed Triton program
 let refinementHistory = []        // [{candidate_id, round, prev_error, new_code, fixed}]
 let sessionDir = ''               // Artifact directory
 
+// --- verification-strategist decisions (additive; defaults keep happy path) ---
+// VERIFICATION_PRUNE gates the parallel Generate screening depth; VERIFICATION_CONFIRM
+// gates the Verify/Compose acceptance depth. Populated in Setup; the actual correctness
+// verdict still belongs to the PyTorch test harness below.
+let VERIFICATION_PRUNE = { method: 'compile_lint', confidence: 'inferred', evidence_source: 'compile' }
+let VERIFICATION_CONFIRM = { method: 'reference_test', confidence: 'measured', evidence_source: 'correctness' }
+
 // =============================================================================
 // Helper: Disallowed PyTorch patterns (from KernelAgent worker.py)
 // =============================================================================
@@ -429,6 +436,26 @@ Return ONLY the Python test code (no markdown, no explanation).`, {
 testCode = testResult.test_code
 log(`Test harness generated (${testCode.length} chars)`)
 
+// verification-strategist: classify the verification NEED per phase (prune for
+// cheap screening of the parallel Generate candidates; confirm for deep Verify/Compose
+// acceptance) and let the substrate DETERMINISTICALLY map (need x host) -> method +
+// stamp confidence. Computed once per session; the vars gate the Generate/Verify
+// guidance sentences below. The model picks the fuzzy need; it must NOT assign
+// confidence itself. The actual correctness verdict still belongs to the test harness.
+const _vp = await agent(
+  `Classify the verification need for the parallel Generate screening phase as 'prune' (cheap early filter of many diverse seed candidates). Then ` +
+  `run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/verification/verification_strategist.py resolve --need prune --host-probe '{"compiler":true,"harness_runnable":true,"reference_available":false}' --cache ${EXP_DIR}/verify_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.\n` +
+  `Return its stdout JSON verbatim {method, evidence_source, confidence, requires, abstained_from, rationale}.`,
+  { model: MODEL.mechanical, label: 'verification-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+if (_vp && _vp.method) VERIFICATION_PRUNE = _vp
+const _vc = await agent(
+  `Classify the verification need for the final Verify/Compose acceptance phase as 'confirm' (deep acceptance of a surviving candidate). Then ` +
+  `run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/verification/verification_strategist.py resolve --need confirm --host-probe '{"compiler":true,"harness_runnable":true,"reference_available":false}' --cache ${EXP_DIR}/verify_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.\n` +
+  `Return its stdout JSON verbatim {method, evidence_source, confidence, requires, abstained_from, rationale}.`,
+  { model: MODEL.mechanical, label: 'verification-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+if (_vc && _vc.method) VERIFICATION_CONFIRM = _vc
+log(`Verification-strategist: prune=${VERIFICATION_PRUNE.method}/${VERIFICATION_PRUNE.confidence} confirm=${VERIFICATION_CONFIRM.method}/${VERIFICATION_CONFIRM.confidence}`)
+
 // Initialize experiment directory
 sessionDir = `${EXP_DIR}/session_${Date.now()}`
 log(`Session directory: ${sessionDir}`)
@@ -587,6 +614,9 @@ ${seedIdx === 1 ? 'Try a different tiling strategy or block size.' : ''}
 ${seedIdx === 2 ? (USE_DRIVER ? 'Consider using vectorized memory access or a different memory layout.' : 'Consider using vectorized loads (tl.load with mask) or different memory layout.') : ''}
 ${seedIdx >= 3 ? 'Explore an alternative algorithmic approach.' : ''}
 
+# Verification Depth (verification-strategist, prune screening)
+Verification-strategist selected method='${VERIFICATION_PRUNE.method}' (confidence='${VERIFICATION_PRUNE.confidence}', evidence='${VERIFICATION_PRUNE.evidence_source}'). Honor it: if method==='reference_test', run the full PyTorch reference numerical comparison and tag the verdict evidence='correctness'. If 'smoke_test', compile+run for shape/finiteness only, tag evidence='runtime'. If 'compile_lint', compile+lint only (no execution), tag evidence='compile'. If 'static', reason from source only (evidence='llm_inferred'). Never fabricate a pass verdict you did not actually run.
+
 # Output
 Return a JSON object with:
 - kernel_code: ${USE_DRIVER ? `complete source file with ${DRIVER_LANG_FENCE} kernel(s) and a callable wrapper` : 'complete Python file with @triton.jit kernel and kernel_function wrapper'}
@@ -670,6 +700,9 @@ ${testCode.substring(0, 3000)}
 4. Capture stdout, stderr, and exit code
 5. If exit code is 0 and output contains "PASS", the kernel is verified
 6. If exit code is non-zero or output contains "FAIL", report the error
+
+# Verification Depth (verification-strategist, confirm acceptance)
+Verification-strategist selected method='${VERIFICATION_CONFIRM.method}' (confidence='${VERIFICATION_CONFIRM.confidence}', evidence='${VERIFICATION_CONFIRM.evidence_source}'). Honor it: if method==='reference_test', run the full PyTorch reference numerical comparison and tag the verdict evidence='correctness'. If 'smoke_test', compile+run for shape/finiteness only, tag evidence='runtime'. If 'compile_lint', compile+lint only (no execution), tag evidence='compile'. If 'static', reason from source only (evidence='llm_inferred'). Never fabricate a pass verdict you did not actually run.
 
 # Verification Rules
 - ${USE_DRIVER ? `The kernel MUST follow the ${DRIVER_LANG_FENCE} backend idiom (no torch.nn fallbacks allowed)` : 'The kernel MUST use @triton.jit (no torch.nn fallbacks allowed)'}

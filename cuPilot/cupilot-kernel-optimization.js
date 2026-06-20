@@ -203,6 +203,19 @@ const MODEL = {
 const EVIDENCE_MODE = (COMPILE_CMD && TEST_CMD && NCU_CMD && STRATEGY_CORPUS_PATH)
   ? 'measured'
   : 'conservative_missing_evidence'
+
+// --- shared profiling-strategist plumbing (bespoke raw-ncu family: no backend
+// driver, so the strategist resolves against the CUDA substrate manifest and
+// the existing ncu prompt below honors its decision). ---
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const PY = args.substrate_command_prefix || ''
+const BACKEND_MANIFEST = args.backend_manifest || `${SUBSTRATE}/backends/cuda/manifest.json`
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+function substrateInstruction(script, cliArgs) {
+  const p = `${SUBSTRATE}/${script}`
+  return PY ? `Run exactly: \`${PY} ${p} ${cliArgs}\`.`
+            : `No substrate_command_prefix for ${p} ${cliArgs}; do not invent an interpreter.`
+}
 if (!KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
   throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
 }
@@ -370,6 +383,26 @@ bestKernel = { code: initialKernel, strategy: 'baseline', fitness: 0, speedup: 1
 
 log(`Setup: ${OP_DESC} | Roofline: ${rooflineClass} | Strategy pool: ${strategyPool.length} strategies`)
 log(`Guidance: ${kernelSetup?.roofline_guidance?.substring(0, 100)}...`)
+
+// --- profiling-strategist: pick the analysis METHOD per backend×task×host, then
+// honor it in the ncu/profiling prompt below. The agent only CLASSIFIES the task
+// (fuzzy op_class/size); the substrate DETERMINISTICALLY picks the method and
+// STAMPS confidence by method (measured/inferred/hypothesized) -- the model must
+// NOT assign confidence itself. See _substrate/profiling/README.md. Defaults to
+// native_profiler so happy-path ncu behavior is unchanged if the decision is ignored. ---
+let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
+{
+  const _pd = await agent(
+    `Classify the kernel under optimization. Source: ` +
+    (KERNEL_PATH ? `read ${KERNEL_PATH}` : `operation "${OP_DESC}"${PROBLEM_DEFINITION ? ` / spec:\n${PROBLEM_DEFINITION.substring(0, 1500)}` : ''}`) + `.\n` +
+    `Pick op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
+    substrateInstruction('profiling/profiling_strategist.py',
+      `resolve --backend-manifest ${BACKEND_MANIFEST} --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
+    ` Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
+    { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (_pd && _pd.method) PROFILING_DECISION = _pd
+}
+log(`Profiling method: ${PROFILING_DECISION.method} (confidence=${PROFILING_DECISION.confidence})`)
 
 // =============================================================================
 // Evolutionary Loop: Epochs × Generations
@@ -543,6 +576,8 @@ If performance is suboptimal, use NCU feedback to make ONE targeted improvement.
 Then return to Step 1.
 
 If a kernel cannot be fixed after ${MAX_REVISE_LOOPS} attempts, mark it as failed.
+
+Profiling-strategist selected method='${PROFILING_DECISION.method}', confidence='${PROFILING_DECISION.confidence}'. If method !== 'native_profiler', do NOT run ncu/Nsight; instead measure throughput (latency, and GFLOPS/GB-s if available) and stamp every emitted bottleneck with evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. If method === 'native_profiler', proceed with ncu as written.
 
 Return the final revised kernel and its metrics.
 

@@ -26,6 +26,20 @@ const MODEL = {
 // __modelTierApplied
 // --- END model-tier ---
 
+// --- profiling-strategist substrate wiring (additive; FACT has no native
+// profiler, so the strategist resolves against the canonical CUDA manifest and
+// ADDS strategist-routed profiling availability for the ablation stage). Task is
+// fixed to 'gemm' (FACT is CUTLASS-GEMM centric); the agent only classifies size;
+// the substrate stamps method+confidence. ---
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const SUBSTRATE_PY = args.substrate_command_prefix || 'python3'
+const STRATEGIST_MANIFEST = args.backend_manifest || `${SUBSTRATE}/backends/cuda/manifest.json`
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+
+// Top-level profiling decision; overwritten only on a valid strategist response.
+// Defaults keep the happy path (discover/realize/compose loop) unchanged if ignored.
+let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured' }
+
 const WORKFLOW_NAME = 'fact-kernel-optimization'
 
 
@@ -292,6 +306,23 @@ Then append:
   const kernelSpec = setupResult.kernel_spec;
   const discoveryDepth = setupResult.discovery_depth || 3;
   const compositionBudget = setupResult.composition_budget || 50;
+
+  // --- profiling-strategist: classify the GEMM problem SIZE (task fixed to
+  // 'gemm'; FACT is CUTLASS-GEMM centric), then let the substrate
+  // DETERMINISTICALLY pick the profiling method and STAMP confidence. The agent
+  // must NOT assign confidence. Default keeps the happy path unchanged if the
+  // decision is ignored. Useful for the ablation stage; does not disturb the
+  // discover/realize/compose loop. ---
+  const _pd = await agent(`Classify the GEMM problem SIZE for the profiling strategist (the task is fixed to 'gemm'; you classify size only — one of tiny|small|large — based on the target operation ${kernelSpec.operation}, shapes ${kernelSpec.shapes}, and dtypes ${kernelSpec.dtypes.join(', ')}).
+Then run exactly: \`${SUBSTRATE_PY} ${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${STRATEGIST_MANIFEST} --task gemm --size <tiny|small|large> --cache ${args.exp_dir}/prof_cache.json --trajectory ${args.exp_dir}/genome.jsonl\`
+Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}. Do NOT assign confidence yourself — the substrate stamps it.`, {
+    model: MODEL.mechanical,
+    label: 'profiling-strategist',
+    phase: 'Setup',
+    schema: JSON_PASSTHROUGH,
+  })
+  if (_pd && _pd.method) PROFILING_DECISION = _pd
+  log(`Profiling-strategist: method=${PROFILING_DECISION.method} confidence=${PROFILING_DECISION.confidence}`)
 
   // Pattern registry: T(rule, dtype, architecture) -> code transformation
   const patternRegistry = [];
@@ -619,6 +650,8 @@ Ablation process:
 3. Execute ablation variants on ${setupResult.target_architecture}
 4. Measure performance impact of each pattern
 5. Identify critical patterns vs marginal patterns
+
+Profiling-strategist selected method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'). If method==='native_profiler', you MAY run ncu for bottleneck evidence during ablation. If method==='perf_heuristic', derive memory-vs-compute-bound hints from benchmark throughput and tag them evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. If method==='static', reason from source only (confidence='hypothesized'). Never fabricate profiler counters.
 
 Return JSON:
 {

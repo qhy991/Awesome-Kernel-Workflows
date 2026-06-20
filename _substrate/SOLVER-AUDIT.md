@@ -78,8 +78,6 @@ Schema: core_loop · authoritative_feedback (executable vs prompt) · distinctiv
 
 ### Newer additions
 
-**ArchAgent** — cache-replacement policy (L2C) discovery via island-model + MAP-Elites · Initialize→Short eval→Evolve→Island migration(every 5 gen)→Long eval(best 5)→Validation(anti-cheat)→Report · **feedback:** ChampSim simulator, executable; fitness = speedup vs LRU − LOC penalty, held-out traces · **borrow:** anti-cheating audit (hardcoded-pattern detection + held-out validation) ensuring genuine, non-overfit progress · **fidelity:** real (ChampSim IPC).
-
 **CutlassGEMM** — NCU-guided GEMM tuning with ceiling detection + cuBLAS hybrid · Analyze→Baseline(4-way dispatch)→one-shot NCU→tile tuning(actionable M only)→ceiling gate→hybrid fallback→MFU report · **feedback:** SOL-ExecBench + NCU, executable · **borrow:** ceiling detection — when M<threshold shows flat latency, switch to cuBLAS instead of tuning (applies to any overhead-bound kernel) · **fidelity:** real.
 
 **FACT** — compositional synthesis: discover patterns from exemplars → realize as CUTLASS templates → compose → ablate · Setup→Pattern discovery→Realization(templates+constraints)→Composition(greedy, dependency-aware)→Ablation(leave-one-out)→Evaluation→Report · **feedback:** CUTLASS compile+correct + GFLOPS; ablation isolates each pattern's measured contribution · **borrow:** discovery→realization→composition→ablation; separates mechanism from measured payoff · **fidelity:** real.

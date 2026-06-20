@@ -467,6 +467,28 @@ if (setupResult.loaded_db && setupResult.loaded_db.optimization_strategies) {
 
 log(`Baseline: ${opType}, kernels: ${setupResult.key_functions.join(', ')}`)
 
+// --- profiling-strategist: pick the analysis METHOD per backend×task×host, then
+// honor it below. The agent only classifies the task (fuzzy op_class/size); the
+// substrate strategist DETERMINISTICALLY picks the method and STAMPS confidence by
+// method (measured/inferred/hypothesized) -- the model must NOT assign confidence.
+// Falls back to native_profiler (NCU 'measured') so the happy path is unchanged.
+// When method !== native_profiler, NCU elapsed-cycle/state metrics are unavailable,
+// so the hardware-state classification + any DB write are stamped as inferred. ---
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const PY = args.substrate_command_prefix || ''
+const BACKEND_MANIFEST = args.backend_manifest || `${SUBSTRATE}/backends/cuda/manifest.json`
+const STRATEGIST_SIZE = args.profiling_size || 'large'
+let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured' }
+const _pd = await agent(`Read ${KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default; the kernel is op_type='${opType}', op_description='${OP_DESC}') and size (tiny|small|large; default '${STRATEGIST_SIZE}'). Then run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${BACKEND_MANIFEST} --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.
+Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`, {
+  model: MODEL.mechanical,
+  label: 'profiling-strategist',
+  phase: 'Setup',
+  schema: { type: 'object', additionalProperties: true },
+})
+if (_pd && _pd.method) PROFILING_DECISION = _pd
+log(`Profiling-strategist: method=${PROFILING_DECISION.method}, confidence=${PROFILING_DECISION.confidence}`)
+
 // NCU baseline profile -> Elapsed Cycles + Speed-of-Light metrics
 const ncuBaseline = await agent(`You are a CUDA profiling expert using Nsight Compute (ncu). Profile the baseline kernel and report Elapsed Cycles plus Speed-of-Light metrics.
 
@@ -494,7 +516,8 @@ ${baselineKernel.substring(0, 4000)}
    Do not invent a profiler command, harness, or benchmark binary.
 4. If profiling is unavailable, fall back to user-provided test_command/benchmark_command if present; otherwise use static analysis and mark cycles as missing evidence.
 
-Return the parsed metrics.`, { model: MODEL.profile,
+Return the parsed metrics.
+Profiling-strategist selected method='${PROFILING_DECISION.method}', confidence='${PROFILING_DECISION.confidence}'. If method !== 'native_profiler', NCU elapsed-cycle/state metrics are unavailable — derive the hardware-performance state from throughput/perf evidence instead, mark the state classification and any DB write as confidence='${PROFILING_DECISION.confidence}' (inferred, NOT measured), and do NOT fabricate NCU counters. If method === 'native_profiler', proceed with NCU as written.`, { model: MODEL.profile,
   label: 'ncu-baseline',
   phase: 'Setup',
   schema: {
@@ -557,6 +580,7 @@ ${ncuBaseline.profile_summary}
 
 Re-profile only if ncu_binary and run_cmd were provided; otherwise reason from the metrics above and the code, and mark missing profiler evidence explicitly.
 Return the classification.
+Profiling-strategist selected method='${PROFILING_DECISION.method}', confidence='${PROFILING_DECISION.confidence}'. If method !== 'native_profiler', NCU elapsed-cycle/state metrics are unavailable — derive the hardware-performance state from throughput/perf evidence instead, mark the state classification and any DB write as confidence='${PROFILING_DECISION.confidence}' (inferred, NOT measured), and do NOT fabricate NCU counters. If method === 'native_profiler', proceed with NCU as written.
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ

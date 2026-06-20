@@ -272,6 +272,12 @@ let DRIVER_IMPL_REQUIREMENTS = ''
 let DRIVER_SOURCE_EXT = LEGACY_SOURCE_EXT
 let DRIVER_FEATURE_CATALOG = ''
 let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
+// --- profiling-strategist: pick the analysis METHOD per backend x task x host,
+// then honor it at the profile step below. The agent only classifies the task
+// (fuzzy op_class/size); the substrate stamps confidence by method
+// (measured/inferred/hypothesized) -- not the agent. See
+// _substrate/profiling/README.md. Falls back to native_profiler if undecided. ---
+let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
 
 function langToken(legacy) {
   return USE_DRIVER ? DRIVER_LANG_FENCE : legacy
@@ -358,6 +364,18 @@ if (USE_DRIVER) {
   DRIVER.profiler_name = DRIVER.profiler_name || (DRIVER.profiler && DRIVER.profiler.name) || null
   DRIVER.profiler_format = DRIVER.profiler_format || (DRIVER.profiler && DRIVER.profiler.format) || 'ncu-csv'
   log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE}, profiler=${DRIVER.profiler_name || 'none'})`)
+
+  // profiling-strategist: classify the task (fuzzy op_class/size from the
+  // reference/source kernel) and let the substrate pick method + stamp
+  // confidence. Computed once per task; PROFILING_DECISION gates the
+  // profile.sh / ncu branch in the Evaluate loop below.
+  const _pd = await agent(
+    `Read ${PROFILE_SOURCE_PATH || REFERENCE_CODE_PATH || TASK_SPEC_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
+    `run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${BACKEND_DIR}/manifest.json --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.\n` +
+    `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
+    { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (_pd && _pd.method) PROFILING_DECISION = _pd
+  log(`Profiling-strategist: method=${PROFILING_DECISION.method} confidence=${PROFILING_DECISION.confidence} normalizer=${PROFILING_DECISION.normalizer || 'none'}`)
 }
 
 const setup = await agent(`You are a ${langToken(LEGACY_SETUP_LANG_TOKEN)} kernel generation expert. Read and structure this CUDA-LLM task.
@@ -679,14 +697,37 @@ Then append, using the values you just measured (status="done" only if compiled 
         `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath} --result ${rPath}`)}\n` +
         `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
         { model: MODEL.profile, label: `driver-run-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
-      const profilePointer = await agent(
-        `${driverSh('profile.sh', buildProfileShArgs(buildOut, iteration, sample))}\n` +
-        profileStepFooter() +
-        `Return stdout JSON verbatim {ok, profiler, native_profile, format, error}.`,
-        { model: MODEL.profile, label: `driver-profile-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
-      const evidenceOut = await agent(
-        buildToEvidencePrompt(profilePointer),
-        { model: MODEL.mechanical, label: `driver-to-evidence-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      let profilePointer = null
+      let evidenceOut = null
+      if (PROFILING_DECISION.method === 'native_profiler') {
+        profilePointer = await agent(
+          `${driverSh('profile.sh', buildProfileShArgs(buildOut, iteration, sample))}\n` +
+          profileStepFooter() +
+          `Return stdout JSON verbatim {ok, profiler, native_profile, format, error}.`,
+          { model: MODEL.profile, label: `driver-profile-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+        evidenceOut = await agent(
+          buildToEvidencePrompt(profilePointer),
+          { model: MODEL.mechanical, label: `driver-to-evidence-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      } else {
+        // profiling-strategist chose a non-native method (e.g. perf_heuristic);
+        // do NOT run profile.sh / ncu. run.sh already produced throughput
+        // (latency_ms; GFLOPS/GB-s if reported). When method==='perf_heuristic',
+        // normalize that throughput into canonical metrics via the strategist
+        // normalizer (substrate profiling/<normalizer>), tagging bottlenecks
+        // evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'.
+        const _norm = PROFILING_DECISION.normalizer || 'perf_to_evidence.py'
+        evidenceOut = await agent(
+          `Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'); do NOT run ${DRIVER.profiler_name || 'a native profiler'}.\n` +
+          `run.sh already wrote throughput to ${rPath}. ` +
+          (PROFILING_DECISION.method === 'perf_heuristic'
+            ? `Normalize that throughput into canonical metrics via ` +
+              `run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/${_norm} --baseline ${rPath} --peak-gflops <device_peak_gflops> --peak-gbs <device_peak_gbs>\`.\n` +
+              `Return its stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}. ` +
+              `Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'.`
+            : `Return {ok:true, metrics:{latency_ms:<from ${rPath}>,dram_pct:null,sm_pct:null,occupancy:null}, coverage:[], source_backend:"${DRIVER_BACKEND_ID}"}.`) +
+          `\nReturn {ok, metrics, coverage, source_backend}.`,
+          { model: MODEL.mechanical, label: `driver-to-evidence-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      }
       const diagOut = await agent(
         `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
         `Return stdout JSON verbatim {bottleneck_class, evidence}.`,

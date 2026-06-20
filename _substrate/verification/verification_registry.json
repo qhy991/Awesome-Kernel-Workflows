@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "_doc": "GENERIC verification ladder + stamping for GENERATOR workflows (TritorX, KernelAgent, ...) that have no performance signal -- the routed quantity is VERIFICATION DEPTH, not a profiler. Same skeleton as profiler_registry.json: a ladder tried in order, each rung gated by host capability, confidence stamped by method (never by the agent). evidence values reuse the existing evidence_schema EVIDENCE enum (correctness/runtime/compile/llm_inferred) -- no new enum needed.",
+  "needs": ["prune", "confirm", "default"],
+  "ladder": ["reference_test", "smoke_test", "compile_lint", "static"],
+  "methods": {
+    "reference_test": {
+      "kind": "reference",
+      "evidence": "correctness",
+      "confidence": "measured",
+      "requires": ["reference_available", "harness_runnable"],
+      "_doc": "run the candidate against a reference op, numerical comparison (allclose/MAA). deepest, most trusted."
+    },
+    "smoke_test": {
+      "kind": "execute",
+      "evidence": "runtime",
+      "confidence": "measured",
+      "requires": ["harness_runnable"],
+      "_doc": "compile + run on sample inputs; check shapes/finiteness/no-crash, no reference comparison."
+    },
+    "compile_lint": {
+      "kind": "static_compile",
+      "evidence": "compile",
+      "confidence": "inferred",
+      "requires": ["compiler"],
+      "_doc": "compile + lint only; no execution. cheap prune signal."
+    },
+    "static": {
+      "kind": "static",
+      "evidence": "llm_inferred",
+      "confidence": "hypothesized",
+      "requires": [],
+      "_doc": "source read only; always available."
+    }
+  },
+  "need_ladder": {
+    "prune":   ["compile_lint", "static"],
+    "confirm": ["reference_test", "smoke_test", "compile_lint", "static"],
+    "default": ["reference_test", "smoke_test", "compile_lint", "static"]
+  },
+  "_note_need": "prune intentionally skips reference_test/smoke_test -- do not pay execution cost during early pruning; confirm walks the full ladder to the deepest method the host supports."
+}

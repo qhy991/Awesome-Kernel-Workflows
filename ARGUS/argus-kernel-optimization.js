@@ -27,6 +27,9 @@ const MODEL = {
 
 const WORKFLOW_NAME = 'argus-kernel-optimization'
 
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+
 
 // --- BEGIN inlined arg_guard (Workflow runtime parses scripts as bare scripts,
 //                              not ES modules; static imports are rejected) ---
@@ -325,6 +328,27 @@ const KNOWLEDGE_BASE = {
 // =============================================================================
 phase('Setup')
 
+// --- profiling-strategist: ADDITIVE extra-evidence routing. ARGUS has no native
+// profiler; this lets the planner/validator OPTIONALLY consult one (native if the
+// host has one, else perf_heuristic) alongside the invariant/test loop. The agent
+// only classifies the task (fuzzy op_class/size); the substrate DETERMINISTICALLY
+// picks the method and stamps confidence (measured/inferred/hypothesized) -- NOT
+// the agent. See _substrate/profiling/README.md. Falls back to native_profiler.
+let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured' }
+{
+  const _profilerManifest = args.backend_manifest || `${SUBSTRATE}/backends/cuda/manifest.json`
+  const _pd = await agent(
+    `Classify this GPU kernel's op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large) from its spec/path: ` +
+    `kernel_spec="${KERNEL_SPEC}", kernel_path="${KERNEL_PATH}", computation hint from hardware target ${HARDWARE_TARGET}. Then ` +
+    `Run exactly: \`${SUBSTRATE}/profiling/profiling_strategist.py resolve ` +
+    `--backend-manifest ${_profilerManifest} --task <op_class> --size <size> ` +
+    `--cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.\n` +
+    `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
+    { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (_pd && _pd.method) PROFILING_DECISION = _pd
+  log(`Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}')`)
+}
+
 if (INPUT_MODE === 'generate_then_optimize') {
   const generated = await agent(`No kernel_path was provided. Generate and verify an initial kernel before starting ARGUS ICRL optimization.
 
@@ -502,6 +526,9 @@ ${recentViolations.length > 0 ? recentViolations.map(v => `- ${v}`).join('\n') :
 ${plannerPolicy || 'No policy learned yet — propose based on knowledge base and missing optimizations.'}
 
 # Categories to explore: ${OPT_CATEGORIES.join(', ')}
+
+# Profiling evidence routing (ADDITIVE — do not let it disturb the invariant/test loop):
+Profiling-strategist selected method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'). If method==='native_profiler', you MAY consult a native profiler for bottleneck evidence alongside the invariant/test evidence. If method==='perf_heuristic', derive memory-vs-compute-bound hints from benchmark throughput and tag them evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. If method==='static', reason from source only (confidence='hypothesized'). Never fabricate profiler counters.
 
 # Task (ARGUS Section 6 — Learnable Planner):
 Generate a RANKED list of 3-5 optimization proposals. For each:

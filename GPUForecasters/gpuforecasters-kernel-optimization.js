@@ -38,6 +38,19 @@ const MODEL = {
 
 const WORKFLOW_NAME = 'gpuforecasters-kernel-optimization'
 
+// --- shared profiling-strategist plumbing (benchmark-heavy forecaster workflow:
+// no native profiler of its own, so the strategist resolves against the CUDA
+// substrate manifest and the forecast/evaluate prompt below honors its decision). ---
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const PY = args.substrate_command_prefix || ''
+const BACKEND_MANIFEST = args.backend_manifest || `${SUBSTRATE}/backends/cuda/manifest.json`
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+function substrateInstruction(script, cliArgs) {
+  const p = `${SUBSTRATE}/${script}`
+  return PY ? `Run exactly: \`${PY} ${p} ${cliArgs}\`.`
+            : `No substrate_command_prefix for ${p} ${cliArgs}; do not invent an interpreter.`
+}
+
 
 // --- BEGIN inlined arg_guard (Workflow runtime parses scripts as bare scripts,
 //                              not ES modules; static imports are rejected) ---
@@ -346,11 +359,35 @@ function embeddedPlanFor(candidatePath, variantSeed) {
 // Based on arXiv:2605.31464 (MIT)
 // Implements surrogate models with abstention + PUCT tree search
 
+// --- profiling-strategist: pick the analysis METHOD per backend×task×host, then
+// honor it in the forecast/evaluate prompt below. The agent only CLASSIFIES the
+// task (fuzzy op_class/size); the substrate DETERMINISTICALLY picks the method and
+// STAMPS confidence by method (measured/inferred/hypothesized) -- the model must
+// NOT assign confidence itself. See _substrate/profiling/README.md. Defaults to
+// native_profiler so the happy-path forecast/execute loop is unchanged if the
+// decision is ignored; only overwritten on a valid strategist response. ---
+let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured' }
+
 async function main() {
   // ============================================================================
   // Phase 1: Setup
   // ============================================================================
   phase('Setup');
+
+  // Classify the kernel and resolve the profiling method via the shared
+  // profiling-strategist (deterministic method pick + confidence stamp).
+  {
+    const _pd = await agent(
+      `Classify the kernel under optimization. Source: ` +
+      (KERNEL_PATH ? `read ${KERNEL_PATH}` : `operation "${OP_DESC}"${PROBLEM_DEFINITION ? ` / spec:\n${PROBLEM_DEFINITION.substring(0, 1500)}` : ''}`) + `.\n` +
+      `Pick op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
+      substrateInstruction('profiling/profiling_strategist.py',
+        `resolve --backend-manifest ${BACKEND_MANIFEST} --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
+      ` Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
+      { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    if (_pd && _pd.method) PROFILING_DECISION = _pd
+  }
+  log(`Profiling method: ${PROFILING_DECISION.method} (confidence=${PROFILING_DECISION.confidence})`)
 
   const setupResult = await agent(
     `Set up GPU Forecasters optimization environment:
@@ -701,6 +738,8 @@ Track:
 - Tree statistics (depth, breadth, nodes explored)
 - Best config found
 
+Profiling-strategist selected method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'). If method==='native_profiler', you MAY use ncu metrics as forecaster features. If method==='perf_heuristic', derive memory-vs-compute-bound features from benchmark throughput (latency, GFLOPS/GB-s) and tag them evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. If method==='static', reason from source only (confidence='hypothesized'). Never fabricate profiler counters.
+
 Return JSON:
 {
   "simulations": ${puctSimulations},
@@ -879,6 +918,8 @@ Validation:
 8. Test on different input sizes (if applicable)
 9. Compare with baseline and other methods
 10. If evidence_mode is conservative_missing_evidence, return validation_passed=false unless the user note explicitly authorizes static-only validation
+
+Profiling-strategist selected method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'). If method==='native_profiler', you MAY use ncu metrics as forecaster features. If method==='perf_heuristic', derive memory-vs-compute-bound features from benchmark throughput (latency, GFLOPS/GB-s) and tag them evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. If method==='static', reason from source only (confidence='hypothesized'). Never fabricate profiler counters.
 
 Return JSON:
 {
