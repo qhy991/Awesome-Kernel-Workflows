@@ -14,6 +14,57 @@ export const meta = {
   ],
 }
 
+// --- BEGIN embedded-eval substrate (auto-inlined by scripts/patch-embedded-eval.js) ---
+const EMBEDDING_CONTRACT = [
+  'EMBEDDED-DISPATCH CONTRACT (this kernel is NOT standalone):',
+  '',
+  'You are authoring a kernel that lives INSIDE a larger project and is wired into',
+  'its dispatch table. It cannot be compiled on its own. Therefore:',
+  '',
+  '1. Emit a COMPLETE source file (e.g. a .cuh) that matches the reference',
+  '   dispatch signature exactly -- same entry-point shape, template params, and',
+  '   launch-bounds conventions as the reference file. Do NOT add a main(), a',
+  '   standalone harness, or top-level test code.',
+  '2. Use ONLY symbols/headers the project already provides (project headers,',
+  '   template instantiations, dispatch macros). Do not invent include paths.',
+  '3. Do NOT register, build, or benchmark the variant yourself, and do NOT name',
+  '   any symbol with the variant suffix -- the workflow + adapter handle wiring.',
+  '4. Return ONLY the file contents plus a short rationale citing the concrete',
+  '   design choice (tile shape, register budget, pipelining, GQA packing, etc.).',
+].join('\n')
+
+// Build the ordered evaluation commands for one candidate against a
+// contract-conforming adapter. All fields are plain strings the caller already
+// resolved from `args`. `params`/`unregParams` are opaque pass-through strings
+// (e.g. "--dkq 256 --dv 256 --cmake-build-dir /p/build") that the substrate does
+// not parse -- they belong to the project's adapter.
+function __embeddedEvalPlan(ctx) {
+  const adapter = ctx.adapter                       // e.g. 'python "/abs/llamacpp_register_variant.py"'
+  const variant = ctx.variant                       // unique variant name for this candidate
+  const source = ctx.source                         // path to the candidate source file on disk
+  const root = ctx.projectRoot                       // --project-root
+  const params = ctx.params || ''                    // opaque register params pass-through
+  const unregParams = ctx.unregParams || ''          // opaque unregister params pass-through
+  const q = (s) => `"${s}"`
+  const reg = `${adapter} register --variant ${variant} --source ${q(source)} --project-root ${q(root)}${params ? ' ' + params : ''}`.trim()
+  const unreg = `${adapter} unregister --variant ${variant} --project-root ${q(root)}${unregParams ? ' ' + unregParams : ''}`.trim()
+  const list = `${adapter} list --project-root ${q(root)}`
+  return {
+    register: reg,
+    list,
+    // Project-native build/test/benchmark, run VERBATIM with the variant's env
+    // gate set so the project binary dispatches to this candidate.
+    build: ctx.buildCmd ? `KERSOR_VARIANT=${variant} ${ctx.buildCmd}` : '',
+    test: ctx.testCmd ? `KERSOR_VARIANT=${variant} ${ctx.testCmd}` : '',
+    benchmark: ctx.benchmarkCmd ? `KERSOR_VARIANT=${variant} ${ctx.benchmarkCmd}` : '',
+    unregister: unreg,
+    // Human-orderable sequence + the non-negotiable cleanup invariant.
+    order: ['register', 'list', 'build', 'test', 'benchmark', 'unregister'],
+    cleanupInvariant: `On ANY failure or non-improvement, run the unregister command and confirm via list that ${variant} is gone, leaving the project byte-exact pristine.`,
+  }
+}
+// --- END embedded-eval substrate ---
+
 // __modelTierApplied (declaration pre-existing)
 
 const WORKFLOW_NAME = 'generalist-kernel-optimization'
@@ -229,6 +280,82 @@ const SEED_CANDIDATES = args.seed_candidates || 3
 const STAGNATION_EPS = 0.02   // < 2% improvement counts as no progress (Xe-Forge/KSearch)
 const STAGNATION_LIMIT = 2    // consecutive stagnant rounds -> stop
 
+// --- Project-native integration (llama.cpp embedded kernels via integration-strategist) ---
+const PROJECT_ROOT = args.project_root || args.ggml_root || ''
+const BUILD_CMD = args.build_command || ''
+const TEST_CMD = args.test_command || ''
+const BENCH_CMD = args.benchmark_command || EVAL_CMD || ''
+const REGISTER_SCRIPT = args.register_script || ''
+const REGISTER_PARAMS = args.register_params || ''
+
+function integrationHostProbeJson() {
+  return JSON.stringify({
+    compiler: true,
+    project_build: !!BUILD_CMD,
+    register_script: !!REGISTER_SCRIPT,
+    runtime_registry: false,
+    reversibility_net: true,
+  })
+}
+
+function embeddedInplaceEvalBlock(kernelPath, runDir) {
+  if (!BUILD_CMD || !TEST_CMD) {
+    return '\n# embedded_inplace requires build_command and test_command; cannot eval without them.\n'
+  }
+  const backup = `${runDir}/orig.backup`
+  const bench = BENCH_CMD || TEST_CMD
+  return [
+    '',
+    '# EMBEDDED-INPLACE EVALUATION (integration-strategist -> embedded_inplace)',
+    `Candidate: ${runDir}/kernel | project kernel file: ${kernelPath}`,
+    'Run IN ORDER:',
+    `1. cp -a ${kernelPath} ${backup}`,
+    `2. cp ${runDir}/kernel ${kernelPath}`,
+    `3. Build: ${BUILD_CMD}`,
+    `4. Test: ${TEST_CMD}`,
+    `5. Benchmark: ${bench}`,
+    `6. ALWAYS restore: cp -a ${backup} ${kernelPath} (project must be byte-exact pristine after eval)`,
+    'Parse compiled/correct/latency/speedup strictly from command output; do NOT fabricate.',
+  ].join('\n')
+}
+
+function embeddedDispatchEvalBlock(kernelPath, runDir, variant) {
+  if (!REGISTER_SCRIPT || !PROJECT_ROOT || !BUILD_CMD || !TEST_CMD) {
+    return '\n# embedded_dispatch requires register_script, project_root, build_command, test_command.\n'
+  }
+  const plan = __embeddedEvalPlan({
+    adapter: `python3 "${REGISTER_SCRIPT}"`,
+    variant,
+    source: `${runDir}/kernel`,
+    projectRoot: PROJECT_ROOT,
+    params: REGISTER_PARAMS,
+    buildCmd: BUILD_CMD,
+    testCmd: TEST_CMD,
+    benchmarkCmd: BENCH_CMD || TEST_CMD,
+  })
+  return [
+    '',
+    '# EMBEDDED-DISPATCH EVALUATION (integration-strategist -> embedded_dispatch)',
+    EMBEDDING_CONTRACT,
+    `Reference dispatch signature: ${kernelPath}`,
+    'Run IN ORDER:',
+    `1. Register: ${plan.register}`,
+    `2. List: ${plan.list}`,
+    `3. Build: ${plan.build}`,
+    `4. Test: ${plan.test}`,
+    `5. Benchmark: ${plan.benchmark}`,
+    `6. Unregister: ${plan.unregister}`,
+    `7. List: ${plan.list} (confirm variant is GONE)`,
+    plan.cleanupInvariant,
+  ].join('\n')
+}
+
+function integrationEvalBlock(integMethod, kernelPath, runDir, variant) {
+  if (integMethod === 'embedded_dispatch') return embeddedDispatchEvalBlock(kernelPath, runDir, variant)
+  if (integMethod === 'embedded_inplace') return embeddedInplaceEvalBlock(kernelPath, runDir)
+  return ''
+}
+
 // --- Backend driver wiring (P5e Stage B; off-by-default; legacy path byte-identical) ---
 const BACKEND_DIR = args.backend_dir || ''
 const SUBSTRATE = args.substrate_dir || '_substrate'
@@ -379,6 +506,30 @@ const DRY_LIMIT = 2               // P1.5 — loop-until-dry stop threshold
 const allAttempts = []
 const verifiedInsights = []       // P1.4 — verified typed insights for the Layer A envelope
 
+// --- integration-strategist: route build/test mode (standalone vs embedded_*). Agent
+// classifies can_compile_standalone; substrate stamps build_fidelity + reversible. ---
+let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
+{
+  const probe = integrationHostProbeJson()
+  const rootCli = PROJECT_ROOT ? ` --project-root "${PROJECT_ROOT}"` : ''
+  const _integ = await agent(
+    `Read ${KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+    `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
+    substrateInstruction('integration/integration_strategist.py',
+      `resolve --kernel "${KERNEL_PATH}"${rootCli} --can-standalone <yes|no|uncertain> --host-probe '${probe}' --cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
+    ` Return stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
+    { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+}
+log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
+if (INTEGRATION_DECISION.method === 'derive_adapter') {
+  throw new Error(
+    'integration-strategist returned derive_adapter — provide project_root + build/test commands, ' +
+    'or run /kersor:integrate to derive an adapter first'
+  )
+}
+const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'standalone'
+
 // --- profiling-strategist: pick the analysis METHOD per backend×task×host, then
 // honor it below. The agent only classifies the task (fuzzy); the substrate stamps
 // confidence by method (measured/inferred/hypothesized) — not the agent. See
@@ -394,8 +545,8 @@ if (USE_DRIVER) {
   if (_pd && _pd.method) PROFILING_DECISION = _pd
 }
 
-// --- Baseline driver envelope (Layer-A, USE_DRIVER only) ---
-if (USE_DRIVER) {
+// --- Baseline driver envelope (Layer-A, standalone driver-path only) ---
+if (USE_DRIVER_STANDALONE) {
   const kPath = KERNEL_PATH || `${EXP_DIR}/baseline.kernel`
   const buildOut = `${EXP_DIR}/baseline.artifact`
   const profOut = `${EXP_DIR}/baseline.prof.native`
@@ -524,12 +675,20 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
   phase('Evaluate')
   const evaluated = (await parallel(plans.map((p, i) => () => (async () => {
     const runDir = `${EXP_DIR}/run-${iter}/cand-${i + 1}`
+    const variant = `gen_${iter}_${i + 1}`.replace(/[^A-Za-z0-9_]/g, '_')
+    const integBlock = integrationEvalBlock(INTEGRATION_DECISION.method, KERNEL_PATH, runDir, variant)
+    const embeddedProposal = INTEGRATION_DECISION.method === 'embedded_dispatch'
+      ? `\n\n${EMBEDDING_CONTRACT}\nMatch dispatch signature of ${KERNEL_PATH} exactly.\n`
+      : ''
     const m = await agent(
       `Implement this plan on a COPY of ${best.code_path} into ${runDir}/kernel, respecting the ` +
       `<<<IMPROVE BEGINS/ENDS>>> anchors. Method: ${p.method}. Plan: ${JSON.stringify(p.plan)}.\n` +
-      (EVAL_CMD
-        ? `Then run the benchmark command \`${EVAL_CMD}\` and return the JSON metrics per schema.`
-        : `No benchmark_command provided; do not invent an evaluator. Return compiled=false, correct=false, speedup=0, and missing evidence fields.`) +
+      embeddedProposal +
+      (integBlock
+        ? integBlock + `\nThen map measured results into the JSON metrics schema.`
+        : EVAL_CMD
+          ? `Then run the benchmark command \`${EVAL_CMD}\` and return the JSON metrics per schema.`
+          : `No benchmark_command provided; do not invent an evaluator. Return compiled=false, correct=false, speedup=0, and missing evidence fields.`) +
       `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\n` +
       `Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\n` +
       `Then append, using the values you just measured (status="done" if compiled AND correct, else "error"; speedup is the measured speedup number, or null if unavailable):\n` +
@@ -545,8 +704,8 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
              recorded_speedup: ac.valid ? ac.recorded_speedup : 0 }
   })()))).filter(Boolean)
 
-  // --- Per-iteration driver envelope (Layer-A, USE_DRIVER only) ---
-  if (USE_DRIVER) {
+  // --- Per-iteration driver envelope (Layer-A, standalone driver-path only) ---
+  if (USE_DRIVER_STANDALONE) {
     for (let ci = 0; ci < evaluated.length; ci++) {
       const suffix = `${iter}-${ci + 1}`
       const kPath = evaluated[ci].code_path

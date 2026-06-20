@@ -529,3 +529,7 @@ routing:
   speedup_field: overall_speedup
   fidelity_boundary: substrate_reference
   requires_ncu: false
+  integration_patterns:
+  - standalone
+  - embedded_dispatch
+  - embedded_inplace

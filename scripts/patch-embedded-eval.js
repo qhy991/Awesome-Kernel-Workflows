@@ -32,6 +32,7 @@ const EMBEDDED_WORKFLOWS = [
   'FACT',
   'CUDAAgent',
   'ARGUS',
+  'Generalist',
 ]
 
 const BEGIN = '// --- BEGIN embedded-eval substrate (auto-inlined by scripts/patch-embedded-eval.js) ---'
