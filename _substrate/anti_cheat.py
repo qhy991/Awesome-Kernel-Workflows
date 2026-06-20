@@ -105,11 +105,21 @@ def evaluate(src, m, extra_fallback=(), extra_skip=()):
     reward, reason = robust_reward(m)
     blocking = [f for f in flags if f["type"] in BLOCKING]
     valid = (reward >= 0) and (not blocking)
-    recorded = float(m.get("claimed_speedup") or 0.0) if (valid and reward >= 2) else 0.0
+    # recorded_speedup: the reward-weighted speedup that may enter the beam/memory
+    # (only when reward>=2, i.e. a real win over baseline). A valid compile+correct
+    # run that merely doesn't beat the reward threshold (e.g. ~1.0x SMOKE, or a
+    # sub-path win that loses on aggregate geomean) would record 0 here — which
+    # misled consumers into reading a valid run as a failure. measured_speedup is
+    # the actual measured value whenever the attempt is valid, independent of the
+    # reward gate, so SMOKE/target-not-met-but-valid attempts are not misread as 0.
+    claimed = float(m.get("claimed_speedup") or 0.0)
+    recorded = claimed if (valid and reward >= 2) else 0.0
+    measured = claimed if valid else 0.0
     return {
         "valid": valid,
         "reward": reward,
         "recorded_speedup": recorded,
+        "measured_speedup": measured,
         "reward_reason": reason,
         "flags": flags,
         "blocking_flags": [f["type"] for f in blocking],
