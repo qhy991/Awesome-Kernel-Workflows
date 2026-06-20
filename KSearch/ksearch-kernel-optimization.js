@@ -347,6 +347,20 @@ Return evaluation results.`, {
   },
 })
 
+// --- profiling-strategist: pick the analysis METHOD per backend×task×host, then
+// honor it below. The agent only classifies the task (fuzzy); the substrate stamps
+// confidence by method (measured/inferred/hypothesized) — not the agent. See
+// _substrate/profiling/README.md. Falls back to native_profiler if undecided. ---
+let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
+if (USE_DRIVER) {
+  const _pd = await agent(
+    `Read ${BASELINE_CODE_PATH || ksearchNodeKernelPath('ksearch_root')}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${BACKEND_DIR}/manifest.json --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
+    `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
+    { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (_pd && _pd.method) PROFILING_DECISION = _pd
+}
+
 if (USE_DRIVER) {
   const kPath = BASELINE_CODE_PATH || ksearchNodeKernelPath('ksearch_root')
   const buildOut = `${EXP_DIR}/ksearch_root.artifact`
@@ -359,14 +373,29 @@ if (USE_DRIVER) {
     `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
     `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
     { model: MODEL.profile, label: 'driver-run-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
-  await agent(
-    `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
-    `Return {ok, native_path}.`,
-    { model: MODEL.profile, label: 'driver-profile-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
-  const evidenceOut = await agent(
-    `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
-    `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-    { model: MODEL.mechanical, label: 'driver-to-evidence-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  let evidenceOut = null
+  if (PROFILING_DECISION.method === 'native_profiler') {
+    await agent(
+      `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+      `Return {ok, native_path}.`,
+      { model: MODEL.profile, label: 'driver-profile-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    evidenceOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+      { model: MODEL.mechanical, label: 'driver-to-evidence-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  } else {
+    // Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'); do NOT run a native profiler.
+    // Reuse the run.sh throughput above; when method==='perf_heuristic', normalize via the strategist normalizer.
+    const _norm = PROFILING_DECISION.normalizer || 'perf_to_evidence.py'
+    if (PROFILING_DECISION.method === 'perf_heuristic') {
+      evidenceOut = await agent(
+        `Normalize the run.sh throughput into canonical metrics.\n` +
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/${_norm} --baseline ${EXP_DIR}/ksearch_root.result.json --run-json '${JSON.stringify(runOut || {})}'\`.\n` +
+        `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}. ` +
+        `Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'.`,
+        { model: MODEL.mechanical, label: 'driver-heuristic-evidence-root', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    }
+  }
   await agent(
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
     `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
@@ -378,6 +407,8 @@ if (USE_DRIVER) {
   baselineEval.driver_envelope = {
     latency_ms: Number((runOut && runOut.latency_ms) || 0),
     backend_id: DRIVER_BACKEND_ID,
+    profiling_method: PROFILING_DECISION.method,
+    profiling_confidence: PROFILING_DECISION.confidence,
   }
 }
 

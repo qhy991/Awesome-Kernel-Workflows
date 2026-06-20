@@ -311,6 +311,13 @@ let generatedKernelPath = ''
 let initialCandidates = []
 let initialGenerationResult = null
 
+// --- profiling-strategist: pick the analysis METHOD per backend×task×host, then
+// honor it in the Validate profile block. The agent only classifies the task
+// (fuzzy); the substrate stamps confidence by method (measured/inferred/hypothesized)
+// -- not the agent. See _substrate/profiling/README.md. Falls back to
+// native_profiler if undecided. ---
+let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
+
 // ---- Helpers ----
 function recordCandidate(id, parentId, status, code, metrics, reason) {
   candidates.push({
@@ -590,6 +597,19 @@ log(`Plan written. ${planCandidates.length} candidates ordered by priority.`)
 //        blockers are explicit."
 // =============================================================================
 
+// --- profiling-strategist resolve (once, before the candidate loop): classify
+// the target kernel and let the substrate pick the analysis METHOD + stamp
+// confidence. The agent only classifies (fuzzy op_class/size); the strategist
+// owns method+confidence. Honored in the Validate profile block below. ---
+if (USE_DRIVER) {
+  const _pd = await agent(
+    `Read ${KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${BACKEND_DIR}/manifest.json --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
+    `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
+    { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (_pd && _pd.method) PROFILING_DECISION = _pd
+}
+
 for (iteration = 0; iteration < Math.min(planCandidates.length, MAX_CANDIDATES) && !promotionMet; iteration++) {
   const candidate = planCandidates[iteration]
   const candidateId = `candidate-${iteration + 1}`
@@ -732,18 +752,39 @@ Then append, using the values you just measured (status="done" if correctness pa
       `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
       `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
       { model: MODEL.profile, label: `driver-run-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
-    await agent(
-      `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
-      `Return {ok, native_path}.`,
-      { model: MODEL.profile, label: `driver-profile-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
-    const evidenceOut = await agent(
-      `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
-      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-      { model: MODEL.mechanical, label: `driver-to-evidence-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
-    const diagOut = await agent(
-      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
-      `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
-      { model: MODEL.mechanical, label: `driver-diagnose-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+    let evidenceOut = null
+    let diagOut = null
+    if (PROFILING_DECISION.method === 'native_profiler') {
+      await agent(
+        `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+        `Return {ok, native_path}.`,
+        { model: MODEL.profile, label: `driver-profile-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+      evidenceOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+        `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+        { model: MODEL.mechanical, label: `driver-to-evidence-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+      diagOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+        `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+        { model: MODEL.mechanical, label: `driver-diagnose-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+    } else {
+      // profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}');
+      // do NOT run profile.sh/${PROFILING_DECISION.normalizer ? 'a native profiler' : 'a native profiler'}. The run.sh
+      // throughput above is the measurement; when method='perf_heuristic', normalize it into canonical metrics via the
+      // strategist normalizer, tagging bottlenecks evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'.
+      let heuristicMetrics = {}
+      if (PROFILING_DECISION.method === 'perf_heuristic') {
+        evidenceOut = await agent(
+          `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/${PROFILING_DECISION.normalizer || 'perf_to_evidence.py'} --baseline ${EXP_DIR}/${candidateId}.result.json --run-json '${JSON.stringify((runOut && { latency_ms: runOut.latency_ms }) || {})}'\`.\n` +
+          `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}. Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'.`,
+          { model: MODEL.mechanical, label: `driver-heuristic-evidence-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+        heuristicMetrics = (evidenceOut && evidenceOut.metrics) || {}
+      }
+      diagOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify(heuristicMetrics)}'\`.\n` +
+        `Return stdout JSON verbatim {bottleneck_class, evidence}. Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'.`,
+        { model: MODEL.mechanical, label: `driver-diagnose-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH })
+    }
     await agent(
       `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/${candidateId}.result.json\`.\n` +
       `Return stdout JSON verbatim {ok, suspicious, reasons}.`,

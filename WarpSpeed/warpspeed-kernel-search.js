@@ -287,6 +287,20 @@ function genomeDir() {
   return EXP_DIR || STATE_DIR_ARG || (PROJECT_DIR ? `${PROJECT_DIR}/.warpspeed` : '.')
 }
 
+// --- profiling-strategist wiring (additive): pick the analysis METHOD once per
+// run (backend x task x host); the agent only classifies op_class+size (fuzzy),
+// the substrate STAMPS confidence -- the model must NOT assign confidence. The
+// existing NCU prompts honor PROFILING_DECISION below. See
+// _substrate/profiling/README.md. Falls back to native_profiler if undecided. ---
+const SUBSTRATE_DIR = args.substrate_dir || '_substrate'
+const SUBSTRATE_PY = args.substrate_command_prefix || 'python3'
+const PROFILING_MANIFEST = args.backend_manifest || `${SUBSTRATE_DIR}/backends/cuda/manifest.json`
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+function substrateInstruction(script, cliArgs) {
+  return `Run exactly: \`${SUBSTRATE_PY} ${SUBSTRATE_DIR}/${script} ${cliArgs}\`.`
+}
+let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured' }
+
 function genomeFooter(phaseName, extraFields = '') {
   const dir = genomeDir()
   const tail = extraFields ? `, ${extraFields}` : ''
@@ -797,6 +811,31 @@ log(`Calibration: sigma=${cal.value.cross_device_sigma_pct != null ? cal.value.c
 // =============================================================================
 
 phase('Seed'); await __genomeReport('Seed', WORKFLOW_NAME)
+
+// Resolve the profiling METHOD ONCE, before the baseline NCU profile is taken,
+// and reuse PROFILING_DECISION across Seed/Profile (don't re-resolve per round).
+{
+  const _genDir = genomeDir()
+  const _pd = await agent(
+    `Classify the kernel under optimization (op_class one of attention|gemm|elementwise|reduction|default; size one of tiny|small|large) from this context: ` +
+    `editable kernel paths=${KERNEL_PATHS.join(', ')}; bench shape="${BENCH_SHAPE}"; task="${OP_DESC || '(none)'}". ` +
+    `Pick the closest op_class and size (fuzzy is fine; use default/small if unsure). Then ` +
+    substrateInstruction('profiling/profiling_strategist.py',
+      `resolve --backend-manifest ${PROFILING_MANIFEST} --task <op_class> --size <size> --cache ${_genDir}/prof_cache.json --trajectory ${_genDir}/genome.jsonl`) +
+    ` Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}. Do NOT assign confidence yourself; relay exactly what the script stamped.`,
+    { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Seed', schema: JSON_PASSTHROUGH }
+  )
+  if (_pd && _pd.method) PROFILING_DECISION = _pd
+  log(`Profiling-strategist: method=${PROFILING_DECISION.method} confidence=${PROFILING_DECISION.confidence}`)
+}
+
+// Guard sentence appended verbatim to every NCU/profile prompt so the doer honors
+// the strategist's method without re-resolving. Built from the resolved decision.
+const PROFILING_GUARD =
+  `\nProfiling-strategist selected method='${PROFILING_DECISION.method}', confidence='${PROFILING_DECISION.confidence}'. ` +
+  `If method !== 'native_profiler', do NOT run ncu/compute-sanitizer-based profiling; measure throughput instead and stamp emitted bottlenecks with evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. ` +
+  `If method === 'native_profiler', proceed as written.`
+
 const seedResult = await agent(
   [
     'Seed the WarpSpeed baseline checkpoint (skip if already seeded).',
@@ -809,6 +848,7 @@ const seedResult = await agent(
     `   - build: ${BUILD_CMD}`,
     `3. Tier-2 confirm latency: ${C.confirm} ${P.project_dir}/${BINARY_PATH} --shape ${BENCH_SHAPE}  -> latency_us_mean`,
     `4. NCU profile into the checkpoint cache (profile each checkpoint ONCE, ever): ${C.ncu_profile} ${P.project_dir}/${BINARY_PATH} ${P.ncu_cache}/<commit>.json --shape ${BENCH_SHAPE}`,
+    PROFILING_GUARD,
     '5. Seed the DB: write {"commit": <commit>, "latency_us": <mean>, "assumptions": [], "ncu_fingerprint": <fingerprint>, "key_metrics": <key_metrics>} to a temp file and run:',
     `   ${C.wsdb} seed-baseline --json @<temp-file>`,
     '6. Return commit, latency_us, ncu_fingerprint, skipped=false.',
@@ -960,6 +1000,7 @@ function profilePrompt(spec) {
     `1. Parent cache: if ${parentCache} exists, READ it (parent_was_cached=true) - checkpoints are profiled once, ever. If missing, profile the parent binary first: WARPSPEED_EXP_ID=${spec.exp_id} ${C.ncu_profile} ${parentBin} ${parentCache} --shape ${BENCH_SHAPE}`,
     `2. Profile the candidate: WARPSPEED_EXP_ID=${spec.exp_id} ${C.ncu_profile} ${wt}/${BINARY_PATH} ${P.ncu_cache}/exp-${spec.exp_id}.json --shape ${BENCH_SHAPE}`,
     '3. Return cand = {fingerprint, key_metrics} and parent = {fingerprint, key_metrics}, both VERBATIM from the JSON files, and ncu_path = the candidate JSON path. Compute nothing yourself.',
+    PROFILING_GUARD,
     '',
     taskContract(spec.exp_id),
     genomeFooter('Profile', `candidate_id="${spec.exp_id}"`),

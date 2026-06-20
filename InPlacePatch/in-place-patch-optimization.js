@@ -188,6 +188,13 @@ const BACKUP_PATH       = args.backup_dir
   ? `${args.backup_dir}/in_place_patch.bak`
   : `${KERNEL_PATH}.in_place_patch.bak`
 
+// Dirty flag: true iff an Edit has been applied to KERNEL_PATH but not yet
+// validated (build/test/bench) or reverted. Every applied edit MUST be resolved
+// within its iteration (revert or keep-and-resnapshot), so this is normally false
+// at loop end. The exit safety net restores from BACKUP_PATH if it is ever true,
+// so an unvalidated patch can never dirty the worktree on exit.
+let dirty = false
+
 // Fail-fast required-arg validation. No fallbacks; missing args mean the
 // caller did not ground the workflow.
 const MISSING = []
@@ -296,6 +303,32 @@ if (snap.state !== 'grounded' || !snap.value.backed_up) {
 }
 
 // =============================================================================
+// profiling-strategist: this workflow has NO native profiler (it relies on the
+// project's own build/test/benchmark). The strategist ADDS optional, routed
+// profiling AVAILABILITY without forcing any tool. The agent only classifies the
+// task (fuzzy op_class/size); the substrate strategist DETERMINISTICALLY picks
+// the method and STAMPS confidence (measured/inferred/hypothesized) -- the model
+// must NOT assign confidence. Default native_profiler/measured is only overwritten
+// on a valid response, so the build/test/bench loop below is unchanged either way.
+// =============================================================================
+
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const PY = args.substrate_command_prefix || ''
+const BACKEND_MANIFEST = args.backend_manifest || `${SUBSTRATE}/backends/cuda/manifest.json`
+const STRATEGIST_SIZE = args.profiling_size || 'large'
+let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured' }
+const _pd = await agent(`Read ${KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default; op_description='${OP_DESC}') and size (tiny|small|large; default '${STRATEGIST_SIZE}'). Then run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${BACKEND_MANIFEST} --task <op_class> --size <size> --cache ${EXPDIR}/prof_cache.json --trajectory ${EXPDIR}/genome.jsonl\`.
+Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`, {
+  model: MODEL.mechanical,
+  label: 'profiling-strategist',
+  phase: 'Snapshot',
+  schema: JSON_PASSTHROUGH,
+})
+if (_pd && _pd.method) PROFILING_DECISION = _pd
+log(`Profiling-strategist: method=${PROFILING_DECISION.method}, confidence=${PROFILING_DECISION.confidence}`)
+
+// =============================================================================
 // Helper: build / test / bench a SINGLE candidate (the current on-disk kernel)
 // =============================================================================
 
@@ -362,6 +395,7 @@ async function revertToBackup(reason) {
       }),
     }
   )
+  dirty = false  // a revert restores KERNEL_PATH to BACKUP_PATH -> no unvalidated edit remains
 }
 
 // =============================================================================
@@ -439,7 +473,8 @@ for (let iter = 1; iter <= MAX_ITER; ++iter) {
     `Do NOT modify any other file. Do NOT run build/test/bench yourself - the workflow does that.`,
     `Avoid strategies already in the "Prior attempts" list above.`,
     `If you cannot find a productive change, return applied=false with the reason in summary.`,
-    GROUNDING_INSTRUCTION,
+    `This step ONLY applies an Edit. Report applied (true/false), title, and a one-line summary. Do NOT run build/test/bench (the workflow does) and do NOT report numeric values here — grounding of measurements is the workflow's job, not yours. Your Edit landing on disk is the only thing that matters for this step.`,
+    `Profiling-strategist selected method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}', evidence='${PROFILING_DECISION.evidence_source || 'ncu'}'). If method!=='native_profiler', no native profiler is available — when reasoning about the bottleneck, derive memory-vs-compute-bound hints from the benchmark throughput the workflow measures, and tag such hints evidence='${PROFILING_DECISION.evidence_source || 'profile_heuristic'}'. Never fabricate profiler counters.`,
     `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXPDIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append (this is optimization iteration ${iter}):\n{"workflow":"${WORKFLOW_NAME}","phase":"Propose","ts":"<ts>","status":"done","candidate_id":"iter-${iter}","technique":"<the focused change you applied, or none if applied=false>","speedup":null,"note":"<one-line diff summary of the Edit, or why no change>"}`,
   ].filter(Boolean).join('\n\n')
 
@@ -450,20 +485,26 @@ for (let iter = 1; iter <= MAX_ITER; ++iter) {
   })
   const prop = classifyResult(propResult)
 
-  if (prop.state !== 'grounded' || !prop.value.applied) {
-    const title = prop.state === 'grounded' ? prop.value.title : '(propose ungrounded)'
+  // Gate ONLY on whether an Edit was applied. Grounding is irrelevant to the
+  // propose step (it produces no numeric values; the workflow measures those), so
+  // an Edit that landed on disk must proceed to build/test/bench — NOT be skipped
+  // because the propose agent returned grounded:false. Skipping an applied Edit
+  // would leave an unvalidated patch on the worktree with zero measurement.
+  if (!prop.value.applied) {
+    const title = prop.value.title || '(no change)'
     history.push({
       iter,
       title,
       verdict: 'no_change',
       speedup: null,
-      detail: prop.state === 'grounded' ? (prop.value.summary || 'no edit applied') : JSON.stringify(prop),
+      detail: prop.value.summary || 'no edit applied',
     })
     log(`Iter ${iter}: no change proposed; continuing.`)
     continue
   }
 
   const title = prop.value.title
+  dirty = true  // an Edit is now on disk; build/test/bench below must resolve it (revert or keep)
 
   // Build the patched kernel.
   const b = await buildCurrent(`iter${iter}`)
@@ -535,6 +576,7 @@ for (let iter = 1; iter <= MAX_ITER; ++iter) {
         }),
       }
     )
+    dirty = false  // kept: KERNEL_PATH == BACKUP_PATH (validated best), nothing unvalidated on disk
   } else {
     await revertToBackup(`no speedup ("${title}": ${speedup.toFixed(3)}x <= ${bestSpeedup.toFixed(3)}x)`)
     history.push({
@@ -551,22 +593,23 @@ for (let iter = 1; iter <= MAX_ITER; ++iter) {
 // Final report
 // =============================================================================
 
+// Exit safety net (Issue 3): if any Edit was applied but never validated/reverted
+// (should not happen with the applied-only gate above, but defense-in-depth),
+// restore from BACKUP_PATH so the worktree is never left with an unvalidated patch.
+if (dirty) {
+  await revertToBackup('unvalidated edit left on disk at exit')
+}
+
 phase('Report')
 
-// Read the (winning) kernel file back so the caller can persist it as best-kernel.
-const finalRead = await agent(
-  `Read the current contents of ${KERNEL_PATH} and return the full file in best_kernel_code.`,
-  {
-    phase: 'Report',
-    label: 'final-read',
-    schema: withGroundingFields({
-      type: 'object',
-      properties: { best_kernel_code: { type: 'string' } },
-      required: ['best_kernel_code'],
-    }),
-  }
-)
-const finalCode = classifyResult(finalRead).value?.best_kernel_code || ''
+// Issue 2: do NOT inline the full kernel file. For large embedded kernels (e.g.
+// llama.cpp mmq.cuh, ~4k lines / ~70K tokens) StructuredOutput cannot carry the
+// full file and the final-read agent stalls retrying. The caller persists the
+// best kernel from best_kernel_path (the file is already patched in place); we
+// emit only a short best-patch summary instead of the full file contents.
+const finalCode = bestPatchTitle && bestPatchTitle !== '(unmodified baseline)'
+  ? `(in-place patched; see best_kernel_path=${KERNEL_PATH}; best patch: "${bestPatchTitle}")`
+  : ''
 
 return {
   ok: true,

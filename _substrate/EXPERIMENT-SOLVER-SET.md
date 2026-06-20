@@ -58,7 +58,6 @@ contrast for the complementarity argument.
 | Solver | Reason |
 |---|---|
 | KEET | diagnostic-only, not an optimizer (KerSor's role gate already filters it) |
-| ArchAgent | cache-replacement policy / ChampSim — not the same GPU-kernel task class |
 | Xe-Forge, KernelFoundry | Intel XPU / SYCL backend — not comparable on an NVIDIA benchmark |
 | CutlassGEMM, FACT | CUTLASS/GEMM-only — operator coverage too narrow (keep as optional GEMM case study) |
 | KernelBlaster | value is cross-run persistent-memory compounding; a single-session experiment can't show it — keep as a separate persistent-memory ablation/case study |

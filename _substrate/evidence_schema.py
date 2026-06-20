@@ -13,7 +13,7 @@ import sys, json, argparse
 
 KIND = {"bottleneck", "failed_strategy", "search_constraint", "validated_win", "env_fact"}
 DIRECTIVE = {"explore", "avoid", "constrain", "reuse", "gate"}
-EVIDENCE = {"ncu", "benchmark", "compile", "correctness", "runtime", "profile_heuristic", "llm_inferred"}
+EVIDENCE = {"ncu", "native_profiler", "benchmark", "compile", "correctness", "runtime", "profile_heuristic", "llm_inferred", "user_provided"}
 CONFIDENCE = {"measured", "inferred", "hypothesized"}
 CONV = {"converged", "budget_exhausted", "stalled", "error", "unknown"}
 

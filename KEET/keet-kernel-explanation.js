@@ -225,6 +225,34 @@ Always cite specific NCU metric values when making claims. Distinguish between:
 // =============================================================================
 phase('Setup')
 
+// --- profiling-strategist: decide whether real NCU metrics are actually
+// available on this host BEFORE we inspect a profile. KEET is a diagnostic
+// (explanation) role with NO optimization loop; the strategist's value here is
+// HONESTY — if no native profiler is available, KEET must NOT pretend it has NCU
+// counters. The agent only classifies the op (fuzzy op_class/size from
+// OP_DESC + source); the substrate strategist DETERMINISTICALLY picks the method
+// and STAMPS confidence (measured/inferred/hypothesized) -- the model must NOT
+// assign confidence. Defaults to native_profiler so the happy path is unchanged
+// when the call returns nothing. See _substrate/profiling/README.md. ---
+const SUBSTRATE_DIR = args.substrate_dir || '_substrate'
+const BACKEND_MANIFEST = args.backend_manifest || `${SUBSTRATE_DIR}/backends/cuda/manifest.json`
+const PROF_STRATEGIST_SCHEMA = { type: 'object', additionalProperties: true }
+let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured' }
+const _pd = await agent(
+  `You classify a CUDA op for profiler-method selection. From the operation description "${OP_DESC}" and the kernel at ${KERNEL_PATH}, ` +
+  `classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (one of tiny|small|large). Then ` +
+  `run exactly: \`${SUBSTRATE_DIR}/profiling/profiling_strategist.py resolve --backend-manifest ${BACKEND_MANIFEST} --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.\n` +
+  `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}. ` +
+  `Do NOT assign confidence yourself — only the strategist stamps it.`,
+  { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: PROF_STRATEGIST_SCHEMA })
+if (_pd && _pd.method) PROFILING_DECISION = _pd
+
+const PROFILE_METHOD_GUARD =
+  `\nProfiling-strategist selected method='${PROFILING_DECISION.method}', confidence='${PROFILING_DECISION.confidence}'. ` +
+  `If method !== 'native_profiler', NCU metrics are NOT available — base your explanation only on source + any throughput/perf evidence present, ` +
+  `explicitly label every profile-derived claim as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}', and do NOT fabricate NCU counter values. ` +
+  `If method === 'native_profiler', proceed as written.`
+
 const setupResults = await parallel([
   // Agent 1: Read and catalog all source files
   () => agent(`You are a CUDA source code reader. Read and catalog kernel source files.
@@ -285,6 +313,7 @@ Extract ALL available metrics organized by category:
 Also extract metrics for any additional profiles listed.
 
 Return structured profile data.
+${PROFILE_METHOD_GUARD}
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -504,6 +533,7 @@ bound (long_scoreboard = 45.2% of stall samples, dram__throughput = 12.3%)"
 
 CRITICAL: Every claim must be supported by a cited metric value from the profile data.
 Do not hallucinate metric values. If a metric is not available, say so.
+${PROFILE_METHOD_GUARD}
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ

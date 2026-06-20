@@ -182,6 +182,15 @@ const NCU_PROFILE_M_VALUES = args.ncu_profile_m_values || [8, 64, 256, 2048]
 const ENABLE_HYBRID = args.enable_hybrid_fallback !== false
 const CUBLAS_THRESHOLD = args.cublas_fallback_threshold || 32
 
+// --- profiling-strategist substrate wiring (additive; BESPOKE raw-ncu family
+// has no backend driver, so the strategist resolves against the canonical CUDA
+// manifest). Task is fixed to 'gemm' (this workflow is CUTLASS-GEMM specific);
+// the agent only classifies size; the substrate stamps method+confidence. ---
+const SUBSTRATE = args.substrate_dir || '_substrate'
+const SUBSTRATE_PY = args.substrate_command_prefix || 'python3'
+const STRATEGIST_MANIFEST = args.backend_manifest || `${SUBSTRATE}/backends/cuda/manifest.json`
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+
 // Hardware peak FLOPS (fp16 tensor core, no sparsity)
 // A100/A800: 312 TFLOPS, H100: 989 TFLOPS (with FP8: 1979)
 const PEAK_TFLOPS = args.peak_tflops || (GPU_ARCH === 'sm_90' ? 989 : 312)
@@ -481,6 +490,22 @@ if (bestPerWorkload.length > 0) {
 // =============================================================================
 phase('NCU Profile')
 
+// --- profiling-strategist: classify size (task fixed to 'gemm'), then let the
+// substrate DETERMINISTICALLY pick the analysis method and STAMP confidence.
+// The agent must NOT assign confidence. Defaults to native_profiler/measured so
+// the happy path (ncu as written) is unchanged if the decision is ignored. ---
+let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
+const _pd = await agent(`Classify the GEMM problem SIZE for the profiling strategist (the task is fixed to 'gemm'; you classify size only — one of tiny|small|large — based on the M range ${analyzeResult.variable_range.min}-${analyzeResult.variable_range.max} and N=${analyzeResult.fixed_N}, K=${analyzeResult.fixed_K}).
+Then run exactly: \`${SUBSTRATE_PY} ${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${STRATEGIST_MANIFEST} --task gemm --size <tiny|small|large> --cache ${OUTPUT_DIR}/prof_cache.json --trajectory ${OUTPUT_DIR}/genome.jsonl\`
+Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}. Do NOT assign confidence yourself — the substrate stamps it.`, {
+  model: MODEL.mechanical,
+  label: 'profiling-strategist',
+  phase: 'NCU Profile',
+  schema: JSON_PASSTHROUGH,
+})
+if (_pd && _pd.method) PROFILING_DECISION = _pd
+log(`Profiling-strategist: method=${PROFILING_DECISION.method} confidence=${PROFILING_DECISION.confidence}`)
+
 const ncuResult = await agent(`Run profiling on the CUTLASS kernel for representative M values using only the user-provided profiling contract.
 
 # Profiling Contract
@@ -505,6 +530,7 @@ ${ceilingDetected ? `
 NOTE: Ceiling already detected for M<64 (flat latency). NCU will confirm this is
 overhead-dominated. Focus NCU analysis on M=64 and M=256 where tuning can help.
 ` : ''}
+Profiling-strategist selected method='${PROFILING_DECISION.method}', confidence='${PROFILING_DECISION.confidence}'. If method !== 'native_profiler', do NOT run ncu; instead measure throughput and stamp emitted bottlenecks with evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. Else proceed with ncu as written.
 
 Return NCU metrics and diagnosis.
 

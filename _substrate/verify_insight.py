@@ -20,7 +20,7 @@ Prints the insight with finalized confidence + a 'verification' trace.
 """
 import sys, json, argparse
 
-EXECUTABLE = {"ncu", "benchmark", "compile", "correctness", "runtime"}
+EXECUTABLE = {"ncu", "native_profiler", "benchmark", "compile", "correctness", "runtime"}
 ORDER = ["hypothesized", "inferred", "measured"]  # index = strength
 
 

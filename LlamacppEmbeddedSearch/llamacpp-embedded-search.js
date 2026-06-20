@@ -158,6 +158,18 @@ const VARIANTS_DIR   = args.variants_dir || `${EXP_DIR}/variants`
 // would otherwise leave the new .cu sources invisible to incremental builds).
 const CMAKE_BUILD_DIR = args.cmake_build_dir || ''
 
+// --- profiling-strategist wiring (additive): this workflow has NO native
+// profiler (variants are benched via the project's test-backend-ops harness).
+// The agent only classifies op_class+size (fuzzy); the substrate STAMPS the
+// confidence -- the model must NOT assign confidence. Resolved ONCE at Setup and
+// reused via PROFILING_DECISION; the variant proposer prompt honors it below.
+// See _substrate/profiling/README.md. Falls back to native_profiler if undecided.
+const SUBSTRATE      = args.substrate_dir || '_substrate'
+const SUBSTRATE_PY   = args.substrate_command_prefix || 'python3'
+const PROFILING_MANIFEST = args.backend_manifest || `${SUBSTRATE}/backends/cuda/manifest.json`
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured' }
+
 const MISSING = []
 if (!GGML_ROOT)     MISSING.push('ggml_root')
 if (!REG_SCRIPT)    MISSING.push('register_script')
@@ -431,6 +443,7 @@ for (let round = 1; round <= MAX_ROUNDS; ++round) {
           `Return the absolute cuh_path you wrote, the variant_name, a short title,`,
           `and a rationale citing the specific design choice (tile shape, register`,
           `layout, sync pattern, ...).`,
+          `Profiling-strategist selected method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}', evidence='${PROFILING_DECISION.evidence_source || 'ncu'}'). If method!=='native_profiler', no native profiler is available — derive memory-vs-compute-bound hints for your design from the test-backend-ops benchmark throughput the workflow measures, and tag such hints evidence='${PROFILING_DECISION.evidence_source || 'profile_heuristic'}'. Never fabricate profiler counters.`,
           GROUNDING_INSTRUCTION,
           `# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append (this is variant ${slot} of round ${round}):\n{"workflow":"${WORKFLOW_NAME}","phase":"Propose","ts":"<ts>","status":"done","candidate_id":"${slot}","technique":"<the distinct design choice for this variant, e.g. tile_shape_or_register_layout>","speedup":null,"note":"<one-line rationale for why this variant should be faster>"}`,
         ].filter(Boolean).join('\n\n'),

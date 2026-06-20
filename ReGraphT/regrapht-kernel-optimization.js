@@ -474,6 +474,20 @@ if (graphResult?.graph?.nodes && graphResult?.graph?.edges) {
   graph = graphResult.graph
 }
 
+// --- profiling-strategist: pick the analysis METHOD per backend×task×host, then
+// honor it below. The agent only classifies the task (fuzzy); the substrate stamps
+// confidence by method (measured/inferred/hypothesized) -- not the agent. See
+// _substrate/profiling/README.md. Falls back to native_profiler if undecided. ---
+let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
+if (USE_DRIVER) {
+  const _pd = await agent(
+    `Read ${SOURCE_CODE_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
+    `run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${BACKEND_DIR}/manifest.json --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
+    `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
+    { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'BuildGraph', schema: JSON_PASSTHROUGH })
+  if (_pd && _pd.method) PROFILING_DECISION = _pd
+}
+
 if (USE_DRIVER) {
   const kPath = SOURCE_CODE_PATH || regraphtNodeKernelPath('regrapht_root')
   const buildOut = `${EXP_DIR}/regrapht_root.artifact`
@@ -486,18 +500,35 @@ if (USE_DRIVER) {
     `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
     `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
     { model: MODEL.profile, label: 'driver-run-root', phase: 'BuildGraph', schema: JSON_PASSTHROUGH })
-  await agent(
-    `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
-    `Return {ok, native_path}.`,
-    { model: MODEL.profile, label: 'driver-profile-root', phase: 'BuildGraph', schema: JSON_PASSTHROUGH })
-  const evidenceOut = await agent(
-    `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
-    `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-    { model: MODEL.mechanical, label: 'driver-to-evidence-root', phase: 'BuildGraph', schema: JSON_PASSTHROUGH })
-  await agent(
-    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
-    `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
-    { model: MODEL.mechanical, label: 'driver-diagnose-root', phase: 'BuildGraph', schema: JSON_PASSTHROUGH })
+  if (PROFILING_DECISION.method === 'native_profiler') {
+    await agent(
+      `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+      `Return {ok, native_path}.`,
+      { model: MODEL.profile, label: 'driver-profile-root', phase: 'BuildGraph', schema: JSON_PASSTHROUGH })
+    const evidenceOut = await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+      { model: MODEL.mechanical, label: 'driver-to-evidence-root', phase: 'BuildGraph', schema: JSON_PASSTHROUGH })
+    await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+      `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+      { model: MODEL.mechanical, label: 'driver-diagnose-root', phase: 'BuildGraph', schema: JSON_PASSTHROUGH })
+  } else {
+    // profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}');
+    // do NOT run profile.sh / to_evidence.py. Normalize run.sh throughput via the strategist normalizer when perf_heuristic.
+    if (PROFILING_DECISION.method === 'perf_heuristic') {
+      const _normalizer = PROFILING_DECISION.normalizer || 'perf_to_evidence.py'
+      await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/${_normalizer} --baseline ${EXP_DIR}/regrapht_root.result.json\`.\n` +
+        `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage}. ` +
+        `Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'.`,
+        { model: MODEL.mechanical, label: 'driver-perf-heuristic-root', phase: 'BuildGraph', schema: JSON_PASSTHROUGH })
+    }
+    await agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '{}' \`.\n` +
+      `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+      { model: MODEL.mechanical, label: 'driver-diagnose-root', phase: 'BuildGraph', schema: JSON_PASSTHROUGH })
+  }
   await agent(
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/regrapht_root.result.json\`.\n` +
     `Return stdout JSON verbatim {ok, suspicious, reasons}.`,

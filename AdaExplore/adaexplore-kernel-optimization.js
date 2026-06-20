@@ -475,6 +475,22 @@ if (USE_DRIVER) {
   log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
 }
 
+// --- profiling-strategist: pick the analysis METHOD per backend×task×host, then
+// honor it in the per-step Evaluate driver envelope. The agent only classifies the
+// task (fuzzy); the substrate stamps confidence by method (measured/inferred/
+// hypothesized) -- not the agent. See _substrate/profiling/README.md. Falls back
+// to native_profiler if undecided. Classifies the operator/task once at Setup;
+// candidate kernels inherit the decision for the whole MCTS run. ---
+let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
+if (USE_DRIVER) {
+  const _pd = await agent(
+    `Read the operator spec for this run (${KERNEL_PATH || PROBLEM_PATH || 'the inline problem_definition'}) and classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${BACKEND_DIR}/manifest.json --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.\n` +
+    `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
+    { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (_pd && _pd.method) PROFILING_DECISION = _pd
+}
+
 const setupResult = await agent(`Set up a standalone AdaExplore-style ${setupLangToken()} optimization run.
 
 # Hard boundary
@@ -809,14 +825,27 @@ Then append, using the values you just measured (status="done" if the candidate 
       `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kernelPath} --result ${resultPath}`)}\n` +
       `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
       { model: MODEL.profile, label: `driver-run-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
-    const profileOut = await agent(
-      `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kernelPath} --out ${profOut}`)}\n` +
-      `Return {ok, native_path}.`,
-      { model: MODEL.profile, label: `driver-profile-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
-    const evidenceOut = await agent(
-      `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
-      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-      { model: MODEL.mechanical, label: `driver-to-evidence-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    let evidenceOut = null
+    if (PROFILING_DECISION.method === 'native_profiler') {
+      const profileOut = await agent(
+        `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kernelPath} --out ${profOut}`)}\n` +
+        `Return {ok, native_path}.`,
+        { model: MODEL.profile, label: `driver-profile-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      evidenceOut = await agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
+        `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+        { model: MODEL.mechanical, label: `driver-to-evidence-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    } else {
+      // Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'); do NOT run profile.sh / a native profiler.
+      // run.sh above already produced throughput. When method='perf_heuristic', normalize that throughput into canonical metrics via the strategist normalizer.
+      if (PROFILING_DECISION.method === 'perf_heuristic') {
+        evidenceOut = await agent(
+          `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/${PROFILING_DECISION.normalizer || 'perf_to_evidence.py'} --baseline ${resultPath}\`.\n` +
+          `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}. ` +
+          `Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'.`,
+          { model: MODEL.mechanical, label: `driver-to-evidence-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      }
+    }
     const diagOut = await agent(
       `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
       `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
@@ -838,6 +867,8 @@ Then append, using the values you just measured (status="done" if the candidate 
       latency_ms: measuredLatency,
       baseline_latency_ms: baselineLatency,
       backend_id: DRIVER_BACKEND_ID,
+      profiling_method: PROFILING_DECISION.method,
+      profiling_confidence: PROFILING_DECISION.confidence,
     }
   }
 

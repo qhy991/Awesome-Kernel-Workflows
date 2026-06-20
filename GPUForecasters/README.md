@@ -177,6 +177,5 @@ Workflow({
 
 ## Related Workflows
 
-- **ArchAgent**: Evolutionary cache policy optimization with short-to-long cascade
 - **StitchCUDA**: Three-agent orchestration with adaptive replanning
 - **KernelBlaster**: MAIC-RL approach with knowledge base
