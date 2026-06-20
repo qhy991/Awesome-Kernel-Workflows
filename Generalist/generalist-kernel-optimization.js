@@ -602,6 +602,24 @@ let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', no
   if (_pd && _pd.method) PROFILING_DECISION = _pd
 }
 
+function nsysEnrichSuffix() {
+  return (
+    `Path B (nsys enrich): if \`nsys\` is on PATH, you MAY run a short nsys timeline profile wrapping the same harness ` +
+    `(e.g. \`nsys profile -o ${EXP_DIR}/prof.nsys-rep --trace=cuda,nvtx --sample=none --force-overwrite=true <harness argv>\`) ` +
+    `to locate hot kernels and decode-vs-batch time share. nsys is enrich-only: do NOT claim dram_pct/sm_pct from nsys; ` +
+    `keep evidence='profile_heuristic' and confidence='inferred' — never upgrade to measured.\n`
+  )
+}
+
+function perfHeuristicProfileHint(evalCmd) {
+  return (
+    `Profiling-strategist chose method='perf_heuristic' (confidence='${PROFILING_DECISION.confidence}'); do NOT run ncu. ` +
+    `Run the benchmark command \`${evalCmd}\` for throughput and derive memory-vs-compute-bound hints from it; ` +
+    `tag any bottleneck evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. ` +
+    nsysEnrichSuffix()
+  )
+}
+
 // --- Baseline driver envelope (Layer-A, standalone driver-path only) ---
 if (USE_DRIVER_STANDALONE) {
   const kPath = KERNEL_PATH || `${EXP_DIR}/baseline.kernel`
@@ -632,7 +650,8 @@ if (USE_DRIVER_STANDALONE) {
       (PROFILING_DECISION.method === 'perf_heuristic'
         ? `Normalize that throughput into canonical metrics via ` +
           substrateInstruction('profiling/' + (PROFILING_DECISION.normalizer || 'perf_to_evidence.py'), `--baseline ${EXP_DIR}/baseline.result.json`) +
-          ` Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. `
+          ` Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. ` +
+          nsysEnrichSuffix()
         : `Return null for dram_pct/sm_pct/occupancy. `) +
       `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
       { model: MODEL.mechanical, label: 'driver-to-evidence-setup', phase: 'Setup', schema: JSON_PASSTHROUGH })
@@ -668,7 +687,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
     (PROFILING_DECISION.method === 'native_profiler' && NCU_CMD && EVAL_CMD
       ? `Run the user-provided ncu_command: \`${NCU_CMD}\` and the benchmark command \`${EVAL_CMD}\`.\n`
       : PROFILING_DECISION.method === 'perf_heuristic' && EVAL_CMD
-        ? `Profiling-strategist chose method='perf_heuristic' (confidence='${PROFILING_DECISION.confidence}'); do NOT run ncu. Run the benchmark command \`${EVAL_CMD}\` for throughput and derive memory-vs-compute-bound hints from it; tag any bottleneck evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'.\n`
+        ? perfHeuristicProfileHint(EVAL_CMD)
         : EVAL_CMD
           ? `Run the benchmark command \`${EVAL_CMD}\` (writes a JSON result file).\n`
           : `No benchmark_command provided; do not invent an evaluator. Return missing/null measured metrics.\n`) +
