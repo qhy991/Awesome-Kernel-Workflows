@@ -43,7 +43,7 @@ exposed workflow/solver/profiling gaps below.
 
 ## Open — Workflow / solver
 
-### O1. Generalist Profile phase ignores `profiling-strategist` on embedded path (High)
+### O1. Generalist Profile phase ignores `profiling-strategist` on embedded path (High) — **FIXED** (`9220923`)
 
 **Symptom**: Session `20260620-173848` selected `native_profiler/ncu` at Setup
 (`prof_cache.json`), but per-iteration Profile uses hardcoded
@@ -65,26 +65,58 @@ This is non-deterministic and bypasses the substrate ladder
 
 ---
 
-### O2. CUDA manifest / profiling ladder: nsys not a first-class native profiler (Medium)
+### O2. nsys on no-ncu hosts: A/B design decision, gated on GPU nsys output (Medium — needs design + GPU)
 
 **Symptom**: `_substrate/backends/cuda/manifest.json` declares `profiler.name=ncu`
 only. `nsys` is `optional_tools` but not in the ladder. Hosts with nsys but no
 working ncu fall through to `perf_heuristic` — same as having no profiler.
 
-**Impact**: Cannot structurally use nsys timeline/kernel stats when ncu is absent
-or admin-blocked; agents improvise instead.
+**Why "just add nsys to the ladder" is NOT enough**: the strategist's native gate
+(`_substrate/profiling/profiling_strategist.py:104-112`) requires `latency_ms` AND
+≥1 bottleneck axis (`dram_pct`/`sm_pct`); a latency-only native is forced to
+`perf_heuristic` (unit test S3 proves this for Metal counters). nsys typically
+emits kernel timeline + duration and does **not** directly give `dram_pct`/`sm_pct`
+without extra ncu runs or heavy post-estimation. So adding nsys to the ladder
+without changing the gate / manifest capabilities still fails the native gate and
+lands at `perf_heuristic` — identical to the mmq run's agent-improvised
+"nsys + benchmark 反推 dram" path, just non-deterministic instead of routed.
 
-**Suggested fix**:
-- Add nsys as alternate native profiler (or `profiler.candidates: [ncu, nsys]`) with
-  a `nsys_to_evidence.py` normalizer, or document nsys as perf_heuristic input.
-- Host probe: distinguish `which ncu` vs `ncu can collect counters`.
+**Impact**: Cannot structurally use nsys when ncu is absent/admin-blocked; agents
+improvise (mmq `20260620-173848` genome Profile: nsys+benchmark estimates,
+`confidence=inferred`, not strategist-routed).
 
-**Evidence**: `_substrate/profiling/tests/test_strategist.sh` S2 (ncu=false → perf);
-mmq run used agent-improvised nsys path.
+**Two real paths — a design decision that needs GPU nsys output to pick**:
+
+| Path | Meaning | To validate on GPU |
+|------|---------|--------------------|
+| **A. nsys = native_profiler** | new `nsys_to_evidence.py`; manifest declares `latency_ms + dram_pct/sm_pct` (or occupancy); possibly a relaxed/new gate kind (e.g. `timeline_native` guarantees latency + kernel attribution only) | run nsys on the mmq harness, check the normalizer can **stably produce** `{latency_ms, dram_pct|sm_pct}` consumable by `diagnose.py`; compare ncu/perf_heuristic for fewer mis-routes |
+| **B. nsys = perf_heuristic input** | ladder unchanged; nsys only helps parse perf / pick the hot kernel; evidence stays `profile_heuristic` + `inferred` | run nsys, verify "nsys timeline + test-backend-ops perf" points at batch-vs-decode more accurately than pure perf stdout; do **not** claim `confidence=measured` |
+
+The mmq experiment was a **wild version of B**: agent used nsys for timeline +
+benchmark for roofline, but bypassed the strategist's deterministic routing → not
+reproducible.
+
+**Minimal GPU experiment to decide A vs B** (do before any code):
+1. Collect: alongside `test-backend-ops perf -o MUL_MAT ...`, run
+   `nsys profile --stats=true -o mmq.nsys-rep -- ...` (like KerSor
+   `profile-tools-smoke`, but bound to the mmq harness).
+2. Inspect what nsys can export: kernel name, duration, and whether the memory
+   throughput column is enough to compute `dram_pct`/`sm_pct`, or only latency.
+3. Decide: stably derivable bottleneck axis → **A** (write normalizer + explicit
+   capabilities); timeline only → **B** (strategist stays perf_heuristic; Generalist
+   Profile uses nsys as optional enrich, does NOT raise confidence).
+
+**Status**: problem GPU-confirmed; fix unimplemented and **must not be coded before
+the A/B decision** — changing the gate/manifest/normalizer blind is a high-risk
+unvalidated substrate change.
+
+**Evidence**: `_substrate/profiling/profiling_strategist.py:104-112` (native gate);
+`_substrate/profiling/tests/test_strategist.sh` S3 (latency-only → perf_heuristic);
+mmq `20260620-173848` genome Profile (agent-improvised nsys path).
 
 ---
 
-### O3. `anti_cheat.py` zeros `recorded_speedup` for valid compile+correct ~1.0x runs (Medium)
+### O3. `anti_cheat.py` zeros `recorded_speedup` for valid compile+correct ~1.0x runs (Medium) — **FIXED** (`9220923`)
 
 **Symptom**: SMOKE and real runs show `genome.jsonl` speedup ~1.0–1.02x but
 `output.json attempts[].speedup=0`, `reward=0`. Beam keeps baseline only when
@@ -171,8 +203,8 @@ Analysis: `LlamaCpp-Exp/.kersor/20260620-173848/run-1/analysis.json`
 
 ## Acceptance criteria (for closing this meta-issue)
 
-- [ ] Generalist embedded Profile honors `profiling-strategist` decision end-to-end
-- [ ] No-ncu / nsys-only hosts degrade deterministically to perf_heuristic (no ad-hoc nsys)
-- [ ] `attempts[]` reporting distinguishes valid+measured from beam-recorded speedup
-- [ ] Document or implement dtype/subtest-focused benchmark gate for embedded GEMM
-- [ ] InPlacePatch SMOKE PASS on mmq.cuh
+- [x] Generalist embedded Profile honors `profiling-strategist` decision end-to-end — **FIXED** (`9220923`; code, GPU-behavior confirm pending)
+- [ ] No-ncu / nsys-only hosts degrade deterministically to perf_heuristic (no ad-hoc nsys) — **blocked on O2 A/B decision** (needs GPU nsys output)
+- [x] `attempts[]` reporting distinguishes valid+measured from beam-recorded speedup — **FIXED** (`9220923`; `anti_cheat.measured_speedup`, GPU-behavior confirm pending)
+- [ ] Document or implement dtype/subtest-focused benchmark gate for embedded GEMM — O4, needs GPU 对照
+- [ ] InPlacePatch SMOKE PASS on mmq.cuh — O7, needs GPU
