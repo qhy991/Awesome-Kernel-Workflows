@@ -128,6 +128,15 @@ function classifyResult(agentResult) {
   }
   return { state: 'grounded', value: agentResult }
 }
+
+// Propose step: no measured numerics — grounded:false must not strip applied/title/summary.
+function classifyProposalResult(agentResult) {
+  if (agentResult == null) return { state: 'failed', error: 'agent returned null', value: null }
+  if (typeof agentResult.applied !== 'boolean') {
+    return { state: 'failed', error: 'proposal missing applied (boolean)', value: agentResult }
+  }
+  return { state: 'ok', value: agentResult }
+}
 // --- END inlined grounding contract ---
 
 // =============================================================================
@@ -483,21 +492,21 @@ for (let iter = 1; iter <= MAX_ITER; ++iter) {
     label: `propose:iter${iter}`,
     schema: PROPOSAL_SCHEMA,
   })
-  const prop = classifyResult(propResult)
+  const prop = classifyProposalResult(propResult)
 
   // Gate ONLY on whether an Edit was applied. Grounding is irrelevant to the
   // propose step (it produces no numeric values; the workflow measures those), so
   // an Edit that landed on disk must proceed to build/test/bench — NOT be skipped
   // because the propose agent returned grounded:false. Skipping an applied Edit
   // would leave an unvalidated patch on the worktree with zero measurement.
-  if (!prop.value.applied) {
-    const title = prop.value.title || '(no change)'
+  if (prop.state === 'failed' || !prop.value || !prop.value.applied) {
+    const title = (prop.value && prop.value.title) || '(no change)'
     history.push({
       iter,
       title,
-      verdict: 'no_change',
+      verdict: prop.state === 'failed' ? 'proposal_failed' : 'no_change',
       speedup: null,
-      detail: prop.value.summary || 'no edit applied',
+      detail: (prop.value && prop.value.summary) || prop.error || 'no edit applied',
     })
     log(`Iter ${iter}: no change proposed; continuing.`)
     continue
