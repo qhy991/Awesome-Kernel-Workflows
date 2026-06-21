@@ -12,6 +12,57 @@ export const meta = {
   ],
 };
 
+// --- BEGIN embedded-eval substrate (auto-inlined by scripts/patch-embedded-eval.js) ---
+const EMBEDDING_CONTRACT = [
+  'EMBEDDED-DISPATCH CONTRACT (this kernel is NOT standalone):',
+  '',
+  'You are authoring a kernel that lives INSIDE a larger project and is wired into',
+  'its dispatch table. It cannot be compiled on its own. Therefore:',
+  '',
+  '1. Emit a COMPLETE source file (e.g. a .cuh) that matches the reference',
+  '   dispatch signature exactly -- same entry-point shape, template params, and',
+  '   launch-bounds conventions as the reference file. Do NOT add a main(), a',
+  '   standalone harness, or top-level test code.',
+  '2. Use ONLY symbols/headers the project already provides (project headers,',
+  '   template instantiations, dispatch macros). Do not invent include paths.',
+  '3. Do NOT register, build, or benchmark the variant yourself, and do NOT name',
+  '   any symbol with the variant suffix -- the workflow + adapter handle wiring.',
+  '4. Return ONLY the file contents plus a short rationale citing the concrete',
+  '   design choice (tile shape, register budget, pipelining, GQA packing, etc.).',
+].join('\n')
+
+// Build the ordered evaluation commands for one candidate against a
+// contract-conforming adapter. All fields are plain strings the caller already
+// resolved from `args`. `params`/`unregParams` are opaque pass-through strings
+// (e.g. "--dkq 256 --dv 256 --cmake-build-dir /p/build") that the substrate does
+// not parse -- they belong to the project's adapter.
+function __embeddedEvalPlan(ctx) {
+  const adapter = ctx.adapter                       // e.g. 'python "/abs/llamacpp_register_variant.py"'
+  const variant = ctx.variant                       // unique variant name for this candidate
+  const source = ctx.source                         // path to the candidate source file on disk
+  const root = ctx.projectRoot                       // --project-root
+  const params = ctx.params || ''                    // opaque register params pass-through
+  const unregParams = ctx.unregParams || ''          // opaque unregister params pass-through
+  const q = (s) => `"${s}"`
+  const reg = `${adapter} register --variant ${variant} --source ${q(source)} --project-root ${q(root)}${params ? ' ' + params : ''}`.trim()
+  const unreg = `${adapter} unregister --variant ${variant} --project-root ${q(root)}${unregParams ? ' ' + unregParams : ''}`.trim()
+  const list = `${adapter} list --project-root ${q(root)}`
+  return {
+    register: reg,
+    list,
+    // Project-native build/test/benchmark, run VERBATIM with the variant's env
+    // gate set so the project binary dispatches to this candidate.
+    build: ctx.buildCmd ? `KERSOR_VARIANT=${variant} ${ctx.buildCmd}` : '',
+    test: ctx.testCmd ? `KERSOR_VARIANT=${variant} ${ctx.testCmd}` : '',
+    benchmark: ctx.benchmarkCmd ? `KERSOR_VARIANT=${variant} ${ctx.benchmarkCmd}` : '',
+    unregister: unreg,
+    // Human-orderable sequence + the non-negotiable cleanup invariant.
+    order: ['register', 'list', 'build', 'test', 'benchmark', 'unregister'],
+    cleanupInvariant: `On ANY failure or non-improvement, run the unregister command and confirm via list that ${variant} is gone, leaving the project byte-exact pristine.`,
+  }
+}
+// --- END embedded-eval substrate ---
+
 // --- BEGIN model-tier (auto-inserted by scripts/patch-model-tier.js) ---
 // Tier-based model routing: mechanical steps (run substrate scripts, parse
 // JSON) use cheaper models; profile steps (run eval/ncu) use mid-tier;
@@ -150,6 +201,14 @@ const SUBSTRATE = args.substrate_dir || '_substrate'
 const SH = args.driver_shell_prefix || ''
 const PY = args.substrate_command_prefix || ''
 const WORKSPACE = args.workspace || '/tmp/stitchcuda'
+
+// --- Project-native integration (embedded kernels via integration-strategist) ---
+const PROJECT_ROOT = args.project_root || args.ggml_root || ''
+const BUILD_CMD = args.build_command || ''
+const BENCH_CMD = args.benchmark_command || ''
+const TEST_CMD = args.test_command || ''
+const REGISTER_SCRIPT = args.register_script || ''
+
 const LEGACY_SETUP_LANG_TOKEN = 'CUDA'
 const LEGACY_REPLAN_LANG_TOKEN = 'CUDA'
 const LEGACY_PLAN_LANG_TOKEN = 'CUDA'
@@ -214,6 +273,16 @@ function verifyToolHint() {
 // to native_profiler if undecided. Happy path is unchanged when ignored. ---
 let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
 
+// --- integration-strategist: route build/test mode (standalone vs embedded_*).
+// Resolved in Setup (below) once KERNEL_PATH is known; declared here at module
+// scope so the attempt loop and exit-restore can read the decision. Default keeps
+// the legacy standalone path byte-identical when no embedded source is supplied. ---
+const KERNEL_PATH = args.kernel_path || ''
+let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
+let USE_DRIVER_STANDALONE = USE_DRIVER  // narrowed after integration-strategist resolves
+let IS_EMBEDDED = false
+let ORIGINAL_BACKUP = ''
+
 async function main() {
   // ============================================================================
   // Phase 1: Setup
@@ -239,6 +308,53 @@ async function main() {
     DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT;
     DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID;
     log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`);
+  }
+
+  // --- integration-strategist gate: route standalone vs embedded_* once we know
+  // the source kernel. StitchCUDA is normally a generator (no kernel_path) -> the
+  // default 'standalone' decision holds and the legacy path is byte-identical. When
+  // args.kernel_path points at an inference-engine embedded operator (e.g. an
+  // llama.cpp .cuh that cannot compile as a single TU), the strategist routes to
+  // embedded_inplace / embedded_dispatch and the attempt loop evaluates in-project. ---
+  if (KERNEL_PATH) {
+    const _profManifest = (USE_DRIVER && BACKEND_DIR) ? `${BACKEND_DIR}/manifest.json` : `${SUBSTRATE}/backends/cuda/manifest.json`
+    const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
+    const _integ = await agent(
+      `Read ${KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+      `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
+      `--kernel "${KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
+      `--cache ${EXPDIR}/integ_cache.json --trajectory ${EXPDIR}/genome.jsonl\`. ` +
+      `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
+      { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+  }
+  log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
+  if (INTEGRATION_DECISION.method === 'derive_adapter') {
+    throw new Error('integration-strategist returned derive_adapter — provide project_root + build/test commands')
+  }
+  USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'standalone'
+  IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+  ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXPDIR}/integ_original.backup` : ''
+  if (ORIGINAL_BACKUP) {
+    await agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+      { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  }
+  // embedded_inplace exit safety net: unconditionally restore the pristine original
+  // before main() returns (covers no_successful_kernel + success paths). The
+  // per-attempt embedded-inplace eval also ALWAYS restores; this is the belt-and-
+  // suspenders exit restore the rollout guard requires.
+  async function __exitRestore() {
+    if (!ORIGINAL_BACKUP) return
+    await agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
+      { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH })
+  }
+  // A-O1 closure: native_profiler but ncu unavailable -> perf_heuristic (no ncu in
+  // StitchCUDA's default contract; the driver profile.sh envelope provides native).
+  if (PROFILING_DECISION.method === 'native_profiler' && !USE_DRIVER) {
+    log(`profiling: native_profiler but no driver profile envelope -> downgrade to perf_heuristic`)
+    PROFILING_DECISION = { method: 'perf_heuristic', confidence: 'inferred', normalizer: 'perf_to_evidence.py',
+      profiler_name: 'verifier-perf', rationale: 'native_profiler but no driver profile envelope -> perf_heuristic' }
   }
 
   const setupResult = await agent(
@@ -588,7 +704,7 @@ Then append:
     // to_evidence -> diagnose -> anti_cheat. Maps onto Verify schema below.
     // ==========================================================================
     let driverEnvelope = null;
-    if (USE_DRIVER) {
+    if (USE_DRIVER_STANDALONE) {
       const kPath = attemptKernelPath(attempt);
       const buildOut = `${WORKSPACE}/attempt_${attempt}/artifact`;
       const profOut = `${WORKSPACE}/attempt_${attempt}/profile.native`;
@@ -629,7 +745,8 @@ Then append:
             `Normalize the run.sh throughput into canonical metrics. Run exactly: ` +
             `\`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/${_normalizer} --baseline ${WORKSPACE}/attempt_${attempt}/result.json --peak-gflops <device_peak_gflops> --peak-gbs <device_peak_gbs>\`.\n` +
             `First write the run.sh result to ${WORKSPACE}/attempt_${attempt}/result.json from: ${JSON.stringify(runOut || {})}\n` +
-            `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}. ` +
+            `Also write heuristic_bclass (memory_bound|compute_bound|latency_bound) based on the throughput ratio so diagnose.py does not fall to unknown. ` +
+            `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, heuristic_bclass, coverage, source_backend}. ` +
             `Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'.`,
             { model: MODEL.mechanical, label: `driver-perf-heuristic-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH });
         }
@@ -651,6 +768,40 @@ Then append:
         latency_ms: Number((runOut && runOut.latency_ms) || 0),
         backend_id: DRIVER_BACKEND_ID,
       };
+    } else if (IS_EMBEDDED) {
+      // --- Embedded eval (integration-strategist -> embedded_inplace / embedded_dispatch) ---
+      // Serial by construction: this whole block runs inside the `for (let attempt...)`
+      // attempt loop, which is sequential (Planner/Coder/Verifier, no `await parallel(`).
+      // So there is no race on the shared project file (inplace) or project build (dispatch).
+      const kPath = attemptKernelPath(attempt);
+      const variant = `stitch_${attempt}`.replace(/[^A-Za-z0-9_]/g, '_');
+      let embLatency = 0, embMetrics = {}, embBclass = 'unknown';
+      if (INTEGRATION_DECISION.method === 'embedded_inplace' && ORIGINAL_BACKUP) {
+        const embResult = await agent(
+          `EMBEDDED-INPLACE EVAL (serial). Candidate: ${kPath} | project kernel: ${KERNEL_PATH} | pristine backup: ${ORIGINAL_BACKUP}\n` +
+          `Run IN ORDER:\n1. Restore pristine: cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}\n` +
+          `2. Apply candidate: cp ${kPath} ${KERNEL_PATH}\n3. Build: ${BUILD_CMD}\n4. Test: ${TEST_CMD}\n5. Benchmark: ${BENCH_CMD || TEST_CMD}\n` +
+          `6. ALWAYS restore: cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}\n` +
+          `Parse latency_ms + heuristic_bclass (memory/compute/latency bound). Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
+          { model: MODEL.mechanical, label: `embedded-inplace-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH });
+        embLatency = Number(embResult?.latency_ms || 0);
+        embBclass = embResult?.heuristic_bclass || 'unknown';
+        embMetrics = embResult?.metrics || { latency_ms: embLatency };
+      } else if (INTEGRATION_DECISION.method === 'embedded_dispatch' && REGISTER_SCRIPT && PROJECT_ROOT) {
+        const _plan = typeof __embeddedEvalPlan === 'function'
+          ? __embeddedEvalPlan({ adapter: `python3 "${REGISTER_SCRIPT}"`, variant, source: kPath, projectRoot: PROJECT_ROOT, buildCmd: BUILD_CMD, testCmd: TEST_CMD, benchmarkCmd: BENCH_CMD || TEST_CMD })
+          : null;
+        if (_plan) {
+          const embResult = await agent(
+            `EMBEDDED-DISPATCH EVAL (serial). Run IN ORDER:\n1. Register: ${_plan.register}\n2. Build: ${_plan.build}\n3. Test: ${_plan.test}\n4. Benchmark: ${_plan.benchmark}\n5. Unregister: ${_plan.unregister}\n${_plan.cleanupInvariant}\n` +
+            `Parse latency_ms + heuristic_bclass. Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
+            { model: MODEL.mechanical, label: `embedded-dispatch-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH });
+          embLatency = Number(embResult?.latency_ms || 0);
+          embBclass = embResult?.heuristic_bclass || 'unknown';
+          embMetrics = embResult?.metrics || { latency_ms: embLatency };
+        }
+      }
+      driverEnvelope = { latency_ms: embLatency, metrics: embMetrics, bottleneck_class: embBclass, backend_id: 'embedded' };
     }
 
     // ==========================================================================
@@ -790,6 +941,7 @@ Then append, using the values you just measured (status="done" if verification_p
 
   if (!bestKernel) {
     log('No successful kernel found');
+    await __exitRestore();
     return { success: false, reason: 'no_successful_kernel' };
   }
 
@@ -855,6 +1007,8 @@ Then append:
   // ============================================================================
   // Return final results
   // ============================================================================
+
+  await __exitRestore();
 
   return {
     success: true,

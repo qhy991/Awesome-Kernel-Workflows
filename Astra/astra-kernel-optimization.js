@@ -210,6 +210,13 @@ const INTEGRATION_MODE = args.integration_mode || 'standalone' // standalone | s
 const LANGUAGE = args.language || 'cuda'
 const SEED_CANDIDATES = args.seed_candidates || 3
 
+// --- Project-native integration (embedded kernels via integration-strategist) ---
+// BENCH_CMD already maps to args.benchmark_command above; reuse it as the embedded
+// benchmark command (do NOT redeclare). TEST_CMD likewise reused for embedded test.
+const PROJECT_ROOT = args.project_root || args.ggml_root || ''
+const BUILD_CMD = args.build_command || ''
+const REGISTER_SCRIPT = args.register_script || ''
+
 if (!INITIAL_KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
   throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
 }
@@ -479,6 +486,38 @@ if (USE_DRIVER) {
   if (_pd && _pd.method) PROFILING_DECISION = _pd
 }
 
+// --- integration-strategist: route build/test mode (standalone vs embedded_*). ---
+let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
+{
+  const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
+  const _integ = await agent(
+    `Read ${INITIAL_KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+    `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
+    `--kernel "${INITIAL_KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
+    `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
+    `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
+    { model: MODEL.mechanical, label: 'integration-strategist', phase: 'ProfileBaseline', schema: JSON_PASSTHROUGH })
+  if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+}
+log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
+if (INTEGRATION_DECISION.method === 'derive_adapter') {
+  throw new Error('integration-strategist returned derive_adapter — provide project_root + build/test commands')
+}
+const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'standalone'
+const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
+if (ORIGINAL_BACKUP) {
+  await agent(`Byte-exact backup: run \`cp -a "${INITIAL_KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+    { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'ProfileBaseline', schema: JSON_PASSTHROUGH })
+}
+// A-O1 closure: native_profiler but no standalone driver path (embedded/legacy) → perf_heuristic
+if (PROFILING_DECISION.method === 'native_profiler' && !USE_DRIVER_STANDALONE) {
+  log(`profiling: native_profiler but no standalone driver path -> downgrade to perf_heuristic`)
+  PROFILING_DECISION = { method: 'perf_heuristic', confidence: 'inferred', normalizer: 'perf_to_evidence.py',
+    profiler_name: 'test-harness-perf', rationale: 'native_profiler but no standalone driver -> perf_heuristic' }
+}
+
 baselineProfile = await agent(`You are Astra's Profiling Agent. Establish the baseline profile for the initial kernel.
 
 # Initial kernel
@@ -674,7 +713,7 @@ Then append, using the values you just measured (status="done" if it compiled an
     },
   })
 
-  if (USE_DRIVER) {
+  if (USE_DRIVER_STANDALONE) {
     const kPath = astraIterKernelPath(iteration)
     const buildOut = `${EXP_DIR}/astra_iter_${iteration}.artifact`
     const profOut = `${EXP_DIR}/astra_iter_${iteration}.prof.native`
@@ -706,7 +745,8 @@ Then append, using the values you just measured (status="done" if it compiled an
         `If method='perf_heuristic', normalize it into canonical metrics via ` +
         `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/${_normalizer} --baseline ${EXP_DIR}/astra_iter_${iteration}.result.json\`. ` +
         `Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. ` +
-        `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+        `Also write heuristic_bclass (memory_bound|compute_bound|latency_bound) based on the throughput ratio so diagnose.py does not fall to unknown. ` +
+        `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, heuristic_bclass, coverage, source_backend}.`,
         { model: MODEL.mechanical, label: `driver-to-evidence-${iteration}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
     }
     const diagOut = await agent(
@@ -723,6 +763,39 @@ Then append, using the values you just measured (status="done" if it compiled an
       bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',
       backend_id: DRIVER_BACKEND_ID,
     }
+  } else if (IS_EMBEDDED) {
+    // --- Embedded eval (integration-strategist → embedded_inplace / embedded_dispatch) ---
+    // Serial: Astra's candidate loop is already a sequential for(iteration) loop, so there
+    // is no race on the shared INITIAL_KERNEL_PATH / project build.
+    const kPath = astraIterKernelPath(iteration)
+    const variant = `astra_${iteration + 1}`.replace(/[^A-Za-z0-9_]/g, '_')
+    let embLatency = 0, embMetrics = {}, embBclass = 'unknown'
+    if (INTEGRATION_DECISION.method === 'embedded_inplace' && ORIGINAL_BACKUP) {
+      const embResult = await agent(
+        `EMBEDDED-INPLACE EVAL (serial). Candidate: ${kPath} | project kernel: ${INITIAL_KERNEL_PATH} | pristine backup: ${ORIGINAL_BACKUP}\n` +
+        `Run IN ORDER:\n1. Restore pristine: cp -a ${ORIGINAL_BACKUP} ${INITIAL_KERNEL_PATH}\n` +
+        `2. Apply candidate: cp ${kPath} ${INITIAL_KERNEL_PATH}\n3. Build: ${BUILD_CMD}\n4. Test: ${TEST_CMD || BENCH_CMD}\n5. Benchmark: ${BENCH_CMD || TEST_CMD}\n` +
+        `6. ALWAYS restore: cp -a ${ORIGINAL_BACKUP} ${INITIAL_KERNEL_PATH}\n` +
+        `Parse latency_ms + heuristic_bclass (memory/compute/latency bound). Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
+        { model: MODEL.mechanical, label: `embedded-inplace-${iteration}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      embLatency = Number(embResult?.latency_ms || 0)
+      embBclass = embResult?.heuristic_bclass || 'unknown'
+      embMetrics = embResult?.metrics || { latency_ms: embLatency }
+    } else if (INTEGRATION_DECISION.method === 'embedded_dispatch' && REGISTER_SCRIPT && PROJECT_ROOT) {
+      const _plan = typeof __embeddedEvalPlan === 'function'
+        ? __embeddedEvalPlan({ adapter: `python3 "${REGISTER_SCRIPT}"`, variant, source: kPath, projectRoot: PROJECT_ROOT, buildCmd: BUILD_CMD, testCmd: TEST_CMD || BENCH_CMD, benchmarkCmd: BENCH_CMD || TEST_CMD })
+        : null
+      if (_plan) {
+        const embResult = await agent(
+          `EMBEDDED-DISPATCH EVAL (serial). Run IN ORDER:\n1. Register: ${_plan.register}\n2. Build: ${_plan.build}\n3. Test: ${_plan.test}\n4. Benchmark: ${_plan.benchmark}\n5. Unregister: ${_plan.unregister}\n${_plan.cleanupInvariant}\n` +
+          `Parse latency_ms + heuristic_bclass. Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
+          { model: MODEL.mechanical, label: `embedded-dispatch-${iteration}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+        embLatency = Number(embResult?.latency_ms || 0)
+        embBclass = embResult?.heuristic_bclass || 'unknown'
+        embMetrics = embResult?.metrics || { latency_ms: embLatency }
+      }
+    }
+    evaluation.driver_envelope = { latency_ms: embLatency, metrics: embMetrics, bottleneck_class: embBclass, backend_id: 'embedded' }
   }
 
   phase('Record')
@@ -867,6 +940,12 @@ Then append (speedup is the best measured speedup, or null if no candidate was v
   label: 'final-report',
   phase: 'Report',
 })
+
+// embedded_inplace exit safety net: unconditionally restore pristine original.
+if (ORIGINAL_BACKUP) {
+  await agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${INITIAL_KERNEL_PATH}"\` and confirm.`,
+    { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH })
+}
 
 return {
   input_mode: INPUT_MODE,

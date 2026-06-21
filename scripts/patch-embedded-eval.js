@@ -33,6 +33,7 @@ const EMBEDDED_WORKFLOWS = [
   'CUDAAgent',
   'ARGUS',
   'Generalist',
+  'StitchCUDA',
 ]
 
 const BEGIN = '// --- BEGIN embedded-eval substrate (auto-inlined by scripts/patch-embedded-eval.js) ---'
