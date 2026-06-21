@@ -236,6 +236,12 @@ const LEGACY_REVISER_PERF_HINT = 'Apply a small, local performance or correctnes
 const LEGACY_EVALUATE_RUN_INSTRUCTION = 'Run the evaluator command if provided. If not provided, do not create one; mark compiled=false, correct=false, speedup=0, and explain missing evidence.'
 const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
 
+// --- Project-native integration (embedded kernels via integration-strategist) ---
+const PROJECT_ROOT = args.project_root || args.ggml_root || ''
+const BUILD_CMD = args.build_command || ''
+const BENCH_CMD = args.benchmark_command || EVAL_CMD || ''
+const REGISTER_SCRIPT = args.register_script || ''
+
 function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
 function driverSh(script, cliArgs) {
   return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
@@ -489,6 +495,44 @@ if (USE_DRIVER) {
     `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
     { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
   if (_pd && _pd.method) PROFILING_DECISION = _pd
+}
+
+// --- integration-strategist: route build/test mode (standalone vs embedded_*). ---
+// Lets AdaExplore optimize inference-engine embedded operators (e.g. llama.cpp .cuh)
+// that cannot compile as a single TU, not just standalone kernels. ADDITIVE:
+// default stays standalone, so the legacy path is byte-identical.
+let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
+{
+  const _kForIntg = KERNEL_PATH || PROBLEM_PATH || `${EXP_DIR}/reference.py`
+  const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
+  const _integ = await agent(
+    `Classify can_compile_standalone for the operator under optimization (${_kForIntg}) as exactly one of yes|no|uncertain ` +
+    `(use no when the file cannot compile as a single TU — e.g. a llama.cpp .cuh with project-only deps). Then ` +
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
+    `--kernel "${_kForIntg}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
+    `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
+    `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
+    { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+}
+log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
+if (INTEGRATION_DECISION.method === 'derive_adapter') {
+  throw new Error('integration-strategist returned derive_adapter — provide project_root + build/test commands')
+}
+const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'standalone'
+const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
+if (ORIGINAL_BACKUP) {
+  await agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+    { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH })
+}
+// A-O1 closure: embedded operators have no driver-provided native profiler
+// (profile.sh targets standalone build artifacts) → downgrade native_profiler to
+// perf_heuristic so the embedded eval normalizes throughput instead of probing ncu.
+if (IS_EMBEDDED && PROFILING_DECISION.method === 'native_profiler') {
+  log(`profiling: native_profiler but embedded operator has no native profiler -> downgrade to perf_heuristic`)
+  PROFILING_DECISION = { method: 'perf_heuristic', confidence: 'inferred', normalizer: 'perf_to_evidence.py',
+    profiler_name: 'embedded-perf', rationale: 'native_profiler but embedded operator -> perf_heuristic' }
 }
 
 const setupResult = await agent(`Set up a standalone AdaExplore-style ${setupLangToken()} optimization run.
@@ -814,7 +858,7 @@ Then append, using the values you just measured (status="done" if the candidate 
   let speedup = Number(evalResult.speedup || 0)
 
   let driverEnvelope = null
-  if (USE_DRIVER) {
+  if (USE_DRIVER_STANDALONE) {
     const buildOut = `${EXP_DIR}/eval/step_${searchStep + 1}_artifact`
     const profOut = `${EXP_DIR}/eval/step_${searchStep + 1}_prof.native`
     await agent(
@@ -841,7 +885,8 @@ Then append, using the values you just measured (status="done" if the candidate 
       if (PROFILING_DECISION.method === 'perf_heuristic') {
         evidenceOut = await agent(
           `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/${PROFILING_DECISION.normalizer || 'perf_to_evidence.py'} --baseline ${resultPath}\`.\n` +
-          `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}. ` +
+          `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend, heuristic_bclass}. ` +
+          `Also write heuristic_bclass (memory_bound|compute_bound|latency_bound) based on the throughput ratio so diagnose.py does not fall to unknown. ` +
           `Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'.`,
           { model: MODEL.mechanical, label: `driver-to-evidence-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
       }
@@ -867,6 +912,50 @@ Then append, using the values you just measured (status="done" if the candidate 
       latency_ms: measuredLatency,
       baseline_latency_ms: baselineLatency,
       backend_id: DRIVER_BACKEND_ID,
+      profiling_method: PROFILING_DECISION.method,
+      profiling_confidence: PROFILING_DECISION.confidence,
+    }
+  } else if (IS_EMBEDDED) {
+    // --- Embedded eval (integration-strategist → embedded_inplace / embedded_dispatch) ---
+    // SERIAL by construction: the MCTS loop evaluates exactly ONE candidate per
+    // searchStep (no `await parallel(` over candidates), so embedded modes never run
+    // concurrently — no race on the shared KERNEL_PATH (inplace) or project build (dispatch).
+    const variant = `adaexplore_${searchStep + 1}_${isLargeStep ? 'L' : 'S'}`.replace(/[^A-Za-z0-9_]/g, '_')
+    let embLatency = 0, embMetrics = {}, embBclass = 'unknown'
+    if (INTEGRATION_DECISION.method === 'embedded_inplace' && ORIGINAL_BACKUP) {
+      const embResult = await agent(
+        `EMBEDDED-INPLACE EVAL (serial). Candidate: ${kernelPath} | project kernel: ${KERNEL_PATH} | pristine backup: ${ORIGINAL_BACKUP}\n` +
+        `Run IN ORDER:\n1. Restore pristine: cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}\n` +
+        `2. Apply candidate: cp ${kernelPath} ${KERNEL_PATH}\n3. Build: ${BUILD_CMD}\n4. Test: ${TEST_CMD}\n5. Benchmark: ${BENCH_CMD || TEST_CMD}\n` +
+        `6. ALWAYS restore: cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}\n` +
+        `Parse latency_ms + heuristic_bclass (memory/compute/latency bound). Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
+        { model: MODEL.mechanical, label: `embedded-inplace-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      embLatency = Number(embResult?.latency_ms || 0)
+      embBclass = embResult?.heuristic_bclass || 'unknown'
+      embMetrics = embResult?.metrics || { latency_ms: embLatency }
+    } else if (INTEGRATION_DECISION.method === 'embedded_dispatch' && REGISTER_SCRIPT && PROJECT_ROOT) {
+      const _plan = typeof __embeddedEvalPlan === 'function'
+        ? __embeddedEvalPlan({ adapter: `python3 "${REGISTER_SCRIPT}"`, variant, source: kernelPath, projectRoot: PROJECT_ROOT, buildCmd: BUILD_CMD, testCmd: TEST_CMD, benchmarkCmd: BENCH_CMD || TEST_CMD })
+        : null
+      if (_plan) {
+        const embResult = await agent(
+          `EMBEDDED-DISPATCH EVAL (serial). Run IN ORDER:\n1. Register: ${_plan.register}\n2. Build: ${_plan.build}\n3. Test: ${_plan.test}\n4. Benchmark: ${_plan.benchmark}\n5. Unregister: ${_plan.unregister}\n${_plan.cleanupInvariant}\n` +
+          `Parse latency_ms + heuristic_bclass. Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
+          { model: MODEL.mechanical, label: `embedded-dispatch-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+        embLatency = Number(embResult?.latency_ms || 0)
+        embBclass = embResult?.heuristic_bclass || 'unknown'
+        embMetrics = embResult?.metrics || { latency_ms: embLatency }
+      }
+    }
+    const embBaselineLatency = Number(args.baseline_latency_ms || 0)
+    const embSpeedup = (embBaselineLatency > 0 && embLatency > 0) ? embBaselineLatency / embLatency : 0
+    if (embSpeedup > 0) speedup = embSpeedup
+    driverEnvelope = {
+      metrics: embMetrics,
+      bottleneck_class: embBclass,
+      latency_ms: embLatency,
+      baseline_latency_ms: embBaselineLatency,
+      backend_id: 'embedded',
       profiling_method: PROFILING_DECISION.method,
       profiling_confidence: PROFILING_DECISION.confidence,
     }
@@ -1044,6 +1133,15 @@ Then append, using the best measured result (speedup is the best measured speedu
   phase: 'Report',
   model: MODEL.judgment,
 })
+
+// --- exit restore (embedded_inplace safety net) ---
+// The per-step inplace eval ALWAYS restores after each candidate, but on any abnormal
+// exit the project tree could be left dirty. Restore pristine unconditionally before
+// returning so the embedded_inplace path never leaves the original kernel mutated.
+if (INTEGRATION_DECISION.method === 'embedded_inplace' && ORIGINAL_BACKUP) {
+  await agent(`Exit-restore: run \`cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}\` and confirm the original kernel is restored byte-exact.`,
+    { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH })
+}
 
 return {
   input_mode: INPUT_MODE,

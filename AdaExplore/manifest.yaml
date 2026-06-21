@@ -29,3 +29,7 @@ routing:
   speedup_field: best_speedup
   fidelity_boundary: high_fidelity_method_translation
   requires_ncu: false
+  integration_patterns:
+  - standalone
+  - embedded_dispatch
+  - embedded_inplace
