@@ -511,3 +511,7 @@ routing:
   speedup_field: speedup
   fidelity_boundary: faithful_but_simplified
   requires_ncu: false
+integration_patterns:
+- standalone
+- embedded_dispatch
+- embedded_inplace

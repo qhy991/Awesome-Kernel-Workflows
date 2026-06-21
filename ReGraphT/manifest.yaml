@@ -384,3 +384,7 @@ routing:
   speedup_field: best_speedup
   fidelity_boundary: training_free_inference
   requires_ncu: false
+integration_patterns:
+- standalone
+- embedded_dispatch
+- embedded_inplace
