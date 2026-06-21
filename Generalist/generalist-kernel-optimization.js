@@ -632,6 +632,8 @@ function perfHeuristicProfileHint(evalCmd) {
     `Profiling-strategist chose method='perf_heuristic' (confidence='${PROFILING_DECISION.confidence}'); do NOT run ncu. ` +
     `Run the benchmark command \`${evalCmd}\` for throughput and derive memory-vs-compute-bound hints from it; ` +
     `tag any bottleneck evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. ` +
+    `In metrics, set evidence='profile_heuristic' and either heuristic_bclass (memory_bound|compute_bound|latency_occupancy|overhead_bound) ` +
+    `or bottleneck_hint (short free text, e.g. "L2/memory bound at 55% SM"); use null heuristic_bclass only if truly unknown. ` +
     nsysEnrichSuffix()
   )
 }
@@ -734,7 +736,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
       `Return its stdout JSON verbatim ({bottleneck_class, techniques, dead_ends}). If unavailable, return empty techniques/dead_ends with missing evidence.`,
       { label: `retrieve-${iter}`, phase: 'Retrieve', schema: JSON_PASSTHROUGH, model: MODEL.mechanical }),
     () => agent(
-      `${substrateInstruction('method_gate.py', `--class ${bclass} --metrics ${EXP_DIR}/run-${iter}/metrics.json`)} ` +
+      `${substrateInstruction('method_gate.py', `--class ${bclass} --metrics ${EXP_DIR}/run-${iter}/metrics.json --op-description ${JSON.stringify(OP)}`)} ` +
       `Return its stdout JSON verbatim ({bottleneck_class, allowed_methods, rationale}). If unavailable, return allowed_methods:[] with missing evidence.`,
       { label: `gate-${iter}`, phase: 'Retrieve', schema: JSON_PASSTHROUGH, model: MODEL.mechanical }),
   ])
