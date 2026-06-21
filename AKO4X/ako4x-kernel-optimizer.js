@@ -248,6 +248,12 @@ const LEGACY_FENCE_BY_LANG = {
 }
 const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
 
+// --- Project-native integration (embedded kernels via integration-strategist) ---
+const PROJECT_ROOT = args.project_root || args.ggml_root || ''
+const BUILD_CMD = args.build_command || ''
+const BENCH_CMD = args.benchmark_command || BENCHMARK_CMD || ''
+const REGISTER_SCRIPT = args.register_script || ''
+
 let DRIVER = null
 let DRIVER_LANG_FENCE = ''
 let DRIVER_IMPL_REQUIREMENTS = ''
@@ -553,6 +559,39 @@ if (USE_DRIVER) {
     `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
     { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
   if (_pd && _pd.method) PROFILING_DECISION = _pd
+}
+
+// --- integration-strategist: route build/test mode (standalone vs embedded_*). ---
+let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
+{
+  const _profManifest = (USE_DRIVER && BACKEND_DIR) ? `${BACKEND_DIR}/manifest.json` : `${SUBSTRATE}/backends/cuda/manifest.json`
+  const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
+  const _integ = await agent(
+    `Read ${KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+    `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
+    `--kernel "${KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
+    `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
+    `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
+    { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+}
+log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
+if (INTEGRATION_DECISION.method === 'derive_adapter') {
+  throw new Error('integration-strategist returned derive_adapter — provide project_root + build/test commands')
+}
+const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'standalone'
+const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
+if (ORIGINAL_BACKUP) {
+  await agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+    { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH })
+}
+// A-O1 closure: native_profiler but ncu unavailable → perf_heuristic
+if (PROFILING_DECISION.method === 'native_profiler' && !NCU_BINARY) {
+  log(`profiling: native_profiler but no ncu_binary -> downgrade to perf_heuristic`)
+  PROFILING_DECISION = { method: 'perf_heuristic', confidence: 'inferred', normalizer: 'perf_to_evidence.py',
+    profiler_name: 'test-harness-perf', rationale: 'native_profiler but no ncu_binary -> perf_heuristic' }
 }
 
 // Establish baseline (NCU profile if available, else benchmark)
@@ -907,8 +946,8 @@ Return benchmark results.`, {
 
       log(`[${iterLabel}] Score: ${benchResult.score} | Speedup: ${speedup.toFixed(2)}x | Passed: ${passed}`)
 
-      // --- Per-attempt Layer-A driver envelope (P5d B3; USE_DRIVER only) ---
-      if (USE_DRIVER) {
+      // --- Per-attempt Layer-A driver envelope (standalone driver-path only; embedded uses project-native eval) ---
+      if (USE_DRIVER_STANDALONE) {
         const envIdx = iterCount - 1
         const kPath = ako4xIterKernelPath(round, iterCount)
         const buildOut = `${EXP_DIR}/variants/r${round + 1}_iter${iterCount}/build.artifact`
@@ -942,6 +981,7 @@ Return benchmark results.`, {
             `\`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/${_norm} --baseline ${EXP_DIR}/variants/r${round + 1}_iter${iterCount}/result.json --peak-gflops <device_peak_gflops> --peak-gbs <device_peak_gbs>\` ` +
             `(read peak GFLOPS/GB-s from ${BACKEND_DIR}/manifest.json if present; else estimate and say so). ` +
             `Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. ` +
+            `Also write heuristic_bclass (memory_bound|compute_bound|latency_bound) based on the throughput ratio so diagnose.py does not fall to unknown. ` +
             `Return stdout JSON verbatim {ok:true, metrics:{latency_ms:<from run.sh>,dram_pct:<from perf or null>,sm_pct:<from perf or null>,occupancy:null}, coverage:[...], source_backend:'${DRIVER_BACKEND_ID}'}.`,
             { model: MODEL.mechanical, label: `driver-to-evidence-${envIdx}`, phase: 'Iterate', schema: JSON_PASSTHROUGH })
         }
@@ -959,6 +999,38 @@ Return benchmark results.`, {
           bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',
           backend_id: DRIVER_BACKEND_ID,
         }
+      } else if (IS_EMBEDDED) {
+        // --- Embedded eval (integration-strategist → embedded_inplace / embedded_dispatch) ---
+        // Sequential (this for...of loop is already serial) — no race on the shared KERNEL_PATH.
+        const kPath = ako4xIterKernelPath(round, iterCount)
+        const variant = `ako4x_${round}_${iterCount}`.replace(/[^A-Za-z0-9_]/g, '_')
+        let embLatency = 0, embMetrics = {}, embBclass = 'unknown'
+        if (INTEGRATION_DECISION.method === 'embedded_inplace' && ORIGINAL_BACKUP) {
+          const embResult = await agent(
+            `EMBEDDED-INPLACE EVAL (serial). Candidate: ${kPath} | project kernel: ${KERNEL_PATH} | pristine backup: ${ORIGINAL_BACKUP}\n` +
+            `Run IN ORDER:\n1. Restore pristine: cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}\n` +
+            `2. Apply candidate: cp ${kPath} ${KERNEL_PATH}\n3. Build: ${BUILD_CMD}\n4. Test: ${TEST_CMD}\n5. Benchmark: ${BENCH_CMD || TEST_CMD}\n` +
+            `6. ALWAYS restore: cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}\n` +
+            `Parse latency_ms + heuristic_bclass (memory/compute/latency bound). Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
+            { model: MODEL.mechanical, label: `embedded-inplace-${iterCount}`, phase: 'Iterate', schema: JSON_PASSTHROUGH })
+          embLatency = Number(embResult?.latency_ms || 0)
+          embBclass = embResult?.heuristic_bclass || 'unknown'
+          embMetrics = embResult?.metrics || { latency_ms: embLatency }
+        } else if (INTEGRATION_DECISION.method === 'embedded_dispatch' && REGISTER_SCRIPT && PROJECT_ROOT) {
+          const _plan = typeof __embeddedEvalPlan === 'function'
+            ? __embeddedEvalPlan({ adapter: `python3 "${REGISTER_SCRIPT}"`, variant, source: kPath, projectRoot: PROJECT_ROOT, buildCmd: BUILD_CMD, testCmd: TEST_CMD, benchmarkCmd: BENCH_CMD || TEST_CMD })
+            : null
+          if (_plan) {
+            const embResult = await agent(
+              `EMBEDDED-DISPATCH EVAL (serial). Run IN ORDER:\n1. Register: ${_plan.register}\n2. Build: ${_plan.build}\n3. Test: ${_plan.test}\n4. Benchmark: ${_plan.benchmark}\n5. Unregister: ${_plan.unregister}\n${_plan.cleanupInvariant}\n` +
+              `Parse latency_ms + heuristic_bclass. Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
+              { model: MODEL.mechanical, label: `embedded-dispatch-${iterCount}`, phase: 'Iterate', schema: JSON_PASSTHROUGH })
+            embLatency = Number(embResult?.latency_ms || 0)
+            embBclass = embResult?.heuristic_bclass || 'unknown'
+            embMetrics = embResult?.metrics || { latency_ms: embLatency }
+          }
+        }
+        benchResult.driver_envelope = { latency_ms: embLatency, metrics: embMetrics, bottleneck_class: embBclass, backend_id: 'embedded' }
       }
 
       // Log to ITERATIONS.md (AKO4X: every labeled bench leaves a row)
@@ -1417,6 +1489,12 @@ Write a report covering:
   phase: 'Report',
   model: MODEL.judgment,
 })
+
+// embedded_inplace exit safety net: unconditionally restore pristine original.
+if (ORIGINAL_BACKUP) {
+  await agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
+    { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH })
+}
 
 return {
   input_mode: INPUT_MODE,
