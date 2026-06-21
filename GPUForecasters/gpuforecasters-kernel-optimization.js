@@ -214,8 +214,17 @@ const BUILD_CMD = args.build_command || ''
 const USER_NOTE = args.note || args.notes || ''
 // Embedded-dispatch mode: gate everything below behind EMBEDDED so the
 // standalone path is byte-identical to before when integration_pattern is absent.
+// NOTE: EMBEDDED is the STATIC seed (from args.integration_pattern) used for arg
+// validation and backward compat. The RUNTIME authority is IS_EMBEDDED, derived
+// from the integration-strategist gate inside main(); EMBEDDED is reassigned to
+// IS_EMBEDDED there so the authoring/eval prompts below honor the runtime decision.
 const INTEGRATION_PATTERN = (args.integration_pattern || 'standalone')
-const EMBEDDED = INTEGRATION_PATTERN.startsWith('embedded')
+let EMBEDDED = INTEGRATION_PATTERN.startsWith('embedded')
+// RUNTIME_INTEGRATION_METHOD is set by the integration-strategist gate inside main();
+// until then it mirrors the static seed. Module-scope helpers (taskContract /
+// embeddedEvidenceContract) read it so their eval-contract text reflects the runtime
+// decision, not the static arg.
+let RUNTIME_INTEGRATION_METHOD = EMBEDDED ? 'embedded_dispatch' : 'standalone'
 const REGISTER_SCRIPT = args.register_script || ''
 const PROJECT_ROOT = args.project_root || args.ggml_root || ''
 const REFERENCE_FILE = args.reference_cuh || args.reference_file || ''
@@ -294,7 +303,7 @@ function taskContract() {
 3. When benchmark_command is provided, run it exactly with {kernel_path} and {result_path} substitutions before reporting measured latency or speedup.
 4. Compute speedup against baseline_latency_ms when provided; otherwise obtain a measured baseline through benchmark_command before claiming measured speedup.
 5. If a required command is missing or cannot run, mark measured evidence unavailable. Do not invent measured correctness, latency, or speedup.
-6. Materialize generated candidates under exp_dir so evidence artifacts can be inspected.${EMBEDDED ? '\n\n' + embeddedEvidenceContract() : ''}`
+6. Materialize generated candidates under exp_dir so evidence artifacts can be inspected.${EMBEDDED ? '\n\n' + embeddedEvidenceContract(RUNTIME_INTEGRATION_METHOD) : ''}`
 }
 
 // Sanitize a candidate/round identity into a valid adapter variant name.
@@ -318,10 +327,32 @@ function embeddedProposalContract() {
   ].join('\n')
 }
 
-// Evidence-prompt appendix: how to EVALUATE one embedded candidate via the adapter.
-function embeddedEvidenceContract() {
+// Evidence-prompt appendix: how to EVALUATE one embedded candidate. Branches on the
+// runtime integration method: embedded_dispatch uses the register adapter; embedded_inplace
+// swaps the candidate into the project file in place (a pristine backup is taken once at
+// Setup and restored on every eval + unconditionally on exit).
+function embeddedEvidenceContract(method) {
+  const m = method || 'embedded_dispatch'
+  if (m === 'embedded_inplace') {
+    return [
+      '# Embedded-Inplace Evidence (integration method=embedded_inplace)',
+      'This kernel is NOT standalone. Do NOT use {kernel_path}/{result_path} substitution.',
+      'Each candidate REPLACES the project kernel file in place; a pristine backup was taken',
+      'once at Setup. For every candidate:',
+      '1. RESTORE pristine first (defensive): cp -a <backup> <project_kernel_path>',
+      '2. APPLY candidate in place: cp <candidatePath> <project_kernel_path>',
+      '3. BUILD the project (project-native build_command)',
+      '4. TEST (correctness) and BENCHMARK (latency) against the built project',
+      '5. ALWAYS restore the pristine original (even on failure/non-improvement):',
+      '   cp -a <backup> <project_kernel_path>',
+      '6. HARD REQUIREMENT (cleanup invariant): leave the project byte-exact pristine.',
+      '7. Parse correctness and latency ONLY from the command stdout, under the SAME',
+      '   grounding/anti-fabrication rules above. Never invent measured correctness, latency,',
+      '   or speedup; if a command is missing or fails, mark measured evidence unavailable.',
+    ].join('\n')
+  }
   return [
-    '# Embedded-Dispatch Evidence (integration_pattern=' + INTEGRATION_PATTERN + ')',
+    '# Embedded-Dispatch Evidence (integration method=embedded_dispatch)',
     'This kernel is NOT standalone. Do NOT use {kernel_path}/{result_path} substitution.',
     'Each candidate is a complete dispatch-compatible .cuh evaluated against the project',
     'register adapter using the workflow-provided embedded eval plan. For every candidate:',
@@ -388,6 +419,69 @@ async function main() {
     if (_pd && _pd.method) PROFILING_DECISION = _pd
   }
   log(`Profiling method: ${PROFILING_DECISION.method} (confidence=${PROFILING_DECISION.confidence})`)
+
+  // --- integration-strategist: DECIDE standalone vs embedded_* at runtime. This
+  // REPLACES the static `EMBEDDED` (from args.integration_pattern) as the authority
+  // for which eval path runs: the strategist classifies whether the kernel can
+  // compile as a single TU and routes accordingly. GPUForecasters has no backend
+  // driver, so standalone runs its native {kernel_path}/{result_path} evidence
+  // loop, IS_EMBEDDED runs project-native register/build/test/benchmark.
+  // Backward compat: seed the strategist's can-standalone probe from the existing
+  // static EMBEDDED arg so legacy `integration_pattern=embedded*` callers still
+  // route to the embedded path when the strategist is unavailable or uncertain.
+  // Additive: when method==='standalone' the path below is byte-identical to before.
+  // See _substrate/integration/README.md and _substrate/integration/ROLLOUT.md.
+  let INTEGRATION_DECISION = { method: EMBEDDED ? 'embedded_dispatch' : 'standalone', build_fidelity: 'isolated', reversible: true }
+  if (KERNEL_PATH) {
+    const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
+    const _integ = await agent(
+      `Read ${KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+      `(use no when the file cannot compile as a single TU — e.g. a llama.cpp .cuh with project-only deps). Then ` +
+      substrateInstruction('integration/integration_strategist.py',
+        `resolve --kernel "${KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
+        `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
+      ` Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
+      { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+  }
+  log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
+  if (INTEGRATION_DECISION.method === 'derive_adapter') {
+    throw new Error('integration-strategist returned derive_adapter — provide project_root + register_script + build/test/benchmark commands')
+  }
+  const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+  RUNTIME_INTEGRATION_METHOD = INTEGRATION_DECISION.method
+  const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
+  if (ORIGINAL_BACKUP) {
+    await agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+      { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  }
+  // If the strategist routed to an embedded path, validate the required wiring now
+  // (the static `EMBEDDED` arg check above only fires when integration_pattern was
+  // passed; the strategist can decide embedded even when it was not).
+  if (IS_EMBEDDED) {
+    const missing = []
+    if (INTEGRATION_DECISION.method === 'embedded_dispatch' && !REGISTER_SCRIPT) missing.push('register_script')
+    if (!PROJECT_ROOT) missing.push('project_root (or ggml_root)')
+    if (!BUILD_CMD) missing.push('build_command')
+    if (!TEST_CMD) missing.push('test_command')
+    if (!BENCHMARK_CMD) missing.push('benchmark_command')
+    if (missing.length) {
+      throw new Error(`integration-strategist routed to ${INTEGRATION_DECISION.method} but missing: ${missing.join(', ')}`)
+    }
+  }
+  // A-O1 closure: GPUForecasters has no native profiler/driver, so a native_profiler
+  // choice cannot be honored without a standalone benchmark command -> downgrade to
+  // perf_heuristic (which writes heuristic_bclass in the eval prompts so diagnose
+  // stays defined).
+  if (PROFILING_DECISION.method === 'native_profiler' && !BENCHMARK_CMD) {
+    log(`profiling: native_profiler but no benchmark command -> downgrade to perf_heuristic`)
+    PROFILING_DECISION = { method: 'perf_heuristic', confidence: 'inferred', normalizer: 'perf_to_evidence.py',
+      profiler_name: 'gpuforecasters-perf', rationale: 'native_profiler but no benchmark_command -> perf_heuristic' }
+  }
+  // Promote the runtime decision to EMBEDDED so the authoring/eval prompts below
+  // route on IS_EMBEDDED (runtime) rather than the static arg. When standalone,
+  // IS_EMBEDDED===false===EMBEDDED so the standalone path is byte-identical.
+  EMBEDDED = IS_EMBEDDED
 
   const setupResult = await agent(
     `Set up GPU Forecasters optimization environment:
@@ -499,7 +593,16 @@ Training process:
 2. Materialize each config under ${EXP_DIR}/training/${EMBEDDED ? `
    When authoring each candidate, follow the Embedded-Dispatch Authoring Contract above.` : ''}
 3. ${EMBEDDED
-    ? `For each candidate written at <candidatePath> with a unique sanitized <variantName>, build the eval plan and run, IN ORDER:
+    ? (INTEGRATION_DECISION.method === 'embedded_inplace'
+        ? `For each candidate written at <candidatePath>, evaluate it IN PLACE (a pristine backup was taken at Setup):
+   - restore pristine: cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}
+   - apply candidate: cp <candidatePath> ${KERNEL_PATH}
+   - build: ${BUILD_CMD}
+   - test (correctness): ${TEST_CMD}
+   - benchmark (latency): ${BENCHMARK_CMD || TEST_CMD}
+   - then ALWAYS restore: cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH} (cleanup invariant — leave the project byte-exact pristine).
+   Parse correctness from test stdout and latency from benchmark stdout, then measure speedup against the baseline contract.`
+        : `For each candidate written at <candidatePath> with a unique sanitized <variantName>, build the eval plan and run, IN ORDER:
    - plan.register, then plan.list (confirm <variantName> is registered)
    - plan.build, then plan.test (correctness), then plan.benchmark (latency)
    - then ALWAYS plan.unregister and confirm via plan.list that <variantName> is gone (cleanup invariant).
@@ -513,10 +616,12 @@ ${(() => { const p = embeddedPlanFor(`${EXP_DIR}/training/cand_001.cuh`, 'cand_0
      '     benchmark:  ' + p.benchmark,
      '     unregister: ' + p.unregister,
    ].join('\n'); })()}
-   Parse correctness from plan.test stdout and latency from plan.benchmark stdout, then measure speedup against the baseline contract.`
+   Parse correctness from plan.test stdout and latency from plan.benchmark stdout, then measure speedup against the baseline contract.`)
     : 'Run test_command before accepting correctness when provided'}
 4. ${EMBEDDED
-    ? 'On ANY failure or non-improvement still run plan.unregister and confirm removal so the project stays byte-exact pristine.'
+    ? (INTEGRATION_DECISION.method === 'embedded_inplace'
+        ? 'On ANY failure or non-improvement still restore the pristine original (cp -a the backup back) so the project stays byte-exact pristine.'
+        : 'On ANY failure or non-improvement still run plan.unregister and confirm removal so the project stays byte-exact pristine.')
     : `Run benchmark_command on ${setupResult.target_gpu} when provided and measure speedup against the baseline contract`}
 5. Store evaluator JSON artifacts beside each candidate
 6. Reject or label candidates with missing/failed correctness evidence
@@ -719,13 +824,23 @@ PUCT algorithm:
    b. Expansion: expand node with forecaster-predicted actions
    c. Simulation:
 ${EMBEDDED
-  ? `      - If forecaster abstains: materialize the config under ${EXP_DIR}/puct/ and execute the embedded eval plan:
+  ? (INTEGRATION_DECISION.method === 'embedded_inplace'
+      ? `      - If forecaster abstains: materialize the config under ${EXP_DIR}/puct/ and evaluate it in place:
+        author a dispatch .cuh per the Authoring Contract, then run IN ORDER: restore pristine
+        (cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}), apply candidate (cp <candidatePath> ${KERNEL_PATH}),
+        build (${BUILD_CMD}), test (${TEST_CMD}), benchmark (${BENCHMARK_CMD || TEST_CMD}), then ALWAYS restore
+        (cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}) — cleanup invariant, leave the project byte-exact pristine.
+        Parse correctness from test stdout and latency from benchmark stdout.
+      - Else: use forecaster prediction
+      - If test fails, treat the candidate as invalid regardless of predicted speedup
+      - Use the measured benchmark latency as the authoritative measured speedup`
+      : `      - If forecaster abstains: materialize the config under ${EXP_DIR}/puct/ and execute the embedded eval plan:
         author a dispatch .cuh per the Authoring Contract, then run IN ORDER plan.register, plan.list, plan.build,
         plan.test, plan.benchmark, then ALWAYS plan.unregister + confirm removal via plan.list (cleanup invariant).
         Parse correctness from plan.test stdout and latency from plan.benchmark stdout.
       - Else: use forecaster prediction
       - If plan.test fails, treat the candidate as invalid regardless of predicted speedup
-      - Use the measured plan.benchmark latency as the authoritative measured speedup`
+      - Use the measured plan.benchmark latency as the authoritative measured speedup`)
   : `      - If forecaster abstains: materialize the config under ${EXP_DIR}/puct/ and execute user-provided evidence commands for ground truth
       - Else: use forecaster prediction
       - If test_command fails, treat the candidate as invalid regardless of predicted speedup
@@ -738,7 +853,7 @@ Track:
 - Tree statistics (depth, breadth, nodes explored)
 - Best config found
 
-Profiling-strategist selected method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'). If method==='native_profiler', you MAY use ncu metrics as forecaster features. If method==='perf_heuristic', derive memory-vs-compute-bound features from benchmark throughput (latency, GFLOPS/GB-s) and tag them evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. If method==='static', reason from source only (confidence='hypothesized'). Never fabricate profiler counters.
+Profiling-strategist selected method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'). If method==='native_profiler', you MAY use ncu metrics as forecaster features. If method==='perf_heuristic', derive memory-vs-compute-bound features from benchmark throughput (latency, GFLOPS/GB-s) and tag them evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'; also write heuristic_bclass (memory_bound|compute_bound|latency_bound) so diagnose does not fall to unknown. If method==='static', reason from source only (confidence='hypothesized'). Never fabricate profiler counters.
 
 Return JSON:
 {
@@ -831,10 +946,14 @@ Refinement strategies:
 4. Fine-grained parameter tuning
 
 Execute promising refinements on GPU (use forecasters to filter).
-Materialize each refinement under ${EXP_DIR}/refinement/ and use the evidence commands exactly when provided.${EMBEDDED ? `
+Materialize each refinement under ${EXP_DIR}/refinement/ and use the evidence commands exactly when provided.${EMBEDDED ? (INTEGRATION_DECISION.method === 'embedded_inplace' ? `
+For each refinement, author a dispatch .cuh per the Authoring Contract and evaluate it IN PLACE: run IN ORDER
+restore pristine (cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}), apply candidate (cp <candidatePath> ${KERNEL_PATH}),
+build (${BUILD_CMD}), test (${TEST_CMD}), benchmark (${BENCHMARK_CMD || TEST_CMD}), then ALWAYS restore
+(cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}) — cleanup invariant. Parse correctness/latency from command stdout only.` : `
 For each refinement, author a dispatch .cuh per the Authoring Contract and evaluate it via the embedded eval
 plan: run IN ORDER plan.register, plan.list, plan.build, plan.test, plan.benchmark, then ALWAYS plan.unregister
-and confirm removal via plan.list (cleanup invariant). Parse correctness/latency from command stdout only.` : ''}
+and confirm removal via plan.list (cleanup invariant). Parse correctness/latency from command stdout only.`) : ''}
 Only promote a refinement as measured if correctness passes and benchmark evidence is available.
 
 Return JSON:
@@ -898,11 +1017,18 @@ Best config: ${bestConfig}
 Best speedup: ${bestSpeedup.toFixed(3)}x
 
 Validation:
-1. Materialize the final candidate under ${EXP_DIR}/final/${EMBEDDED ? `
+1. Materialize the final candidate under ${EXP_DIR}/final/${EMBEDDED ? (INTEGRATION_DECISION.method === 'embedded_inplace'
+   ? `
+   Author it as a dispatch .cuh per the Authoring Contract, then evaluate it IN PLACE: run IN ORDER
+   restore pristine (cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}), apply candidate (cp <candidatePath> ${KERNEL_PATH}),
+   build (${BUILD_CMD}), test (${TEST_CMD}), benchmark (${BENCHMARK_CMD || TEST_CMD}), then ALWAYS restore
+   (cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}) — cleanup invariant. Use test stdout for correctness and benchmark
+   stdout for latency; do NOT use {kernel_path}/{result_path} substitution.`
+   : `
    Author it as a dispatch .cuh per the Authoring Contract, then evaluate via the embedded eval plan:
    run IN ORDER plan.register, plan.list, plan.build, plan.test, plan.benchmark, then ALWAYS plan.unregister
    and confirm removal via plan.list (cleanup invariant). Use plan.test for correctness and plan.benchmark
-   stdout for latency; do NOT use {kernel_path}/{result_path} substitution.` : ''}
+   stdout for latency; do NOT use {kernel_path}/{result_path} substitution.`) : ''}
 2. Run test_command exactly if provided and fail validation if correctness fails
 3. Run benchmark_command exactly if provided; parse its JSON artifact as authoritative measured performance
 4. Execute on target hardware (${setupResult.target_gpu}) multiple times when benchmark_command supports repeated runs
@@ -919,7 +1045,7 @@ Validation:
 9. Compare with baseline and other methods
 10. If evidence_mode is conservative_missing_evidence, return validation_passed=false unless the user note explicitly authorizes static-only validation
 
-Profiling-strategist selected method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'). If method==='native_profiler', you MAY use ncu metrics as forecaster features. If method==='perf_heuristic', derive memory-vs-compute-bound features from benchmark throughput (latency, GFLOPS/GB-s) and tag them evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. If method==='static', reason from source only (confidence='hypothesized'). Never fabricate profiler counters.
+Profiling-strategist selected method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'). If method==='native_profiler', you MAY use ncu metrics as forecaster features. If method==='perf_heuristic', derive memory-vs-compute-bound features from benchmark throughput (latency, GFLOPS/GB-s) and tag them evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'; also write heuristic_bclass (memory_bound|compute_bound|latency_bound) so diagnose does not fall to unknown. If method==='static', reason from source only (confidence='hypothesized'). Never fabricate profiler counters.
 
 Return JSON:
 {
@@ -965,6 +1091,12 @@ Then append (status="done" if correctness passed AND validation passed, else "er
 
   if (!validationResult || !validationResult.validation_passed) {
     log('Validation failed');
+    // embedded_inplace exit safety net: restore pristine original before the early
+    // return so the project is left byte-exact even when validation fails mid-flow.
+    if (ORIGINAL_BACKUP) {
+      await agent(`Exit restore (unconditional, validation failed): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
+        { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Validation', schema: JSON_PASSTHROUGH })
+    }
     return {
       success: false,
       reason: 'validation_failed',
@@ -1052,6 +1184,13 @@ Then append (speedup is the final best validated speedup number, or null if unav
   // ============================================================================
   // Return final results
   // ============================================================================
+
+  // embedded_inplace exit safety net: unconditionally restore the pristine original
+  // so the project is left byte-exact regardless of how the workflow terminated.
+  if (ORIGINAL_BACKUP) {
+    await agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
+      { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH })
+  }
 
   return {
     success: true,

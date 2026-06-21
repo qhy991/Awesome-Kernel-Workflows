@@ -324,6 +324,72 @@ Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, 
   if (_pd && _pd.method) PROFILING_DECISION = _pd
   log(`Profiling-strategist: method=${PROFILING_DECISION.method} confidence=${PROFILING_DECISION.confidence}`)
 
+  // --- integration-strategist: DECIDE standalone vs embedded_* at runtime. This
+  // REPLACES the static `EMBEDDED` (from args.integration_pattern) as the authority
+  // for which eval path runs: the strategist classifies whether the (reference)
+  // kernel can compile as a single TU and routes accordingly. FACT has no backend
+  // driver, so there is no USE_DRIVER_STANDALONE; standalone runs FACT's native
+  // (in-prompt) CUTLASS compile/eval, IS_EMBEDDED runs project-native
+  // register/build/test/benchmark. Additive: when method==='standalone' the path
+  // below is byte-identical to before. The static `EMBEDDED` arg SEEDS the default
+  // for backward compat (existing embedded callers keep working), then the
+  // strategist may override. See _substrate/integration/README.md and ROLLOUT.md.
+  // FACT has no single KERNEL_PATH; the strategist reads the dispatch reference
+  // (REFERENCE_FILE) when present — that is the file whose standalone-compile
+  // ability determines the embedded route.
+  const _integProbeKernel = REFERENCE_FILE || (setupResult.exemplar_kernels && setupResult.exemplar_kernels[0]) || ''
+  const _integSeedMethod = EMBEDDED ? 'embedded_dispatch' : 'standalone'
+  let INTEGRATION_DECISION = { method: _integSeedMethod, build_fidelity: 'isolated', reversible: true }
+  {
+    const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
+    const _integ = await agent(
+      `${_integProbeKernel ? `Read ${_integProbeKernel}; ` : ''}classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+      `(use no when the file cannot compile as a single TU — e.g. a llama.cpp .cuh with project-only deps). Then ` +
+      `Run exactly: \`${SUBSTRATE_PY} ${SUBSTRATE}/integration/integration_strategist.py resolve ` +
+      `--kernel "${_integProbeKernel || args.exp_dir + '/_fact_target'}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
+      `--cache ${args.exp_dir}/integ_cache.json --trajectory ${args.exp_dir}/genome.jsonl\`. ` +
+      `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
+      { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+  }
+  log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
+  if (INTEGRATION_DECISION.method === 'derive_adapter') {
+    throw new Error('integration-strategist returned derive_adapter — provide project_root + register_script + build/test/benchmark commands')
+  }
+  // IS_EMBEDDED is the RUNTIME authority (gates eval/composition blocks below),
+  // replacing the static `EMBEDDED` arg as the source of truth. ORIGINAL_BACKUP is
+  // taken once for embedded_inplace (restore-on-exit safety net).
+  const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+  const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${args.exp_dir}/integ_original.backup` : ''
+  if (ORIGINAL_BACKUP && _integProbeKernel) {
+    await agent(`Byte-exact backup: run \`cp -a "${_integProbeKernel}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+      { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  }
+  // If the strategist routed to an embedded path, validate the required wiring now
+  // (the static `EMBEDDED` arg check above only fires when integration_pattern was
+  // passed; the strategist can decide embedded even when it was not).
+  if (IS_EMBEDDED) {
+    const missing = []
+    if (INTEGRATION_DECISION.method === 'embedded_dispatch' && !REGISTER_SCRIPT) missing.push('register_script')
+    if (!PROJECT_ROOT) missing.push('project_root (or ggml_root)')
+    if (!BUILD_CMD) missing.push('build_command')
+    if (!TEST_CMD) missing.push('test_command')
+    if (!BENCHMARK_CMD) missing.push('benchmark_command')
+    if (missing.length) {
+      throw new Error(`integration-strategist routed to ${INTEGRATION_DECISION.method} but missing: ${missing.join(', ')}`)
+    }
+  }
+  // A-O1 closure: FACT has no native profiler/ncu, so a native_profiler choice
+  // cannot be honored on the embedded path without a standalone CUTLASS compile ->
+  // downgrade to perf_heuristic (which writes heuristic_bclass in the ablation
+  // prompt so diagnose stays defined). Gated on IS_EMBEDDED so the standalone
+  // path's PROFILING_DECISION (and the byte-identical ablation prompt) is unchanged.
+  if (IS_EMBEDDED && PROFILING_DECISION.method === 'native_profiler' && !BENCHMARK_CMD) {
+    log(`profiling: native_profiler but no benchmark command on embedded path -> downgrade to perf_heuristic`)
+    PROFILING_DECISION = { method: 'perf_heuristic', confidence: 'inferred', normalizer: 'perf_to_evidence.py',
+      profiler_name: 'fact-perf', rationale: 'native_profiler but no benchmark_command on embedded path -> perf_heuristic' }
+  }
+
   // Pattern registry: T(rule, dtype, architecture) -> code transformation
   const patternRegistry = [];
   const discoveredPatterns = [];
@@ -533,9 +599,10 @@ Then append:
   log(`Composing patterns to generate optimized kernels (budget: ${compositionBudget})...`);
 
   // In embedded mode each composed kernel must be a complete dispatch-compatible
-  // .cuh that matches the project's reference dispatch signature exactly.
-  const compositionEmbeddingBlock = EMBEDDED
-    ? `\n\n${EMBEDDING_CONTRACT}\n\nMANDATORY (embedded dispatch): Read the reference dispatch file at ${REFERENCE_FILE} and match its dispatch signature EXACTLY (same entry-point shape, template params, launch-bounds conventions). Each composed candidate's kernel_code MUST be a COMPLETE dispatch-compatible \`.cuh\` (NOT a standalone translation unit, NO main()/harness/top-level test code). Use ONLY symbols/headers the project already provides; do not register, build, or benchmark the variant yourself.`
+  // .cuh that matches the project's reference dispatch signature exactly. Gated on
+  // the runtime IS_EMBEDDED (integration-strategist), not the static EMBEDDED arg.
+  const compositionEmbeddingBlock = IS_EMBEDDED
+    ? `\n\n${EMBEDDING_CONTRACT}\n\nMANDATORY (embedded): Read the reference dispatch file at ${REFERENCE_FILE} and match its dispatch signature EXACTLY (same entry-point shape, template params, launch-bounds conventions). Each composed candidate's kernel_code MUST be a COMPLETE dispatch-compatible \`.cuh\` (NOT a standalone translation unit, NO main()/harness/top-level test code). Use ONLY symbols/headers the project already provides; do not register, build, or benchmark the variant yourself.`
     : '';
 
   const compositionResult = await agent(
@@ -720,25 +787,34 @@ Then append (status="done" if ablation completed, else "error"):
 
   log('Evaluating composed kernels on target hardware...');
 
-  // Embedded-dispatch evaluation: each composed kernel is registered into the
-  // project, built/tested/benchmarked via the project's own commands, then ALWAYS
-  // unregistered back to pristine. Replaces the standalone CUTLASS compile path.
+  // Embedded evaluation: gated on the runtime IS_EMBEDDED (integration-strategist),
+  // NOT the static EMBEDDED arg. embedded_dispatch registers each candidate into the
+  // project via the adapter, builds/tests/benchmarks, then ALWAYS unregisters back to
+  // pristine. embedded_inplace REPLACES the project kernel file in place (a pristine
+  // backup was taken at Setup) with restore→apply→build→test→bench→restore per
+  // candidate. Both replace the standalone CUTLASS compile path. FACT evaluates all
+  // candidates in a SINGLE agent call (no `await parallel(`), so embedded eval is
+  // already serial — no separate serial for-loop is needed.
   let evaluationEmbeddingBlock = '';
-  if (EMBEDDED) {
-    const planBlocks = composedKernels.map((k, idx) => {
-      const variantName = `fact_${k.kernel_id || ('k' + idx)}`.replace(/[^A-Za-z0-9_]/g, '_');
-      const candidatePath = `${PROJECT_ROOT}/.fact_candidates/${variantName}.cuh`;
-      const plan = __embeddedEvalPlan({
-        adapter: 'python "' + REGISTER_SCRIPT + '"',
-        variant: variantName,
-        source: candidatePath,
-        projectRoot: PROJECT_ROOT,
-        params: REGISTER_PARAMS,
-        buildCmd: BUILD_CMD,
-        testCmd: TEST_CMD,
-        benchmarkCmd: BENCHMARK_CMD,
-      });
-      return `### Candidate kernel_id=${k.kernel_id || ('k' + idx)} (variant ${variantName})
+  if (IS_EMBEDDED) {
+    const _embBclassLine = PROFILING_DECISION.method === 'perf_heuristic'
+      ? `\nFor EACH candidate, also write heuristic_bclass (memory_bound|compute_bound|latency_bound) derived from the measured throughput so diagnose does not fall to unknown. Tag it evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'.`
+      : '';
+    if (INTEGRATION_DECISION.method === 'embedded_dispatch') {
+      const planBlocks = composedKernels.map((k, idx) => {
+        const variantName = `fact_${k.kernel_id || ('k' + idx)}`.replace(/[^A-Za-z0-9_]/g, '_');
+        const candidatePath = `${PROJECT_ROOT}/.fact_candidates/${variantName}.cuh`;
+        const plan = __embeddedEvalPlan({
+          adapter: 'python "' + REGISTER_SCRIPT + '"',
+          variant: variantName,
+          source: candidatePath,
+          projectRoot: PROJECT_ROOT,
+          params: REGISTER_PARAMS,
+          buildCmd: BUILD_CMD,
+          testCmd: TEST_CMD,
+          benchmarkCmd: BENCHMARK_CMD,
+        });
+        return `### Candidate kernel_id=${k.kernel_id || ('k' + idx)} (variant ${variantName})
 Write this candidate's kernel_code verbatim to ${candidatePath}, then run IN THIS EXACT ORDER:
 1. Register:   ${plan.register}
 2. List:       ${plan.list}   (CONFIRM ${variantName} is now listed; abort this candidate if absent)
@@ -748,15 +824,38 @@ Write this candidate's kernel_code verbatim to ${candidatePath}, then run IN THI
 6. Unregister: ${plan.unregister}
 7. List:       ${plan.list}   (CONFIRM ${variantName} is GONE)
 HARD REQUIREMENT (cleanup invariant): ${plan.cleanupInvariant}`;
-    }).join('\n\n');
-    evaluationEmbeddingBlock = `
+      }).join('\n\n');
+      evaluationEmbeddingBlock = `
 
 # EMBEDDED-DISPATCH EVALUATION (overrides the standalone CUTLASS compile/execute steps below)
 These kernels are NOT standalone translation units; each is a dispatch-compatible \`.cuh\` that must be wired into the project at ${PROJECT_ROOT} via the register adapter. Do NOT attempt a standalone \`nvcc\`/CUTLASS compile. For EACH candidate below, run its commands in order, and ALWAYS run the unregister command and confirm removal via list even on build/correctness/benchmark FAILURE or non-improvement — never leave the project dirty.
 
 ${planBlocks}
 
-Map per-candidate results into evaluation_results: compilation_success=build succeeded, correctness_passed=test passed, gflops/execution_time derived from the benchmark output. Parse correctness (pass/fail) and latency STRICTLY from the actual test/benchmark command output. Do NOT fabricate numbers; if a value is not present in the output, report it as unavailable rather than guessing.`;
+Map per-candidate results into evaluation_results: compilation_success=build succeeded, correctness_passed=test passed, gflops/execution_time derived from the benchmark output, heuristic_bclass from throughput. Parse correctness (pass/fail) and latency STRICTLY from the actual test/benchmark command output. Do NOT fabricate numbers; if a value is not present in the output, report it as unavailable rather than guessing.${_embBclassLine}`;
+    } else { // embedded_inplace
+      const inplaceBlocks = composedKernels.map((k, idx) => {
+        const variantName = `fact_${k.kernel_id || ('k' + idx)}`.replace(/[^A-Za-z0-9_]/g, '_');
+        const candidatePath = `${PROJECT_ROOT}/.fact_candidates/${variantName}.cuh`;
+        return `### Candidate kernel_id=${k.kernel_id || ('k' + idx)} (variant ${variantName})
+Write this candidate's kernel_code verbatim to ${candidatePath}, then run IN THIS EXACT ORDER (project kernel: ${REFERENCE_FILE} | pristine backup: ${ORIGINAL_BACKUP}):
+1. RESTORE pristine first (defensive): cp -a ${ORIGINAL_BACKUP} ${REFERENCE_FILE}
+2. APPLY candidate in place: cp ${candidatePath} ${REFERENCE_FILE}
+3. Build:      ${BUILD_CMD}
+4. Test:       ${TEST_CMD}        (correctness)
+5. Benchmark:  ${BENCHMARK_CMD}   (latency)
+6. RESTORE pristine (HARD REQUIREMENT — run even on failure/non-improvement): cp -a ${ORIGINAL_BACKUP} ${REFERENCE_FILE}
+You MUST leave the project byte-exact pristine after each candidate; do not skip step 6.`;
+      }).join('\n\n');
+      evaluationEmbeddingBlock = `
+
+# EMBEDDED-INPLACE EVALUATION (overrides the standalone CUTLASS compile/execute steps below)
+These kernels are NOT standalone translation units; each is a dispatch-compatible \`.cuh\` that REPLACES the project kernel file at ${REFERENCE_FILE} in place. A pristine backup was taken at Setup (${ORIGINAL_BACKUP}). Do NOT attempt a standalone \`nvcc\`/CUTLASS compile. For EACH candidate below, run its commands in order, and ALWAYS restore the pristine original in step 6 even on build/correctness/benchmark FAILURE or non-improvement — never leave the project dirty.
+
+${inplaceBlocks}
+
+Map per-candidate results into evaluation_results: compilation_success=build succeeded, correctness_passed=test passed, gflops/execution_time derived from the benchmark output, heuristic_bclass from throughput. Parse correctness (pass/fail) and latency STRICTLY from the actual test/benchmark command output. Do NOT fabricate numbers; if a value is not present in the output, report it as unavailable rather than guessing.${_embBclassLine}`;
+    }
   }
 
   const evaluationResult = await agent(
@@ -909,6 +1008,15 @@ Then append (speedup is the best speedup vs baseline, or null if unavailable):
   // ============================================================================
   // Return final results
   // ============================================================================
+
+  // embedded_inplace exit safety net: unconditionally restore the pristine
+  // original so the project is left byte-exact regardless of how the workflow
+  // terminated. (embedded_dispatch is non-mutating — adapter unregister is the
+  // reversibility — so it is exempt.)
+  if (ORIGINAL_BACKUP && _integProbeKernel) {
+    await agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${_integProbeKernel}"\` and confirm.`,
+      { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH })
+  }
 
   return {
     success: true,

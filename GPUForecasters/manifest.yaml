@@ -80,4 +80,5 @@ routing:
   integration_patterns:
   - standalone
   - embedded_dispatch
+  - embedded_inplace
   requires_ncu: false
