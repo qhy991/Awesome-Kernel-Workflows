@@ -285,6 +285,10 @@ const ADAPTATION_SCOPE = 'inference_time_adaptation'
 const LANGUAGE = args.language || 'cuda'
 const TARGET_GPU = args.target_gpu || 'unknown GPU'
 const SEED_CANDIDATES = args.seed_candidates || 3
+// Optional ncu binary/command. native_profiler needs a real profiler to run; when
+// absent the integration/profiling gates downgrade native_profiler -> perf_heuristic
+// (A-O1 closure) so the Profile phase does not try ncu it cannot run.
+const NCU_CMD = args.ncu_command || args.ncu_binary || ''
 
 // --- Embedded-dispatch mode (gated; standalone path is byte-identical when off) ---
 const INTEGRATION_PATTERN = (args.integration_pattern || 'standalone')
@@ -424,6 +428,55 @@ modelCode = setupResult.model_code
 }
 log(`Profiling method: ${PROFILING_DECISION.method} (confidence=${PROFILING_DECISION.confidence})`)
 
+// --- integration-strategist: route build/test mode (standalone vs embedded_*).
+// The agent only CLASSIFIES can_compile_standalone; the substrate DETERMINISTICALLY
+// resolves the method (standalone | embedded_inplace | embedded_dispatch | derive_adapter).
+// Defaults to standalone so the legacy path stays byte-identical when the decision
+// is absent. The explicit integration_pattern arg (EMBEDDED above) is honored as a
+// strong host hint into can_standalone. See _substrate/integration/README.md. ---
+let INTEGRATION_DECISION = { method: EMBEDDED ? INTEGRATION_PATTERN : 'standalone', build_fidelity: 'isolated', reversible: true }
+{
+  const _kernelForProbe = MODEL_PATH || REFERENCE_FILE || ''
+  const _canStandaloneHint = EMBEDDED ? 'no' : 'uncertain'
+  const _probe = JSON.stringify({ compiler: !!COMPILE_CMD, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
+  if (_kernelForProbe) {
+    const _integ = await agent(
+      `Read ${_kernelForProbe}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+      `(use no when the file cannot compile as a single TU — e.g. a project .cuh with project-only deps; ` +
+      `the caller hinted can_standalone="${_canStandaloneHint}"). Then ` +
+      substrateInstruction('integration/integration_strategist.py',
+        `resolve --kernel "${_kernelForProbe}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
+        `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
+      ` Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
+      { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+  }
+}
+log(`Integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
+if (INTEGRATION_DECISION.method === 'derive_adapter') {
+  throw new Error('integration-strategist returned derive_adapter — provide project_root + register_script + build/test commands (integration_pattern=embedded)')
+}
+// CUDAAgent has no standalone driver-build envelope (the validator agent runs
+// COMPILE_CMD/VERIFY_CMD/PROFILE_CMD directly), so there is nothing extra to gate on a
+// USE_DRIVER_STANDALONE flag; the standalone path is simply "not IS_EMBEDDED".
+const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+// embedded_inplace mutates the project file in place; back it up ONCE so every
+// candidate restores to a pristine original and the exit net can too.
+const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
+if (ORIGINAL_BACKUP) {
+  await agent(`Byte-exact backup (once): run \`cp -a "${REFERENCE_FILE || MODEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm it exists.`,
+    { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH })
+}
+// A-O1 closure: native_profiler needs a real profiler to run; CUDAAgent's native
+// profiler is ncu. If no ncu command is available, downgrade native_profiler ->
+// perf_heuristic so the Profile phase derives memory/compute-bound hints from
+// benchmark throughput instead of trying ncu it cannot run.
+if (PROFILING_DECISION.method === 'native_profiler' && !NCU_CMD) {
+  log(`profiling: native_profiler but no ncu_command -> downgrade to perf_heuristic`)
+  PROFILING_DECISION = { method: 'perf_heuristic', confidence: 'inferred', normalizer: 'perf_to_evidence.py',
+    profiler_name: 'test-harness-perf', rationale: 'native_profiler but no ncu_command -> perf_heuristic' }
+}
+
 // =============================================================================
 // Phase 2: Profile — Analyze baseline performance
 // =============================================================================
@@ -458,7 +511,7 @@ ${PROFILE_CMD ? `   Run: ${PROFILE_CMD}` : '   Estimate performance from operato
 
 Return profiling results and optimization plan.
 
-Profiling-strategist selected method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'). If method==='native_profiler', you MAY run ncu for bottleneck evidence. If method==='perf_heuristic', derive memory-vs-compute-bound hints from benchmark throughput (latency, GFLOPS/GB-s) and tag them evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. If method==='static', reason from source only (confidence='hypothesized'). Never fabricate profiler counters.
+Profiling-strategist selected method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'). If method==='native_profiler', you MAY run ncu${NCU_CMD ? ` (ncu command: ${NCU_CMD})` : ''} for bottleneck evidence. If method==='perf_heuristic', derive memory-vs-compute-bound hints from benchmark throughput (latency, GFLOPS/GB-s) and tag them evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'; ALSO set heuristic_bclass (memory_bound|compute_bound|latency_bound) from the throughput ratio so downstream diagnosis does not fall back to unknown. If method==='static', reason from source only (confidence='hypothesized'). Never fabricate profiler counters.
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -475,6 +528,7 @@ Then append:
       bottlenecks: { type: 'array', items: { type: 'string' } },
       optimization_strategy: { type: 'string' },
       fusion_plan: { type: 'string' },
+      heuristic_bclass: { type: 'string' },
     },
     required: ['eager_time_ms', 'compile_time_ms', 'bottlenecks', 'optimization_strategy'],
   },
@@ -513,7 +567,7 @@ for (currentAttempt = 0; currentAttempt < MAX_TURNS && !targetMet; currentAttemp
     ? '\n# Proactive knowledge fetch (on retries)\nIf a previous attempt FAILED (compile/correctness/speedup) or you are unsure about an API, intrinsic, or how a known bottleneck is typically resolved, FIRST run the search command from the `## Knowledge Tools (on-demand)` block in your input (e.g. `query.py` for kernel patterns, `chub search` for API/Triton docs). Read 1-2 returned pages, extract the actionable technique, then implement. This is best-effort: if no block is present or nothing relevant returns, proceed with your own knowledge. Do not block on it.'
     : ''
 
-  const embeddedProposalBlock = EMBEDDED
+  const embeddedProposalBlock = IS_EMBEDDED
     ? `\n\n${EMBEDDING_CONTRACT}\n\nMANDATORY: Read the reference dispatch file at ${REFERENCE_FILE} and match its dispatch signature EXACTLY (same entry-point shape, template params, launch-bounds conventions). Emit a COMPLETE dispatch-compatible \`.cuh\` (NOT a standalone translation unit, NO main()/harness). Put the full \`.cuh\` contents in kernel_code; binding_code and model_new_code are not used in embedded mode (return brief placeholders).`
     : ''
 
@@ -585,23 +639,47 @@ Then append (this is optimization attempt ${currentAttempt}):
   // ===========================================================================
   phase('Verify')
 
-  // Embedded-dispatch evaluation: register candidate into the project, build/test/
-  // benchmark via the project's own commands, then ALWAYS unregister to pristine.
+  // Embedded evaluation (integration-strategist → embedded_dispatch / embedded_inplace).
+  // This for-loop is already SERIAL, so embedded eval (which mutates a shared file or a
+  // shared project build) runs inline with no race — no separate serial loop needed.
+  // Gated on the RUNTIME decision IS_EMBEDDED, not the static integration_pattern arg.
   let embeddedEvalBlock = ''
-  if (EMBEDDED) {
+  if (IS_EMBEDDED) {
     const variantName = `cuda_agent_t${currentAttempt}`.replace(/[^A-Za-z0-9_]/g, '_')
     const candidatePath = `${EXP_DIR}/kernels/${variantName}.cuh`
-    const plan = __embeddedEvalPlan({
-      adapter: 'python "' + REGISTER_SCRIPT + '"',
-      variant: variantName,
-      source: candidatePath,
-      projectRoot: PROJECT_ROOT,
-      params: REGISTER_PARAMS,
-      buildCmd: BUILD_CMD,
-      testCmd: VERIFY_CMD,
-      benchmarkCmd: PROFILE_CMD,
-    })
-    embeddedEvalBlock = `
+    if (INTEGRATION_DECISION.method === 'embedded_inplace' && ORIGINAL_BACKUP) {
+      // embedded_inplace: copy the candidate over the project file in place, build/test/
+      // benchmark with the project's own commands, then ALWAYS restore the pristine backup.
+      const projectFile = REFERENCE_FILE || MODEL_PATH
+      embeddedEvalBlock = `
+
+# EMBEDDED-INPLACE EVALUATION (overrides the standalone steps below)
+This candidate is NOT standalone; it replaces the project file in place. Write the kernel_code above verbatim to ${candidatePath}, then evaluate by running these commands IN THIS EXACT ORDER:
+
+1. Restore pristine: cp -a "${ORIGINAL_BACKUP}" "${projectFile}"
+2. Apply candidate:  cp "${candidatePath}" "${projectFile}"
+3. Build:            ${BUILD_CMD}
+4. Test:             ${VERIFY_CMD}        (correctness)
+5. Benchmark:        ${PROFILE_CMD || VERIFY_CMD}   (latency)
+6. ALWAYS restore:   cp -a "${ORIGINAL_BACKUP}" "${projectFile}"
+
+HARD REQUIREMENT (cleanup invariant): You MUST run the final restore (step 6) and confirm the project file is byte-exact pristine even on compile/correctness/benchmark FAILURE or non-improvement. Never leave the project dirty.
+
+Parse correctness (pass/fail) and latency STRICTLY from the test/benchmark command output. Do NOT fabricate numbers; if a value is not present in the output, report it as unavailable rather than guessing. Map results into the schema (compiled=build succeeded, correct=test passed, kernel_time_ms=measured latency).`
+    } else {
+      // embedded_dispatch (default embedded): register into the project's dispatch table,
+      // build/test/benchmark via the project's own commands, then ALWAYS unregister to pristine.
+      const plan = __embeddedEvalPlan({
+        adapter: 'python "' + REGISTER_SCRIPT + '"',
+        variant: variantName,
+        source: candidatePath,
+        projectRoot: PROJECT_ROOT,
+        params: REGISTER_PARAMS,
+        buildCmd: BUILD_CMD,
+        testCmd: VERIFY_CMD,
+        benchmarkCmd: PROFILE_CMD,
+      })
+      embeddedEvalBlock = `
 
 # EMBEDDED-DISPATCH EVALUATION (overrides the standalone steps below)
 This candidate is NOT standalone. Write the kernel_code above verbatim to ${candidatePath}, then evaluate it against the project's dispatch adapter by running these commands IN THIS EXACT ORDER:
@@ -618,6 +696,7 @@ HARD REQUIREMENT (cleanup invariant): ${plan.cleanupInvariant}
 You MUST run the unregister command and confirm removal even on compile/correctness/benchmark FAILURE or non-improvement. Never leave the project dirty.
 
 Parse correctness (pass/fail) and latency STRICTLY from the test/benchmark command output. Do NOT fabricate numbers; if a value is not present in the output, report it as unavailable rather than guessing. Map results into the schema (compiled=build succeeded, correct=test passed, kernel_time_ms=measured latency).`
+    }
   }
 
   const verifyResult = await agent(`You are a CUDA kernel validator. Compile, verify, and benchmark this kernel implementation.${embeddedEvalBlock}
@@ -765,6 +844,14 @@ Write:
   label: 'final-report',
   phase: 'Report',
 })
+
+// Exit restore (embedded_inplace safety net): the candidate eval restores after each
+// attempt, but force one final restore so the project file is byte-exact pristine on
+// exit regardless of how the loop terminated. No-op for standalone/embedded_dispatch.
+if (ORIGINAL_BACKUP) {
+  await agent(`Exit restore: run \`cp -a "${ORIGINAL_BACKUP}" "${REFERENCE_FILE || MODEL_PATH}"\` and confirm the project file is byte-exact pristine.`,
+    { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH })
+}
 
 return {
   input_mode: INPUT_MODE,

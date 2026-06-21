@@ -349,6 +349,60 @@ let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured' }
   log(`Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}')`)
 }
 
+// --- integration-strategist: DECIDE standalone vs embedded_* at runtime. This
+// REPLACES the static `EMBEDDED` (from args.integration_pattern) as the authority
+// for which eval path runs: the strategist classifies whether the kernel can
+// compile as a single TU and routes accordingly. ARGUS has no backend driver, so
+// there is no USE_DRIVER_STANDALONE; standalone runs ARGUS's native (in-prompt)
+// validation, IS_EMBEDDED runs project-native register/build/test/benchmark.
+// Additive: when method==='standalone' the path below is byte-identical to before.
+// See _substrate/integration/README.md and _substrate/integration/ROLLOUT.md.
+let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
+{
+  const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
+  const _integ = await agent(
+    `Read ${KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+    `(use no when the file cannot compile as a single TU — e.g. a llama.cpp .cuh with project-only deps). Then ` +
+    `Run exactly: \`${SUBSTRATE}/integration/integration_strategist.py resolve ` +
+    `--kernel "${KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
+    `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
+    `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
+    { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+}
+log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
+if (INTEGRATION_DECISION.method === 'derive_adapter') {
+  throw new Error('integration-strategist returned derive_adapter — provide project_root + register_script + build/test/benchmark commands')
+}
+const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
+if (ORIGINAL_BACKUP) {
+  await agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+    { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH })
+}
+// If the strategist routed to an embedded path, validate the required wiring now
+// (the static `EMBEDDED` arg check above only fires when integration_pattern was
+// passed; the strategist can decide embedded even when it was not).
+if (IS_EMBEDDED) {
+  const missing = []
+  if (INTEGRATION_DECISION.method === 'embedded_dispatch' && !REGISTER_SCRIPT) missing.push('register_script')
+  if (!PROJECT_ROOT) missing.push('project_root (or ggml_root)')
+  if (!TEST_CMD) missing.push('test_command')
+  if (!BENCH_CMD) missing.push('benchmark_command')
+  if (!BUILD_CMD) missing.push('build_command')
+  if (missing.length) {
+    throw new Error(`integration-strategist routed to ${INTEGRATION_DECISION.method} but missing: ${missing.join(', ')}`)
+  }
+}
+// A-O1 closure: ARGUS has no native profiler/driver, so a native_profiler choice
+// cannot be honored without a standalone driver path -> downgrade to perf_heuristic
+// (which writes heuristic_bclass in the validate prompt so diagnose stays defined).
+if (PROFILING_DECISION.method === 'native_profiler' && !BENCH_CMD) {
+  log(`profiling: native_profiler but no benchmark command -> downgrade to perf_heuristic`)
+  PROFILING_DECISION = { method: 'perf_heuristic', confidence: 'inferred', normalizer: 'perf_to_evidence.py',
+    profiler_name: 'argus-perf', rationale: 'native_profiler but no benchmark_command -> perf_heuristic' }
+}
+
 if (INPUT_MODE === 'generate_then_optimize') {
   const generated = await agent(`No kernel_path was provided. Generate and verify an initial kernel before starting ARGUS ICRL optimization.
 
@@ -678,7 +732,7 @@ ${currentCode.substring(0, 6000)}
 
 # Knowledge Base Examples for "${step.optimization}":
 ${KNOWLEDGE_BASE[step.category || 'global_intrusive']?.filter(k => k.includes(step.optimization.split(':')[0].toLowerCase().replace(/\s+/g, '_')))?.join('\n') || 'Use general optimization patterns.'}
-${EMBEDDED ? `
+${IS_EMBEDDED ? `
 # EMBEDDED-DISPATCH AUTHORING REQUIREMENTS (override "standalone compilable kernel"):
 ${EMBEDDING_CONTRACT}
 
@@ -729,10 +783,14 @@ Then append (ICRL iteration ${outerIter}, lowering step ${stepIdx}):
   let embeddedPlan = null
   let candidatePath = ''
   let variantName = ''
-  if (EMBEDDED) {
+  // Gated on the integration-strategist decision (IS_EMBEDDED), NOT the static
+  // args.integration_pattern. The ICRL outer loop is already SERIAL (a `for`), so
+  // each embedded eval mutates the shared project one-at-a-time (no race); no
+  // separate serial for-loop is needed. Standalone is byte-identical to before.
+  if (IS_EMBEDDED) {
     variantName = `argus_i${outerIter}`.replace(/[^A-Za-z0-9_]/g, '_')
     candidatePath = `${EXP_DIR}/candidates/${variantName}.cuh`
-    await agent(`Write the embedded-dispatch candidate file to disk verbatim (no edits, no extra files).
+    await agent(`Write the embedded candidate file to disk verbatim (no edits, no extra files).
 
 # Target path: ${candidatePath}
 # Create parent dir first: mkdir -p ${EXP_DIR}/candidates
@@ -742,16 +800,18 @@ ${currentCode}
 \`\`\`
 
 Return after writing the file.`, { label: `write-candidate-${outerIter}`, phase: 'Validate' })
-    embeddedPlan = __embeddedEvalPlan({
-      adapter: 'python "' + REGISTER_SCRIPT + '"',
-      variant: variantName,
-      source: candidatePath,
-      projectRoot: PROJECT_ROOT,
-      params: REGISTER_PARAMS,
-      buildCmd: BUILD_CMD,
-      testCmd: TEST_CMD,
-      benchmarkCmd: BENCH_CMD,
-    })
+    if (INTEGRATION_DECISION.method === 'embedded_dispatch') {
+      embeddedPlan = __embeddedEvalPlan({
+        adapter: 'python "' + REGISTER_SCRIPT + '"',
+        variant: variantName,
+        source: candidatePath,
+        projectRoot: PROJECT_ROOT,
+        params: REGISTER_PARAMS,
+        buildCmd: BUILD_CMD,
+        testCmd: TEST_CMD,
+        benchmarkCmd: BENCH_CMD,
+      })
+    }
   }
 
   const validateResult = await agent(`You are the ARGUS Validator Agent (Section 6).
@@ -764,7 +824,7 @@ ${currentCode.substring(0, 6000)}
 
 # Invariants to Check:
 ${loweringResults.map(r => r.invariants.map(inv => `- ${inv}`).join('\n')).join('\n')}
-${EMBEDDED ? `
+${IS_EMBEDDED && INTEGRATION_DECISION.method === 'embedded_dispatch' ? `
 # EMBEDDED-DISPATCH EVALUATION (this kernel is wired into a project; it is NOT a
 # standalone translation unit). Run these adapter commands IN THIS EXACT ORDER.
 # Run each as a Bash command verbatim; do not paraphrase or reorder.
@@ -796,6 +856,7 @@ was compiled INTO the project (not a standalone translation unit):
 5. Run the benchmark against the built project:
    ${embeddedPlan.benchmark}
 - Compare against baseline: ${bestThroughput} TFLOPS; identify bottlenecks.
+${PROFILING_DECISION.method === 'perf_heuristic' ? `- Profiling-strategist chose method='perf_heuristic' (confidence='${PROFILING_DECISION.confidence}'): derive a qualitative bottleneck from the measured throughput and write heuristic_bclass (memory_bound|compute_bound|latency_bound) so diagnose does not fall to unknown. Tag it evidence='profile_heuristic'.` : ''}
 
 ## Step 4: Mandatory cleanup (HARD REQUIREMENT — run even on failure/non-improvement)
 6. ALWAYS unregister the variant, even if any step above failed:
@@ -813,7 +874,47 @@ Reward = f(correctness, invariant_satisfaction, performance)
 
 Apply the SAME grounding/anti-fabrication rules as always: report ONLY metrics
 actually emitted by the commands above. If a command did not run or produced no
-parseable result, mark it unmeasured — do not infer or invent numbers.` : `
+parseable result, mark it unmeasured — do not infer or invent numbers.` : (IS_EMBEDDED && INTEGRATION_DECISION.method === 'embedded_inplace') ? `
+# EMBEDDED-INPLACE EVALUATION (this candidate REPLACES the project file in place;
+# a pristine backup was taken at Setup). Run IN THIS EXACT ORDER, as Bash verbatim.
+# project kernel: ${KERNEL_PATH} | candidate: ${candidatePath} | pristine backup: ${ORIGINAL_BACKUP}
+
+1. RESTORE pristine first (defensive): cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}
+2. APPLY candidate in place: cp ${candidatePath} ${KERNEL_PATH}
+3. BUILD the project (this REPLACES any standalone compile; ARGUS invariant
+   validation below runs against THIS built project):
+   ${BUILD_CMD}
+
+## Step 1: Compile-Time Invariant Validation (against the built project)
+After build succeeds, run the ARGUS static analysis over the candidate as compiled
+INTO the project (not a standalone TU):
+- Track tag propagation; check tag assertions at all use sites
+- For any violation, produce a CONCRETE COUNTEREXAMPLE:
+  "Violation at [program point]: thread [T] holds element [E] with tag [X],
+   but assertion requires tag [Y]"
+- A build failure is a hard correctness failure (tests_pass=false).
+
+## Step 2: Functional Correctness
+4. Run correctness against the built project: ${TEST_CMD}
+
+## Step 3: Performance Profiling
+5. Run the benchmark against the built project: ${BENCH_CMD || TEST_CMD}
+- Compare against baseline: ${bestThroughput} TFLOPS; identify bottlenecks.
+${PROFILING_DECISION.method === 'perf_heuristic' ? `- Profiling-strategist chose method='perf_heuristic' (confidence='${PROFILING_DECISION.confidence}'): derive a qualitative bottleneck from throughput and write heuristic_bclass (memory_bound|compute_bound|latency_bound) so diagnose does not fall to unknown. Tag it evidence='profile_heuristic'.` : ''}
+
+## Step 4: Mandatory cleanup (HARD REQUIREMENT — run even on failure/non-improvement)
+6. ALWAYS restore the pristine original, even if any step above failed:
+   cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}
+You MUST leave the project byte-exact pristine; do not skip step 6.
+
+## Step 5: Compute Reward Signal (ARGUS ICRL reward)
+Reward = f(correctness, invariant_satisfaction, performance)
+- If invariants violated or build fails: negative/zero reward (dense signal).
+- If tests fail: zero reward.
+- If correct + improved: positive reward proportional to speedup.
+
+Apply the SAME grounding/anti-fabrication rules: report ONLY metrics actually
+emitted by the commands above; mark anything unmeasured rather than infer.` : `
 # Validation Steps (ARGUS Section 5 + Section 6):
 
 ## Step 1: Compile-Time Invariant Validation
@@ -837,6 +938,7 @@ ${BENCH_CMD ? `Run: ${BENCH_CMD}` : 'Estimate performance:'}
 - Measure or estimate throughput (TFLOPS)
 - Compare against baseline: ${bestThroughput} TFLOPS
 - Identify remaining bottlenecks
+${PROFILING_DECISION.method === 'perf_heuristic' ? `- Profiling-strategist chose method='perf_heuristic' (confidence='${PROFILING_DECISION.confidence}'): derive a qualitative bottleneck from throughput and write heuristic_bclass (memory_bound|compute_bound|latency_bound) so diagnose does not fall to unknown. Tag it evidence='profile_heuristic'.` : ''}
 
 ## Step 4: Compute Reward Signal (ARGUS ICRL reward)
 Reward = f(correctness, invariant_satisfaction, performance)
@@ -862,6 +964,7 @@ Then append, using the values you just measured (status="done" if invariants sat
         throughput_tflops: { type: 'number' },
         speedup: { type: 'number' },
         remaining_bottlenecks: { type: 'array', items: { type: 'string' } },
+        heuristic_bclass: { type: 'string' },
         reward: { type: 'number' },
         reward_breakdown: { type: 'string' },
       },
@@ -1002,6 +1105,13 @@ Write:
   label: 'final-report',
   phase: 'Learn',
 })
+
+// embedded_inplace exit safety net: unconditionally restore the pristine original
+// so the project is left byte-exact regardless of how the loop terminated.
+if (ORIGINAL_BACKUP) {
+  await agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
+    { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Learn', schema: JSON_PASSTHROUGH })
+}
 
 return {
   input_mode: INPUT_MODE,
