@@ -126,17 +126,19 @@ decode load-width vs q8_0 batch occupancy, (3) no harness filter for q8_0-only g
 
 ---
 
-### A-O5. `integration-strategist` fully wired only in Generalist (Medium — scope)
+### A-O5. `integration-strategist` fully wired only in Generalist (Medium — scope) — **RESOLVED** (rollout complete, 23/29 workflows)
 
 **Symptom**: Only `Generalist/generalist-kernel-optimization.js` calls
 `integration_strategist.py` with eval branching. Other ~27 workflows got
 profiling-strategist INJECT but not integration wiring per
 `_substrate/integration/README.md`.
 
-**Impact**: llama.cpp embedded kernels still break on standalone-default workflows.
-
-**Suggested fix**: Extract shared `integration_eval` inline block (like
-`embedded_eval.js` patch) and roll out to priority workflows (CUDAAgent, AKO4X).
+**Fix**: Wired the Generalist-level treatment (integration gate + USE_DRIVER_STANDALONE
+gating + embedded eval branch + serial eval + ORIGINAL_BACKUP/restore + native→perf
+downgrade + heuristic_bclass + manifest integration_patterns) into 23/29 workflows
+(all optimizers). Bug-class guard (`test_workflow_embedded_safety.py`) enforces the 3
+Generalist bug-classes across the full tree (0 findings). See
+`_substrate/integration/ROLLOUT.md` for the recipe + cohort history.
 
 ---
 

@@ -1,8 +1,12 @@
-# Integration-strategist rollout — wiring the Generalist-level embedded treatment
+# Integration-strategist rollout — COMPLETE (23/29 workflows wired)
+
+> **Status: DONE.** 23 of 29 workflows now wire the integration-strategist (all
+> optimizers). All pass wfcheck + the bug-class guard (0 findings). The recipe below
+> is kept as the reference for future workflows + the guard is the permanent safety net.
 
 Goal: let every workflow handle inference-engine embedded operators (llama.cpp / PyTorch
 aten / vLLM …), not just Generalist. Generalist is the **GPU-validated reference**
-(CONFIRM v2/v5); this document is the recipe to apply that treatment to the other
+(CONFIRM v2/v5); this document was the recipe to apply that treatment to the other
 ~23 standalone-default workflows, and the `tests/test_workflow_embedded_safety.py`
 guard is the net that keeps the rollout honest.
 
