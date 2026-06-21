@@ -28,3 +28,7 @@ routing:
   speedup_field: best_score
   fidelity_boundary: strict_high_fidelity
   requires_ncu: false
+  integration_patterns:
+  - standalone
+  - embedded_dispatch
+  - embedded_inplace
