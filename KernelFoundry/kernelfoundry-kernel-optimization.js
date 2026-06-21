@@ -257,6 +257,14 @@ const BACKEND_DIR = args.backend_dir || ''
 const SUBSTRATE = args.substrate_dir || '_substrate'
 const SH = args.driver_shell_prefix || ''
 const PY = args.substrate_command_prefix || ''
+
+// --- Project-native integration (embedded kernels via integration-strategist) ---
+// PROJECT_BUILD_CMD/REGISTER_SCRIPT are new; benchmark/test reuse the existing
+// BENCH_CMD/TEST_CMD consts (do NOT redeclare them).
+const PROJECT_ROOT = args.project_root || args.ggml_root || ''
+const PROJECT_BUILD_CMD = args.build_command || ''
+const REGISTER_SCRIPT = args.register_script || ''
+
 const LEGACY_LANG_TOKEN = TARGET_LANG
 const LEGACY_FENCE_TOKEN = TARGET_LANG
 const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
@@ -362,6 +370,42 @@ if (USE_DRIVER) {
     { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
   if (_pd && _pd.method) PROFILING_DECISION = _pd
   log(`Profiling-strategist: method=${PROFILING_DECISION.method} confidence=${PROFILING_DECISION.confidence} normalizer=${PROFILING_DECISION.normalizer}`)
+}
+
+// --- integration-strategist: route build/test mode (standalone vs embedded_*). ---
+// Lets KernelFoundry handle inference-engine embedded operators (e.g. llama.cpp .cuh)
+// not just standalone kernels. Default standalone => legacy path byte-identical.
+let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
+{
+  const _probe = JSON.stringify({ compiler: true, project_build: !!PROJECT_BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
+  const _integ = await agent(
+    `${KERNEL_PATH ? `Read ${KERNEL_PATH}; ` : 'Read the operator spec; '}` +
+    `classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+    `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
+    substrateInstruction('integration/integration_strategist.py',
+      `resolve --kernel "${KERNEL_PATH || EXP_DIR + '/operator.spec'}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' --cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
+    ` Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
+    { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+}
+log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
+if (INTEGRATION_DECISION.method === 'derive_adapter') {
+  throw new Error('integration-strategist returned derive_adapter — provide project_root + build/test commands')
+}
+const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'standalone'
+const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
+if (ORIGINAL_BACKUP) {
+  await agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+    { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH })
+}
+// A-O1 closure: native_profiler chosen but driver-profile path unavailable when not
+// running the standalone driver envelope (KernelFoundry has no ncu_binary arg, so key
+// on !USE_DRIVER_STANDALONE) -> downgrade so Profile uses perf_heuristic instead.
+if (PROFILING_DECISION.method === 'native_profiler' && !USE_DRIVER_STANDALONE) {
+  log(`profiling: native_profiler but not standalone-driver -> downgrade to perf_heuristic`)
+  PROFILING_DECISION = { method: 'perf_heuristic', confidence: 'inferred', normalizer: 'perf_to_evidence.py',
+    profiler_name: 'test-harness-perf', rationale: 'native_profiler but not USE_DRIVER_STANDALONE -> perf_heuristic' }
 }
 
 const setupResult = await agent(`You are a GPU kernel optimization expert setting up the KernelFoundry evolutionary search.
@@ -610,7 +654,7 @@ Then append (this is generation ${generation}; status="done" if it compiled AND 
     },
   })
 
-  if (USE_DRIVER) {
+  if (USE_DRIVER_STANDALONE) {
     const suffix = `${generation}`
     const kPath = kernelPathForGeneration(generation)
     const buildOut = `${EXP_DIR}/gen_${generation}.artifact`
@@ -643,7 +687,8 @@ Then append (this is generation ${generation}; status="done" if it compiled AND 
           `Throughput is in ${resultPath} from run.sh. Normalize it into canonical metrics via ` +
           substrateInstruction('profiling/' + (PROFILING_DECISION.normalizer || 'perf_to_evidence.py'), `--baseline ${resultPath} --peak-gflops <device_peak_gflops> --peak-gbs <device_peak_gbs>`) +
           ` Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. ` +
-          `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+          `Also write heuristic_bclass (memory_bound|compute_bound|latency_bound) based on the throughput ratio so diagnose.py does not fall to unknown. ` +
+          `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, heuristic_bclass, coverage, source_backend}.`,
           { model: MODEL.mechanical, label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
       }
     }
@@ -662,6 +707,43 @@ Then append (this is generation ${generation}; status="done" if it compiled AND 
       profiling_method: PROFILING_DECISION.method,
       profiling_confidence: PROFILING_DECISION.confidence,
     }
+  } else if (IS_EMBEDDED) {
+    // --- Embedded eval (integration-strategist → embedded_inplace / embedded_dispatch) ---
+    // KernelFoundry is MAP-Elites: one offspring per generation, evaluated inside this
+    // serial `for (generation...)` loop. No `await parallel(` candidate eval here, so the
+    // embedded branch is already serial — no race on the shared KERNEL_PATH / project build.
+    const kPath = kernelPathForGeneration(generation)
+    const variant = `kf_gen_${generation}`.replace(/[^A-Za-z0-9_]/g, '_')
+    let embLatency = 0, embMetrics = {}, embBclass = 'unknown'
+    // Materialize the offspring source to kPath first so build/test/bench can find it.
+    await agent(`Write the offspring kernel source to ${kPath} (mkdir -p its parent dir first):\n\`\`\`${fenceToken()}\n${offspringCode.substring(0, 6000)}\n\`\`\``,
+      { model: MODEL.mechanical, label: `embedded-materialize-${generation}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    if (INTEGRATION_DECISION.method === 'embedded_inplace' && ORIGINAL_BACKUP) {
+      const embResult = await agent(
+        `EMBEDDED-INPLACE EVAL (serial). Candidate: ${kPath} | project kernel: ${KERNEL_PATH} | pristine backup: ${ORIGINAL_BACKUP}\n` +
+        `Run IN ORDER:\n1. Restore pristine: cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}\n` +
+        `2. Apply candidate: cp ${kPath} ${KERNEL_PATH}\n3. Build: ${PROJECT_BUILD_CMD}\n4. Test: ${TEST_CMD}\n5. Benchmark: ${BENCH_CMD || TEST_CMD}\n` +
+        `6. ALWAYS restore: cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}\n` +
+        `Parse latency_ms + heuristic_bclass (memory/compute/latency bound). Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
+        { model: MODEL.mechanical, label: `embedded-inplace-${generation}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      embLatency = Number(embResult?.latency_ms || 0)
+      embBclass = embResult?.heuristic_bclass || 'unknown'
+      embMetrics = embResult?.metrics || { latency_ms: embLatency }
+    } else if (INTEGRATION_DECISION.method === 'embedded_dispatch' && REGISTER_SCRIPT && PROJECT_ROOT) {
+      const _plan = typeof __embeddedEvalPlan === 'function'
+        ? __embeddedEvalPlan({ adapter: `python3 "${REGISTER_SCRIPT}"`, variant, source: kPath, projectRoot: PROJECT_ROOT, buildCmd: PROJECT_BUILD_CMD, testCmd: TEST_CMD, benchmarkCmd: BENCH_CMD || TEST_CMD })
+        : null
+      if (_plan) {
+        const embResult = await agent(
+          `EMBEDDED-DISPATCH EVAL (serial). Run IN ORDER:\n1. Register: ${_plan.register}\n2. Build: ${_plan.build}\n3. Test: ${_plan.test}\n4. Benchmark: ${_plan.benchmark}\n5. Unregister: ${_plan.unregister}\n${_plan.cleanupInvariant}\n` +
+          `Parse latency_ms + heuristic_bclass. Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
+          { model: MODEL.mechanical, label: `embedded-dispatch-${generation}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+        embLatency = Number(embResult?.latency_ms || 0)
+        embBclass = embResult?.heuristic_bclass || 'unknown'
+        embMetrics = embResult?.metrics || { latency_ms: embLatency }
+      }
+    }
+    evalResult.driver_envelope = { latency_ms: embLatency, metrics: embMetrics, bottleneck_class: embBclass, backend_id: 'embedded' }
   }
 
   const fitness = computeFitness(evalResult.compiled, evalResult.correct, evalResult.speedup || 0)
@@ -824,6 +906,12 @@ Then append (final report; speedup is the best speedup found, or null if none):
   label: 'final-report',
   phase: 'Evaluate',
 })
+
+// embedded_inplace exit safety net: unconditionally restore pristine original.
+if (ORIGINAL_BACKUP) {
+  await agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
+    { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+}
 
 return {
   input_mode: INPUT_MODE,
