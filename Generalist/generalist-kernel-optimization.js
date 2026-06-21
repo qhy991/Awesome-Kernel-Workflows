@@ -426,10 +426,11 @@ const ANTICHEAT_SCHEMA = {
   type: 'object',
   properties: {
     valid: { type: 'boolean' }, reward: { type: 'number' },
-    recorded_speedup: { type: 'number' }, reward_reason: { type: 'string' },
+    recorded_speedup: { type: 'number' }, measured_speedup: { type: 'number' },
+    reward_reason: { type: 'string' },
     flags: { type: 'array' }, blocking_flags: { type: 'array' },
   },
-  required: ['valid', 'reward', 'recorded_speedup'],
+  required: ['valid', 'reward', 'recorded_speedup', 'measured_speedup'],
 }
 
 phase('Setup')
@@ -600,6 +601,21 @@ let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', no
     ` Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
     { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
   if (_pd && _pd.method) PROFILING_DECISION = _pd
+}
+
+// A-O1 closure (K-O2 ↔ profiling-strategist SSOT): the strategist probes `which ncu`
+// (binary present) and may pick native_profiler even when NCU hw counters are
+// admin-blocked. KerSor harness-preflight (K-O2) detects the block and STRIPS
+// ncu_command from dispatch-args. So if the strategist says native_profiler but no
+// ncu_command arrived (stripped by preflight, or never provided), downgrade to
+// perf_heuristic — the native path is unusable. This closes the loop without a
+// cross-repo host-probe contract: preflight's strip is the signal.
+if (PROFILING_DECISION.method === 'native_profiler' && !NCU_CMD) {
+  log(`profiling: strategist chose native_profiler but ncu_command is absent (stripped by ` +
+      `preflight because counters blocked, or not provided) -> downgrade to perf_heuristic`)
+  PROFILING_DECISION = { method: 'perf_heuristic', confidence: 'inferred',
+    normalizer: 'perf_to_evidence.py', profiler_name: 'test-harness-perf',
+    rationale: 'native_profiler selected but ncu_command absent (K-O2 strip / not provided) -> perf_heuristic' }
 }
 
 function nsysEnrichSuffix() {
@@ -788,7 +804,8 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
       `If substrate commands are unavailable, mark valid=false with blocking_flags:["missing_substrate_command_prefix"].`,
       { label: `anticheat-${iter}-${i + 1}`, phase: 'Evaluate', schema: ANTICHEAT_SCHEMA, model: MODEL.mechanical })
     return { plan: p, metrics: m, anticheat: ac, code_path: `${runDir}/kernel`,
-             recorded_speedup: ac.valid ? ac.recorded_speedup : 0 }
+             recorded_speedup: ac.valid ? ac.recorded_speedup : 0,
+             measured_speedup: ac.valid ? (ac.measured_speedup ?? 0) : 0 }
   }
   // Embedded modes mutate a shared file (inplace) or share a project build (dispatch):
   // they MUST evaluate SERIALLY — parallel candidates would clobber KERNEL_PATH / collide
@@ -878,7 +895,8 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
     .map((e, i) => ({ id: `it${iter}-c${i + 1}`, parent_id: best.id, code_path: e.code_path,
                       speedup: e.recorded_speedup, metrics: e.metrics.metrics || {}, planTitle: e.plan.method }))
   evaluated.forEach((e) => allAttempts.push({ iter, method: e.plan.method, valid: e.anticheat.valid,
-                                              reward: e.anticheat.reward, speedup: e.recorded_speedup }))
+                                              reward: e.anticheat.reward, speedup: e.recorded_speedup,
+                                              measured_speedup: e.measured_speedup ?? 0 }))
   const merged = [...candidateBeam, ...newCandidates].sort((a, b) => b.speedup - a.speedup)
   candidateBeam = merged.slice(0, TOPK)
 
