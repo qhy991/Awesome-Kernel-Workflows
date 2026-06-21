@@ -273,4 +273,6 @@ routing:
   - target_gpu
   integration_patterns:
   - standalone
+  - embedded_dispatch
+  - embedded_inplace
   requires_ncu: true

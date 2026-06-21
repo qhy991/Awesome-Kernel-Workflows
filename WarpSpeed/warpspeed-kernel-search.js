@@ -283,6 +283,16 @@ const CONFIG_OVERRIDES = CONFIG_OVERRIDES_RAW
   ? (typeof CONFIG_OVERRIDES_RAW === 'string' ? JSON.parse(CONFIG_OVERRIDES_RAW) : CONFIG_OVERRIDES_RAW)
   : {}
 
+// --- Project-native integration args (embedded inference-engine operators, e.g.
+// llama.cpp .cuh). ADDITIVE: when the integration-strategist routes to standalone
+// (the default), NONE of these are consulted and the legacy benchmark path is
+// byte-identical. PROJECT_ROOT reuses PROJECT_DIR; BUILD_CMD already exists above
+// (no duplicate const); WarpSpeed has no standalone benchmark const, so the embedded
+// eval uses the rendered confirm/correctness commands threaded via the task contract.
+// register_script is only needed for embedded_dispatch. See _substrate/integration/ROLLOUT.md. ---
+const PROJECT_ROOT = args.project_root || PROJECT_DIR
+const REGISTER_SCRIPT = args.register_script || ''
+
 function genomeDir() {
   return EXP_DIR || STATE_DIR_ARG || (PROJECT_DIR ? `${PROJECT_DIR}/.warpspeed` : '.')
 }
@@ -829,6 +839,61 @@ phase('Seed'); await __genomeReport('Seed', WORKFLOW_NAME)
   log(`Profiling-strategist: method=${PROFILING_DECISION.method} confidence=${PROFILING_DECISION.confidence}`)
 }
 
+// --- integration-strategist: route eval mode (standalone vs embedded_*). For an
+// inference-engine embedded operator (e.g. a llama.cpp .cuh referenced by project-only
+// headers) the candidate cannot compile as a standalone TU, so the legacy A/B-screen
+// benchmark path is unreachable; the strategist routes to embedded_inplace/dispatch.
+// ADDITIVE: when method==='standalone' (default) the legacy candidate pipeline runs
+// byte-identically — IS_EMBEDDED stays false and the new serial branch is skipped.
+// WarpSpeed has no backend driver, so there is no USE_DRIVER/USE_DRIVER_STANDALONE;
+// IS_EMBEDDED alone gates the new branch. The strategist reads the single editable
+// kernel file (KERNEL_PATHS[0]). See _substrate/integration/ROLLOUT.md.
+const PRIMARY_KERNEL_PATH = KERNEL_PATHS[0] || ''
+let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
+{
+  const _genDir = genomeDir()
+  const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
+  const _integ = await agent(
+    `Read ${PRIMARY_KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+    `(use no when the file cannot compile as a single translation unit — e.g. a llama.cpp .cuh with project-only deps). Then ` +
+    substrateInstruction('integration/integration_strategist.py',
+      `resolve --kernel "${PRIMARY_KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' --cache ${_genDir}/integ_cache.json --trajectory ${_genDir}/genome.jsonl`) +
+    ` Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
+    { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Seed', schema: JSON_PASSTHROUGH }
+  )
+  if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+}
+log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
+if (INTEGRATION_DECISION.method === 'derive_adapter') {
+  throw new Error('integration-strategist returned derive_adapter — provide project_root + build_command (+ register_script for dispatch) for the embedded operator')
+}
+const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+// embedded_inplace mutates the project operator file in place; back it up ONCE here
+// so every serial candidate restores to a pristine original and the exit net can too.
+const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${genomeDir()}/integ_original.backup` : ''
+if (ORIGINAL_BACKUP) {
+  await agent(`Byte-exact backup (once): run \`cp -a "${PRIMARY_KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+    { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Seed', schema: JSON_PASSTHROUGH })
+}
+// Unconditional exit-restore net for embedded_inplace: each serial candidate restores
+// after itself, but this guarantees the project operator file is pristine on EVERY exit
+// path (no-op when not embedded_inplace). Call __exitRestore() before each return below.
+async function __exitRestore() {
+  if (!ORIGINAL_BACKUP) return
+  try {
+    await agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${P.project_dir}/${PRIMARY_KERNEL_PATH}"\` and confirm.`,
+      { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH })
+  } catch (e) { /* restore is best-effort on the way out */ }
+}
+// A-O1 closure: the strategist may pick native_profiler (ncu) but ncu is absent on
+// this host (preflight pf.ncu_ok=false) — downgrade so Profile uses perf_heuristic
+// instead of trying ncu against a missing binary.
+if (PROFILING_DECISION.method === 'native_profiler' && !pf.ncu_ok) {
+  log(`profiling: native_profiler but no ncu (pf.ncu_ok=false) -> downgrade to perf_heuristic`)
+  PROFILING_DECISION = { method: 'perf_heuristic', confidence: 'inferred', normalizer: 'perf_to_evidence.py',
+    profiler_name: 'warpspeed-perf', rationale: 'native_profiler but ncu unavailable -> perf_heuristic' }
+}
+
 // Guard sentence appended verbatim to every NCU/profile prompt so the doer honors
 // the strategist's method without re-resolving. Built from the resolved decision.
 const PROFILING_GUARD =
@@ -859,6 +924,7 @@ const seedResult = await agent(
 )
 const seed = classifyResult(seedResult)
 if (seed.state !== 'grounded') {
+  await __exitRestore()
   return { ok: false, grounded: false, error: `seeding failed: ${JSON.stringify(seed)}` }
 }
 log(`Baseline: ${seed.value.commit && seed.value.commit.slice(0, 10)} ${seed.value.latency_us ? seed.value.latency_us + 'us' : '(already seeded)'}`)
@@ -1204,6 +1270,167 @@ async function runCandidate(spec, snap) {
 }
 
 // =============================================================================
+// Embedded candidate pipeline (inference-engine operators, e.g. llama.cpp .cuh)
+// -----------------------------------------------------------------------------
+// Same generate<->review loop as runCandidate, but the legacy standalone A/B screen
+// is unreachable (the operator does not compile as a single TU), so eval is done
+// IN THE PROJECT: embedded_inplace swaps the candidate onto the project operator
+// file (backup -> apply -> build -> test -> bench -> ALWAYS restore), or
+// embedded_dispatch registers it via __embeddedEvalPlan. This function is only ever
+// called from the SERIAL for-loop above (never await parallel) because both modes
+// share project state. Returns the same result shape so the Record barrier is unchanged.
+// =============================================================================
+async function runCandidateEmbedded(spec, snap) {
+  const noise = noisePct(
+    null,
+    (snap.calibration || {}).cross_device_sigma_pct != null
+      ? snap.calibration.cross_device_sigma_pct
+      : cal.value.cross_device_sigma_pct
+  )
+  // ---- generate <-> review loop (identical contract to runCandidate) ----
+  let impl = null
+  let review = null
+  let objections = []
+  let iters = 0
+  for (let iter = 1; iter <= MAX_REVIEW_ITERS; iter++) {
+    iters = iter
+    const implRes = classifyResult(await agent(implementorPrompt(spec, iter, objections), {
+      phase: 'Generate', label: `${spec.exp_id}:impl${iter}`, schema: IMPL_SCHEMA,
+    }))
+    if (implRes.state !== 'grounded') {
+      await finishExp(spec, 'gen_failed', { failure_reason: `implementor not grounded: ${implRes.missing || implRes.error || 'unknown'}` }, iter)
+      return { spec, status: 'gen_failed' }
+    }
+    impl = implRes.value
+    if (impl.gave_up || !impl.commit) {
+      await finishExp(spec, 'gen_failed', { failure_reason: impl.failure_reason || 'implementor gave up', commit_hash: impl.commit || null }, iter)
+      return { spec, status: 'gen_failed' }
+    }
+    if (!impl.build_ok) {
+      await finishExp(spec, 'compile_error', { failure_reason: impl.failure_reason || 'build failed', commit_hash: impl.commit }, iter)
+      return { spec, status: 'compile_error' }
+    }
+    if (!impl.correctness_passed) {
+      await finishExp(spec, 'incorrect', { failure_reason: impl.failure_reason || 'correctness failed in implementor loop', commit_hash: impl.commit }, iter)
+      return { spec, status: 'incorrect' }
+    }
+    const revRes = classifyResult(await agent(reviewerPrompt(spec, impl, iter), {
+      phase: 'Generate', label: `${spec.exp_id}:review${iter}`, schema: REVIEW_SCHEMA,
+    }))
+    if (revRes.state !== 'grounded') {
+      await finishExp(spec, 'review_rejected', { failure_reason: `review runner not grounded: ${revRes.missing || revRes.error || 'unknown'}`, commit_hash: impl.commit }, iter)
+      return { spec, status: 'review_rejected' }
+    }
+    review = revRes.value
+    if (!review.independent_correctness) {
+      await finishExp(spec, 'incorrect', {
+        failure_reason: 'reviewer_correctness_divergence: implementor passed but independent re-run failed (treated as a race, not retried)',
+        commit_hash: impl.commit, sanitizer_clean: review.sanitizer_clean === true ? 1 : (review.sanitizer_clean === false ? 0 : null),
+      }, iter)
+      return { spec, status: 'incorrect' }
+    }
+    if (review.accept) break
+    objections = (review.objections && review.objections.length) ? review.objections : [review.objection || 'unspecified objection']
+    if (iter === MAX_REVIEW_ITERS) {
+      await finishExp(spec, 'review_rejected', {
+        failure_reason: `review exhausted after ${MAX_REVIEW_ITERS} iterations: ${review.objection || objections.join('; ')}`,
+        commit_hash: impl.commit, sanitizer_clean: review.sanitizer_clean === true ? 1 : (review.sanitizer_clean === false ? 0 : null),
+      }, iter)
+      return { spec, status: 'review_rejected' }
+    }
+  }
+
+  // ---- embedded eval (SERIAL; shared project state) ----
+  // Candidate operator source lives in the experiment worktree at the editable path.
+  const candFile = `${P.worktrees}/${spec.exp_id}/${PRIMARY_KERNEL_PATH}`
+  const liveFile = `${P.project_dir}/${PRIMARY_KERNEL_PATH}`
+  let embLatency = null, embMetrics = {}, embBclass = 'unknown', embCorrect = false
+  if (INTEGRATION_DECISION.method === 'embedded_inplace' && ORIGINAL_BACKUP) {
+    const embResult = await agent(
+      [
+        `EMBEDDED-INPLACE EVAL (serial). Candidate: ${candFile} | project operator file: ${liveFile} | pristine backup: ${ORIGINAL_BACKUP}`,
+        'Run IN ORDER (this candidate mutates the shared project operator file; ALWAYS restore at the end):',
+        `1. Restore pristine: cp -a ${ORIGINAL_BACKUP} ${liveFile}`,
+        `2. Apply candidate:  cp ${candFile} ${liveFile}`,
+        `3. Build the project: ${BUILD_CMD}`,
+        `4. Correctness (fixed invocation): ${C.correctness} ${P.project_dir}/${BINARY_PATH}`,
+        `5. Benchmark latency: ${C.confirm} ${P.project_dir}/${BINARY_PATH} --shape ${BENCH_SHAPE}`,
+        `6. ALWAYS restore pristine (even on failure): cp -a ${ORIGINAL_BACKUP} ${liveFile}`,
+        PROFILING_GUARD,
+        `Parse latency_us + heuristic_bclass (memory_bound|compute_bound|latency_bound). Return {latency_us, heuristic_bclass, compiled, correct, metrics:{latency_us}}.`,
+        taskContract(spec.exp_id),
+      ].join('\n'),
+      { model: MODEL.profile, label: `${spec.exp_id}:embedded-inplace`, phase: 'Confirm', schema: JSON_PASSTHROUGH })
+    embLatency = embResult && embResult.latency_us != null ? Number(embResult.latency_us) : null
+    embBclass = (embResult && embResult.heuristic_bclass) || 'unknown'
+    embMetrics = (embResult && embResult.metrics) || { latency_us: embLatency }
+    embCorrect = !!(embResult && embResult.correct)
+  } else if (INTEGRATION_DECISION.method === 'embedded_dispatch' && REGISTER_SCRIPT && PROJECT_ROOT) {
+    const variant = `warpspeed_${spec.exp_id}`.replace(/[^A-Za-z0-9_]/g, '_')
+    const _plan = typeof __embeddedEvalPlan === 'function'
+      ? __embeddedEvalPlan({ adapter: `python3 "${REGISTER_SCRIPT}"`, variant, source: candFile, projectRoot: PROJECT_ROOT, buildCmd: BUILD_CMD, testCmd: `${C.correctness} ${P.project_dir}/${BINARY_PATH}`, benchmarkCmd: `${C.confirm} ${P.project_dir}/${BINARY_PATH} --shape ${BENCH_SHAPE}` })
+      : null
+    if (_plan) {
+      const embResult = await agent(
+        [
+          'EMBEDDED-DISPATCH EVAL (serial). Run IN ORDER:',
+          `1. Register: ${_plan.register}`,
+          `2. Build:    ${_plan.build}`,
+          `3. Test:     ${_plan.test}`,
+          `4. Benchmark:${_plan.benchmark}`,
+          `5. Unregister: ${_plan.unregister}`,
+          _plan.cleanupInvariant,
+          PROFILING_GUARD,
+          `Parse latency_us + heuristic_bclass. Return {latency_us, heuristic_bclass, compiled, correct, metrics:{latency_us}}.`,
+          taskContract(spec.exp_id),
+        ].join('\n'),
+        { model: MODEL.profile, label: `${spec.exp_id}:embedded-dispatch`, phase: 'Confirm', schema: JSON_PASSTHROUGH })
+      embLatency = embResult && embResult.latency_us != null ? Number(embResult.latency_us) : null
+      embBclass = (embResult && embResult.heuristic_bclass) || 'unknown'
+      embMetrics = (embResult && embResult.metrics) || { latency_us: embLatency }
+      embCorrect = !!(embResult && embResult.correct)
+    }
+  }
+
+  // ---- status + record (embedded eval yields absolute latency, not an A/B screen) ----
+  const parentCkpt = frontierByCommit(snap, spec.parent_commit)
+  const parentLat = parentCkpt ? parentCkpt.latency_us : null
+  const best = bestLatency(snap)
+  const candLat = embLatency
+  const relSpeedup = (parentLat != null && candLat != null && candLat > 0)
+    ? (parentLat / candLat - 1) * 100 : 0
+  const sig = isSignificant(relSpeedup, noise, CFG.MIN_GAIN_PCT)
+  const newBestClaim = sig && (best == null || (candLat != null && candLat < best))
+  const status = (candLat == null || !embCorrect)
+    ? 'incorrect'
+    : (!sig ? 'correct_slower' : (newBestClaim ? 'new_best' : 'correct_faster'))
+  const achieved = relSpeedup
+  const gap = predictionGap(spec.predicted_gain_pct, achieved)
+
+  await finishExp(spec, status, {
+    commit_hash: impl.commit,
+    sanitizer_clean: review.sanitizer_clean === true ? 1 : (review.sanitizer_clean === false ? 0 : null),
+    bench_tier: 'embedded',
+    latency_us_mean: candLat,
+    speedup_vs_parent: relSpeedup,
+    achieved_gain_pct: achieved,
+    prediction_gap_pct: gap,
+    key_metrics: embMetrics,
+    diagnosis: `embedded:${INTEGRATION_DECISION.method} | bclass=${embBclass}`,
+  }, iters)
+
+  return {
+    spec, status, impl, review, screen: null, confirm: null, prof: { cand: { key_metrics: embMetrics } }, analyst: null,
+    sig, achieved, gap, candLat, projectedLat: candLat,
+    fingerprint: null,
+    keyMetrics: embMetrics,
+    heuristic_bclass: embBclass,
+    noise,
+    assumptions: Array.from(new Set([...(parentCkpt ? parentCkpt.assumptions : []), ...(spec.direction_tags || [])])).sort(),
+  }
+}
+
+// =============================================================================
 // Round-level helpers
 // =============================================================================
 
@@ -1505,9 +1732,25 @@ for (let r = 1; r <= ITERATIONS; r++) {
   // ---- Generate/Screen/Confirm/Profile per candidate, fan-out capped ----
   phase('Generate'); await __genomeReport('Generate', WORKFLOW_NAME)
   const results = []
-  for (const chunk of chunkArray(runnable, PARALLEL_AGENTS)) {
-    const chunkResults = await parallel(chunk.map(s => () => runCandidate(s, snap)))
-    results.push(...chunkResults.filter(Boolean))
+  if (IS_EMBEDDED) {
+    // EMBEDDED EVAL — SERIAL by construction (this for-loop, NOT await parallel):
+    // embedded_inplace mutates the shared project operator file (PRIMARY_KERNEL_PATH)
+    // and embedded_dispatch shares the single project build, so candidates cannot be
+    // evaluated concurrently (the parallel-embedded-race bug-class). The standalone
+    // branch below keeps the legacy parallel A/B-screen path byte-identical.
+    for (const spec of runnable) {
+      try {
+        const r = await runCandidateEmbedded(spec, snap)
+        if (r) results.push(r)
+      } catch (e) {
+        log(`embedded eval failed for ${spec.exp_id}: ${(e && e.message) || e}`)
+      }
+    }
+  } else {
+    for (const chunk of chunkArray(runnable, PARALLEL_AGENTS)) {
+      const chunkResults = await parallel(chunk.map(s => () => runCandidate(s, snap)))
+      results.push(...chunkResults.filter(Boolean))
+    }
   }
 
   // ---- Record barrier ----
@@ -1649,6 +1892,10 @@ const rep = reportRes.state === 'grounded' ? reportRes.value : {}
 
 const baselineLat = rep.baseline_latency_us != null ? rep.baseline_latency_us : (seed.value.latency_us || null)
 const bestLat = rep.best_latency_us != null ? rep.best_latency_us : (lastSnap ? bestLatency(lastSnap) : null)
+
+// embedded_inplace exit safety net: restore the project operator file to pristine
+// before returning (no-op unless INTEGRATION_DECISION.method === 'embedded_inplace').
+await __exitRestore()
 
 return {
   ok: true,
