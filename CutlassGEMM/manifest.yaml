@@ -41,3 +41,7 @@ routing:
   speedup_field: baseline_avg_speedup
   fidelity_boundary: strict_high_fidelity
   requires_ncu: true
+integration_patterns:
+- standalone
+- embedded_dispatch
+- embedded_inplace

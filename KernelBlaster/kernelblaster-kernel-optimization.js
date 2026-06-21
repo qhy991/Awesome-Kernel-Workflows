@@ -188,7 +188,7 @@ const OPT_DB_PATH = args.optimization_db_path || ''
 const EXP_DIR = args.exp_dir || '/tmp/kernelblaster_exp'
 const NCU_BINARY = args.ncu_binary || ''
 const KERNEL_NAME_REGEX = args.kernel_name_regex || ''
-const BUILD_CMD = args.build_cmd || ''
+const BUILD_CMD = args.build_cmd || args.build_command || ''
 const RUN_CMD = args.run_cmd || ''
 const RL_ITERATIONS = args.rl_iterations || 3
 const ROLLOUT_STEPS = args.rollout_steps || 4
@@ -199,6 +199,20 @@ const RUN_TS = args.run_timestamp_iso || 'unknown'
 // Fallback (no NCU): custom test + benchmark commands
 const TEST_CMD = args.test_command || ''
 const BENCH_CMD = args.benchmark_command || ''
+
+// --- Project-native integration (embedded operators via integration-strategist) ---
+// For inference-engine embedded operators (e.g. llama.cpp .cuh) the candidate cannot
+// compile as a standalone TU; it is built/tested/benchmarked INSIDE the host project.
+// BENCH_CMD already names the legacy (standalone) benchmark, so the project-native
+// benchmark uses a distinct name (PROJECT_BENCH_CMD) to avoid a duplicate `const`
+// (which would break wfcheck). KernelBlaster is BESPOKE raw-ncu (no backend driver),
+// so there is NO USE_DRIVER / USE_DRIVER_STANDALONE — IS_EMBEDDED alone gates the new
+// embedded eval branch; the legacy benchmark path stays byte-identical when standalone.
+// BUILD_CMD already exists above (args.build_cmd) — reuse it; do NOT redeclare.
+const PROJECT_ROOT = args.project_root || args.ggml_root || ''
+const PROJECT_BENCH_CMD = args.project_benchmark_command || BENCH_CMD || ''
+const REGISTER_SCRIPT = args.register_script || ''
+const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
 
 if (!KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
   throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
@@ -489,6 +503,45 @@ Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, 
 if (_pd && _pd.method) PROFILING_DECISION = _pd
 log(`Profiling-strategist: method=${PROFILING_DECISION.method}, confidence=${PROFILING_DECISION.confidence}`)
 
+// --- integration-strategist: route build/test mode (standalone vs embedded_*).
+// For an inference-engine embedded operator (e.g. llama.cpp .cuh referenced via
+// KERNEL_PATH), can_compile_standalone=no, so the candidate is built/tested/benchmarked
+// INSIDE the host project rather than as an isolated TU. KernelBlaster has NO backend
+// driver (it inlines ncu + benchmark), so the only thing this gates is the new embedded
+// eval branch; the legacy benchmark path stays byte-identical when standalone. ---
+let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
+{
+  const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
+  const _integ = await agent(
+    `Read ${KERNEL_PATH || '(not provided)'}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+    `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
+    `--kernel "${KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
+    `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
+    `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
+    { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+}
+log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
+if (INTEGRATION_DECISION.method === 'derive_adapter') {
+  throw new Error('integration-strategist returned derive_adapter — provide project_root + build/test commands')
+}
+const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+// The embedded operator file we swap in place is the project-referenced KERNEL_PATH.
+const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
+if (ORIGINAL_BACKUP) {
+  await agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+    { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH })
+}
+// A-O1 closure: native_profiler chosen but the inline NCU profiler is unreachable on
+// the embedded path (no isolated TU to ncu) → downgrade to perf_heuristic so the
+// project benchmark's throughput is normalized instead. Also covers no-ncu standalone.
+if (PROFILING_DECISION.method === 'native_profiler' && (IS_EMBEDDED || !NCU_BINARY)) {
+  log(`profiling: native_profiler unreachable (${IS_EMBEDDED ? 'embedded path' : 'no ncu_binary'}) -> downgrade to perf_heuristic`)
+  PROFILING_DECISION = { method: 'perf_heuristic', confidence: 'inferred', normalizer: 'perf_to_evidence.py',
+    profiler_name: 'project-native-perf', rationale: 'native_profiler unreachable -> perf_heuristic' }
+}
+
 // NCU baseline profile -> Elapsed Cycles + Speed-of-Light metrics
 const ncuBaseline = await agent(`You are a CUDA profiling expert using Nsight Compute (ncu). Profile the baseline kernel and report Elapsed Cycles plus Speed-of-Light metrics.
 
@@ -580,7 +633,7 @@ ${ncuBaseline.profile_summary}
 
 Re-profile only if ncu_binary and run_cmd were provided; otherwise reason from the metrics above and the code, and mark missing profiler evidence explicitly.
 Return the classification.
-Profiling-strategist selected method='${PROFILING_DECISION.method}', confidence='${PROFILING_DECISION.confidence}'. If method !== 'native_profiler', NCU elapsed-cycle/state metrics are unavailable — derive the hardware-performance state from throughput/perf evidence instead, mark the state classification and any DB write as confidence='${PROFILING_DECISION.confidence}' (inferred, NOT measured), and do NOT fabricate NCU counters. If method === 'native_profiler', proceed with NCU as written.
+Profiling-strategist selected method='${PROFILING_DECISION.method}', confidence='${PROFILING_DECISION.confidence}'. If method !== 'native_profiler', NCU elapsed-cycle/state metrics are unavailable — derive the hardware-performance state from throughput/perf evidence instead, mark the state classification and any DB write as confidence='${PROFILING_DECISION.confidence}' (inferred, NOT measured), and do NOT fabricate NCU counters. ${PROFILING_DECISION.method === 'perf_heuristic' ? `Because method='perf_heuristic', ALSO write heuristic_bclass (memory_bound|compute_bound|latency_bound) from the throughput ratio so the diagnose contract does not fall to unknown.` : ''} If method === 'native_profiler', proceed with NCU as written.
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -733,7 +786,64 @@ Then append (rollout ${iter}, step ${step}):
     // -------------------------------------------------------------------------
     phase('Evaluate')
 
-    const evals = await parallel(
+    let evals
+    if (IS_EMBEDDED) {
+      // --- Embedded eval (integration-strategist → embedded_inplace / embedded_dispatch) ---
+      // SEPARATE SERIAL for-loop (NOT parallel): for inference-engine embedded operators
+      // (e.g. llama.cpp .cuh) embedded_inplace mutates the shared project file KERNEL_PATH
+      // and embedded_dispatch shares the project build, so candidates CANNOT be evaluated
+      // concurrently (parallel-embedded-race bug-class). Builds/tests/benchmarks the
+      // candidate INSIDE the host project instead of inline-ncu on an isolated TU.
+      // Returns the same {is_correct,is_compilable,elapsed_cycles,speedup,improvement_pct}
+      // shape the legacy parallel path produces, so downstream Reward logic is unchanged.
+      evals = []
+      for (let i = 0; i < variants.length; i++) {
+        const v = variants[i]
+        const suffix = `r${iter}-s${step}-${i}`.replace(/[^A-Za-z0-9_]/g, '_')
+        const kPath = `${EXP_DIR}/variants/${suffix}/candidate.cu`
+        const variant = `kb_${suffix}`.replace(/[^A-Za-z0-9_]/g, '_')
+        // Materialize the candidate source so the embedded eval can apply/register it.
+        await agent(`Write the candidate kernel source to ${kPath} (mkdir -p its dir first).\n\n` +
+          `\`\`\`cuda\n${(v.code || '').substring(0, 6000)}\n\`\`\`\n` +
+          `Return {ok:true, path:"${kPath}"}.`,
+          { model: MODEL.mechanical, label: `embedded-materialize-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+        let embResult = null
+        if (INTEGRATION_DECISION.method === 'embedded_inplace' && ORIGINAL_BACKUP) {
+          embResult = await agent(
+            `EMBEDDED-INPLACE EVAL (serial). Strategy: ${v.technique}\n` +
+            `Candidate: ${kPath} | project operator file: ${KERNEL_PATH} | pristine backup: ${ORIGINAL_BACKUP}\n` +
+            `Run IN ORDER:\n1. Restore pristine: cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}\n` +
+            `2. Apply candidate: cp ${kPath} ${KERNEL_PATH}\n3. Build: ${BUILD_CMD}\n4. Test: ${TEST_CMD}\n5. Benchmark: ${PROJECT_BENCH_CMD || TEST_CMD}\n` +
+            `6. ALWAYS restore: cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}\n` +
+            `baseline_cycles=${currentCycles}; speedup = baseline_cycles / new_cycles (or measured latency ratio); ` +
+            `improvement_pct = (baseline-new)/baseline*100. Parse heuristic_bclass (memory/compute/latency bound).\n` +
+            `Return {is_correct, is_compilable, elapsed_cycles, speedup, improvement_pct, heuristic_bclass}.`,
+            { model: MODEL.profile, label: `embedded-inplace-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+        } else if (INTEGRATION_DECISION.method === 'embedded_dispatch' && REGISTER_SCRIPT && PROJECT_ROOT) {
+          const _plan = typeof __embeddedEvalPlan === 'function'
+            ? __embeddedEvalPlan({ adapter: `python3 "${REGISTER_SCRIPT}"`, variant, source: kPath, projectRoot: PROJECT_ROOT, buildCmd: BUILD_CMD, testCmd: TEST_CMD, benchmarkCmd: PROJECT_BENCH_CMD || TEST_CMD })
+            : null
+          if (_plan) {
+            embResult = await agent(
+              `EMBEDDED-DISPATCH EVAL (serial). Strategy: ${v.technique}\n` +
+              `Run IN ORDER:\n1. Register: ${_plan.register}\n2. Build: ${_plan.build}\n3. Test: ${_plan.test}\n4. Benchmark: ${_plan.benchmark}\n5. Unregister: ${_plan.unregister}\n${_plan.cleanupInvariant}\n` +
+              `baseline_cycles=${currentCycles}; speedup = baseline_cycles / new_cycles (or measured latency ratio); ` +
+              `improvement_pct = (baseline-new)/baseline*100. Parse heuristic_bclass.\n` +
+              `Return {is_correct, is_compilable, elapsed_cycles, speedup, improvement_pct, heuristic_bclass}.`,
+              { model: MODEL.profile, label: `embedded-dispatch-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+          }
+        }
+        evals.push(embResult ? {
+          is_correct: !!embResult.is_correct,
+          is_compilable: !!embResult.is_compilable,
+          elapsed_cycles: Number(embResult.elapsed_cycles || 0),
+          speedup: Number(embResult.speedup || 0),
+          improvement_pct: Number(embResult.improvement_pct || 0),
+          heuristic_bclass: embResult.heuristic_bclass || 'unknown',
+        } : null)
+      }
+    } else {
+    evals = await parallel(
       variants.map((v) => () =>
         agent(`You are a CUDA evaluator using the KernelBench-CUDA driver and Nsight Compute. Evaluate this optimized kernel.
 
@@ -778,6 +888,7 @@ Then append, using the values you just measured (status="done" if correct AND co
         })
       )
     )
+    }
 
     // Pick the best correct variant for this step.
     let bestStep = null
@@ -983,6 +1094,12 @@ Write:
   label: 'final-report',
   phase: 'Iterate',
 })
+
+// embedded_inplace exit safety net: unconditionally restore the pristine operator file.
+if (ORIGINAL_BACKUP) {
+  await agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
+    { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Iterate', schema: JSON_PASSTHROUGH })
+}
 
 return {
   input_mode: INPUT_MODE,

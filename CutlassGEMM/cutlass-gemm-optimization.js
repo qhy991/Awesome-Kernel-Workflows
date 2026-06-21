@@ -191,6 +191,23 @@ const SUBSTRATE_PY = args.substrate_command_prefix || 'python3'
 const STRATEGIST_MANIFEST = args.backend_manifest || `${SUBSTRATE}/backends/cuda/manifest.json`
 const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
 
+// --- Project-native integration args (additive; BESPOKE raw-ncu family has no
+// backend driver, so there is no standalone driver envelope to gate — these only
+// drive the embedded eval branch when an inference-engine embedded CUTLASS-GEMM
+// operator is the target (can_compile_standalone=no). When unset the legacy
+// SOL-ExecBench benchmark path is byte-identical. The "config path" that is
+// swapped in place is the project's embedded GEMM source/header (EMBEDDED_OP_PATH);
+// it defaults to the canonical solution.json so the gate has a concrete file. ---
+const PROJECT_ROOT = args.project_root || ''
+const BUILD_CMD = args.build_command || ''
+const REGISTER_SCRIPT = args.register_script || ''
+// PROJECT_BENCH_CMD: project-native benchmark for the embedded operator (NOT the
+// SOL-ExecBench legacy path). No duplicate const — CutlassGEMM has no benchmark
+// const (it inlines the sol-execbench command in prompts).
+const PROJECT_BENCH_CMD = args.project_benchmark_command || ''
+// The embedded operator file the integration-strategist classifies / swaps.
+const EMBEDDED_OP_PATH = args.embedded_op_path || args.kernel_path || `${OUTPUT_DIR}/solution.json`
+
 // Hardware peak FLOPS (fp16 tensor core, no sparsity)
 // A100/A800: 312 TFLOPS, H100: 989 TFLOPS (with FP8: 1979)
 const PEAK_TFLOPS = args.peak_tflops || (GPU_ARCH === 'sm_90' ? 989 : 312)
@@ -506,6 +523,48 @@ Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, 
 if (_pd && _pd.method) PROFILING_DECISION = _pd
 log(`Profiling-strategist: method=${PROFILING_DECISION.method} confidence=${PROFILING_DECISION.confidence}`)
 
+// --- integration-strategist gate (additive; routes build/test mode standalone vs
+// embedded_*). For an inference-engine embedded CUTLASS-GEMM operator (e.g. a
+// project-only .cuh/.cu referenced via EMBEDDED_OP_PATH), can_compile_standalone=no,
+// so the candidate is built/tested INSIDE the host project (embedded eval) rather
+// than via the SOL-ExecBench legacy benchmark path. BESPOKE raw-ncu has NO backend
+// driver, so there is NO USE_DRIVER and NO standalone driver envelope to gate —
+// IS_EMBEDDED alone gates the new embedded branch; the legacy path stays
+// byte-identical when not embedded. ---
+let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
+{
+  const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
+  const _integ = await agent(
+    `Read ${EMBEDDED_OP_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+    `(use no when the file cannot compile as a single TU — e.g. an inference-engine embedded CUTLASS-GEMM operator with project-only deps). Then ` +
+    `Run exactly: \`${SUBSTRATE_PY} ${SUBSTRATE}/integration/integration_strategist.py resolve ` +
+    `--kernel "${EMBEDDED_OP_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
+    `--cache ${OUTPUT_DIR}/integ_cache.json --trajectory ${OUTPUT_DIR}/genome.jsonl\`. ` +
+    `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
+    { model: MODEL.mechanical, label: 'integration-strategist', phase: 'NCU Profile', schema: JSON_PASSTHROUGH })
+  if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+}
+log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
+if (INTEGRATION_DECISION.method === 'derive_adapter') {
+  throw new Error('integration-strategist returned derive_adapter — provide project_root + build/test commands')
+}
+const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+// The embedded operator file we swap in place is the project-referenced EMBEDDED_OP_PATH.
+const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${OUTPUT_DIR}/integ_original.backup` : ''
+if (ORIGINAL_BACKUP) {
+  await agent(`Byte-exact backup: run \`cp -a "${EMBEDDED_OP_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+    { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'NCU Profile', schema: JSON_PASSTHROUGH })
+}
+// native -> perf downgrade: this BESPOKE family has no backend driver / project-native
+// profiler reachable on the embedded path, and the only profiler is ncu via NCU_COMMAND.
+// If the strategist picked native_profiler but ncu is unavailable (no NCU_COMMAND) on
+// the embedded path, downgrade so the embedded eval uses perf_heuristic throughput.
+if (PROFILING_DECISION.method === 'native_profiler' && IS_EMBEDDED && !NCU_COMMAND) {
+  log(`profiling: native_profiler but embedded path with no ncu_command -> downgrade to perf_heuristic`)
+  PROFILING_DECISION = { method: 'perf_heuristic', confidence: 'inferred', normalizer: 'perf_to_evidence.py',
+    profiler_name: 'project-native-perf', rationale: 'native_profiler unreachable on embedded path -> perf_heuristic' }
+}
+
 const ncuResult = await agent(`Run profiling on the CUTLASS kernel for representative M values using only the user-provided profiling contract.
 
 # Profiling Contract
@@ -678,7 +737,9 @@ ${tuningHistory.map(h => `${h.label}: avg=${h.avg_speedup?.toFixed(4)}x${h.chang
 
 # OUTPUT:
 Write improved solution to: ${OUTPUT_DIR}/solution_iter${iter + 1}.json
-Then benchmark: cd ${SOL_DIR} && CUTLASS_DIR=${CUTLASS_DIR} uv run sol-execbench ${PROBLEM_DIR} --solution ${OUTPUT_DIR}/solution_iter${iter + 1}.json --no-json -v
+${IS_EMBEDDED
+  ? `This is an EMBEDDED inference-engine CUTLASS-GEMM operator (integration method='${INTEGRATION_DECISION.method}'). Do NOT run the SOL-ExecBench legacy benchmark here — the embedded eval (build/test/benchmark INSIDE the host project) runs in a separate step after you return. Just write the solution file and return compilation_success/changes_made (leave avg_speedup as your best static estimate; the embedded eval will overwrite the measured number).`
+  : `Then benchmark: cd ${SOL_DIR} && CUTLASS_DIR=${CUTLASS_DIR} uv run sol-execbench ${PROBLEM_DIR} --solution ${OUTPUT_DIR}/solution_iter${iter + 1}.json --no-json -v`}
 
 Return results.
 
@@ -706,6 +767,51 @@ Then append, using the values you just measured (this is tuning iteration ${iter
       required: ['compilation_success', 'avg_speedup'],
     },
   })
+
+  // --- Embedded eval branch (integration-strategist → embedded_inplace / embedded_dispatch)
+  // ADDITIVE alternative to the legacy SOL-ExecBench benchmark path above. SERIAL by
+  // construction: this is inside the sequential `for (let iter ...)` tuning loop (the
+  // workflow has NO `await parallel(`), so candidates are never evaluated concurrently —
+  // embedded_inplace mutates the shared EMBEDDED_OP_PATH operator file and embedded_dispatch
+  // shares the project build, so they cannot race. Legacy path (when !IS_EMBEDDED) is
+  // byte-identical: this whole block is skipped. ---
+  if (IS_EMBEDDED) {
+    const _candPath = `${OUTPUT_DIR}/solution_iter${iter + 1}.json`
+    const _variant = `cutlassgemm_iter${iter + 1}`.replace(/[^A-Za-z0-9_]/g, '_')
+    let embLatency = 0, embBclass = 'unknown'
+    if (INTEGRATION_DECISION.method === 'embedded_inplace' && ORIGINAL_BACKUP) {
+      const embResult = await agent(
+        `EMBEDDED-INPLACE EVAL (serial). Candidate solution: ${_candPath} | project embedded operator file: ${EMBEDDED_OP_PATH} | pristine backup: ${ORIGINAL_BACKUP}\n` +
+        `Run IN ORDER:\n1. Restore pristine: cp -a ${ORIGINAL_BACKUP} ${EMBEDDED_OP_PATH}\n` +
+        `2. Apply candidate CUTLASS-GEMM into the project operator file: ${EMBEDDED_OP_PATH} (use the candidate at ${_candPath})\n3. Build: ${BUILD_CMD}\n4. Test/correctness: ${PROJECT_BENCH_CMD ? '(see benchmark)' : BUILD_CMD}\n5. Benchmark: ${PROJECT_BENCH_CMD || BUILD_CMD}\n` +
+        `6. ALWAYS restore: cp -a ${ORIGINAL_BACKUP} ${EMBEDDED_OP_PATH}\n` +
+        `Profiling-strategist method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'): use perf_heuristic throughput (no ncu). ` +
+        `Parse latency_ms + heuristic_bclass (memory_bound|compute_bound|latency_bound). Return {latency_ms, heuristic_bclass, compiled, correct, avg_speedup, all_passed}.`,
+        { model: MODEL.profile, label: `embedded-inplace-${iter}`, phase: 'Tune', schema: JSON_PASSTHROUGH })
+      embLatency = Number(embResult?.latency_ms || 0)
+      embBclass = embResult?.heuristic_bclass || 'unknown'
+      if (typeof embResult?.avg_speedup === 'number') tuneResult.avg_speedup = embResult.avg_speedup
+      if (typeof embResult?.compiled === 'boolean') tuneResult.compilation_success = embResult.compiled
+      if (typeof embResult?.all_passed === 'boolean') tuneResult.all_passed = embResult.all_passed
+    } else if (INTEGRATION_DECISION.method === 'embedded_dispatch' && REGISTER_SCRIPT && PROJECT_ROOT) {
+      const _plan = typeof __embeddedEvalPlan === 'function'
+        ? __embeddedEvalPlan({ adapter: `python3 "${REGISTER_SCRIPT}"`, variant: _variant, source: _candPath, projectRoot: PROJECT_ROOT, buildCmd: BUILD_CMD, testCmd: PROJECT_BENCH_CMD || BUILD_CMD, benchmarkCmd: PROJECT_BENCH_CMD || BUILD_CMD })
+        : null
+      if (_plan) {
+        const embResult = await agent(
+          `EMBEDDED-DISPATCH EVAL (serial). Run IN ORDER:\n1. Register: ${_plan.register}\n2. Build: ${_plan.build}\n3. Test: ${_plan.test}\n4. Benchmark: ${_plan.benchmark}\n5. Unregister: ${_plan.unregister}\n${_plan.cleanupInvariant}\n` +
+          `Profiling-strategist method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'): use perf_heuristic throughput (no ncu). ` +
+          `Parse latency_ms + heuristic_bclass. Return {latency_ms, heuristic_bclass, compiled, correct, avg_speedup, all_passed}.`,
+          { model: MODEL.profile, label: `embedded-dispatch-${iter}`, phase: 'Tune', schema: JSON_PASSTHROUGH })
+        embLatency = Number(embResult?.latency_ms || 0)
+        embBclass = embResult?.heuristic_bclass || 'unknown'
+        if (typeof embResult?.avg_speedup === 'number') tuneResult.avg_speedup = embResult.avg_speedup
+        if (typeof embResult?.compiled === 'boolean') tuneResult.compilation_success = embResult.compiled
+        if (typeof embResult?.all_passed === 'boolean') tuneResult.all_passed = embResult.all_passed
+      }
+    }
+    log(`Iter ${iter + 1}: embedded eval (${INTEGRATION_DECISION.method}) latency=${embLatency}ms bclass=${embBclass}`)
+  }
 
   if (!tuneResult.compilation_success) {
     log(`Iter ${iter + 1}: COMPILE FAILED: ${tuneResult.error}`)
@@ -865,6 +971,16 @@ for (const h of tuningHistory) {
   log(`  [${h.label}] avg=${h.avg_speedup?.toFixed(4) || 'N/A'}x${h.changes ? ' | ' + h.changes.join('; ') : ''}`)
 }
 log(`Best: ${bestAvgSpeedup.toFixed(4)}x`)
+
+// --- Exit restore (embedded_inplace safety net): unconditionally restore the
+// pristine project operator file from the single backup before returning, so the
+// host project is never left mutated by an embedded eval. No-op when not embedded
+// (ORIGINAL_BACKUP is '') — legacy path byte-identical. ---
+if (ORIGINAL_BACKUP) {
+  await agent(`Exit restore (embedded_inplace safety net): ALWAYS restore pristine by running ` +
+    `\`cp -a "${ORIGINAL_BACKUP}" "${EMBEDDED_OP_PATH}"\` and confirm the project operator file matches the backup.`,
+    { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Validate', schema: JSON_PASSTHROUGH })
+}
 
 // Recompute final MFU with best per-workload data
 if (bestPerWorkload.length > 0 && analyzeResult.fixed_N && analyzeResult.fixed_K) {
