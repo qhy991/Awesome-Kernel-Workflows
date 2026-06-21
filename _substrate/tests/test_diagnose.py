@@ -114,6 +114,44 @@ class TestDiagnosePriorityPin(unittest.TestCase):
         )
 
 
+class TestDiagnoseHeuristic(unittest.TestCase):
+    """perf_heuristic qualitative path: heuristic_bclass / bottleneck_hint before unknown."""
+
+    def test_heuristic_bclass_memory_bound(self):
+        self.assertEqual(
+            diagnose.classify({"heuristic_bclass": "memory_bound", "evidence": "profile_heuristic"}),
+            ("memory_bound", ["heuristic_bclass=memory_bound (evidence=profile_heuristic)"]),
+        )
+
+    def test_heuristic_bclass_latency_bound_alias(self):
+        self.assertEqual(
+            diagnose.classify({"heuristic_bclass": "latency_bound"}),
+            ("latency_occupancy", ["heuristic_bclass=latency_occupancy (evidence=profile_heuristic)"]),
+        )
+
+    def test_bottleneck_hint_l2_memory(self):
+        cls, ev = diagnose.classify({"bottleneck_hint": "L2-bound / 55% SM utilization"})
+        self.assertEqual(cls, "memory_bound")
+        self.assertTrue(any("heuristic hint" in e for e in ev))
+
+    def test_bottleneck_hint_compute(self):
+        cls, _ = diagnose.classify({"bottleneck_hint": "compute bound, SM saturated"})
+        self.assertEqual(cls, "compute_bound")
+
+    def test_profile_note_with_evidence_tag(self):
+        cls, _ = diagnose.classify({
+            "evidence": "profile_heuristic",
+            "profile_note": "latency bound, not saturating DRAM",
+        })
+        self.assertEqual(cls, "latency_occupancy")
+
+    def test_numeric_path_unchanged_when_no_heuristic(self):
+        self.assertEqual(
+            diagnose.classify({"dram_pct": 80, "sm_pct": 30}),
+            ("memory_bound", ["dram 80% high, sm 30% low"]),
+        )
+
+
 class TestDiagnoseVendorProfile(unittest.TestCase):
     """Prove that _vendor selects a different threshold profile. The apple profile
     uses occ_lat=0.30 rather than nvidia's 0.40, so occupancy=0.35 straddles the
