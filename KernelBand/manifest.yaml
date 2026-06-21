@@ -456,3 +456,7 @@ routing:
   speedup_field: best_speedup
   fidelity_boundary: algorithm_sketch_execution_risk
   requires_ncu: true
+integration_patterns:
+- standalone
+- embedded_dispatch
+- embedded_inplace

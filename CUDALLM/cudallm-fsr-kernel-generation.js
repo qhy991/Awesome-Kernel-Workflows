@@ -231,6 +231,16 @@ const LEGACY_FENCE_TOKEN = 'cuda'
 const LEGACY_TRITON_FEATURE_FALLBACK = 'Explore the standard Triton optimization idioms appropriate to this driver (block tiling, vectorized loads, masking, reductions, autotune configs).'
 const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
 
+// --- Project-native integration (embedded operators via integration-strategist) ---
+// For inference-engine embedded operators (e.g. llama.cpp .cuh) that cannot
+// compile as a standalone TU; built/tested/benchmarked inside the host project.
+// EVAL_CMD is the existing standalone evaluator; PROJECT_BENCH_CMD is the
+// project-native benchmark (falls back to EVAL_CMD when not provided).
+const PROJECT_ROOT = args.project_root || args.ggml_root || ''
+const BUILD_CMD = args.build_command || ''
+const PROJECT_BENCH_CMD = args.project_benchmark_command || EVAL_CMD || ''
+const REGISTER_SCRIPT = args.register_script || ''
+
 function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
 function driverSh(script, cliArgs) {
   return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
@@ -376,6 +386,46 @@ if (USE_DRIVER) {
     { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
   if (_pd && _pd.method) PROFILING_DECISION = _pd
   log(`Profiling-strategist: method=${PROFILING_DECISION.method} confidence=${PROFILING_DECISION.confidence} normalizer=${PROFILING_DECISION.normalizer || 'none'}`)
+}
+
+// --- integration-strategist: route build/test mode (standalone vs embedded_*).
+// Generalist-level embedded treatment: an inference-engine operator (e.g.
+// llama.cpp .cuh) cannot compile as a standalone TU, so the strategist may
+// route to embedded_inplace / embedded_dispatch. Default is standalone, so the
+// legacy candidate-eval path is byte-identical when method=standalone. ---
+let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
+{
+  const _profManifest = (USE_DRIVER && BACKEND_DIR) ? `${BACKEND_DIR}/manifest.json` : `${SUBSTRATE}/backends/cuda/manifest.json`
+  const _kernelForInteg = REFERENCE_CODE_PATH || PROFILE_SOURCE_PATH || TASK_SPEC_PATH
+  const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
+  const _integ = await agent(
+    `Read ${_kernelForInteg}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+    `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
+    `--kernel "${_kernelForInteg}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
+    `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
+    `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
+    { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+}
+log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
+if (INTEGRATION_DECISION.method === 'derive_adapter') {
+  throw new Error('integration-strategist returned derive_adapter — provide project_root + build/test commands')
+}
+const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'standalone'
+const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
+if (ORIGINAL_BACKUP) {
+  await agent(`Byte-exact backup: run \`cp -a "${REFERENCE_CODE_PATH || PROFILE_SOURCE_PATH || TASK_SPEC_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+    { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH })
+}
+// native_profiler downgrade keyed on !USE_DRIVER_STANDALONE: when running the
+// embedded path there is no standalone artifact to feed a native profiler, so
+// fall back to perf_heuristic on project-native throughput.
+if (PROFILING_DECISION.method === 'native_profiler' && !USE_DRIVER_STANDALONE) {
+  log(`profiling: native_profiler but not standalone driver path -> downgrade to perf_heuristic`)
+  PROFILING_DECISION = { method: 'perf_heuristic', confidence: 'inferred', normalizer: 'perf_to_evidence.py',
+    profiler_name: 'project-native-perf', rationale: 'native_profiler but embedded/non-standalone path -> perf_heuristic' }
 }
 
 const setup = await agent(`You are a ${langToken(LEGACY_SETUP_LANG_TOKEN)} kernel generation expert. Read and structure this CUDA-LLM task.
@@ -685,7 +735,7 @@ Then append, using the values you just measured (status="done" only if compiled 
       eval: evaluation,
     }
 
-    if (USE_DRIVER) {
+    if (USE_DRIVER_STANDALONE) {
       const kPath = cudallmCandidatePath(iteration, sample)
       const rPath = cudallmResultPath(iteration, sample)
       const buildOut = `${EXP_DIR}/cudallm_iter_${iteration}_sample_${sample}.artifact`
@@ -723,6 +773,7 @@ Then append, using the values you just measured (status="done" only if compiled 
             ? `Normalize that throughput into canonical metrics via ` +
               `run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/${_norm} --baseline ${rPath} --peak-gflops <device_peak_gflops> --peak-gbs <device_peak_gbs>\`.\n` +
               `Return its stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}. ` +
+              `Also write heuristic_bclass (memory_bound|compute_bound|latency_bound) based on the throughput ratio so diagnose.py does not fall to unknown. ` +
               `Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'.`
             : `Return {ok:true, metrics:{latency_ms:<from ${rPath}>,dram_pct:null,sm_pct:null,occupancy:null}, coverage:[], source_backend:"${DRIVER_BACKEND_ID}"}.`) +
           `\nReturn {ok, metrics, coverage, source_backend}.`,
@@ -748,6 +799,42 @@ Then append, using the values you just measured (status="done" only if compiled 
         profiler_format: (profilePointer && profilePointer.format) || null,
         profile_ok: profilePointer ? profilePointer.ok !== false : false,
       }
+    } else if (IS_EMBEDDED) {
+      // --- Embedded eval (integration-strategist → embedded_inplace / embedded_dispatch) ---
+      // Generalist-level treatment for inference-engine embedded operators
+      // (e.g. llama.cpp .cuh) that cannot compile standalone. This runs inside
+      // the existing serial sample loop (the FSR candidate eval is sequential —
+      // no `await parallel(` — so there is no race on the shared project file).
+      const kPath = cudallmCandidatePath(iteration, sample)
+      const projectKernel = REFERENCE_CODE_PATH || PROFILE_SOURCE_PATH || TASK_SPEC_PATH
+      const variant = `cudallm_${iteration}_${sample}`.replace(/[^A-Za-z0-9_]/g, '_')
+      let embLatency = 0, embMetrics = {}, embBclass = 'unknown'
+      if (INTEGRATION_DECISION.method === 'embedded_inplace' && ORIGINAL_BACKUP) {
+        const embResult = await agent(
+          `EMBEDDED-INPLACE EVAL (serial). Candidate: ${kPath} | project operator: ${projectKernel} | pristine backup: ${ORIGINAL_BACKUP}\n` +
+          `Run IN ORDER:\n1. Restore pristine: cp -a ${ORIGINAL_BACKUP} ${projectKernel}\n` +
+          `2. Apply candidate: cp ${kPath} ${projectKernel}\n3. Build: ${BUILD_CMD}\n4. Test: ${EVAL_CMD || PROJECT_BENCH_CMD}\n5. Benchmark: ${PROJECT_BENCH_CMD || EVAL_CMD}\n` +
+          `6. ALWAYS restore: cp -a ${ORIGINAL_BACKUP} ${projectKernel}\n` +
+          `Parse latency_ms + heuristic_bclass (memory/compute/latency bound). Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
+          { model: MODEL.mechanical, label: `embedded-inplace-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+        embLatency = Number(embResult?.latency_ms || 0)
+        embBclass = embResult?.heuristic_bclass || 'unknown'
+        embMetrics = embResult?.metrics || { latency_ms: embLatency }
+      } else if (INTEGRATION_DECISION.method === 'embedded_dispatch' && REGISTER_SCRIPT && PROJECT_ROOT) {
+        const _plan = typeof __embeddedEvalPlan === 'function'
+          ? __embeddedEvalPlan({ adapter: `python3 "${REGISTER_SCRIPT}"`, variant, source: kPath, projectRoot: PROJECT_ROOT, buildCmd: BUILD_CMD, testCmd: EVAL_CMD || PROJECT_BENCH_CMD, benchmarkCmd: PROJECT_BENCH_CMD || EVAL_CMD })
+          : null
+        if (_plan) {
+          const embResult = await agent(
+            `EMBEDDED-DISPATCH EVAL (serial). Run IN ORDER:\n1. Register: ${_plan.register}\n2. Build: ${_plan.build}\n3. Test: ${_plan.test}\n4. Benchmark: ${_plan.benchmark}\n5. Unregister: ${_plan.unregister}\n${_plan.cleanupInvariant}\n` +
+            `Parse latency_ms + heuristic_bclass. Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
+            { model: MODEL.mechanical, label: `embedded-dispatch-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+          embLatency = Number(embResult?.latency_ms || 0)
+          embBclass = embResult?.heuristic_bclass || 'unknown'
+          embMetrics = embResult?.metrics || { latency_ms: embLatency }
+        }
+      }
+      candidate.driver_envelope = { latency_ms: embLatency, metrics: embMetrics, bottleneck_class: embBclass, backend_id: 'embedded' }
     }
 
     candidates.push(candidate)
@@ -858,6 +945,13 @@ Then append:
   label: 'final-report',
   phase: 'Report',
 })
+
+// embedded_inplace exit safety net: unconditionally restore the pristine project
+// operator so the host project is left byte-exact regardless of how the loop ended.
+if (ORIGINAL_BACKUP) {
+  await agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${REFERENCE_CODE_PATH || PROFILE_SOURCE_PATH || TASK_SPEC_PATH}"\` and confirm.`,
+    { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH })
+}
 
 return {
   input_mode: INPUT_MODE,
