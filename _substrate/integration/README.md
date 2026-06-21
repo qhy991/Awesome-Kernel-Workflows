@@ -70,10 +70,15 @@ build + backup/restore; `registry_dispatch` → python register/unregister.
 - `integration_registry.json` — ladder + preference + stamping
 - `tests/test_strategist.sh` — 18 assertions (no GPU/project needed)
 
-## Scope
+## Scope — rollout COMPLETE (23/29 workflows wired)
 
-The component is built and verified. **Wiring it into the 23 standalone-default
-workflows is a separate, larger step** (each must gate its build/eval step on the
-method, switching to `embedded_eval.js` when non-standalone) — more invasive than the
-profiling INJECT (a guidance sentence) because it changes the build flow, not just a
-prompt. The 6 already-embedded workflows don't need it (they hardcode their mode).
+The integration-strategist is wired into **23 of 29 workflows** (all optimizers). Each
+gates its build/eval step on the strategist's method: standalone → existing build.sh /
+benchmark path (byte-identical); embedded → project-native build/test/bench + restore.
+See `ROLLOUT.md` for the recipe + cohort history. The bug-class guard
+(`tests/test_workflow_embedded_safety.py`) enforces the three Generalist bug-classes
+across the full tree (0 findings).
+
+**Not wired (by design):** KEET (diagnostic — no optimization eval loop); TritorX,
+KernelAgent (generators — no embedded generation path); InPlacePatch,
+LlamacppEmbeddedSearch (embedded-native — always embedded, no standalone to gate).
