@@ -111,12 +111,12 @@ function __attemptBlock() {
 // treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 const WORKFLOW_SUITABILITY = {
-  method_supported_backends: ['cuda', 'triton'],
+  method_supported_backends: ['cuda', 'triton', 'metax'],
   default_backend: 'cuda',
   requires_capability: { bottleneck_classes: [], metrics: ['dram_pct', 'sm_pct'] },
   supported_problem_types: ['cuda-kernel-optimization', 'cuda-kernel-generation'],
   problem_types: ['existing CUDA kernel optimization', 'CUDA generation from problem_definition with benchmark contract'],
-  reason: 'AccelOpt is intrinsic to NCU-class profiling (dram_pct/sm_pct); runs on any NVIDIA-vendor backend (cuda, triton) with a present driver.',
+  reason: 'AccelOpt is intrinsic to native-profiler metrics (dram_pct/sm_pct) — NCU-class on NVIDIA (cuda, triton), mcProfiler/mcTracer-class on MetaX (metax) — with a present driver.',
 }
 
 function normalizeSuitabilityValue(value) {
@@ -854,8 +854,12 @@ if (ORIGINAL_BACKUP) {
 }
 // A-O1 closure: native_profiler chosen but ncu unavailable, OR the embedded path has no
 // reachable native profiler -> downgrade to perf_heuristic (run/bench gives throughput).
-if (PROFILING_DECISION.method === 'native_profiler' && (!NCU_BINARY || (IS_EMBEDDED && !USE_DRIVER_STANDALONE))) {
-  log(`profiling: native_profiler unreachable (ncu_binary=${!!NCU_BINARY}, embedded=${IS_EMBEDDED}) -> downgrade to perf_heuristic`)
+// On the driver-standalone path the native profiler is the backend's own tool
+// (mcProfiler/msprof/rocprofv3/ncu via profile.sh), advertised as IDIOMS.profiler_name
+// — NOT the NVIDIA ncu binary. Only the legacy non-driver path needs NCU_BINARY.
+const NATIVE_PROFILER_REACHABLE = USE_DRIVER_STANDALONE ? !!IDIOMS.profiler_name : !!NCU_BINARY
+if (PROFILING_DECISION.method === 'native_profiler' && (!NATIVE_PROFILER_REACHABLE || (IS_EMBEDDED && !USE_DRIVER_STANDALONE))) {
+  log(`profiling: native_profiler unreachable (reachable=${NATIVE_PROFILER_REACHABLE}, profiler=${IDIOMS.profiler_name || 'none'}, ncu_binary=${!!NCU_BINARY}, embedded=${IS_EMBEDDED}) -> downgrade to perf_heuristic`)
   PROFILING_DECISION = { method: 'perf_heuristic', confidence: 'inferred', normalizer: 'perf_to_evidence.py',
     profiler_name: 'project-native-perf', rationale: 'native_profiler unreachable -> perf_heuristic' }
 }
