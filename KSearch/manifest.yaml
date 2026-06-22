@@ -455,8 +455,13 @@ args:
   - name: benchmark_command
     type: string
     default: ''''''
-    description: Command to run the benchmark/test harness
+    description: Command to run the perf benchmark for each candidate
     example: <user-provided benchmark command with {kernel_path}/{result_path}>
+  - name: test_command
+    type: string
+    default: ''''''
+    description: Optional correctness/test command (kept separate from benchmark_command so the NMSE/correctness gate exercises a real test path, not the perf path). When omitted, KSearch falls back to benchmark_command for back-compat and logs that test==benchmark.
+    example: <correctness-only command with {kernel_path}>
   - name: rtol
     type: number
     default: '0.01'

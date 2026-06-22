@@ -167,6 +167,7 @@ if (!USE_DRIVER) {
 //     stagnation_window: 3,              // non-improving attempts before cycle ends
 //     max_difficulty: 4,                  // max action difficulty (1-5)
 //     benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+//     test_command: '<correctness/test command — when separate from benchmark>',
 //     kernel_path: '/path/to/baseline.py',
 //     rtol: 0.01,
 //     atol: 0.01,
@@ -185,6 +186,7 @@ const ATTEMPTS_PER_CYCLE = args.attempts_per_cycle || 5
 const STAGNATION_WINDOW = args.stagnation_window || 3
 const MAX_DIFFICULTY = args.max_difficulty || 4
 const BENCH_CMD = args.benchmark_command || ''
+const TEST_CMD = args.test_command || ''
 const BASELINE_CODE_PATH = args.kernel_path || ''
 const INPUT_MODE = BASELINE_CODE_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const RTOL = args.rtol || 0.01
@@ -208,6 +210,15 @@ const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
 const PROJECT_ROOT = args.project_root || args.ggml_root || ''
 const BUILD_CMD = args.build_command || ''
 const PROJECT_BENCH_CMD = args.benchmark_command || BENCH_CMD || ''
+// Embedded eval: prefer a dedicated correctness command. When none is provided,
+// fall back to PROJECT_BENCH_CMD for back-compat (current default) but log so
+// the operator can see test==benchmark is in effect. The NMSE correctness gate
+// only protects you if the test command actually measures correctness, not
+// latency-only.
+const PROJECT_TEST_CMD = args.test_command || TEST_CMD || PROJECT_BENCH_CMD || ''
+if (PROJECT_TEST_CMD && PROJECT_BENCH_CMD && PROJECT_TEST_CMD === PROJECT_BENCH_CMD) {
+  log(`KSearch: test_command == benchmark_command (no separate test). NMSE/correctness gate runs the same command as the perf measurement; pass a distinct args.test_command if your harness has a correctness-only path.`)
+}
 const REGISTER_SCRIPT = args.register_script || ''
 
 function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
@@ -961,7 +972,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
         const embResult = await agent(
           `EMBEDDED-INPLACE EVAL (serial). Candidate: ${kPath} | project kernel: ${INTEG_KERNEL_PATH} | pristine backup: ${ORIGINAL_BACKUP}\n` +
           `Run IN ORDER:\n1. Restore pristine: cp -a ${ORIGINAL_BACKUP} ${INTEG_KERNEL_PATH}\n` +
-          `2. Apply candidate: cp ${kPath} ${INTEG_KERNEL_PATH}\n3. Build: ${BUILD_CMD}\n4. Test: ${PROJECT_BENCH_CMD}\n5. Benchmark: ${PROJECT_BENCH_CMD}\n` +
+          `2. Apply candidate: cp ${kPath} ${INTEG_KERNEL_PATH}\n3. Build: ${BUILD_CMD}\n4. Test: ${PROJECT_TEST_CMD}\n5. Benchmark: ${PROJECT_BENCH_CMD}\n` +
           `6. ALWAYS restore: cp -a ${ORIGINAL_BACKUP} ${INTEG_KERNEL_PATH}\n` +
           `Parse latency_ms + heuristic_bclass (memory/compute/latency bound). Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
           { model: MODEL.mechanical, label: `embedded-inplace-${cycle}-${attempt}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
@@ -970,7 +981,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
         embMetrics = embResult?.metrics || { latency_ms: embLatency }
       } else if (INTEGRATION_DECISION.method === 'embedded_dispatch' && REGISTER_SCRIPT && PROJECT_ROOT) {
         const _plan = typeof __embeddedEvalPlan === 'function'
-          ? __embeddedEvalPlan({ adapter: `python3 "${REGISTER_SCRIPT}"`, variant, source: kPath, projectRoot: PROJECT_ROOT, buildCmd: BUILD_CMD, testCmd: PROJECT_BENCH_CMD, benchmarkCmd: PROJECT_BENCH_CMD })
+          ? __embeddedEvalPlan({ adapter: `python3 "${REGISTER_SCRIPT}"`, variant, source: kPath, projectRoot: PROJECT_ROOT, buildCmd: BUILD_CMD, testCmd: PROJECT_TEST_CMD, benchmarkCmd: PROJECT_BENCH_CMD })
           : null
         if (_plan) {
           const embResult = await agent(
