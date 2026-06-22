@@ -285,6 +285,7 @@ const STAGNATION_LIMIT = 2    // consecutive stagnant rounds -> stop
 //     on can_compile_standalone + host caps; nothing here is llama.cpp-specific. ---
 const PROJECT_ROOT = args.project_root || args.ggml_root || ''  // ggml_root is a llama.cpp compat alias; project_root is canonical
 const BUILD_CMD = args.build_command || ''
+const BUILD_DIR = args.build_dir || ''  // optional CMake build dir for force-recompile-dependents
 const TEST_CMD = args.test_command || ''
 const BENCH_CMD = args.benchmark_command || EVAL_CMD || ''
 const REGISTER_SCRIPT = args.register_script || ''
@@ -305,19 +306,41 @@ function embeddedInplaceEvalBlock(kernelPath, runDir, originalBackup) {
     return '\n# embedded_inplace requires build_command and test_command; cannot eval without them.\n'
   }
   const bench = BENCH_CMD || TEST_CMD
-  return [
+  // Force-recompile guard: when the candidate is a header (.cuh / .h / …),
+  // CMake/Ninja's dependency scan can miss the .cu translation units that
+  // include it (depfile lag, same-second mtime, NVCC dep races). Inlined as
+  // bash so the workflow does not require an external KerSor helper at the
+  // AKW-submodule layer.
+  const headerExts = /\.(cuh|h|hh|hpp|cuhpp|hxx)$/i
+  const isHeader = headerExts.test(kernelPath)
+  const headerDir = isHeader ? `$(dirname ${kernelPath})` : ''
+  const touchSiblings = isHeader
+    ? `2a. Force sibling TU recompile (defeats header-mtime races): find ${headerDir} -maxdepth 1 -type f \\( -name '*.cu' -o -name '*.cpp' -o -name '*.cc' -o -name '*.cxx' \\) -exec touch -c {} + ; echo touched siblings under ${headerDir}`
+    : ''
+  // Stale-object purge when build_dir is known: any .d depfile that
+  // references the kernel path -> remove the corresponding .o so the next
+  // build cannot reuse a stale object.
+  const purgeStaleObjects = BUILD_DIR
+    ? `2b. Purge stale objects keyed on this header: find ${BUILD_DIR} -type f -name '*.d' -exec grep -lF ${kernelPath} {} + 2>/dev/null | while IFS= read -r d; do rm -f "\${d%.d}.o" "\${d%.d}"; done; true`
+    : ''
+  const steps = [
     '',
     '# EMBEDDED-INPLACE EVALUATION (integration-strategist -> embedded_inplace; SERIAL — never run concurrently with another candidate)',
     `Candidate: ${runDir}/kernel | project kernel file: ${kernelPath} | pristine backup: ${originalBackup}`,
     'Run IN ORDER:',
     `1. Restore pristine FIRST (recovers if a prior candidate left the file dirty): cp -a ${originalBackup} ${kernelPath}`,
-    `2. Apply candidate: cp ${runDir}/kernel ${kernelPath}`,
+    `2. Apply candidate AND bump mtime: cp ${runDir}/kernel ${kernelPath} && touch -c ${kernelPath}`,
+  ]
+  if (touchSiblings) steps.push(touchSiblings)
+  if (purgeStaleObjects) steps.push(purgeStaleObjects)
+  steps.push(
     `3. Build: ${BUILD_CMD}`,
     `4. Test: ${TEST_CMD}`,
     `5. Benchmark: ${bench}`,
     `6. ALWAYS restore pristine: cp -a ${originalBackup} ${kernelPath} (project must be byte-exact pristine after eval)`,
     'Parse compiled/correct/latency/speedup strictly from command output; do NOT fabricate.',
-  ].join('\n')
+  )
+  return steps.join('\n')
 }
 
 function embeddedDispatchEvalBlock(kernelPath, runDir, variant) {

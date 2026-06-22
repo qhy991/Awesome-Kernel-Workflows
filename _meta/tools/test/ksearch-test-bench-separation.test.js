@@ -26,17 +26,20 @@ test('ksearch: PROJECT_TEST_CMD is declared and falls back to PROJECT_BENCH_CMD'
 
 test('ksearch: embedded_inplace branch Test step uses PROJECT_TEST_CMD, Benchmark uses PROJECT_BENCH_CMD', () => {
   // The embedded_inplace prompt is a single template literal containing
-  // `Test: ${PROJECT_TEST_CMD}` and `Benchmark: ${PROJECT_BENCH_CMD}`.
+  // `Test: [${TIMEOUT_WRAP} ]${PROJECT_TEST_CMD}` and `Benchmark: [..] ${PROJECT_BENCH_CMD}`.
   const inplaceBlock = SOURCE.match(/EMBEDDED-INPLACE EVAL[\s\S]*?ALWAYS restore/)
   assert.ok(inplaceBlock, 'embedded_inplace prompt block must exist')
   const block = inplaceBlock[0]
-  assert.match(block, /Test:\s*\$\{PROJECT_TEST_CMD\}/,
+  // The eval-timeout patch wraps each command with `${TIMEOUT_WRAP} `;
+  // accept either bare or wrapped form so this test pins the bench/test
+  // separation without coupling to the wall-clock wrapper.
+  assert.match(block, /Test:\s*(?:\$\{TIMEOUT_WRAP\}\s*)?\$\{PROJECT_TEST_CMD\}/,
     'Test step in embedded_inplace prompt must use PROJECT_TEST_CMD, not PROJECT_BENCH_CMD')
-  assert.match(block, /Benchmark:\s*\$\{PROJECT_BENCH_CMD\}/,
+  assert.match(block, /Benchmark:\s*(?:\$\{TIMEOUT_WRAP\}\s*)?\$\{PROJECT_BENCH_CMD\}/,
     'Benchmark step must use PROJECT_BENCH_CMD')
   // Pin the contract: Test and Benchmark must not be the same identifier.
   assert.ok(
-    !/Test:\s*\$\{PROJECT_BENCH_CMD\}/.test(block),
+    !/Test:\s*(?:\$\{TIMEOUT_WRAP\}\s*)?\$\{PROJECT_BENCH_CMD\}/.test(block),
     'Test step must not use PROJECT_BENCH_CMD — that was the bug',
   )
 })
@@ -47,13 +50,15 @@ test('ksearch: embedded_dispatch __embeddedEvalPlan call separates testCmd and b
   const idx = SOURCE.indexOf('__embeddedEvalPlan(')
   assert.ok(idx > 0, '__embeddedEvalPlan call site must exist')
   const slice = SOURCE.slice(idx, idx + 600)
-  assert.match(slice, /testCmd:\s*PROJECT_TEST_CMD/,
-    'embedded_dispatch testCmd must be PROJECT_TEST_CMD')
-  assert.match(slice, /benchmarkCmd:\s*PROJECT_BENCH_CMD/,
-    'embedded_dispatch benchmarkCmd must be PROJECT_BENCH_CMD')
-  // Regression pin: testCmd and benchmarkCmd must not both be PROJECT_BENCH_CMD.
+  // Accept bare PROJECT_TEST_CMD or `${TIMEOUT_WRAP} ${PROJECT_TEST_CMD}` (the
+  // eval-timeout patch wraps the substrate-plan commands with `timeout Ns`).
+  assert.match(slice, /testCmd:\s*`?\$\{TIMEOUT_WRAP\}\s*\$\{PROJECT_TEST_CMD\}`?|testCmd:\s*PROJECT_TEST_CMD/,
+    'embedded_dispatch testCmd must reference PROJECT_TEST_CMD')
+  assert.match(slice, /benchmarkCmd:\s*`?\$\{TIMEOUT_WRAP\}\s*\$\{PROJECT_BENCH_CMD\}`?|benchmarkCmd:\s*PROJECT_BENCH_CMD/,
+    'embedded_dispatch benchmarkCmd must reference PROJECT_BENCH_CMD')
+  // Regression pin: testCmd must NOT alias to PROJECT_BENCH_CMD (the original bug).
   assert.ok(
-    !/testCmd:\s*PROJECT_BENCH_CMD/.test(slice),
+    !/testCmd:\s*PROJECT_BENCH_CMD\b/.test(slice),
     'testCmd must not collapse onto PROJECT_BENCH_CMD — that was the bug',
   )
 })

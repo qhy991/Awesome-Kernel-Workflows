@@ -192,6 +192,15 @@ const INPUT_MODE = BASELINE_CODE_PATH ? 'optimize_existing' : 'generate_then_opt
 const RTOL = args.rtol || 0.01
 const ATOL = args.atol || 0.01
 const EXP_DIR = args.exp_dir || '/tmp/ksearch_exp'
+// Wall-clock budget for a single eval attempt (compile + test + benchmark).
+// Without this, fattn R1 ran 90+ minutes of correctness rechecks with no
+// benchmark latency emitted. The agent prompts surface the budget; the
+// embedded paths additionally wrap build/test/benchmark with coreutils
+// `timeout` so a runaway command is killed at the shell layer too.
+const EVAL_TIMEOUT_SEC = Number.isFinite(args.eval_timeout_sec) && args.eval_timeout_sec > 0
+  ? Math.floor(args.eval_timeout_sec)
+  : 600
+const TIMEOUT_WRAP = `timeout ${EVAL_TIMEOUT_SEC}s`
 
 if (!KERNEL_SPEC_PATH && !PROBLEM_DEFINITION && !BASELINE_CODE_PATH) {
   throw new Error('Provide one of problem_path, problem_definition, or kernel_path')
@@ -853,6 +862,8 @@ Then append:
 
     const evalResult = await agent(`You are a kernel evaluation expert. Evaluate this ${langToken(LANGUAGE)} kernel for correctness and performance.
 
+WALL-CLOCK BUDGET: ${EVAL_TIMEOUT_SEC}s for this whole eval attempt (compile + correctness + benchmark combined). If you exceed it on correctness alone with no benchmark latency yet, RETURN EARLY with {is_valid:false, latency_ms:null, metric_value:null, reason:"timeout_in_correctness"} — do not keep retrying. A budget-exceeded attempt is itself useful signal; a 90-minute correctness loop is not.
+
 # Kernel Code:
 \`\`\`${langToken(LANGUAGE)}
 ${genResult.code.substring(0, 4000)}
@@ -971,8 +982,9 @@ Then append, using the values you just measured (status="done" if it compiled AN
       if (INTEGRATION_DECISION.method === 'embedded_inplace' && ORIGINAL_BACKUP) {
         const embResult = await agent(
           `EMBEDDED-INPLACE EVAL (serial). Candidate: ${kPath} | project kernel: ${INTEG_KERNEL_PATH} | pristine backup: ${ORIGINAL_BACKUP}\n` +
+          `WALL-CLOCK BUDGET: ${EVAL_TIMEOUT_SEC}s per command — when any single step exceeds the budget, abort the attempt, restore pristine, and return {compiled:false, correct:false, latency_ms:null, heuristic_bclass:"unknown", metrics:{latency_ms:null}, reason:"timeout"}.\n` +
           `Run IN ORDER:\n1. Restore pristine: cp -a ${ORIGINAL_BACKUP} ${INTEG_KERNEL_PATH}\n` +
-          `2. Apply candidate: cp ${kPath} ${INTEG_KERNEL_PATH}\n3. Build: ${BUILD_CMD}\n4. Test: ${PROJECT_TEST_CMD}\n5. Benchmark: ${PROJECT_BENCH_CMD}\n` +
+          `2. Apply candidate: cp ${kPath} ${INTEG_KERNEL_PATH}\n3. Build: ${TIMEOUT_WRAP} ${BUILD_CMD}\n4. Test: ${TIMEOUT_WRAP} ${PROJECT_TEST_CMD}\n5. Benchmark: ${TIMEOUT_WRAP} ${PROJECT_BENCH_CMD}\n` +
           `6. ALWAYS restore: cp -a ${ORIGINAL_BACKUP} ${INTEG_KERNEL_PATH}\n` +
           `Parse latency_ms + heuristic_bclass (memory/compute/latency bound). Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
           { model: MODEL.mechanical, label: `embedded-inplace-${cycle}-${attempt}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
@@ -981,11 +993,13 @@ Then append, using the values you just measured (status="done" if it compiled AN
         embMetrics = embResult?.metrics || { latency_ms: embLatency }
       } else if (INTEGRATION_DECISION.method === 'embedded_dispatch' && REGISTER_SCRIPT && PROJECT_ROOT) {
         const _plan = typeof __embeddedEvalPlan === 'function'
-          ? __embeddedEvalPlan({ adapter: `python3 "${REGISTER_SCRIPT}"`, variant, source: kPath, projectRoot: PROJECT_ROOT, buildCmd: BUILD_CMD, testCmd: PROJECT_TEST_CMD, benchmarkCmd: PROJECT_BENCH_CMD })
+          ? __embeddedEvalPlan({ adapter: `python3 "${REGISTER_SCRIPT}"`, variant, source: kPath, projectRoot: PROJECT_ROOT, buildCmd: `${TIMEOUT_WRAP} ${BUILD_CMD}`, testCmd: `${TIMEOUT_WRAP} ${PROJECT_TEST_CMD}`, benchmarkCmd: `${TIMEOUT_WRAP} ${PROJECT_BENCH_CMD}` })
           : null
         if (_plan) {
           const embResult = await agent(
-            `EMBEDDED-DISPATCH EVAL (serial). Run IN ORDER:\n1. Register: ${_plan.register}\n2. Build: ${_plan.build}\n3. Test: ${_plan.test}\n4. Benchmark: ${_plan.benchmark}\n5. Unregister: ${_plan.unregister}\n${_plan.cleanupInvariant}\n` +
+            `EMBEDDED-DISPATCH EVAL (serial).\n` +
+            `WALL-CLOCK BUDGET: ${EVAL_TIMEOUT_SEC}s per command — when any step exceeds the budget, unregister, return {compiled:false, correct:false, latency_ms:null, heuristic_bclass:"unknown", metrics:{latency_ms:null}, reason:"timeout"}.\n` +
+            `Run IN ORDER:\n1. Register: ${_plan.register}\n2. Build: ${_plan.build}\n3. Test: ${_plan.test}\n4. Benchmark: ${_plan.benchmark}\n5. Unregister: ${_plan.unregister}\n${_plan.cleanupInvariant}\n` +
             `Parse latency_ms + heuristic_bclass. Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
             { model: MODEL.mechanical, label: `embedded-dispatch-${cycle}-${attempt}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
           embLatency = Number(embResult?.latency_ms || 0)

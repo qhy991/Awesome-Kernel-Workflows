@@ -462,6 +462,11 @@ args:
     default: ''''''
     description: Optional correctness/test command (kept separate from benchmark_command so the NMSE/correctness gate exercises a real test path, not the perf path). When omitted, KSearch falls back to benchmark_command for back-compat and logs that test==benchmark.
     example: <correctness-only command with {kernel_path}>
+  - name: eval_timeout_sec
+    type: number
+    default: '600'
+    description: Per-attempt wall-clock budget (seconds) for the eval phase. Embedded build/test/benchmark commands are wrapped with `timeout Ns ...` and the eval agents are told to abort early once the budget is spent. Prevents pathological correctness loops (fattn R1 ran 90+ minutes with no benchmark latency). Set to 0 / negative to fall back to the 600s default.
+    example: '900'
   - name: rtol
     type: number
     default: '0.01'
