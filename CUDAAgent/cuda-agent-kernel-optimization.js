@@ -280,6 +280,15 @@ const PROFILE_CMD = args.profile_command || ''
 const COMPILE_CMD = args.compile_command || ''
 const TARGET_SPEEDUP = args.target_speedup || 1.05
 const MAX_TURNS = args.max_turns || 15
+// --- Watchdog / stall guards (parity with Generalist's STAGNATION/DRY guards) ---
+// The loop used to be bounded ONLY by MAX_TURNS: a single hung Implement/Verify turn
+// (no new genome.jsonl row, task stuck in_progress) stalled the whole run for 40+ min
+// before an orchestrator manually killed it. TURN_TIMEOUT_MS bounds each doer turn;
+// the stagnation/dry guards stop a converged-but-not-target or no-progress loop early.
+const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn wall-clock cap
+const STAGNATION_EPS = 0.02                       // < 2% best-speedup gain counts as no progress
+const STAGNATION_LIMIT = args.stagnation_limit || 3  // consecutive stagnant turns -> stop (stalled)
+const DRY_LIMIT = args.dry_limit || 4             // consecutive turns with no correct measured result -> stop
 const EXP_DIR = args.exp_dir || '/tmp/cuda_agent_exp'
 const ADAPTATION_SCOPE = 'inference_time_adaptation'
 const LANGUAGE = args.language || 'cuda'
@@ -545,6 +554,26 @@ log(`Strategy: ${profileResult.optimization_strategy}`)
 // =============================================================================
 
 let targetMet = false
+let stagnantRounds = 0
+let dryRounds = 0
+let convergenceStatus = null  // 'timeout' | 'stalled' when the loop exits early
+
+// Per-turn wall-clock watchdog. Wraps a doer agent() call so a hung turn rejects
+// instead of stalling the run forever. Degrades to a passthrough when the runtime has
+// no timers (TURN_TIMEOUT_MS<=0 disables it). On reject the loop catches it and exits
+// with convergence_status=timeout rather than hanging.
+function withTurnTimeout(promise, label) {
+  if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return promise
+  let timer
+  const guard = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)),
+      TURN_TIMEOUT_MS)
+  })
+  return Promise.race([promise, guard]).finally(() => {
+    if (typeof clearTimeout === 'function') clearTimeout(timer)
+  })
+}
 
 for (currentAttempt = 0; currentAttempt < MAX_TURNS && !targetMet; currentAttempt++) {
 
@@ -571,7 +600,9 @@ for (currentAttempt = 0; currentAttempt < MAX_TURNS && !targetMet; currentAttemp
     ? `\n\n${EMBEDDING_CONTRACT}\n\nMANDATORY: Read the reference dispatch file at ${REFERENCE_FILE} and match its dispatch signature EXACTLY (same entry-point shape, template params, launch-bounds conventions). Emit a COMPLETE dispatch-compatible \`.cuh\` (NOT a standalone translation unit, NO main()/harness). Put the full \`.cuh\` contents in kernel_code; binding_code and model_new_code are not used in embedded mode (return brief placeholders).`
     : ''
 
-  const implResult = await agent(`You are a CUDA kernel developer. Implement an optimized CUDA kernel for this PyTorch model.
+  let implResult
+  try {
+  implResult = await withTurnTimeout(agent(`You are a CUDA kernel developer. Implement an optimized CUDA kernel for this PyTorch model.
 
 # Model to Optimize:
 \`\`\`python
@@ -632,7 +663,12 @@ Then append (this is optimization attempt ${currentAttempt}):
       },
       required: ['kernel_code', 'binding_code', 'model_new_code'],
     },
-  })
+  }), `Implement turn ${currentAttempt + 1}`)
+  } catch (e) {
+    log(`  Turn ${currentAttempt + 1}: Implement watchdog tripped — stopping (${e.message})`)
+    convergenceStatus = 'timeout'
+    break
+  }
 
   // ===========================================================================
   // Phase 4: Verify — Compile + correctness + performance
@@ -699,7 +735,9 @@ Parse correctness (pass/fail) and latency STRICTLY from the test/benchmark comma
     }
   }
 
-  const verifyResult = await agent(`You are a CUDA kernel validator. Compile, verify, and benchmark this kernel implementation.${embeddedEvalBlock}
+  let verifyResult
+  try {
+  verifyResult = await withTurnTimeout(agent(`You are a CUDA kernel validator. Compile, verify, and benchmark this kernel implementation.${embeddedEvalBlock}
 
 # Kernel Code (kernel.cu):
 \`\`\`cuda
@@ -762,7 +800,12 @@ Then append, using the values you just measured (status="done" if correctness pa
       },
       required: ['compiled', 'correct', 'reward'],
     },
-  })
+  }), `Verify turn ${currentAttempt + 1}`)
+  } catch (e) {
+    log(`  Turn ${currentAttempt + 1}: Verify watchdog tripped — stopping (${e.message})`)
+    convergenceStatus = 'timeout'
+    break
+  }
 
   // Record history
   let outcome = ''
@@ -787,6 +830,7 @@ Then append, using the values you just measured (status="done" if correctness pa
   })
 
   // Update best
+  const prevBest = bestSpeedup
   if (verifyResult.correct && (verifyResult.speedup_vs_compile || 0) > bestSpeedup) {
     bestKernelCode = implResult.kernel_code
     bestBindingCode = implResult.binding_code
@@ -809,12 +853,37 @@ Then append, using the values you just measured (status="done" if correctness pa
       log(`  Turn ${currentAttempt + 1}: ${outcome} | Refining...`)
     }
   }
+
+  // ---- Stall / convergence guards (parity with Generalist STAGNATION/DRY) ----
+  // Stop early instead of burning the full MAX_TURNS when the loop stops improving
+  // (stagnant) or stops producing any correct measured result (dry).
+  if (!targetMet) {
+    const improvement = (bestSpeedup - prevBest) / Math.max(prevBest, 1e-9)
+    stagnantRounds = improvement < STAGNATION_EPS ? stagnantRounds + 1 : 0
+    const producedMeasured = verifyResult.correct && (verifyResult.speedup_vs_compile || 0) > 0
+    dryRounds = producedMeasured ? 0 : dryRounds + 1
+    log(`  Turn ${currentAttempt + 1}: best ${bestSpeedup.toFixed(2)}x | stagnant ${stagnantRounds}/${STAGNATION_LIMIT} | dry ${dryRounds}/${DRY_LIMIT}`)
+    if (stagnantRounds >= STAGNATION_LIMIT) {
+      log(`  stagnation limit (${STAGNATION_LIMIT}) reached — stopping (stalled)`)
+      convergenceStatus = 'stalled'
+      break
+    }
+    if (dryRounds >= DRY_LIMIT) {
+      log(`  dry limit (${DRY_LIMIT}) reached: no correct measured result — stopping (stalled)`)
+      convergenceStatus = 'stalled'
+      break
+    }
+  }
 }
 
 // =============================================================================
 // Phase 6: Report
 // =============================================================================
 phase('Report')
+
+// converged (target met) | timeout (a turn watchdog tripped) | stalled (stagnation/dry
+// guard) | budget_exhausted (ran out of MAX_TURNS without any of the above).
+const convergence_status = targetMet ? 'converged' : (convergenceStatus || 'budget_exhausted')
 
 const finalReport = await agent(`Write a concise optimization report.
 
@@ -827,6 +896,7 @@ const finalReport = await agent(`Write a concise optimization report.
 - Best speedup vs compile: ${bestSpeedup.toFixed(2)}x
 - Target: ${TARGET_SPEEDUP}x | ${targetMet ? 'ACHIEVED' : 'NOT MET'}
 - Turns used: ${currentAttempt}/${MAX_TURNS}
+- Convergence status: ${convergence_status}
 
 # Optimization History:
 ${history.map(h => `Turn ${h.turn + 1}: ${h.outcome} (reward=${h.reward})`).join('\n')}
@@ -866,6 +936,7 @@ return {
   best_speedup_vs_compile: bestSpeedup,
   best_speedup_vs_eager: eagerTime / (compileTime / (bestSpeedup || 1)),
   target_met: targetMet,
+  convergence_status,
   turns_used: currentAttempt,
   max_turns: MAX_TURNS,
   reward_history: history.map(h => h.reward),
