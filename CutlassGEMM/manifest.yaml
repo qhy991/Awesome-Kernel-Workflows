@@ -9,6 +9,7 @@ backend:
   - cutlass
   supported:
   - cutlass
+  - cuda
   default: cutlass
   notes: 'Tier per spec §7.2 (method_intrinsic, CUTLASS). Targets SOL-ExecBench GEMM
     problems on Ampere/Hopper. Legacy WORKFLOW_SUITABILITY=[''cutlass'', ''cuda'',
