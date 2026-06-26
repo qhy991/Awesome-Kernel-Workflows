@@ -72,6 +72,48 @@ function __unwrapArgs(rawArgs) {
 // eslint-disable-next-line no-global-assign
 args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // --- END inlined arg_guard ---
+
+// --- BEGIN inlined agent-retry scaffolding (from _meta/scaffolding/agent-retry.js) ---
+async function agentRetry(fn, opts) {
+  const retries = (opts && opts.retries != null) ? opts.retries : 5
+  let lastError = null
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const result = await fn()
+      if (result != null) return result
+      // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
+    } catch (e) {
+      lastError = e
+    }
+  }
+  if (lastError) throw lastError
+  return null
+}
+
+/**
+ * Null-guard a REQUIRED structured field. Throws a clear, attributable error
+ * (instead of a cryptic TypeError) when an agent returned null/malformed output,
+ * so the run fails loudly at the dereference rather than producing garbage.
+ */
+function expect(obj, field, ctx) {
+  if (obj == null || obj[field] == null) {
+    throw new Error(
+      `agentRetry: required field "${field}" is missing${ctx ? ' from ' + ctx : ''} ` +
+      `(agent returned null or a malformed result after retries).`,
+    )
+  }
+  return obj[field]
+}
+
+/**
+ * Null-guard an OPTIONAL structured field with a fallback (no throw).
+ * Use for deref points that have a sensible default (e.g. `[]`, `''`, `0`).
+ */
+function guard(obj, field, fallback) {
+  if (obj == null || obj[field] == null) return fallback
+  return obj[field]
+}
+// --- END inlined agent-retry scaffolding ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
@@ -231,7 +273,7 @@ let VERIFICATION_CONFIRM = { method: 'compile_lint', confidence: 'inferred', evi
 // =============================================================================
 phase('Setup')
 
-const setupResult = await agent(`You are setting up a TritorX kernel generation session.
+const setupResult = await agentRetry(() => agent(`You are setting up a TritorX kernel generation session.
 
 # Target Platform: ${TARGET_PLATFORM}
 # Triton Dialect: ${TRITON_DIALECT}
@@ -274,7 +316,7 @@ Then append:
     },
     required: ['platform_ready'],
   },
-})
+}), { retries: 5 })
 
 log(`Setup: ${TARGET_PLATFORM} | ${operators.length} operator(s) | Dtypes: ${SUPPORTED_DTYPES.join(', ')}`)
 
@@ -283,14 +325,14 @@ log(`Setup: ${TARGET_PLATFORM} | ${operators.length} operator(s) | Dtypes: ${SUP
 // and let the substrate pick the method + stamp confidence. The agent only
 // classifies (fuzzy need × host probe); the strategist owns method+confidence.
 // Honored in the Lint and Compile-Test prompts below. ---
-const _vsp = await agent(
+const _vsp = await agentRetry(() => agent(
   `Classify the host verification capability for this TritorX session on ${TARGET_PLATFORM} (${TRITON_DIALECT}). ` +
   `Probe: is a Triton compiler available (compiler=true)? is the test harness runnable (harness_runnable=${!!TEST_CMD || STRICT_HARNESS})? is a numerical reference available (reference_available=${!!TEST_CMD})? ` +
   `Then run the strategist TWICE with the same host probe and write both results to the trajectory:\n` +
   `1. Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/verification/verification_strategist.py resolve --need prune --host-probe '<probe json>' --cache ${EXP_DIR}/verify_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`\n` +
   `2. Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/verification/verification_strategist.py resolve --need confirm --host-probe '<probe json>' --cache ${EXP_DIR}/verify_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`\n` +
   `Return JSON {prune: <stdout1 verbatim>, confirm: <stdout2 verbatim>} where each value has {method, confidence, evidence_source, requires, abstained_from, rationale}.`,
-  { model: MODEL.mechanical, label: 'verification-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  { model: MODEL.mechanical, label: 'verification-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
 if (_vsp && _vsp.prune && _vsp.prune.method) VERIFICATION_PRUNE = _vsp.prune
 if (_vsp && _vsp.confirm && _vsp.confirm.method) VERIFICATION_CONFIRM = _vsp.confirm
 
@@ -316,7 +358,7 @@ for (const op of operators) {
     // =========================================================================
     phase('Generate')
 
-    const generateResult = await agent(`You are a TritorX kernel generator. Generate a Triton ${TRITON_DIALECT} kernel and Python wrapper for this PyTorch ATen operator.
+    const generateResult = await agentRetry(() => agent(`You are a TritorX kernel generator. Generate a Triton ${TRITON_DIALECT} kernel and Python wrapper for this PyTorch ATen operator.
 
 # Operator: ${opName}
 # Docstring:
@@ -363,7 +405,7 @@ Then append (operator ${opName}, attempt ${attempt}):
         },
         required: ['kernel_code', 'wrapper_code'],
       },
-    })
+    }), { retries: 5 })
 
     currentKernel = generateResult?.kernel_code || ''
     currentWrapper = generateResult?.wrapper_code || ''
@@ -380,7 +422,7 @@ Then append (operator ${opName}, attempt ${attempt}):
         // =====================================================================
         phase('Lint')
 
-        const lintResult = await agent(`You are the TritorX Custom Linter (Section 3.2).
+        const lintResult = await agentRetry(() => agent(`You are the TritorX Custom Linter (Section 3.2).
 Check this Triton kernel + wrapper for violations.
 
 # Kernel:
@@ -423,7 +465,7 @@ Then append (operator ${opName}, status="done" if lint passed else "error"):
             },
             required: ['passed'],
           },
-        })
+        }), { retries: 5 })
         llmCallsThisAttempt++
 
         if (lintResult?.passed) {
@@ -439,7 +481,7 @@ Then append (operator ${opName}, status="done" if lint passed else "error"):
         // =====================================================================
         phase('Compile-Test')
 
-        const testResult = await agent(`You are the TritorX Compile/Test executor.
+        const testResult = await agentRetry(() => agent(`You are the TritorX Compile/Test executor.
 Compile and test this kernel on ${TARGET_PLATFORM}.
 
 # Kernel:
@@ -486,7 +528,7 @@ Then append, using the values you just measured (status="done" if all_passed, el
             },
             required: ['compiled', 'all_passed'],
           },
-        })
+        }), { retries: 5 })
         llmCallsThisAttempt++
 
         if (testResult?.all_passed) {
@@ -509,7 +551,7 @@ Then append, using the values you just measured (status="done" if all_passed, el
         // =====================================================================
         phase('Debug')
 
-        const debugResult = await agent(`You are the TritorX Debug agent. Fix this kernel based on the error feedback.
+        const debugResult = await agentRetry(() => agent(`You are the TritorX Debug agent. Fix this kernel based on the error feedback.
 
 # Current Kernel:
 \`\`\`python
@@ -551,7 +593,7 @@ Then append (operator ${opName}, attempt ${attempt}):
             },
             required: ['kernel_code', 'wrapper_code'],
           },
-        })
+        }), { retries: 5 })
         llmCallsThisAttempt++
 
         if (debugResult?.kernel_code) {
@@ -586,7 +628,7 @@ phase('Report')
 
 const coverage = operators.length > 0 ? (operatorsPassed.length / operators.length * 100).toFixed(1) : '0'
 
-const finalReport = await agent(`Write a TritorX generation report.
+const finalReport = await agentRetry(() => agent(`Write a TritorX generation report.
 
 # TritorX Results
 - Target: ${TARGET_PLATFORM} (${TRITON_DIALECT})
@@ -616,7 +658,7 @@ Then append:
 {"workflow":"${WORKFLOW_NAME}","phase":"Report","ts":"<ts>","status":"done","technique":"coverage_report","speedup":null,"note":"<operators passed/attempted, coverage %, dominant failure pattern, one line>"}`, {
   label: 'final-report',
   phase: 'Report',
-})
+}), { retries: 5 })
 
 return {
   target_platform: TARGET_PLATFORM,

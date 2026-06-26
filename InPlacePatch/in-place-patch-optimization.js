@@ -67,6 +67,48 @@ function __unwrapArgs(rawArgs) {
 args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // --- END inlined arg_guard ---
 
+// --- BEGIN inlined agent-retry scaffolding (from _meta/scaffolding/agent-retry.js) ---
+async function agentRetry(fn, opts) {
+  const retries = (opts && opts.retries != null) ? opts.retries : 5
+  let lastError = null
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const result = await fn()
+      if (result != null) return result
+      // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
+    } catch (e) {
+      lastError = e
+    }
+  }
+  if (lastError) throw lastError
+  return null
+}
+
+/**
+ * Null-guard a REQUIRED structured field. Throws a clear, attributable error
+ * (instead of a cryptic TypeError) when an agent returned null/malformed output,
+ * so the run fails loudly at the dereference rather than producing garbage.
+ */
+function expect(obj, field, ctx) {
+  if (obj == null || obj[field] == null) {
+    throw new Error(
+      `agentRetry: required field "${field}" is missing${ctx ? ' from ' + ctx : ''} ` +
+      `(agent returned null or a malformed result after retries).`,
+    )
+  }
+  return obj[field]
+}
+
+/**
+ * Null-guard an OPTIONAL structured field with a fallback (no throw).
+ * Use for deref points that have a sensible default (e.g. `[]`, `''`, `0`).
+ */
+function guard(obj, field, fallback) {
+  if (obj == null || obj[field] == null) return fallback
+  return obj[field]
+}
+// --- END inlined agent-retry scaffolding ---
+
 // --- BEGIN inlined grounding contract (mirrors _substrate/grounding.js) ---
 const GROUNDING_INSTRUCTION = [
   'GROUNDING CONTRACT (mandatory):',
@@ -282,7 +324,7 @@ phase('Snapshot')
 log(`Kernel: ${KERNEL_PATH}`)
 log(`Backup will live at: ${BACKUP_PATH}`)
 
-const snapshotAgent = await agent(
+const snapshotAgent = await agentRetry(() => agent(
   [
     `Read the file at ${KERNEL_PATH} and make a byte-exact copy at ${BACKUP_PATH} using Bash (cp on unix, copy on windows).`,
     `Then report whether the backup file now exists and is non-empty.`,
@@ -298,7 +340,7 @@ const snapshotAgent = await agent(
       required: ['backed_up'],
     }),
   }
-)
+), { retries: 5 })
 const snap = classifyResult(snapshotAgent)
 if (snap.state !== 'grounded' || !snap.value.backed_up) {
   return {
@@ -327,13 +369,13 @@ const PY = args.substrate_command_prefix || ''
 const BACKEND_MANIFEST = args.backend_manifest || `${SUBSTRATE}/backends/cuda/manifest.json`
 const STRATEGIST_SIZE = args.profiling_size || 'large'
 let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured' }
-const _pd = await agent(`Read ${KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default; op_description='${OP_DESC}') and size (tiny|small|large; default '${STRATEGIST_SIZE}'). Then run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${BACKEND_MANIFEST} --task <op_class> --size <size> --cache ${EXPDIR}/prof_cache.json --trajectory ${EXPDIR}/genome.jsonl\`.
+const _pd = await agentRetry(() => agent(`Read ${KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default; op_description='${OP_DESC}') and size (tiny|small|large; default '${STRATEGIST_SIZE}'). Then run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${BACKEND_MANIFEST} --task <op_class> --size <size> --cache ${EXPDIR}/prof_cache.json --trajectory ${EXPDIR}/genome.jsonl\`.
 Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`, {
   model: MODEL.mechanical,
   label: 'profiling-strategist',
   phase: 'Snapshot',
   schema: JSON_PASSTHROUGH,
-})
+}), { retries: 5 })
 if (_pd && _pd.method) PROFILING_DECISION = _pd
 log(`Profiling-strategist: method=${PROFILING_DECISION.method}, confidence=${PROFILING_DECISION.confidence}`)
 
@@ -342,7 +384,7 @@ log(`Profiling-strategist: method=${PROFILING_DECISION.method}, confidence=${PRO
 // =============================================================================
 
 async function buildCurrent(label) {
-  const r = await agent(
+  const r = await agentRetry(() => agent(
     [
       `Run the project build command and report whether it succeeded.`,
       `Command: ${BUILD_CMD}`,
@@ -351,7 +393,7 @@ async function buildCurrent(label) {
       GROUNDING_INSTRUCTION,
     ].join('\n\n'),
     { phase: 'Build', label: `build:${label}`, schema: BUILD_SCHEMA }
-  )
+  ), { retries: 5 })
   return classifyResult(r)
 }
 
@@ -359,7 +401,7 @@ async function testCurrent(label) {
   const correctnessHint = CORRECTNESS_REGEX
     ? `Treat the run as CORRECT iff the regex /${CORRECTNESS_REGEX}/ matches the stdout AND the exit code is 0.`
     : `Treat the run as CORRECT iff the exit code is 0.`
-  const r = await agent(
+  const r = await agentRetry(() => agent(
     [
       `Run the project correctness command and report PASS/FAIL.`,
       `Command: ${TEST_CMD}`,
@@ -368,12 +410,12 @@ async function testCurrent(label) {
       GROUNDING_INSTRUCTION,
     ].join('\n\n'),
     { phase: 'Test', label: `test:${label}`, schema: TEST_SCHEMA }
-  )
+  ), { retries: 5 })
   return classifyResult(r)
 }
 
 async function benchCurrent(label) {
-  const r = await agent(
+  const r = await agentRetry(() => agent(
     [
       `Run the project benchmark command and extract per-workload latency.`,
       `Command: ${BENCH_CMD}`,
@@ -386,13 +428,13 @@ async function benchCurrent(label) {
       `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXPDIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append, using the value you just measured (status="done" if a latency was parsed, else "error"):\n{"workflow":"${WORKFLOW_NAME}","phase":"Bench","ts":"<ts>","status":"<done|error>","candidate_id":"${label}","speedup":null,"technique":"benchmark_measurement","note":"<aggregate_latency + unit + aggregate_strategy, or the parse failure reason>"}`,
     ].filter(Boolean).join('\n\n'),
     { phase: 'Bench', label: `bench:${label}`, schema: BENCH_SCHEMA }
-  )
+  ), { retries: 5 })
   return classifyResult(r)
 }
 
 async function revertToBackup(reason) {
   log(`Reverting kernel: ${reason}`)
-  await agent(
+  await agentRetry(() => agent(
     `Copy ${BACKUP_PATH} over ${KERNEL_PATH} (overwrite) using Bash. Then report whether the file is now byte-equal to the backup.`,
     {
       phase: 'Decide',
@@ -403,7 +445,7 @@ async function revertToBackup(reason) {
         required: ['reverted'],
       }),
     }
-  )
+  ), { retries: 5 })
   dirty = false  // a revert restores KERNEL_PATH to BACKUP_PATH -> no unvalidated edit remains
 }
 
@@ -487,11 +529,11 @@ for (let iter = 1; iter <= MAX_ITER; ++iter) {
     `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXPDIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append (this is optimization iteration ${iter}):\n{"workflow":"${WORKFLOW_NAME}","phase":"Propose","ts":"<ts>","status":"done","candidate_id":"iter-${iter}","technique":"<the focused change you applied, or none if applied=false>","speedup":null,"note":"<one-line diff summary of the Edit, or why no change>"}`,
   ].filter(Boolean).join('\n\n')
 
-  const propResult = await agent(proposeContext, {
+  const propResult = await agentRetry(() => agent(proposeContext, {
     phase: 'Propose',
     label: `propose:iter${iter}`,
     schema: PROPOSAL_SCHEMA,
-  })
+  }), { retries: 5 })
   const prop = classifyProposalResult(propResult)
 
   // Gate ONLY on whether an Edit was applied. Grounding is irrelevant to the
@@ -573,7 +615,7 @@ for (let iter = 1; iter <= MAX_ITER; ++iter) {
       detail: `latency ${candidateLatency} ${LATENCY_UNIT} (${m.value.aggregate_strategy || ''})`,
     })
     // Re-snapshot the now-better kernel so further iterations revert to THIS.
-    await agent(
+    await agentRetry(() => agent(
       `Copy ${KERNEL_PATH} over ${BACKUP_PATH} (overwrite) using Bash. Confirm the file copy succeeded.`,
       {
         phase: 'Decide',
@@ -584,7 +626,7 @@ for (let iter = 1; iter <= MAX_ITER; ++iter) {
           required: ['resnapshotted'],
         }),
       }
-    )
+    ), { retries: 5 })
     dirty = false  // kept: KERNEL_PATH == BACKUP_PATH (validated best), nothing unvalidated on disk
   } else {
     await revertToBackup(`no speedup ("${title}": ${speedup.toFixed(3)}x <= ${bestSpeedup.toFixed(3)}x)`)

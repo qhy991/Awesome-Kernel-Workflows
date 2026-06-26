@@ -63,6 +63,48 @@ function __unwrapArgs(rawArgs) {
 args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // --- END inlined arg_guard ---
 
+// --- BEGIN inlined agent-retry scaffolding (from _meta/scaffolding/agent-retry.js) ---
+async function agentRetry(fn, opts) {
+  const retries = (opts && opts.retries != null) ? opts.retries : 5
+  let lastError = null
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const result = await fn()
+      if (result != null) return result
+      // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
+    } catch (e) {
+      lastError = e
+    }
+  }
+  if (lastError) throw lastError
+  return null
+}
+
+/**
+ * Null-guard a REQUIRED structured field. Throws a clear, attributable error
+ * (instead of a cryptic TypeError) when an agent returned null/malformed output,
+ * so the run fails loudly at the dereference rather than producing garbage.
+ */
+function expect(obj, field, ctx) {
+  if (obj == null || obj[field] == null) {
+    throw new Error(
+      `agentRetry: required field "${field}" is missing${ctx ? ' from ' + ctx : ''} ` +
+      `(agent returned null or a malformed result after retries).`,
+    )
+  }
+  return obj[field]
+}
+
+/**
+ * Null-guard an OPTIONAL structured field with a fallback (no throw).
+ * Use for deref points that have a sensible default (e.g. `[]`, `''`, `0`).
+ */
+function guard(obj, field, fallback) {
+  if (obj == null || obj[field] == null) return fallback
+  return obj[field]
+}
+// --- END inlined agent-retry scaffolding ---
+
 // --- BEGIN inlined grounding contract ---
 const GROUNDING_INSTRUCTION = [
   'GROUNDING CONTRACT (mandatory):',
@@ -237,7 +279,7 @@ const BENCH_SCHEMA = withGroundingFields({
 
 async function runBuild(label, env) {
   const cmd = env ? `${env} ${BUILD_CMD}` : BUILD_CMD
-  const r = await agent(
+  const r = await agentRetry(() => agent(
     [
       `Run the project build command and report whether it succeeded.`,
       `Command: ${cmd}`,
@@ -246,7 +288,7 @@ async function runBuild(label, env) {
       GROUNDING_INSTRUCTION,
     ].join('\n\n'),
     { phase: 'Evaluate', label: `build:${label}`, schema: BUILD_SCHEMA }
-  )
+  ), { retries: 5 })
   return classifyResult(r)
 }
 
@@ -255,7 +297,7 @@ async function runTest(label, env) {
   const correctnessHint = CORRECT_REGEX
     ? `CORRECT iff /${CORRECT_REGEX}/ matches stdout AND exit is 0.`
     : `CORRECT iff exit is 0.`
-  const r = await agent(
+  const r = await agentRetry(() => agent(
     [
       `Run the project correctness command and report PASS/FAIL.`,
       `Command: ${cmd}`,
@@ -264,13 +306,13 @@ async function runTest(label, env) {
       GROUNDING_INSTRUCTION,
     ].join('\n\n'),
     { phase: 'Evaluate', label: `test:${label}`, schema: TEST_SCHEMA }
-  )
+  ), { retries: 5 })
   return classifyResult(r)
 }
 
 async function runBench(label, env) {
   const cmd = env ? `${env} ${BENCH_CMD}` : BENCH_CMD
-  const r = await agent(
+  const r = await agentRetry(() => agent(
     [
       `Run the project benchmark command and extract per-workload latency.`,
       `Command: ${cmd}`,
@@ -282,13 +324,13 @@ async function runBench(label, env) {
       GROUNDING_INSTRUCTION,
     ].filter(Boolean).join('\n\n'),
     { phase: 'Evaluate', label: `bench:${label}`, schema: BENCH_SCHEMA }
-  )
+  ), { retries: 5 })
   return classifyResult(r)
 }
 
 async function registerVariant(variantName, cuhPath) {
   const cmakeFlag = CMAKE_BUILD_DIR ? ` --cmake-build-dir "${CMAKE_BUILD_DIR}"` : ''
-  const r = await agent(
+  const r = await agentRetry(() => agent(
     [
       `Run the register script to wire this variant into fattn.cu:`,
       `  python "${REG_SCRIPT}" register --variant ${variantName} --cuh-src "${cuhPath}" --ggml-root "${GGML_ROOT}" --dkq ${DKQ} --dv ${DV}${cmakeFlag}`,
@@ -304,13 +346,13 @@ async function registerVariant(variantName, cuhPath) {
         required: ['ok'],
       }),
     }
-  )
+  ), { retries: 5 })
   return classifyResult(r)
 }
 
 async function unregisterVariant(variantName) {
   const cmakeFlag = CMAKE_BUILD_DIR ? ` --cmake-build-dir "${CMAKE_BUILD_DIR}"` : ''
-  const r = await agent(
+  const r = await agentRetry(() => agent(
     [
       `Run the register script to remove this variant from fattn.cu (must be byte-exact reversible):`,
       `  python "${REG_SCRIPT}" unregister --variant ${variantName} --ggml-root "${GGML_ROOT}"${cmakeFlag}`,
@@ -326,7 +368,7 @@ async function unregisterVariant(variantName) {
         required: ['ok'],
       }),
     }
-  )
+  ), { retries: 5 })
   return classifyResult(r)
 }
 
@@ -342,7 +384,7 @@ log(`variants_dir      = ${VARIANTS_DIR}`)
 log(`n_variants/round  = ${N_VARIANTS}`)
 log(`max_rounds        = ${MAX_ROUNDS}`)
 
-await agent(
+await agentRetry(() => agent(
   [
     `Ensure the variants directory exists: mkdir -p "${VARIANTS_DIR}".`,
     `Also confirm the register script is executable by running:`,
@@ -360,7 +402,7 @@ await agent(
       required: ['ok'],
     }),
   }
-)
+), { retries: 5 })
 
 phase('Baseline')
 const baseBuild = await runBuild('baseline', '')
@@ -410,7 +452,7 @@ for (let round = 1; round <= MAX_ROUNDS; ++round) {
   const proposals = await parallel(
     Array.from({ length: N_VARIANTS }, (_, i) => () => {
       const slot = `r${round}v${i + 1}`
-      return agent(
+      return agentRetry(() => agent(
         [
           OP_DESC ? `Task context: ${OP_DESC}` : '',
           HANDOFF ? `Handoff from prior rounds:\n${HANDOFF}` : '',
@@ -448,7 +490,7 @@ for (let round = 1; round <= MAX_ROUNDS; ++round) {
           `# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append (this is variant ${slot} of round ${round}):\n{"workflow":"${WORKFLOW_NAME}","phase":"Propose","ts":"<ts>","status":"done","candidate_id":"${slot}","technique":"<the distinct design choice for this variant, e.g. tile_shape_or_register_layout>","speedup":null,"note":"<one-line rationale for why this variant should be faster>"}`,
         ].filter(Boolean).join('\n\n'),
         { phase: 'Propose', label: `propose:${slot}`, schema: PROPOSAL_SCHEMA }
-      )
+      ), { retries: 5 })
     })
   )
 
@@ -524,7 +566,7 @@ phase('Report')
 // Read the winning kernel back (or null if no variant beat baseline).
 let bestCode = null
 if (bestVariantName !== '(baseline)') {
-  const r = await agent(
+  const r = await agentRetry(() => agent(
     `Read the file at ${bestCuhPath} and return its full contents in best_kernel_code.\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\nAppend exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\nThen append (the search winner is variant ${bestVariantName} at ${bestSpeedup}x over baseline):\n{"workflow":"${WORKFLOW_NAME}","phase":"Report","ts":"<ts>","status":"done","candidate_id":"${bestVariantName}","speedup":${bestSpeedup},"technique":"best_variant_selected","note":"<one-line summary of the winning design and its latency>"}`,
     {
       phase: 'Report',
@@ -535,7 +577,7 @@ if (bestVariantName !== '(baseline)') {
         required: ['best_kernel_code'],
       }),
     }
-  )
+  ), { retries: 5 })
   bestCode = classifyResult(r).value?.best_kernel_code || null
   // Unregister the winner too: leave the project in its original byte-exact state.
   // The caller decides whether to re-register the kept variant (e.g. via best-kernel/).

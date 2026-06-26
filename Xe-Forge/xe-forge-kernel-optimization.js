@@ -83,6 +83,48 @@ function __unwrapArgs(rawArgs) {
 // eslint-disable-next-line no-global-assign
 args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // --- END inlined arg_guard ---
+
+// --- BEGIN inlined agent-retry scaffolding (from _meta/scaffolding/agent-retry.js) ---
+async function agentRetry(fn, opts) {
+  const retries = (opts && opts.retries != null) ? opts.retries : 5
+  let lastError = null
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const result = await fn()
+      if (result != null) return result
+      // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
+    } catch (e) {
+      lastError = e
+    }
+  }
+  if (lastError) throw lastError
+  return null
+}
+
+/**
+ * Null-guard a REQUIRED structured field. Throws a clear, attributable error
+ * (instead of a cryptic TypeError) when an agent returned null/malformed output,
+ * so the run fails loudly at the dereference rather than producing garbage.
+ */
+function expect(obj, field, ctx) {
+  if (obj == null || obj[field] == null) {
+    throw new Error(
+      `agentRetry: required field "${field}" is missing${ctx ? ' from ' + ctx : ''} ` +
+      `(agent returned null or a malformed result after retries).`,
+    )
+  }
+  return obj[field]
+}
+
+/**
+ * Null-guard an OPTIONAL structured field with a fallback (no throw).
+ * Use for deref points that have a sensible default (e.g. `[]`, `''`, `0`).
+ */
+function guard(obj, field, fallback) {
+  if (obj == null || obj[field] == null) return fallback
+  return obj[field]
+}
+// --- END inlined agent-retry scaffolding ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
@@ -159,7 +201,7 @@ async function main() {
   // ============================================================================
   phase('Setup');
 
-  const setupResult = await agent(
+  const setupResult = await agentRetry(() => agent(
     `Set up Xe-Forge optimization environment for Intel XPU:
 
 1. Verify Intel XPU availability (Data Center GPU Max)
@@ -219,7 +261,7 @@ Then append:
         required: ['xpu_available', 'kernel_spec', 'target_backend'],
       },
     }
-  );
+  ), { retries: 5 });
 
   if (!setupResult || !setupResult.xpu_available) {
     log('Intel XPU not available or setup failed');
@@ -241,13 +283,13 @@ Then append:
   // confidence. Honored in the generate/refine prompt below; defaults keep the
   // happy-path VTune behavior unchanged if the decision is ignored. ---
   {
-    const _pd = await agent(
+    const _pd = await agentRetry(() => agent(
       `Classify the kernel under optimization. Operation: "${kernelSpec.operation}" (shapes: ${kernelSpec.shapes}).\n` +
       `Pick op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
       substrateInstruction('profiling/profiling_strategist.py',
         `resolve --backend-manifest ${BACKEND_MANIFEST} --task <op_class> --size <size> --cache ${EXPDIR}/prof_cache.json --trajectory ${EXPDIR}/genome.jsonl`) +
       ` Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
-      { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+      { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
     if (_pd && _pd.method) PROFILING_DECISION = _pd
   }
   log(`Profiling method: ${PROFILING_DECISION.method} (confidence=${PROFILING_DECISION.confidence})`)
@@ -265,7 +307,7 @@ Then append:
 
   log('Generating initial kernel implementation...');
 
-  const initialResult = await agent(
+  const initialResult = await agentRetry(() => agent(
     `Generate initial ${targetBackend} implementation:
 
 Kernel specification:
@@ -320,7 +362,7 @@ Then append:
         required: ['backend', 'kernel_code', 'initial_strategy'],
       },
     }
-  );
+  ), { retries: 5 });
 
   if (!initialResult) {
     log('Failed to generate initial implementation');
@@ -344,7 +386,7 @@ Then append:
 
     log('Analyzing performance bottlenecks...');
 
-    const analysisResult = await agent(
+    const analysisResult = await agentRetry(() => agent(
       `Analyze current kernel implementation (Cycle ${cycle + 1}):
 
 Backend: ${targetBackend}
@@ -409,7 +451,7 @@ Then append, using the values you just measured:
           required: ['cycle', 'gflops', 'bottleneck_type', 'optimization_opportunities'],
         },
       }
-    );
+    ), { retries: 5 });
 
     if (!analysisResult) {
       log('Analysis failed, stopping CoVeR cycles');
@@ -438,7 +480,7 @@ Then append, using the values you just measured:
 
     log('Planning optimization strategies...');
 
-    const planResult = await agent(
+    const planResult = await agentRetry(() => agent(
       `Plan optimizations based on analysis (Cycle ${cycle + 1}):
 
 Current performance: ${analysisResult.gflops.toFixed(2)} GFLOPS
@@ -511,7 +553,7 @@ Then append:
           required: ['cycle', 'strategies', 'rationale'],
         },
       }
-    );
+    ), { retries: 5 });
 
     if (!planResult || planResult.strategies.length === 0) {
       log('Planning failed, stopping CoVeR cycles');
@@ -530,7 +572,7 @@ Then append:
 
     log('Applying optimizations...');
 
-    const optimizeResult = await agent(
+    const optimizeResult = await agentRetry(() => agent(
       `Apply planned optimizations (Cycle ${cycle + 1}):
 
 Current implementation:
@@ -579,7 +621,7 @@ Then append:
           required: ['cycle', 'optimized_kernel_code', 'changes_applied'],
         },
       }
-    );
+    ), { retries: 5 });
 
     if (!optimizeResult) {
       log('Optimization failed, stopping CoVeR cycles');
@@ -595,7 +637,7 @@ Then append:
 
     log('Verifying optimized implementation...');
 
-    const verifyResult = await agent(
+    const verifyResult = await agentRetry(() => agent(
       `Verify optimized implementation (Cycle ${cycle + 1}):
 
 Optimized kernel:
@@ -655,7 +697,7 @@ Then append, using the values you just measured (status="done" if correctness pa
           required: ['cycle', 'correctness_passed', 'performance_gflops', 'verification_passed'],
         },
       }
-    );
+    ), { retries: 5 });
 
     if (!verifyResult) {
       log('Verification failed, stopping CoVeR cycles');
@@ -690,7 +732,7 @@ Then append, using the values you just measured (status="done" if correctness pa
     phase('Refine');
 
     if (cycle < coverCycles - 1) {
-      const refineDecision = await agent(
+      const refineDecision = await agentRetry(() => agent(
         `Decide whether to continue CoVeR cycles (Cycle ${cycle + 1}):
 
 Current performance: ${verifyResult.performance_gflops.toFixed(2)} GFLOPS
@@ -721,7 +763,7 @@ Return JSON:
             required: ['continue', 'reason'],
           },
         }
-      );
+      ), { retries: 5 });
 
       if (refineDecision && !refineDecision.continue) {
         log(`Early termination: ${refineDecision.reason}`);
@@ -735,7 +777,7 @@ Return JSON:
   // ============================================================================
   phase('Report');
 
-  const report = await agent(
+  const report = await agentRetry(() => agent(
     `Generate Xe-Forge optimization report:
 
 Kernel: ${kernelSpec.operation}
@@ -790,7 +832,7 @@ Then append, using the final results (speedup is best_gflops over baseline_gflop
         required: ['summary', 'cycles_completed', 'best_gflops'],
       },
     }
-  );
+  ), { retries: 5 });
 
   // ============================================================================
   // Return final results

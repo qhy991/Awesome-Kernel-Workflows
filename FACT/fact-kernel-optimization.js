@@ -78,6 +78,48 @@ function __unwrapArgs(rawArgs) {
 // eslint-disable-next-line no-global-assign
 args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // --- END inlined arg_guard ---
+
+// --- BEGIN inlined agent-retry scaffolding (from _meta/scaffolding/agent-retry.js) ---
+async function agentRetry(fn, opts) {
+  const retries = (opts && opts.retries != null) ? opts.retries : 5
+  let lastError = null
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const result = await fn()
+      if (result != null) return result
+      // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
+    } catch (e) {
+      lastError = e
+    }
+  }
+  if (lastError) throw lastError
+  return null
+}
+
+/**
+ * Null-guard a REQUIRED structured field. Throws a clear, attributable error
+ * (instead of a cryptic TypeError) when an agent returned null/malformed output,
+ * so the run fails loudly at the dereference rather than producing garbage.
+ */
+function expect(obj, field, ctx) {
+  if (obj == null || obj[field] == null) {
+    throw new Error(
+      `agentRetry: required field "${field}" is missing${ctx ? ' from ' + ctx : ''} ` +
+      `(agent returned null or a malformed result after retries).`,
+    )
+  }
+  return obj[field]
+}
+
+/**
+ * Null-guard an OPTIONAL structured field with a fallback (no throw).
+ * Use for deref points that have a sensible default (e.g. `[]`, `''`, `0`).
+ */
+function guard(obj, field, fallback) {
+  if (obj == null || obj[field] == null) return fallback
+  return obj[field]
+}
+// --- END inlined agent-retry scaffolding ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
@@ -228,7 +270,7 @@ async function main() {
   // ============================================================================
   phase('Setup');
 
-  const setupResult = await agent(
+  const setupResult = await agentRetry(() => agent(
     `Set up FACT compositional synthesis environment:
 
 1. Initialize CUTLASS workspace:
@@ -292,7 +334,7 @@ Then append:
         required: ['cutlass_version', 'target_architecture', 'kernel_spec'],
       },
     }
-  );
+  ), { retries: 5 });
 
   if (!setupResult) {
     log('Setup failed');
@@ -313,14 +355,14 @@ Then append:
   // must NOT assign confidence. Default keeps the happy path unchanged if the
   // decision is ignored. Useful for the ablation stage; does not disturb the
   // discover/realize/compose loop. ---
-  const _pd = await agent(`Classify the GEMM problem SIZE for the profiling strategist (the task is fixed to 'gemm'; you classify size only — one of tiny|small|large — based on the target operation ${kernelSpec.operation}, shapes ${kernelSpec.shapes}, and dtypes ${kernelSpec.dtypes.join(', ')}).
+  const _pd = await agentRetry(() => agent(`Classify the GEMM problem SIZE for the profiling strategist (the task is fixed to 'gemm'; you classify size only — one of tiny|small|large — based on the target operation ${kernelSpec.operation}, shapes ${kernelSpec.shapes}, and dtypes ${kernelSpec.dtypes.join(', ')}).
 Then run exactly: \`${SUBSTRATE_PY} ${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${STRATEGIST_MANIFEST} --task gemm --size <tiny|small|large> --cache ${args.exp_dir}/prof_cache.json --trajectory ${args.exp_dir}/genome.jsonl\`
 Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}. Do NOT assign confidence yourself — the substrate stamps it.`, {
     model: MODEL.mechanical,
     label: 'profiling-strategist',
     phase: 'Setup',
     schema: JSON_PASSTHROUGH,
-  })
+  }), { retries: 5 })
   if (_pd && _pd.method) PROFILING_DECISION = _pd
   log(`Profiling-strategist: method=${PROFILING_DECISION.method} confidence=${PROFILING_DECISION.confidence}`)
 
@@ -342,14 +384,14 @@ Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, 
   let INTEGRATION_DECISION = { method: _integSeedMethod, build_fidelity: 'isolated', reversible: true }
   {
     const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
-    const _integ = await agent(
+    const _integ = await agentRetry(() => agent(
       `${_integProbeKernel ? `Read ${_integProbeKernel}; ` : ''}classify can_compile_standalone as exactly one of yes|no|uncertain ` +
       `(use no when the file cannot compile as a single TU — e.g. a llama.cpp .cuh with project-only deps). Then ` +
       `Run exactly: \`${SUBSTRATE_PY} ${SUBSTRATE}/integration/integration_strategist.py resolve ` +
       `--kernel "${_integProbeKernel || args.exp_dir + '/_fact_target'}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
       `--cache ${args.exp_dir}/integ_cache.json --trajectory ${args.exp_dir}/genome.jsonl\`. ` +
       `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
-      { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+      { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
     if (_integ && _integ.method) INTEGRATION_DECISION = _integ
   }
   log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
@@ -362,8 +404,8 @@ Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, 
   const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
   const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${args.exp_dir}/integ_original.backup` : ''
   if (ORIGINAL_BACKUP && _integProbeKernel) {
-    await agent(`Byte-exact backup: run \`cp -a "${_integProbeKernel}" "${ORIGINAL_BACKUP}"\` and confirm.`,
-      { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${_integProbeKernel}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+      { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
   }
   // If the strategist routed to an embedded path, validate the required wiring now
   // (the static `EMBEDDED` arg check above only fires when integration_pattern was
@@ -403,7 +445,7 @@ Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, 
 
   log(`Discovering optimization patterns from ${setupResult.exemplar_kernels.length} exemplars...`);
 
-  const discoveryResult = await agent(
+  const discoveryResult = await agentRetry(() => agent(
     `Discover optimization patterns from exemplar kernels:
 
 Target operation: ${kernelSpec.operation}
@@ -482,7 +524,7 @@ Then append:
         required: ['exemplars_analyzed', 'patterns_discovered', 'discovery_summary'],
       },
     }
-  );
+  ), { retries: 5 });
 
   if (!discoveryResult || discoveryResult.patterns_discovered.length === 0) {
     log('Pattern discovery failed or no patterns found');
@@ -502,7 +544,7 @@ Then append:
 
   log('Realizing patterns as CUTLASS code transformations...');
 
-  const realizationResult = await agent(
+  const realizationResult = await agentRetry(() => agent(
     `Realize discovered patterns as concrete code transformations:
 
 Target: ${kernelSpec.operation}
@@ -581,7 +623,7 @@ Then append:
         required: ['patterns_realized', 'realization_summary'],
       },
     }
-  );
+  ), { retries: 5 });
 
   if (!realizationResult || realizationResult.patterns_realized.length === 0) {
     log('Pattern realization failed');
@@ -605,7 +647,7 @@ Then append:
     ? `\n\n${EMBEDDING_CONTRACT}\n\nMANDATORY (embedded): Read the reference dispatch file at ${REFERENCE_FILE} and match its dispatch signature EXACTLY (same entry-point shape, template params, launch-bounds conventions). Each composed candidate's kernel_code MUST be a COMPLETE dispatch-compatible \`.cuh\` (NOT a standalone translation unit, NO main()/harness/top-level test code). Use ONLY symbols/headers the project already provides; do not register, build, or benchmark the variant yourself.`
     : '';
 
-  const compositionResult = await agent(
+  const compositionResult = await agentRetry(() => agent(
     `Compose patterns to generate optimized CUTLASS kernels:
 
 Target specification:
@@ -686,7 +728,7 @@ Then append:
         required: ['candidates_generated', 'composed_kernels', 'composition_summary'],
       },
     }
-  );
+  ), { retries: 5 });
 
   if (!compositionResult || compositionResult.composed_kernels.length === 0) {
     log('Pattern composition failed');
@@ -703,7 +745,7 @@ Then append:
 
   log('Running ablation studies to validate pattern contributions...');
 
-  const ablationResult = await agent(
+  const ablationResult = await agentRetry(() => agent(
     `Run ablation studies on top composed kernels:
 
 Top kernels: ${Math.min(composedKernels.length, 5)}
@@ -772,7 +814,7 @@ Then append (status="done" if ablation completed, else "error"):
         required: ['kernels_ablated', 'ablation_results', 'critical_patterns'],
       },
     }
-  );
+  ), { retries: 5 });
 
   if (!ablationResult) {
     log('Ablation studies failed');
@@ -858,7 +900,7 @@ Map per-candidate results into evaluation_results: compilation_success=build suc
     }
   }
 
-  const evaluationResult = await agent(
+  const evaluationResult = await agentRetry(() => agent(
     `Evaluate all composed kernels:${evaluationEmbeddingBlock}
 
 Kernels to evaluate: ${composedKernels.length}
@@ -931,7 +973,7 @@ Then append, using the values you just measured (status="done" if the best kerne
         required: ['kernels_evaluated', 'evaluation_results', 'best_kernel'],
       },
     }
-  );
+  ), { retries: 5 });
 
   if (!evaluationResult) {
     log('Evaluation failed');
@@ -946,7 +988,7 @@ Then append, using the values you just measured (status="done" if the best kerne
   // ============================================================================
   phase('Report');
 
-  const report = await agent(
+  const report = await agentRetry(() => agent(
     `Generate FACT compositional synthesis report:
 
 Summary:
@@ -1003,7 +1045,7 @@ Then append (speedup is the best speedup vs baseline, or null if unavailable):
         required: ['summary', 'best_gflops'],
       },
     }
-  );
+  ), { retries: 5 });
 
   // ============================================================================
   // Return final results
@@ -1014,8 +1056,8 @@ Then append (speedup is the best speedup vs baseline, or null if unavailable):
   // terminated. (embedded_dispatch is non-mutating — adapter unregister is the
   // reversibility — so it is exempt.)
   if (ORIGINAL_BACKUP && _integProbeKernel) {
-    await agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${_integProbeKernel}"\` and confirm.`,
-      { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH })
+    await agentRetry(() => agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${_integProbeKernel}"\` and confirm.`,
+      { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH }), { retries: 5 })
   }
 
   return {

@@ -10,6 +10,26 @@ for the versioning policy.
 
 ### Added
 
+- **Canonical Ascend/AscendC workflow `AscendC/`** (#16, P0). A first-class,
+  Ascend-native catalog entry (`ascendc-kernel-optimization.js` + README EN/zh +
+  `manifest.yaml`) derived from the proven session-local variant evolved across
+  910b-exp sessions. Targets AscendC on Ascend 910B via msprof and the substrate
+  `ascend` backend (`ascendc_direct_launch`), so Ascend tasks no longer STALL at
+  workflow selection and need not re-evolve a session-local variant every run.
+  Count/badge 30 → 31.
+- **`agentRetry` + null-guard default scaffolding across all `agent()`-based
+  workflows** (#17). New canonical helper `_meta/scaffolding/agent-retry.js` +
+  codemod `scripts/add-agent-retry-scaffolding.js` (string/template/regex-aware)
+  wrap every `agent()` call (573 sites / 31 files) in a bounded retry and null-guard
+  the dereference points, so a transient API 429 / agent-skip no longer crashes the
+  run. KDA also gains a turn-boundary directive in its Implement prompt; the new
+  AscendC workflow bakes in turn-boundary + per-file Bash write + NO HARNESS
+  MANIPULATION.
+- **Ascend routing on the backend-agnostic universal workflows** (#16). `Generalist`
+  and `KDA` (both `method_supported_backends: any`, `portability: clean`) now
+  declare `ascendc`/`ascend` and route Ascend through the substrate ascend backend
+  (faithful but simplified). `InPlacePatch` is intentionally NOT widened — it is
+  `vendor_locked`/`intrinsic_to: nvcc/hipcc` with no Ascend (bisheng) path.
 - **Manifest `routing:` blocks (KerSor metadata consolidation).** All 31 routable
   `.js` entrypoints now declare selector routing in `<Workflow>/manifest.yaml`
   (`variants[].routing` for multi-entrypoint dirs). Schema documented in

@@ -134,11 +134,12 @@ Workflow 文件遵循 Claude Code 约定：导出 `meta`（名称、描述、阶
 
 | Workflow | 支持语言 / 后端 | 支持的 `problem_type` | 适合处理 | 不适合 |
 |----------|-----------------|-----------------------|----------|--------|
+| [AscendC](AscendC/) | AscendC / Ascend（msprof + `ascendc_direct_launch`） | `ascend-kernel-optimization`, `ascend-kernel-generation` | 昇腾 910B NPU 上的 kernel 优化/生成，经 msprof 与 substrate ascend backend | CUDA/Triton/ROCm/Metal 目标——请用各自的 workflow |
 | [AccelOpt](AccelOpt/) | CUDA（默认）· Triton via driver（vendor-locked: ncu） | `cuda-kernel-optimization`, `cuda-kernel-generation` | 已有 CUDA kernel，或先生成 CUDA seed 再用 NCU/benchmark 优化 | Triton/SYCL/XPU 任务，或没有 benchmark/profile 契约 |
 | [KEET](KEET/) | CUDA（vendor-locked: ncu） | `performance-explanation` | 基于 CUDA 源码和 Nsight Compute profile 做性能解释 | 生成或优化 kernel，尤其是没有 profile artifact 时 |
 | [ARGUS](ARGUS/) | ROCm/CUDA/Triton/ARGUS-DSL（legacy；driver 待迁移） | `invariant-guided-kernel-optimization`, `gpu-kernel-optimization` | 带 invariant checker / 测试反馈的 GPU kernel 优化 | 没有不变量或验证证据的任务 |
 | [AKO4X](AKO4X/) | Triton（默认）· CUDA/CuTe/TileLang/C++/PyTorch via driver | `gpu-kernel-optimization`, `kernel-generation` | 多轮 benchmark 驱动的 GPU kernel/DSL 优化 | 非 kernel 应用代码，或不支持的后端工具链 |
-| [KDA](KDA/) | CUDA（默认）· Triton via driver（experimental） | `cuda-kernel-optimization`, `cuda-kernel-generation` | 证据驱动的 CUDA 实现、验证和优化循环 | 非 CUDA 后端，除非后续泛化 KDA skill flow |
+| [KDA](KDA/) | CUDA（默认）· Triton via driver（experimental）· Ascend via substrate（faithful but simplified） | `cuda-kernel-optimization`, `cuda-kernel-generation`, `ascend-kernel-optimization`, `ascend-kernel-generation` | 证据驱动的 CUDA 实现、验证和优化循环；Ascend 经 substrate ascend backend | 没有 substrate driver 或验证契约的后端 |
 | [K-Search](KSearch/) | Triton（默认）· CUDA/Python via driver | `gpu-kernel-optimization`, `kernel-search` | 带 evaluator/benchmark 契约的 world-model tree search | 没有可执行 evaluator 反馈的任务 |
 | [AdaExplore](AdaExplore/) | CUDA · Triton via driver（experimental） | `triton-kernel-optimization`, `triton-kernel-generation` | 从 PyTorch 算子规格生成/优化 Triton kernel，使用 MCTS 和失败记忆 | 直接 CUDA/CUTLASS/SYCL 优化 |
 | [KernelFoundry](KernelFoundry/) | CUDA（默认）· Triton via driver（experimental） | `gpu-kernel-optimization`, `kernel-generation`, `kernel-search` | MAP-Elites 质量-多样性 kernel 搜索，需要 descriptor/archive 反馈 | 没有 archive 状态的单次确定性 patch |
@@ -162,7 +163,7 @@ Workflow 文件遵循 Claude Code 约定：导出 `meta`（名称、描述、阶
 | [StitchCUDA](StitchCUDA/) | CUDA（默认）· Triton via driver（experimental） | `cuda-kernel-generation`, `cuda-kernel-optimization` | Planner/Coder/Verifier CUDA 合成和重规划 | 非 CUDA 后端 |
 | [WarpSpeed](WarpSpeed/) | CUDA（vendor-locked：需要 NCU/compute-sanitizer） | `cuda-kernel-optimization`, `kernel-search` | 独占多 GPU 节点上的持续优化战役：检查点树、GPU 互斥、两级基准、可回退 | 一次性补丁、共享 GPU、缺少 NCU/sanitizer 的主机 |
 | [Xe-Forge](Xe-Forge/) | Intel XPU（vendor-locked: xpu） | `xpu-kernel-optimization`, `triton-kernel-optimization` | Intel XPU CoVeR staged refinement | NVIDIA CUDA-only 调优 |
-| [Generalist](Generalist/) | CUDA（默认）· Triton via driver（experimental） | `cuda-kernel-generation`, `cuda-kernel-optimization` | CUDA benchmark-driven default solver substrate | 后端无关求解；当前还未泛化 |
+| [Generalist](Generalist/) | CUDA/Triton/MetaX（默认）· Ascend via substrate（faithful but simplified） | `cuda-kernel-generation`, `cuda-kernel-optimization`, `ascend-kernel-generation`, `ascend-kernel-optimization` | 后端无关的 substrate solver（beam）；默认单 solver 基线；Ascend 经 substrate ascend backend | 需要非 substrate 测量信号的任务 |
 | [Meta-Workflow](_meta/) | Tooling | N/A | 生成和验证 workflow 定义 | 直接 kernel 优化 |
 
 ---
@@ -171,6 +172,7 @@ Workflow 文件遵循 Claude Code 约定：导出 `meta`（名称、描述、阶
 
 | 方法 | 标签 | 核心循环 | 论文 / 项目 |
 |------|------|----------|-------------|
+| [AscendC](AscendC/) | ![AscendC](https://img.shields.io/badge/AscendC-0066CC?style=flat) ![msprof](https://img.shields.io/badge/msprof-555?style=flat) ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) | Setup → Generate → Evaluate → Optimize（msprof）→ Report | 经验证的 session-local 变体（[AscendC/README.md](AscendC/README.md)）；已提升 upstream |
 | [AccelOpt](AccelOpt/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![NCU](https://img.shields.io/badge/NCU-555?style=flat) ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) ![Experience](https://img.shields.io/badge/experience--memory-orange?style=flat) | Plan → Execute → Profile → Learn → Iterate | [arXiv:2511.15915](https://arxiv.org/abs/2511.15915)（MLSys 2026） |
 | [KEET](KEET/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![NCU](https://img.shields.io/badge/NCU-555?style=flat) ![Pipeline](https://img.shields.io/badge/pipeline-purple?style=flat) ![Explanation](https://img.shields.io/badge/explanation-teal?style=flat) | 源码检查 → Profile 检查 → 聚合 → 审查 | [arXiv:2605.04467](https://arxiv.org/abs/2605.04467)（UMD/NVIDIA/LLNL 2026） |
 | [ARGUS](ARGUS/) | ![ROCm](https://img.shields.io/badge/ROCm-ED1C24?style=flat&logo=amd&logoColor=white) ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![DSL](https://img.shields.io/badge/DSL-darkgreen?style=flat) ![ICRL](https://img.shields.io/badge/ICRL-blue?style=flat) ![Invariants](https://img.shields.io/badge/invariants-red?style=flat) | Plan → Select → Lower → Validate → Learn | [arXiv:2604.18616](https://arxiv.org/abs/2604.18616)（CausalFlow/港科大/斯坦福 2026） |
@@ -216,6 +218,7 @@ Workflow 文件遵循 Claude Code 约定：导出 `meta`（名称、描述、阶
 
 | Workflow | 主要类别 | 搜索拓扑 | 权威反馈信号 | 状态 / 记忆 | Fidelity 边界 |
 |----------|----------|----------|--------------|-------------|---------------|
+| [AscendC](AscendC/) | `iterative_self_improving` | plan→generate→evaluate→optimize（msprof）循环 | msprof 瓶颈类型 + eval_single_runner 计时（ascendc_direct_launch） | 候选提交、最优路径、停滞计数 | Substrate reference——substrate ascend backend 拥有测量信号 |
 | [AccelOpt](AccelOpt/) | `iterative_self_improving` | Beam 式 Plan/Execute/Profile/Learn 循环 | NCU 指标、延迟、慢/快对 | `experienceMemory`、candidate beam | 对更广义 accelerator 方法的 CUDA/NCU 适配 |
 | [KEET](KEET/) | `single_pass_pipeline` | 源码/Profile 分析流水线 | NCU profile + 源码假设 | 假设裁决、解释报告 | 解释 workflow，不是优化器 |
 | [ARGUS](ARGUS/) | `iterative_self_improving` | ICRL Plan/Select/Lower/Validate/Learn 循环 | 不变量违规、单测、吞吐量 | planner policy、不变量违规日志、候选 beam | 严格复现需要可执行 invariant checker 证据 |
