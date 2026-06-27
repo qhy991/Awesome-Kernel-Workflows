@@ -8,6 +8,17 @@
 
 ### 修复（Fixed）
 
+- **收敛 driver-backed workflow 的残留 profiling 耦合。** `Generalist` 现在通过共享的
+  driver Layer-A envelope profiling baseline、当前最佳和候选 attempt，因此 Triton/其他
+  driver path 不再渲染旧的 `ncu_command`/benchmark prompt。`AKO4X` 在 perf-heuristic
+  路径也会发出统一的 `driver-profile-*` envelope，并继续把吞吐归一化交给 substrate
+  profiling normalizer；driver-backed prompt 使用中性的 profile 词汇与 artifact
+  目录。AKO4X Triton dry-run guard 现在会大小写无关地检查 `ncu` 泄漏，并显式断言
+  `perf_to_evidence.py` 路径。
+  (`Generalist/generalist-kernel-optimization.js`,
+  `AKO4X/ako4x-kernel-optimizer.js`,
+  `_meta/tools/test/ako4x-triton-dryrun.test.js`)
+
 - **移除迁移后的旧文档引用。** Substrate 文档现在使用 `/kersor:optimize`
   命令名和 `KerSor/docs/transfer-object.md`；agent 指南把 manifest 作者指向
   `docs/manifest-schema.yaml`，不再指向已删除的 `_manifests/schema.yaml`。

@@ -62,6 +62,18 @@ for the versioning policy.
 
 ### Fixed
 
+- **Collapsed residual profiling coupling in driver-backed workflows.** `Generalist`
+  now profiles the baseline, current-best, and candidate attempts through a shared
+  driver Layer-A envelope, so Triton/other driver paths no longer render legacy
+  `ncu_command`/benchmark prompts. `AKO4X` now emits a uniform `driver-profile-*`
+  envelope for perf-heuristic runs and keeps throughput normalization in the
+  substrate profiling normalizer, uses neutral profile wording/artifact directories
+  on driver-backed prompts, and the AKO4X Triton dry-run guard now checks
+  case-insensitive `ncu` leaks while asserting the `perf_to_evidence.py` path.
+  (`Generalist/generalist-kernel-optimization.js`,
+  `AKO4X/ako4x-kernel-optimizer.js`,
+  `_meta/tools/test/ako4x-triton-dryrun.test.js`)
+
 - **Removed stale post-migration doc references.** Substrate docs now use the
   `/kersor:optimize` command name and `KerSor/docs/transfer-object.md`; the agent
   guide points manifest authors at `docs/manifest-schema.yaml` instead of the
