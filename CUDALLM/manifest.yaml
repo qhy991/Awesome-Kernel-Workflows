@@ -4,6 +4,7 @@ backend:
   matrix_eligible: true
   method_supported_backends: any
   supported:
+  - ascend
   - cuda
   - triton
   - metax
@@ -371,7 +372,7 @@ routing:
   requires_harness: true
   languages:
   - cuda
-  - ascend
+  - ascendc
   - python_reference
   - metax
   method_category: iterative_self_improving

@@ -6,6 +6,7 @@ backend:
   matrix_eligible: true
   method_supported_backends: any
   supported:
+  - ascend
   - cuda
   - triton
   - metax
@@ -21,7 +22,7 @@ routing:
   requires_harness: true
   languages:
   - triton
-  - ascend
+  - ascendc
   - python_reference
   - metax
   method_category: tree_exploration

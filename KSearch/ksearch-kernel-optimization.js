@@ -221,6 +221,7 @@ if (!USE_DRIVER) {
 //     stagnation_window: 3,              // non-improving attempts before cycle ends
 //     max_difficulty: 4,                  // max action difficulty (1-5)
 //     benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
+//     test_command: '<correctness/test command — when separate from benchmark>',
 //     kernel_path: '/path/to/baseline.py',
 //     rtol: 0.01,
 //     atol: 0.01,
@@ -239,11 +240,21 @@ const ATTEMPTS_PER_CYCLE = args.attempts_per_cycle || 5
 const STAGNATION_WINDOW = args.stagnation_window || 3
 const MAX_DIFFICULTY = args.max_difficulty || 4
 const BENCH_CMD = args.benchmark_command || ''
+const TEST_CMD = args.test_command || ''
 const BASELINE_CODE_PATH = args.kernel_path || ''
 const INPUT_MODE = BASELINE_CODE_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const RTOL = args.rtol || 0.01
 const ATOL = args.atol || 0.01
 const EXP_DIR = args.exp_dir || '/tmp/ksearch_exp'
+// Wall-clock budget for a single eval attempt (compile + test + benchmark).
+// Without this, fattn R1 ran 90+ minutes of correctness rechecks with no
+// benchmark latency emitted. The agent prompts surface the budget; the
+// embedded paths additionally wrap build/test/benchmark with coreutils
+// `timeout` so a runaway command is killed at the shell layer too.
+const EVAL_TIMEOUT_SEC = Number.isFinite(args.eval_timeout_sec) && args.eval_timeout_sec > 0
+  ? Math.floor(args.eval_timeout_sec)
+  : 600
+const TIMEOUT_WRAP = `timeout ${EVAL_TIMEOUT_SEC}s`
 
 if (!KERNEL_SPEC_PATH && !PROBLEM_DEFINITION && !BASELINE_CODE_PATH) {
   throw new Error('Provide one of problem_path, problem_definition, or kernel_path')
@@ -262,6 +273,15 @@ const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
 const PROJECT_ROOT = args.project_root || args.ggml_root || ''
 const BUILD_CMD = args.build_command || ''
 const PROJECT_BENCH_CMD = args.benchmark_command || BENCH_CMD || ''
+// Embedded eval: prefer a dedicated correctness command. When none is provided,
+// fall back to PROJECT_BENCH_CMD for back-compat (current default) but log so
+// the operator can see test==benchmark is in effect. The NMSE correctness gate
+// only protects you if the test command actually measures correctness, not
+// latency-only.
+const PROJECT_TEST_CMD = args.test_command || TEST_CMD || PROJECT_BENCH_CMD || ''
+if (PROJECT_TEST_CMD && PROJECT_BENCH_CMD && PROJECT_TEST_CMD === PROJECT_BENCH_CMD) {
+  log(`KSearch: test_command == benchmark_command (no separate test). NMSE/correctness gate runs the same command as the perf measurement; pass a distinct args.test_command if your harness has a correctness-only path.`)
+}
 const REGISTER_SCRIPT = args.register_script || ''
 
 function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
@@ -896,6 +916,8 @@ Then append:
 
     const evalResult = await agentRetry(() => agent(`You are a kernel evaluation expert. Evaluate this ${langToken(LANGUAGE)} kernel for correctness and performance.
 
+WALL-CLOCK BUDGET: ${EVAL_TIMEOUT_SEC}s for this whole eval attempt (compile + correctness + benchmark combined). If you exceed it on correctness alone with no benchmark latency yet, RETURN EARLY with {is_valid:false, latency_ms:null, metric_value:null, reason:"timeout_in_correctness"} — do not keep retrying. A budget-exceeded attempt is itself useful signal; a 90-minute correctness loop is not.
+
 # Kernel Code:
 \`\`\`${langToken(LANGUAGE)}
 ${genResult.code.substring(0, 4000)}
@@ -950,7 +972,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
         },
         required: ['is_valid', 'metric_value'],
       },
-    }), { retries: 5, allowNull: true })
+    }), { retries: 5 })
 
     if (USE_DRIVER_STANDALONE) {
       const suffix = `${cycle}-${attempt}`
@@ -1014,8 +1036,9 @@ Then append, using the values you just measured (status="done" if it compiled AN
       if (INTEGRATION_DECISION.method === 'embedded_inplace' && ORIGINAL_BACKUP) {
         const embResult = await agentRetry(() => agent(
           `EMBEDDED-INPLACE EVAL (serial). Candidate: ${kPath} | project kernel: ${INTEG_KERNEL_PATH} | pristine backup: ${ORIGINAL_BACKUP}\n` +
+          `WALL-CLOCK BUDGET: ${EVAL_TIMEOUT_SEC}s per command — when any single step exceeds the budget, abort the attempt, restore pristine, and return {compiled:false, correct:false, latency_ms:null, heuristic_bclass:"unknown", metrics:{latency_ms:null}, reason:"timeout"}.\n` +
           `Run IN ORDER:\n1. Restore pristine: cp -a ${ORIGINAL_BACKUP} ${INTEG_KERNEL_PATH}\n` +
-          `2. Apply candidate: cp ${kPath} ${INTEG_KERNEL_PATH}\n3. Build: ${BUILD_CMD}\n4. Test: ${PROJECT_BENCH_CMD}\n5. Benchmark: ${PROJECT_BENCH_CMD}\n` +
+          `2. Apply candidate: cp ${kPath} ${INTEG_KERNEL_PATH}\n3. Build: ${TIMEOUT_WRAP} ${BUILD_CMD}\n4. Test: ${TIMEOUT_WRAP} ${PROJECT_TEST_CMD}\n5. Benchmark: ${TIMEOUT_WRAP} ${PROJECT_BENCH_CMD}\n` +
           `6. ALWAYS restore: cp -a ${ORIGINAL_BACKUP} ${INTEG_KERNEL_PATH}\n` +
           `Parse latency_ms + heuristic_bclass (memory/compute/latency bound). Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
           { model: MODEL.mechanical, label: `embedded-inplace-${cycle}-${attempt}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
@@ -1024,11 +1047,13 @@ Then append, using the values you just measured (status="done" if it compiled AN
         embMetrics = embResult?.metrics || { latency_ms: embLatency }
       } else if (INTEGRATION_DECISION.method === 'embedded_dispatch' && REGISTER_SCRIPT && PROJECT_ROOT) {
         const _plan = typeof __embeddedEvalPlan === 'function'
-          ? __embeddedEvalPlan({ adapter: `python3 "${REGISTER_SCRIPT}"`, variant, source: kPath, projectRoot: PROJECT_ROOT, buildCmd: BUILD_CMD, testCmd: PROJECT_BENCH_CMD, benchmarkCmd: PROJECT_BENCH_CMD })
+          ? __embeddedEvalPlan({ adapter: `python3 "${REGISTER_SCRIPT}"`, variant, source: kPath, projectRoot: PROJECT_ROOT, buildCmd: `${TIMEOUT_WRAP} ${BUILD_CMD}`, testCmd: `${TIMEOUT_WRAP} ${PROJECT_TEST_CMD}`, benchmarkCmd: `${TIMEOUT_WRAP} ${PROJECT_BENCH_CMD}` })
           : null
         if (_plan) {
           const embResult = await agentRetry(() => agent(
-            `EMBEDDED-DISPATCH EVAL (serial). Run IN ORDER:\n1. Register: ${_plan.register}\n2. Build: ${_plan.build}\n3. Test: ${_plan.test}\n4. Benchmark: ${_plan.benchmark}\n5. Unregister: ${_plan.unregister}\n${_plan.cleanupInvariant}\n` +
+            `EMBEDDED-DISPATCH EVAL (serial).\n` +
+            `WALL-CLOCK BUDGET: ${EVAL_TIMEOUT_SEC}s per command — when any step exceeds the budget, unregister, return {compiled:false, correct:false, latency_ms:null, heuristic_bclass:"unknown", metrics:{latency_ms:null}, reason:"timeout"}.\n` +
+            `Run IN ORDER:\n1. Register: ${_plan.register}\n2. Build: ${_plan.build}\n3. Test: ${_plan.test}\n4. Benchmark: ${_plan.benchmark}\n5. Unregister: ${_plan.unregister}\n${_plan.cleanupInvariant}\n` +
             `Parse latency_ms + heuristic_bclass. Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
             { model: MODEL.mechanical, label: `embedded-dispatch-${cycle}-${attempt}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
           embLatency = Number(embResult?.latency_ms || 0)

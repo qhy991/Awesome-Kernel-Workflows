@@ -6,6 +6,7 @@ backend:
   matrix_eligible: true
   method_supported_backends: any
   supported:
+  - ascend
   - cuda
   - triton
   - metax
@@ -42,7 +43,7 @@ routing:
   - cuda
   - triton
   - sycl
-  - ascend
+  - ascendc
   - python_reference
   - metax
   method_category: search_based
