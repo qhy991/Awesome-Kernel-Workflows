@@ -105,6 +105,60 @@ function __attemptBlock() {
 }
 // --- END typed-args ---
 // --- END inlined arg_guard ---
+
+// --- BEGIN inlined agent-retry scaffolding (from _meta/scaffolding/agent-retry.js) ---
+async function agentRetry(fn, opts) {
+  const retries = (opts && opts.retries != null) ? opts.retries : 5
+  let lastError = null
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const result = await fn()
+      if (result != null) return result
+      // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
+    } catch (e) {
+      lastError = e
+    }
+  }
+  if (lastError) throw lastError
+  // All attempts returned null (agent skipped mid-run OR a terminal subagent
+  // failure such as a sustained 429). FAIL-SAFE DEFAULT: throw an attributable
+  // error instead of returning null. A null return would later hit an unguarded
+  // deref (`diag.bottleneck_class`, `impl.code`, ...) and crash the run with a
+  // cryptic TypeError — issue #20. Throwing here makes the round abort cleanly
+  // with a recorded reason, and inside `parallel()` a throwing thunk simply
+  // resolves to a null slot that `.filter(Boolean)` drops (graceful). Callers
+  // that INTENTIONALLY degrade on a missing result opt out with `{ allowNull: true }`.
+  if (opts && opts.allowNull === true) return null
+  throw new Error(
+    `agentRetry: "${(opts && opts.label) || 'agent'}" returned null after ${retries + 1} attempt(s) ` +
+    `(agent skipped or terminal API failure after retries).`,
+  )
+}
+
+/**
+ * Null-guard a REQUIRED structured field. Throws a clear, attributable error
+ * (instead of a cryptic TypeError) when an agent returned null/malformed output,
+ * so the run fails loudly at the dereference rather than producing garbage.
+ */
+function expect(obj, field, ctx) {
+  if (obj == null || obj[field] == null) {
+    throw new Error(
+      `agentRetry: required field "${field}" is missing${ctx ? ' from ' + ctx : ''} ` +
+      `(agent returned null or a malformed result after retries).`,
+    )
+  }
+  return obj[field]
+}
+
+/**
+ * Null-guard an OPTIONAL structured field with a fallback (no throw).
+ * Use for deref points that have a sensible default (e.g. `[]`, `''`, `0`).
+ */
+function guard(obj, field, fallback) {
+  if (obj == null || obj[field] == null) return fallback
+  return obj[field]
+}
+// --- END inlined agent-retry scaffolding ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
@@ -339,12 +393,12 @@ function computeFitness(compiled, correct, speedup) {
 phase('Setup')
 
 if (USE_DRIVER) {
-  DRIVER = await agent(
+  DRIVER = await agentRetry(() => agent(
     `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
-    { model: MODEL.mechanical, label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.mechanical, label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   if (!DRIVER || DRIVER.present === false) {
     throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
   }
@@ -361,13 +415,13 @@ if (USE_DRIVER) {
 // profiling-strategist: classify the task once and let the substrate stamp the
 // method+confidence. Honored in the per-generation Evaluate driver-profile branch.
 if (USE_DRIVER) {
-  const _pd = await agent(
+  const _pd = await agentRetry(() => agent(
     `${KERNEL_PATH ? `Read ${KERNEL_PATH}; ` : 'Read the operator spec below; '}` +
     `classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
     substrateInstruction('profiling/profiling_strategist.py',
       `resolve --backend-manifest ${driverPath('manifest.json')} --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
     ` Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
-    { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   if (_pd && _pd.method) PROFILING_DECISION = _pd
   log(`Profiling-strategist: method=${PROFILING_DECISION.method} confidence=${PROFILING_DECISION.confidence} normalizer=${PROFILING_DECISION.normalizer}`)
 }
@@ -378,14 +432,14 @@ if (USE_DRIVER) {
 let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
 {
   const _probe = JSON.stringify({ compiler: true, project_build: !!PROJECT_BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
-  const _integ = await agent(
+  const _integ = await agentRetry(() => agent(
     `${KERNEL_PATH ? `Read ${KERNEL_PATH}; ` : 'Read the operator spec; '}` +
     `classify can_compile_standalone as exactly one of yes|no|uncertain ` +
     `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
     substrateInstruction('integration/integration_strategist.py',
       `resolve --kernel "${KERNEL_PATH || EXP_DIR + '/operator.spec'}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' --cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
     ` Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
-    { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   if (_integ && _integ.method) INTEGRATION_DECISION = _integ
 }
 log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
@@ -396,8 +450,8 @@ const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'sta
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
-  await agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
-    { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+    { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 // A-O1 closure: native_profiler chosen but driver-profile path unavailable when not
 // running the standalone driver envelope (KernelFoundry has no ncu_binary arg, so key
@@ -408,7 +462,7 @@ if (PROFILING_DECISION.method === 'native_profiler' && !USE_DRIVER_STANDALONE) {
     profiler_name: 'test-harness-perf', rationale: 'native_profiler but not USE_DRIVER_STANDALONE -> perf_heuristic' }
 }
 
-const setupResult = await agent(`You are a GPU kernel optimization expert setting up the KernelFoundry evolutionary search.
+const setupResult = await agentRetry(() => agent(`You are a GPU kernel optimization expert setting up the KernelFoundry evolutionary search.
 
 # Task:
 ${KERNEL_PATH ? `Read kernel/operator from: ${KERNEL_PATH}` : ''}
@@ -452,7 +506,7 @@ Then append:
     },
     required: ['operator_code', 'baseline_time_ms'],
   },
-})
+}), { retries: 5 })
 
 const operatorCode = setupResult.operator_code
 const baselineTime = setupResult.baseline_time_ms
@@ -518,7 +572,7 @@ for (generation = 0; generation < GENERATIONS; generation++) {
     ? `\n# Parent Kernel (from cell [${selectedParent.cell}], fitness=${selectedParent.fitness.toFixed(2)}, speedup=${selectedParent.speedup.toFixed(2)}x):\n\`\`\`${fenceToken()}\n${selectedParent.code.substring(0, 4000)}\n\`\`\``
     : ''
 
-  const varyResult = await agent(`You are a GPU kernel generator for the KernelFoundry evolutionary framework.
+  const varyResult = await agentRetry(() => agent(`You are a GPU kernel generator for the KernelFoundry evolutionary framework.
 Generate a ${TARGET_LANG.toUpperCase()} kernel that implements the given operator.
 
 # Operator to Implement:
@@ -580,7 +634,7 @@ Then append (this is generation ${generation}):
       },
       required: ['kernel_code', 'strategy_description'],
     },
-  })
+  }), { retries: 5, allowNull: true })
 
   const offspringCode = varyResult?.kernel_code || ''
 
@@ -589,7 +643,7 @@ Then append (this is generation ${generation}):
   // ===========================================================================
   phase('Evaluate')
 
-  const evalResult = await agent(`You are a kernel evaluator for KernelFoundry. Evaluate this ${langToken(LEGACY_LANG_TOKEN)} kernel.
+  const evalResult = await agentRetry(() => agent(`You are a kernel evaluator for KernelFoundry. Evaluate this ${langToken(LEGACY_LANG_TOKEN)} kernel.
 
 # Kernel Code:
 \`\`\`${fenceToken()}
@@ -652,7 +706,7 @@ Then append (this is generation ${generation}; status="done" if it compiled AND 
       },
       required: ['compiled', 'correct', 'speedup', 'd_mem', 'd_algo', 'd_sync'],
     },
-  })
+  }), { retries: 5 })
 
   if (USE_DRIVER_STANDALONE) {
     const suffix = `${generation}`
@@ -660,46 +714,46 @@ Then append (this is generation ${generation}; status="done" if it compiled AND 
     const buildOut = `${EXP_DIR}/gen_${generation}.artifact`
     const profOut = `${EXP_DIR}/gen_${generation}.prof.native`
     const resultPath = `${EXP_DIR}/gen_${generation}.result.json`
-    await agent(
+    await agentRetry(() => agent(
       `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
       `Return its stdout JSON verbatim.`,
-      { model: MODEL.mechanical, label: `driver-build-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
-    const runOut = await agent(
+      { model: MODEL.mechanical, label: `driver-build-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
+    const runOut = await agentRetry(() => agent(
       `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath} --result ${resultPath}`)}\n` +
       `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
-      { model: MODEL.profile, label: `driver-run-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      { model: MODEL.profile, label: `driver-run-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
     let evidenceOut
     if (PROFILING_DECISION.method === 'native_profiler') {
-      await agent(
+      await agentRetry(() => agent(
         `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
         `Return {ok, native_path}.`,
-        { model: MODEL.profile, label: `driver-profile-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
-      evidenceOut = await agent(
+        { model: MODEL.profile, label: `driver-profile-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
+      evidenceOut = await agentRetry(() => agent(
         `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
         `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-        { model: MODEL.mechanical, label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+        { model: MODEL.mechanical, label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
     } else {
       // profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}');
       // do NOT run profile.sh. run.sh above already produced throughput. If perf_heuristic,
       // normalize that throughput into canonical metrics via the strategist normalizer.
       if (PROFILING_DECISION.method === 'perf_heuristic') {
-        evidenceOut = await agent(
+        evidenceOut = await agentRetry(() => agent(
           `Throughput is in ${resultPath} from run.sh. Normalize it into canonical metrics via ` +
           substrateInstruction('profiling/' + (PROFILING_DECISION.normalizer || 'perf_to_evidence.py'), `--baseline ${resultPath} --peak-gflops <device_peak_gflops> --peak-gbs <device_peak_gbs>`) +
           ` Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. ` +
           `Also write heuristic_bclass (memory_bound|compute_bound|latency_bound) based on the throughput ratio so diagnose.py does not fall to unknown. ` +
           `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, heuristic_bclass, coverage, source_backend}.`,
-          { model: MODEL.mechanical, label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+          { model: MODEL.mechanical, label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
       }
     }
-    const diagOut = await agent(
+    const diagOut = await agentRetry(() => agent(
       `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
       `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
-      { model: MODEL.mechanical, label: `driver-diagnose-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
-    await agent(
+      { model: MODEL.mechanical, label: `driver-diagnose-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
+    await agentRetry(() => agent(
       `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${resultPath}\`.\n` +
       `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
-      { model: MODEL.mechanical, label: `driver-anti-cheat-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+      { model: MODEL.mechanical, label: `driver-anti-cheat-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
     evalResult.driver_envelope = {
       latency_ms: Number((runOut && runOut.latency_ms) || 0),
       bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',
@@ -716,16 +770,16 @@ Then append (this is generation ${generation}; status="done" if it compiled AND 
     const variant = `kf_gen_${generation}`.replace(/[^A-Za-z0-9_]/g, '_')
     let embLatency = 0, embMetrics = {}, embBclass = 'unknown'
     // Materialize the offspring source to kPath first so build/test/bench can find it.
-    await agent(`Write the offspring kernel source to ${kPath} (mkdir -p its parent dir first):\n\`\`\`${fenceToken()}\n${offspringCode.substring(0, 6000)}\n\`\`\``,
-      { model: MODEL.mechanical, label: `embedded-materialize-${generation}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+    await agentRetry(() => agent(`Write the offspring kernel source to ${kPath} (mkdir -p its parent dir first):\n\`\`\`${fenceToken()}\n${offspringCode.substring(0, 6000)}\n\`\`\``,
+      { model: MODEL.mechanical, label: `embedded-materialize-${generation}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
     if (INTEGRATION_DECISION.method === 'embedded_inplace' && ORIGINAL_BACKUP) {
-      const embResult = await agent(
+      const embResult = await agentRetry(() => agent(
         `EMBEDDED-INPLACE EVAL (serial). Candidate: ${kPath} | project kernel: ${KERNEL_PATH} | pristine backup: ${ORIGINAL_BACKUP}\n` +
         `Run IN ORDER:\n1. Restore pristine: cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}\n` +
         `2. Apply candidate: cp ${kPath} ${KERNEL_PATH}\n3. Build: ${PROJECT_BUILD_CMD}\n4. Test: ${TEST_CMD}\n5. Benchmark: ${BENCH_CMD || TEST_CMD}\n` +
         `6. ALWAYS restore: cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}\n` +
         `Parse latency_ms + heuristic_bclass (memory/compute/latency bound). Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
-        { model: MODEL.mechanical, label: `embedded-inplace-${generation}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+        { model: MODEL.mechanical, label: `embedded-inplace-${generation}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
       embLatency = Number(embResult?.latency_ms || 0)
       embBclass = embResult?.heuristic_bclass || 'unknown'
       embMetrics = embResult?.metrics || { latency_ms: embLatency }
@@ -734,10 +788,10 @@ Then append (this is generation ${generation}; status="done" if it compiled AND 
         ? __embeddedEvalPlan({ adapter: `python3 "${REGISTER_SCRIPT}"`, variant, source: kPath, projectRoot: PROJECT_ROOT, buildCmd: PROJECT_BUILD_CMD, testCmd: TEST_CMD, benchmarkCmd: BENCH_CMD || TEST_CMD })
         : null
       if (_plan) {
-        const embResult = await agent(
+        const embResult = await agentRetry(() => agent(
           `EMBEDDED-DISPATCH EVAL (serial). Run IN ORDER:\n1. Register: ${_plan.register}\n2. Build: ${_plan.build}\n3. Test: ${_plan.test}\n4. Benchmark: ${_plan.benchmark}\n5. Unregister: ${_plan.unregister}\n${_plan.cleanupInvariant}\n` +
           `Parse latency_ms + heuristic_bclass. Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
-          { model: MODEL.mechanical, label: `embedded-dispatch-${generation}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+          { model: MODEL.mechanical, label: `embedded-dispatch-${generation}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
         embLatency = Number(embResult?.latency_ms || 0)
         embBclass = embResult?.heuristic_bclass || 'unknown'
         embMetrics = embResult?.metrics || { latency_ms: embLatency }
@@ -798,7 +852,7 @@ Then append (this is generation ${generation}; status="done" if it compiled AND 
     const improvements = recentOutcomes.filter(t => t.outcome === 'improvement' || t.outcome === 'discovery')
     const failures = recentOutcomes.filter(t => t.outcome === 'regression' || t.outcome === 'neutral')
 
-    const metaResult = await agent(`You are the KernelFoundry Meta-Prompter (Section 3.5).
+    const metaResult = await agentRetry(() => agent(`You are the KernelFoundry Meta-Prompter (Section 3.5).
 Your job is to evolve the optimization guidance prompts based on recent evolutionary outcomes.
 
 # Current Evolvable Prompt Sections:
@@ -847,7 +901,7 @@ Then append (this meta-evolution ran at generation ${generation}):
         },
         required: ['optimization_philosophy', 'optimization_strategies', 'common_pitfalls', 'analysis_guidance'],
       },
-    })
+    }), { retries: 5, allowNull: true })
 
     if (metaResult) {
       metaPrompt = {
@@ -867,7 +921,7 @@ Then append (this meta-evolution ran at generation ${generation}):
 // =============================================================================
 phase('Evaluate')
 
-const finalReport = await agent(`Write a concise technical report on KernelFoundry MAP-Elites optimization.
+const finalReport = await agentRetry(() => agent(`Write a concise technical report on KernelFoundry MAP-Elites optimization.
 
 # Results
 - Operation: ${OP_DESC}
@@ -905,12 +959,12 @@ Then append (final report; speedup is the best speedup found, or null if none):
 {"workflow":"${WORKFLOW_NAME}","phase":"Evaluate","ts":"<ts>","status":"done","candidate_id":"final","speedup":<number or null>,"technique":"<best cell strategy>","note":"<archive coverage + best speedup + most effective strategy, one line>"}`, {
   label: 'final-report',
   phase: 'Evaluate',
-})
+}), { retries: 5 })
 
 // embedded_inplace exit safety net: unconditionally restore pristine original.
 if (ORIGINAL_BACKUP) {
-  await agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
-    { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+  await agentRetry(() => agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
+    { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 
 return {

@@ -65,6 +65,60 @@ function __unwrapArgs(rawArgs) {
 // eslint-disable-next-line no-global-assign
 args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // --- END inlined arg_guard ---
+
+// --- BEGIN inlined agent-retry scaffolding (from _meta/scaffolding/agent-retry.js) ---
+async function agentRetry(fn, opts) {
+  const retries = (opts && opts.retries != null) ? opts.retries : 5
+  let lastError = null
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const result = await fn()
+      if (result != null) return result
+      // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
+    } catch (e) {
+      lastError = e
+    }
+  }
+  if (lastError) throw lastError
+  // All attempts returned null (agent skipped mid-run OR a terminal subagent
+  // failure such as a sustained 429). FAIL-SAFE DEFAULT: throw an attributable
+  // error instead of returning null. A null return would later hit an unguarded
+  // deref (`diag.bottleneck_class`, `impl.code`, ...) and crash the run with a
+  // cryptic TypeError — issue #20. Throwing here makes the round abort cleanly
+  // with a recorded reason, and inside `parallel()` a throwing thunk simply
+  // resolves to a null slot that `.filter(Boolean)` drops (graceful). Callers
+  // that INTENTIONALLY degrade on a missing result opt out with `{ allowNull: true }`.
+  if (opts && opts.allowNull === true) return null
+  throw new Error(
+    `agentRetry: "${(opts && opts.label) || 'agent'}" returned null after ${retries + 1} attempt(s) ` +
+    `(agent skipped or terminal API failure after retries).`,
+  )
+}
+
+/**
+ * Null-guard a REQUIRED structured field. Throws a clear, attributable error
+ * (instead of a cryptic TypeError) when an agent returned null/malformed output,
+ * so the run fails loudly at the dereference rather than producing garbage.
+ */
+function expect(obj, field, ctx) {
+  if (obj == null || obj[field] == null) {
+    throw new Error(
+      `agentRetry: required field "${field}" is missing${ctx ? ' from ' + ctx : ''} ` +
+      `(agent returned null or a malformed result after retries).`,
+    )
+  }
+  return obj[field]
+}
+
+/**
+ * Null-guard an OPTIONAL structured field with a fallback (no throw).
+ * Use for deref points that have a sensible default (e.g. `[]`, `''`, `0`).
+ */
+function guard(obj, field, fallback) {
+  if (obj == null || obj[field] == null) return fallback
+  return obj[field]
+}
+// --- END inlined agent-retry scaffolding ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
@@ -392,7 +446,7 @@ function dbSummaryForPrompt(db) {
 phase('Setup')
 
 if (INPUT_MODE === 'generate_then_optimize') {
-  const generated = await agent(`No kernel_path was provided. Generate and verify an initial CUDA kernel before starting KernelBlaster.
+  const generated = await agentRetry(() => agent(`No kernel_path was provided. Generate and verify an initial CUDA kernel before starting KernelBlaster.
 
 # Problem Input
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
@@ -421,7 +475,7 @@ Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run
       },
       required: ['generated_kernel_path', 'initial_candidates', 'initial_generation_result'],
     },
-  })
+  }), { retries: 5 })
   initialCandidates = generated.initial_candidates || []
   initialGenerationResult = generated.initial_generation_result || { verified: false }
   generatedKernelPath = generated.generated_kernel_path || ''
@@ -430,7 +484,7 @@ Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run
   KERNEL_PATH = generatedKernelPath
 }
 
-const setupResult = await agent(`Read the CUDA kernel at: ${KERNEL_PATH}
+const setupResult = await agentRetry(() => agent(`Read the CUDA kernel at: ${KERNEL_PATH}
 ${DRIVER_PATH ? `The build/run/validate harness (KernelBench-CUDA style driver) is at: ${DRIVER_PATH}` : ''}
 ${OPT_DB_PATH ? `A persistent optimization knowledge base may exist at: ${OPT_DB_PATH} — if it exists and is valid JSON, read it and return its contents in loaded_db (else return null).` : ''}
 
@@ -464,7 +518,7 @@ Then append:
     },
     required: ['kernel_code', 'op_type', 'key_functions', 'current_approach'],
   },
-})
+}), { retries: 5 })
 
 const baselineKernel = setupResult.kernel_code
 const opType = setupResult.op_type
@@ -493,13 +547,13 @@ const PY = args.substrate_command_prefix || ''
 const BACKEND_MANIFEST = args.backend_manifest || `${SUBSTRATE}/backends/cuda/manifest.json`
 const STRATEGIST_SIZE = args.profiling_size || 'large'
 let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured' }
-const _pd = await agent(`Read ${KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default; the kernel is op_type='${opType}', op_description='${OP_DESC}') and size (tiny|small|large; default '${STRATEGIST_SIZE}'). Then run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${BACKEND_MANIFEST} --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.
+const _pd = await agentRetry(() => agent(`Read ${KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default; the kernel is op_type='${opType}', op_description='${OP_DESC}') and size (tiny|small|large; default '${STRATEGIST_SIZE}'). Then run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${BACKEND_MANIFEST} --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.
 Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`, {
   model: MODEL.mechanical,
   label: 'profiling-strategist',
   phase: 'Setup',
   schema: { type: 'object', additionalProperties: true },
-})
+}), { retries: 5, allowNull: true })
 if (_pd && _pd.method) PROFILING_DECISION = _pd
 log(`Profiling-strategist: method=${PROFILING_DECISION.method}, confidence=${PROFILING_DECISION.confidence}`)
 
@@ -512,14 +566,14 @@ log(`Profiling-strategist: method=${PROFILING_DECISION.method}, confidence=${PRO
 let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
 {
   const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
-  const _integ = await agent(
+  const _integ = await agentRetry(() => agent(
     `Read ${KERNEL_PATH || '(not provided)'}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
     `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
     `--kernel "${KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
     `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
     `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
-    { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   if (_integ && _integ.method) INTEGRATION_DECISION = _integ
 }
 log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
@@ -530,8 +584,8 @@ const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGR
 // The embedded operator file we swap in place is the project-referenced KERNEL_PATH.
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
-  await agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
-    { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+    { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 // A-O1 closure: native_profiler chosen but the inline NCU profiler is unreachable on
 // the embedded path (no isolated TU to ncu) → downgrade to perf_heuristic so the
@@ -543,7 +597,7 @@ if (PROFILING_DECISION.method === 'native_profiler' && (IS_EMBEDDED || !NCU_BINA
 }
 
 // NCU baseline profile -> Elapsed Cycles + Speed-of-Light metrics
-const ncuBaseline = await agent(`You are a CUDA profiling expert using Nsight Compute (ncu). Profile the baseline kernel and report Elapsed Cycles plus Speed-of-Light metrics.
+const ncuBaseline = await agentRetry(() => agent(`You are a CUDA profiling expert using Nsight Compute (ncu). Profile the baseline kernel and report Elapsed Cycles plus Speed-of-Light metrics.
 
 # Environment
 - NCU binary: ${NCU_BINARY || '(not provided)'}
@@ -588,7 +642,7 @@ Profiling-strategist selected method='${PROFILING_DECISION.method}', confidence=
     },
     required: ['elapsed_cycles', 'profile_summary'],
   },
-})
+}), { retries: 5 })
 
 baselineCycles = ncuBaseline.elapsed_cycles
 bestCycles = baselineCycles
@@ -612,7 +666,7 @@ for (let iter = 0; iter < RL_ITERATIONS; iter++) {
     // -------------------------------------------------------------------------
     phase('ProfileState')
 
-    const stateResult = await agent(`You are a CUDA performance-state classifier (KernelBlaster MAIC-RL). Profile the current kernel and classify it into EXACTLY ONE hardware performance state.
+    const stateResult = await agentRetry(() => agent(`You are a CUDA performance-state classifier (KernelBlaster MAIC-RL). Profile the current kernel and classify it into EXACTLY ONE hardware performance state.
 
 # Current kernel (Elapsed Cycles so far: ${currentCycles})
 \`\`\`cuda
@@ -651,7 +705,7 @@ Then append (rollout ${iter}, step ${step}):
         },
         required: ['state_name', 'evidence'],
       },
-    })
+    }), { retries: 5 })
 
     const currentState = optDb.optimization_strategies[stateResult.state_name] ? stateResult.state_name : 'latency_occupancy_limited'
     log(`Step ${step + 1}: state=${currentState} | ${stateResult.evidence.substring(0, 90)}`)
@@ -677,7 +731,7 @@ Then append (rollout ${iter}, step ${step}):
 
     const plans = await parallel(
       candidates.map((cand) => () =>
-        agent(`You are a CUDA optimization expert guided by the KernelBlaster knowledge base. Turn this retrieved strategy into a concrete, evidence-based plan for THIS kernel.
+        agentRetry(() => agent(`You are a CUDA optimization expert guided by the KernelBlaster knowledge base. Turn this retrieved strategy into a concrete, evidence-based plan for THIS kernel.
 
 # Operation: ${OP_DESC} (${opType})
 # Performance state: ${currentState}
@@ -720,7 +774,7 @@ Then append (rollout ${iter}, step ${step}):
             },
             required: ['technique', 'plan', 'predicted_improvement'],
           },
-        })
+        }), { retries: 5 })
       )
     )
 
@@ -734,7 +788,7 @@ Then append (rollout ${iter}, step ${step}):
 
     const impls = await parallel(
       validPlans.map((plan) => () =>
-        agent(`You are an expert CUDA developer. Apply this optimization plan to produce a COMPLETE, compilable kernel.
+        agentRetry(() => agent(`You are an expert CUDA developer. Apply this optimization plan to produce a COMPLETE, compilable kernel.
 
 # Strategy: ${plan.technique} — "${plan.title || plan.technique}"
 # Plan: ${plan.plan}
@@ -769,7 +823,7 @@ Then append (rollout ${iter}, step ${step}):
             },
             required: ['code'],
           },
-        })
+        }), { retries: 5 })
       )
     )
 
@@ -803,13 +857,13 @@ Then append (rollout ${iter}, step ${step}):
         const kPath = `${EXP_DIR}/variants/${suffix}/candidate.cu`
         const variant = `kb_${suffix}`.replace(/[^A-Za-z0-9_]/g, '_')
         // Materialize the candidate source so the embedded eval can apply/register it.
-        await agent(`Write the candidate kernel source to ${kPath} (mkdir -p its dir first).\n\n` +
+        await agentRetry(() => agent(`Write the candidate kernel source to ${kPath} (mkdir -p its dir first).\n\n` +
           `\`\`\`cuda\n${(v.code || '').substring(0, 6000)}\n\`\`\`\n` +
           `Return {ok:true, path:"${kPath}"}.`,
-          { model: MODEL.mechanical, label: `embedded-materialize-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+          { model: MODEL.mechanical, label: `embedded-materialize-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
         let embResult = null
         if (INTEGRATION_DECISION.method === 'embedded_inplace' && ORIGINAL_BACKUP) {
-          embResult = await agent(
+          embResult = await agentRetry(() => agent(
             `EMBEDDED-INPLACE EVAL (serial). Strategy: ${v.technique}\n` +
             `Candidate: ${kPath} | project operator file: ${KERNEL_PATH} | pristine backup: ${ORIGINAL_BACKUP}\n` +
             `Run IN ORDER:\n1. Restore pristine: cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}\n` +
@@ -818,19 +872,19 @@ Then append (rollout ${iter}, step ${step}):
             `baseline_cycles=${currentCycles}; speedup = baseline_cycles / new_cycles (or measured latency ratio); ` +
             `improvement_pct = (baseline-new)/baseline*100. Parse heuristic_bclass (memory/compute/latency bound).\n` +
             `Return {is_correct, is_compilable, elapsed_cycles, speedup, improvement_pct, heuristic_bclass}.`,
-            { model: MODEL.profile, label: `embedded-inplace-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+            { model: MODEL.profile, label: `embedded-inplace-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
         } else if (INTEGRATION_DECISION.method === 'embedded_dispatch' && REGISTER_SCRIPT && PROJECT_ROOT) {
           const _plan = typeof __embeddedEvalPlan === 'function'
             ? __embeddedEvalPlan({ adapter: `python3 "${REGISTER_SCRIPT}"`, variant, source: kPath, projectRoot: PROJECT_ROOT, buildCmd: BUILD_CMD, testCmd: TEST_CMD, benchmarkCmd: PROJECT_BENCH_CMD || TEST_CMD })
             : null
           if (_plan) {
-            embResult = await agent(
+            embResult = await agentRetry(() => agent(
               `EMBEDDED-DISPATCH EVAL (serial). Strategy: ${v.technique}\n` +
               `Run IN ORDER:\n1. Register: ${_plan.register}\n2. Build: ${_plan.build}\n3. Test: ${_plan.test}\n4. Benchmark: ${_plan.benchmark}\n5. Unregister: ${_plan.unregister}\n${_plan.cleanupInvariant}\n` +
               `baseline_cycles=${currentCycles}; speedup = baseline_cycles / new_cycles (or measured latency ratio); ` +
               `improvement_pct = (baseline-new)/baseline*100. Parse heuristic_bclass.\n` +
               `Return {is_correct, is_compilable, elapsed_cycles, speedup, improvement_pct, heuristic_bclass}.`,
-              { model: MODEL.profile, label: `embedded-dispatch-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH })
+              { model: MODEL.profile, label: `embedded-dispatch-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
           }
         }
         evals.push(embResult ? {
@@ -845,7 +899,7 @@ Then append (rollout ${iter}, step ${step}):
     } else {
     evals = await parallel(
       variants.map((v) => () =>
-        agent(`You are a CUDA evaluator using the KernelBench-CUDA driver and Nsight Compute. Evaluate this optimized kernel.
+        agentRetry(() => agent(`You are a CUDA evaluator using the KernelBench-CUDA driver and Nsight Compute. Evaluate this optimized kernel.
 
 # Strategy applied: ${v.technique}
 # Driver / harness: ${DRIVER_PATH || '(standalone harness)'}
@@ -885,7 +939,7 @@ Then append, using the values you just measured (status="done" if correct AND co
             },
             required: ['is_correct', 'is_compilable', 'elapsed_cycles', 'speedup'],
           },
-        })
+        }), { retries: 5 })
       )
     )
     }
@@ -974,7 +1028,7 @@ Then append, using the values you just measured (status="done" if correct AND co
       }
     }
 
-    const policyUpdate = await agent(`You are the KernelBlaster policy-evaluation agent. Analyze recent optimization trajectories and recommend confidence adjustments to the knowledge base.
+    const policyUpdate = await agentRetry(() => agent(`You are the KernelBlaster policy-evaluation agent. Analyze recent optimization trajectories and recommend confidence adjustments to the knowledge base.
 
 # Recent steps (state, technique, predicted%, actual%, reward):
 ${JSON.stringify(perfData, null, 2)}
@@ -1015,7 +1069,7 @@ Then append (after rollout ${iter}):
         },
         required: ['analysis'],
       },
-    })
+    }), { retries: 5 })
 
     // Apply bounded confidence adjustments from the policy-update cycle.
     let applied = 0
@@ -1038,7 +1092,7 @@ Then append (after rollout ${iter}):
 // Persist the knowledge base (cross-task / cross-run memory) + final report
 // =============================================================================
 if (OPT_DB_PATH) {
-  await agent(`Persist the updated KernelBlaster optimization knowledge base to disk so it carries across runs and kernels.
+  await agentRetry(() => agent(`Persist the updated KernelBlaster optimization knowledge base to disk so it carries across runs and kernels.
 
 Write this exact JSON (pretty-printed) to: ${OPT_DB_PATH}
 
@@ -1054,7 +1108,7 @@ Use a file write. Confirm the byte count written.`, {
       properties: { written: { type: 'boolean' }, path: { type: 'string' }, bytes: { type: 'number' } },
       required: ['written'],
     },
-  })
+  }), { retries: 5 })
   log(`Persisted optimization DB to ${OPT_DB_PATH}`)
 }
 
@@ -1064,7 +1118,7 @@ const bufferStats = {
   success_rate: replayBuffer.length ? replayBuffer.filter((t) => t.final_cycles < t.initial_cycles).length / replayBuffer.length : 0,
 }
 
-const finalReport = await agent(`Write a concise technical report for this KernelBlaster (MAIC-RL) optimization run.
+const finalReport = await agentRetry(() => agent(`Write a concise technical report for this KernelBlaster (MAIC-RL) optimization run.
 
 # Results
 - Operation: ${OP_DESC} (${opType})
@@ -1093,12 +1147,12 @@ Write:
 4. Remaining bottleneck of the final kernel and recommended next strategies.`, {
   label: 'final-report',
   phase: 'Iterate',
-})
+}), { retries: 5 })
 
 // embedded_inplace exit safety net: unconditionally restore the pristine operator file.
 if (ORIGINAL_BACKUP) {
-  await agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
-    { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Iterate', schema: JSON_PASSTHROUGH })
+  await agentRetry(() => agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
+    { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Iterate', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 
 return {

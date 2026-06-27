@@ -9,6 +9,7 @@ backend:
   - cuda
   - triton
   - metax
+  - ascend
   default: cuda
   notes: 'Legacy WORKFLOW_SUITABILITY=[''cuda'']. Driver-path supported=[cuda, triton].
     triton-dryrun.test.js contract-tests the driver path.
@@ -23,6 +24,7 @@ routing:
   - cutlass
   - rocm
   - metax
+  - ascendc
   method_category: iterative_self_improving
   role: optimizer
   speedup_field: best_score

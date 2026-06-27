@@ -62,6 +62,60 @@ function __unwrapArgs(rawArgs) {
 // eslint-disable-next-line no-global-assign
 args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // --- END inlined arg_guard ---
+
+// --- BEGIN inlined agent-retry scaffolding (from _meta/scaffolding/agent-retry.js) ---
+async function agentRetry(fn, opts) {
+  const retries = (opts && opts.retries != null) ? opts.retries : 5
+  let lastError = null
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const result = await fn()
+      if (result != null) return result
+      // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
+    } catch (e) {
+      lastError = e
+    }
+  }
+  if (lastError) throw lastError
+  // All attempts returned null (agent skipped mid-run OR a terminal subagent
+  // failure such as a sustained 429). FAIL-SAFE DEFAULT: throw an attributable
+  // error instead of returning null. A null return would later hit an unguarded
+  // deref (`diag.bottleneck_class`, `impl.code`, ...) and crash the run with a
+  // cryptic TypeError — issue #20. Throwing here makes the round abort cleanly
+  // with a recorded reason, and inside `parallel()` a throwing thunk simply
+  // resolves to a null slot that `.filter(Boolean)` drops (graceful). Callers
+  // that INTENTIONALLY degrade on a missing result opt out with `{ allowNull: true }`.
+  if (opts && opts.allowNull === true) return null
+  throw new Error(
+    `agentRetry: "${(opts && opts.label) || 'agent'}" returned null after ${retries + 1} attempt(s) ` +
+    `(agent skipped or terminal API failure after retries).`,
+  )
+}
+
+/**
+ * Null-guard a REQUIRED structured field. Throws a clear, attributable error
+ * (instead of a cryptic TypeError) when an agent returned null/malformed output,
+ * so the run fails loudly at the dereference rather than producing garbage.
+ */
+function expect(obj, field, ctx) {
+  if (obj == null || obj[field] == null) {
+    throw new Error(
+      `agentRetry: required field "${field}" is missing${ctx ? ' from ' + ctx : ''} ` +
+      `(agent returned null or a malformed result after retries).`,
+    )
+  }
+  return obj[field]
+}
+
+/**
+ * Null-guard an OPTIONAL structured field with a fallback (no throw).
+ * Use for deref points that have a sensible default (e.g. `[]`, `''`, `0`).
+ */
+function guard(obj, field, fallback) {
+  if (obj == null || obj[field] == null) return fallback
+  return obj[field]
+}
+// --- END inlined agent-retry scaffolding ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
@@ -238,13 +292,13 @@ const SUBSTRATE_DIR = args.substrate_dir || '_substrate'
 const BACKEND_MANIFEST = args.backend_manifest || `${SUBSTRATE_DIR}/backends/cuda/manifest.json`
 const PROF_STRATEGIST_SCHEMA = { type: 'object', additionalProperties: true }
 let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured' }
-const _pd = await agent(
+const _pd = await agentRetry(() => agent(
   `You classify a CUDA op for profiler-method selection. From the operation description "${OP_DESC}" and the kernel at ${KERNEL_PATH}, ` +
   `classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (one of tiny|small|large). Then ` +
   `run exactly: \`${SUBSTRATE_DIR}/profiling/profiling_strategist.py resolve --backend-manifest ${BACKEND_MANIFEST} --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.\n` +
   `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}. ` +
   `Do NOT assign confidence yourself — only the strategist stamps it.`,
-  { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: PROF_STRATEGIST_SCHEMA })
+  { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: PROF_STRATEGIST_SCHEMA }), { retries: 5, allowNull: true })
 if (_pd && _pd.method) PROFILING_DECISION = _pd
 
 const PROFILE_METHOD_GUARD =
@@ -255,7 +309,7 @@ const PROFILE_METHOD_GUARD =
 
 const setupResults = await parallel([
   // Agent 1: Read and catalog all source files
-  () => agent(`You are a CUDA source code reader. Read and catalog kernel source files.
+  () => agentRetry(() => agent(`You are a CUDA source code reader. Read and catalog kernel source files.
 
 # Primary kernel file: ${KERNEL_PATH}
 # Additional source files: ${JSON.stringify(SOURCE_PATHS)}
@@ -284,10 +338,10 @@ Return a catalog of all source files with their contents and metadata.`, {
       },
       required: ['primary_source', 'kernel_functions'],
     },
-  }),
+  }), { retries: 5 }),
 
   // Agent 2: Extract NCU profile data
-  () => agent(`You are an NCU profiling expert. Extract performance data from NCU profile(s).
+  () => agentRetry(() => agent(`You are an NCU profiling expert. Extract performance data from NCU profile(s).
 
 # NCU Report: ${NCU_REPORT_PATH || '(need to generate)'}
 # NCU Binary: ${NCU_BINARY || '(not provided)'}
@@ -350,7 +404,7 @@ Then append:
       },
       required: ['primary_profile', 'profile_count'],
     },
-  }),
+  }), { retries: 5 }),
 ])
 
 const sourceData = setupResults[0]
@@ -365,7 +419,7 @@ phase('Source Inspection')
 
 // KEET's Source Code Inspection: iteratively review each source file,
 // build algorithm summary, generate performance hypotheses BEFORE seeing data
-const sourceInspection = await agent(`You are a GPU performance expert analyzing CUDA kernel source code.
+const sourceInspection = await agentRetry(() => agent(`You are a GPU performance expert analyzing CUDA kernel source code.
 Your job is to understand the algorithm and predict performance characteristics
 WITHOUT looking at any profiling data. This is the "hypothesis-first" approach from KEET.
 
@@ -441,7 +495,7 @@ Then append:
     },
     required: ['algorithm_summary', 'performance_hypotheses'],
   },
-})
+}), { retries: 5 })
 
 algorithmSummary = sourceInspection.algorithm_summary
 performanceHypotheses = sourceInspection.performance_hypotheses || []
@@ -470,7 +524,7 @@ const guidelines = ANALYSIS_GUIDELINES_PATH
 // Analyze each profile — metric selection + grounded analysis
 const profileAnalysisResults = await parallel(
   profilesToAnalyze.map((profile, profIdx) => () =>
-    agent(`You are the KEET Profile Analyzer — an expert GPU performance analyst.
+    agentRetry(() => agent(`You are the KEET Profile Analyzer — an expert GPU performance analyst.
 You produce data-grounded natural language explanations of kernel performance.
 
 # Role: Profile Analyzer (KEET Section III-C)
@@ -568,7 +622,7 @@ Then append:
         },
         required: ['primary_bottleneck', 'optimization_suggestions', 'full_analysis'],
       },
-    })
+    }), { retries: 5 })
   )
 )
 
@@ -578,7 +632,7 @@ log(`Profile Inspection: ${profileAnalyses.length} profile(s) analyzed | Primary
 // Optional: DrGPU integration (KEET Section III-C)
 let drgpuAnalysis = null
 if (INCLUDE_DRGPU) {
-  drgpuAnalysis = await agent(`You are the DrGPU Evaluator agent (KEET Section III-C).
+  drgpuAnalysis = await agentRetry(() => agent(`You are the DrGPU Evaluator agent (KEET Section III-C).
 DrGPU is a rule-based tool that decomposes stall reasons into a tree structure.
 Simulate DrGPU's analysis approach:
 
@@ -608,7 +662,7 @@ Generate DrGPU-style suggestions and evaluate their applicability.`, {
       },
       required: ['suggestions'],
     },
-  })
+  }), { retries: 5, allowNull: true })
   log(`DrGPU: ${drgpuAnalysis?.useful_suggestions?.length || 0} useful suggestions`)
 }
 
@@ -617,7 +671,7 @@ Generate DrGPU-style suggestions and evaluate their applicability.`, {
 // =============================================================================
 phase('Aggregation')
 
-const aggregatedReport = await agent(`You are the KEET Analysis Aggregator (Section III-D).
+const aggregatedReport = await agentRetry(() => agent(`You are the KEET Analysis Aggregator (Section III-D).
 Combine all performance analyses into a single, coherent performance explanation report.
 
 # Operation: ${OP_DESC}
@@ -680,7 +734,7 @@ Then append:
     },
     required: ['executive_summary', 'bottleneck_list', 'full_report'],
   },
-})
+}), { retries: 5 })
 
 log(`Aggregation: ${aggregatedReport.bottleneck_list?.length || 0} bottlenecks, ${aggregatedReport.optimization_suggestions?.length || 0} suggestions`)
 
@@ -689,7 +743,7 @@ log(`Aggregation: ${aggregatedReport.bottleneck_list?.length || 0} bottlenecks, 
 // =============================================================================
 phase('Review')
 
-const reviewResult = await agent(`You are the KEET Explanation Reviewer (Section III-D).
+const reviewResult = await agentRetry(() => agent(`You are the KEET Explanation Reviewer (Section III-D).
 Your job is to cross-check the final performance explanation against the
 performance hypotheses that were generated BEFORE seeing any profiling data.
 
@@ -748,7 +802,7 @@ Then append:
     },
     required: ['hypothesis_verdicts', 'overall_quality', 'review_summary'],
   },
-})
+}), { retries: 5 })
 
 log(`Review: ${reviewResult.confirmed_count || 0} confirmed, ${reviewResult.refuted_count || 0} refuted, ${reviewResult.inconclusive_count || 0} inconclusive | Quality: ${reviewResult.overall_quality}`)
 

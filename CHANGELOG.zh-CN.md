@@ -31,6 +31,21 @@
 
 ### 新增（Added）
 
+- **权威 Ascend/AscendC workflow `AscendC/`**（#16，P0）。新增一条 Ascend 原生的
+  catalog 条目（`ascendc-kernel-optimization.js` + 中英文 README + `manifest.yaml`），
+  源自 910b-exp 多个 session 中演化并验证的 session-local 变体。面向 Ascend 910B 上的
+  AscendC，经 msprof 与 substrate `ascend` backend（`ascendc_direct_launch`），让 Ascend 任务
+  不再在选型阶段 STALL、无需每次重新演化 session-local 变体。Count/badge 30 → 31。
+- **`agentRetry` + null 守卫默认脚手架覆盖所有 `agent()` 类 workflow**（#17）。新增权威助手
+  `_meta/scaffolding/agent-retry.js` 与 codemod `scripts/add-agent-retry-scaffolding.js`
+  （感知字符串/模板/正则），把每个 `agent()` 调用（573 处 / 31 文件）包裹成有限次重试，并对
+  解引用点加 null 守卫，使瞬态 API 429 / agent 跳过不再让整个 run 崩溃。KDA 的 Implement
+  prompt 还加了 turn 边界指令；新的 AscendC workflow 内建 turn 边界 + 逐文件 Bash 写入 +
+  NO HARNESS MANIPULATION。
+- **后端无关的通用 workflow 开放 Ascend 路由**（#16）。`Generalist` 与 `KDA`（均为
+  `method_supported_backends: any`、`portability: clean`）现声明 `ascendc`/`ascend`，经 substrate
+  ascend backend 路由 Ascend（faithful but simplified）。`InPlacePatch` 刻意不开放——它是
+  `vendor_locked`/`intrinsic_to: nvcc/hipcc`，没有 Ascend（bisheng）路径。
 - **WarpSpeed:对齐 AKW v0.2 genome 与 KerSor 派发。** 支持 `exp_dir` 写入
   `genome.jsonl` 并镜像报告;KerSor 参数别名(`compile_command`、`kernel_path`、
   `ggml_root`);阶段与 Screen/Confirm/Profile 的内联 genome 自报告;manifest 补全
