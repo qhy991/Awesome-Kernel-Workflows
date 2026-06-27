@@ -201,6 +201,7 @@ ${JSON.stringify(parseResult.agent_calls || [], null, 2)}
 5. Every field in schema.required must exist in schema.properties — ERROR if orphan required field
 6. Agent without schema is acceptable (returns free text) — no violation
 7. The final agent (report) may lack schema — no violation
+8. Null-safety (#20): if the workflow inlines the agentRetry scaffolding, every agent() call must be wrapped as agentRetry(() => agent(...)) — flag any bare await agent(...) whose result is later dereferenced (result.field) as ERROR (a null return would crash). An agentRetry result passed { allowNull: true } must be null-guarded where dereferenced (guard() / (x && x.field) / x?.field) — flag an unguarded deref as ERROR.
 
 Return violations found.`, {
     label: 'check-agent-schemas',

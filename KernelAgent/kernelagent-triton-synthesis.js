@@ -53,6 +53,60 @@ function __unwrapArgs(rawArgs) {
 // eslint-disable-next-line no-global-assign
 args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // --- END inlined arg_guard ---
+
+// --- BEGIN inlined agent-retry scaffolding (from _meta/scaffolding/agent-retry.js) ---
+async function agentRetry(fn, opts) {
+  const retries = (opts && opts.retries != null) ? opts.retries : 5
+  let lastError = null
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const result = await fn()
+      if (result != null) return result
+      // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
+    } catch (e) {
+      lastError = e
+    }
+  }
+  if (lastError) throw lastError
+  // All attempts returned null (agent skipped mid-run OR a terminal subagent
+  // failure such as a sustained 429). FAIL-SAFE DEFAULT: throw an attributable
+  // error instead of returning null. A null return would later hit an unguarded
+  // deref (`diag.bottleneck_class`, `impl.code`, ...) and crash the run with a
+  // cryptic TypeError — issue #20. Throwing here makes the round abort cleanly
+  // with a recorded reason, and inside `parallel()` a throwing thunk simply
+  // resolves to a null slot that `.filter(Boolean)` drops (graceful). Callers
+  // that INTENTIONALLY degrade on a missing result opt out with `{ allowNull: true }`.
+  if (opts && opts.allowNull === true) return null
+  throw new Error(
+    `agentRetry: "${(opts && opts.label) || 'agent'}" returned null after ${retries + 1} attempt(s) ` +
+    `(agent skipped or terminal API failure after retries).`,
+  )
+}
+
+/**
+ * Null-guard a REQUIRED structured field. Throws a clear, attributable error
+ * (instead of a cryptic TypeError) when an agent returned null/malformed output,
+ * so the run fails loudly at the dereference rather than producing garbage.
+ */
+function expect(obj, field, ctx) {
+  if (obj == null || obj[field] == null) {
+    throw new Error(
+      `agentRetry: required field "${field}" is missing${ctx ? ' from ' + ctx : ''} ` +
+      `(agent returned null or a malformed result after retries).`,
+    )
+  }
+  return obj[field]
+}
+
+/**
+ * Null-guard an OPTIONAL structured field with a fallback (no throw).
+ * Use for deref points that have a sensible default (e.g. `[]`, `''`, `0`).
+ */
+function guard(obj, field, fallback) {
+  if (obj == null || obj[field] == null) return fallback
+  return obj[field]
+}
+// --- END inlined agent-retry scaffolding ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
@@ -335,12 +389,12 @@ function shouldUsePipeline(analysis) {
 phase('Setup')
 
 if (USE_DRIVER) {
-  DRIVER = await agent(
+  DRIVER = await agentRetry(() => agent(
     `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
-    { model: MODEL.mechanical, label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.mechanical, label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   if (!DRIVER || DRIVER.present === false) {
     throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
   }
@@ -356,7 +410,7 @@ if (USE_DRIVER) {
 }
 
 // Read problem from file or use description directly
-const setupResult = await agent(`You are a ${langToken(LEGACY_ROUTE_LANG_TOKEN)} kernel synthesis expert. Analyze the problem and produce a structured description.
+const setupResult = await agentRetry(() => agent(`You are a ${langToken(LEGACY_ROUTE_LANG_TOKEN)} kernel synthesis expert. Analyze the problem and produce a structured description.
 
 # Problem Source
 ${PROBLEM_PATH ? `File: ${PROBLEM_PATH} — read and extract the problem description from the Python code.` : ''}
@@ -393,13 +447,13 @@ Then append:
     },
     required: ['problem_definition', 'operations'],
   },
-})
+}), { retries: 5 })
 
 problemDescription = setupResult.problem_definition
 log(`Problem parsed: ${setupResult.operations.length} ops detected`)
 
 // Generate test harness
-const testResult = await agent(`You are a ${langToken(LEGACY_HARNESS_LANG_TOKEN)} kernel test engineer. Generate a Python test harness for the following problem.
+const testResult = await agentRetry(() => agent(`You are a ${langToken(LEGACY_HARNESS_LANG_TOKEN)} kernel test engineer. Generate a Python test harness for the following problem.
 
 # Problem Description
 ${problemDescription}
@@ -431,7 +485,7 @@ Return ONLY the Python test code (no markdown, no explanation).`, {
     },
     required: ['test_code'],
   },
-})
+}), { retries: 5 })
 
 testCode = testResult.test_code
 log(`Test harness generated (${testCode.length} chars)`)
@@ -442,17 +496,17 @@ log(`Test harness generated (${testCode.length} chars)`)
 // stamp confidence. Computed once per session; the vars gate the Generate/Verify
 // guidance sentences below. The model picks the fuzzy need; it must NOT assign
 // confidence itself. The actual correctness verdict still belongs to the test harness.
-const _vp = await agent(
+const _vp = await agentRetry(() => agent(
   `Classify the verification need for the parallel Generate screening phase as 'prune' (cheap early filter of many diverse seed candidates). Then ` +
   `run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/verification/verification_strategist.py resolve --need prune --host-probe '{"compiler":true,"harness_runnable":true,"reference_available":false}' --cache ${EXP_DIR}/verify_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.\n` +
   `Return its stdout JSON verbatim {method, evidence_source, confidence, requires, abstained_from, rationale}.`,
-  { model: MODEL.mechanical, label: 'verification-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  { model: MODEL.mechanical, label: 'verification-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
 if (_vp && _vp.method) VERIFICATION_PRUNE = _vp
-const _vc = await agent(
+const _vc = await agentRetry(() => agent(
   `Classify the verification need for the final Verify/Compose acceptance phase as 'confirm' (deep acceptance of a surviving candidate). Then ` +
   `run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/verification/verification_strategist.py resolve --need confirm --host-probe '{"compiler":true,"harness_runnable":true,"reference_available":false}' --cache ${EXP_DIR}/verify_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.\n` +
   `Return its stdout JSON verbatim {method, evidence_source, confidence, requires, abstained_from, rationale}.`,
-  { model: MODEL.mechanical, label: 'verification-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  { model: MODEL.mechanical, label: 'verification-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
 if (_vc && _vc.method) VERIFICATION_CONFIRM = _vc
 log(`Verification-strategist: prune=${VERIFICATION_PRUNE.method}/${VERIFICATION_PRUNE.confidence} confirm=${VERIFICATION_CONFIRM.method}/${VERIFICATION_CONFIRM.confidence}`)
 
@@ -465,7 +519,7 @@ log(`Session directory: ${sessionDir}`)
 // =============================================================================
 phase('Route')
 
-const routeResult = await agent(`Analyze this problem to determine the optimal synthesis path.
+const routeResult = await agentRetry(() => agent(`Analyze this problem to determine the optimal synthesis path.
 
 # Problem Description
 ${problemDescription}
@@ -512,14 +566,14 @@ Then append:
     },
     required: ['path', 'reason'],
   },
-})
+}), { retries: 5 })
 
 routingDecision = routeResult
 log(`Routing: ${routeResult.path} — ${routeResult.reason}`)
 
 // If pipeline path, extract subgraphs
 if (routeResult.path === 'pipeline') {
-  const subgraphResult = await agent(`Extract subgraphs from this problem for parallel kernel synthesis.
+  const subgraphResult = await agentRetry(() => agent(`Extract subgraphs from this problem for parallel kernel synthesis.
 
 # Problem Description
 ${problemDescription}
@@ -559,7 +613,7 @@ Return a JSON object with:
       },
       required: ['subgraphs'],
     },
-  })
+  }), { retries: 5 })
 
   subgraphs = subgraphResult.subgraphs
   log(`Extracted ${subgraphs.length} subgraphs for parallel synthesis`)
@@ -584,7 +638,7 @@ for (const target of synthesisTargets) {
   for (let seedIdx = 0; seedIdx < MAX_SEEDS; seedIdx++) {
     const temperature = TEMPERATURE_BASE + (seedIdx * 0.1)
     seedPromises.push(() =>
-      agent(`You are an expert ${langToken(LEGACY_SYNTH_LANG_TOKEN)} kernel developer. Generate a complete, working ${langToken(LEGACY_SYNTH_LANG_TOKEN)} kernel.
+      agentRetry(() => agent(`You are an expert ${langToken(LEGACY_SYNTH_LANG_TOKEN)} kernel developer. Generate a complete, working ${langToken(LEGACY_SYNTH_LANG_TOKEN)} kernel.
 
 # Problem
 ${target.description}
@@ -640,7 +694,7 @@ Then append (this is seed variant ${seedIdx} for target ${target.id}):
           },
           required: ['kernel_code', 'approach'],
         },
-      })
+      }), { retries: 5 })
     )
   }
 }
@@ -679,7 +733,7 @@ phase('Verify')
 
 if (VERIFY && validCandidates.length > 0) {
   const verifyPromises = validCandidates.map(candidate => () =>
-    agent(`You are a kernel verification engineer. Execute the test harness against this ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel.
+    agentRetry(() => agent(`You are a kernel verification engineer. Execute the test harness against this ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel.
 
 # Kernel Code
 \`\`\`python
@@ -736,7 +790,7 @@ Then append, using the result you just measured (status="done" if the kernel pas
         },
         required: ['passed', 'verification_result'],
       },
-    })
+    }), { retries: 5 })
   )
 
   const verifyResults = await parallel(verifyPromises)
@@ -776,30 +830,30 @@ Then append, using the result you just measured (status="done" if the kernel pas
       const buildOut = `${EXP_DIR}/candidates/${candidate.id}/artifact`
       const profOut = `${EXP_DIR}/candidates/${candidate.id}/prof.native`
       const resultPath = `${EXP_DIR}/candidates/${candidate.id}/result.json`
-      await agent(
+      await agentRetry(() => agent(
         `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
         `Return its stdout JSON verbatim.`,
-        { model: MODEL.mechanical, label: `driver-build-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
-      const runOut = await agent(
+        { model: MODEL.mechanical, label: `driver-build-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5 })
+      const runOut = await agentRetry(() => agent(
         `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath} --test ${tPath} --result ${resultPath}`)}\n` +
         `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
-        { model: MODEL.profile, label: `driver-run-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
-      await agent(
+        { model: MODEL.profile, label: `driver-run-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
+      await agentRetry(() => agent(
         `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
         `Return {ok, native_path}.`,
-        { model: MODEL.profile, label: `driver-profile-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
-      const evidenceOut = await agent(
+        { model: MODEL.profile, label: `driver-profile-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5 })
+      const evidenceOut = await agentRetry(() => agent(
         `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
         `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-        { model: MODEL.mechanical, label: `driver-to-evidence-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
-      const diagOut = await agent(
+        { model: MODEL.mechanical, label: `driver-to-evidence-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
+      const diagOut = await agentRetry(() => agent(
         `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
         `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
-        { model: MODEL.mechanical, label: `driver-diagnose-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
-      const antiCheatOut = await agent(
+        { model: MODEL.mechanical, label: `driver-diagnose-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
+      const antiCheatOut = await agentRetry(() => agent(
         `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${resultPath}\`.\n` +
         `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
-        { model: MODEL.mechanical, label: `driver-anti-cheat-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH })
+        { model: MODEL.mechanical, label: `driver-anti-cheat-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5 })
       candidate.driver_envelope = {
         anti_cheat: antiCheatOut || {},
         metrics: (evidenceOut && evidenceOut.metrics) || {},
@@ -844,7 +898,7 @@ while (failedCandidates.length > 0 && currentRound < MAX_ROUNDS && verifiedKerne
   log(`Refinement round ${currentRound}/${MAX_ROUNDS} — ${failedCandidates.length} candidates to fix`)
 
   const refinePromises = failedCandidates.map(candidate => () =>
-    agent(`You are a ${langToken(LEGACY_REFINE_LANG_TOKEN)} kernel debugging expert. Fix this failing kernel.
+    agentRetry(() => agent(`You are a ${langToken(LEGACY_REFINE_LANG_TOKEN)} kernel debugging expert. Fix this failing kernel.
 
 # Problem Description
 ${problemDescription}
@@ -913,7 +967,7 @@ Then append (this is refinement round ${currentRound} for ${candidate.id}):
         },
         required: ['kernel_code', 'fix_explanation'],
       },
-    })
+    }), { retries: 5 })
   )
 
   const refineResults = await parallel(refinePromises)
@@ -950,7 +1004,7 @@ Then append (this is refinement round ${currentRound} for ${candidate.id}):
   const toReVerify = failedCandidates.filter(c => c.status === 'pending')
   if (toReVerify.length > 0 && VERIFY) {
     const reVerifyPromises = toReVerify.map(candidate => () =>
-      agent(`Verify this refined ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel against the test harness.
+      agentRetry(() => agent(`Verify this refined ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel against the test harness.
 
 # Kernel Code
 \`\`\`python
@@ -984,7 +1038,7 @@ ${USE_DRIVER ? driverSh('run.sh', `--kernel ${kernelFilename()} --test ${testFil
           },
           required: ['passed', 'verification_result'],
         },
-      })
+      }), { retries: 5 })
     )
 
     const reVerifyResults = await parallel(reVerifyPromises)
@@ -1033,7 +1087,7 @@ if (currentRound > 0) {
 phase('Compose')
 
 if (routingDecision.path === 'pipeline' && subgraphs.length > 1 && COMPOSE && verifiedKernels.length > 0) {
-  const composeResult = await agent(`You are a ${langToken(LEGACY_COMPOSE_LANG_TOKEN)} kernel composition expert. Stitch these verified subgraph kernels into a single, cohesive ${langToken(LEGACY_COMPOSE_LANG_TOKEN)} program.
+  const composeResult = await agentRetry(() => agent(`You are a ${langToken(LEGACY_COMPOSE_LANG_TOKEN)} kernel composition expert. Stitch these verified subgraph kernels into a single, cohesive ${langToken(LEGACY_COMPOSE_LANG_TOKEN)} program.
 
 # Problem Description
 ${problemDescription}
@@ -1080,14 +1134,14 @@ Then append:
       },
       required: ['composed_code', 'composition_notes'],
     },
-  })
+  }), { retries: 5 })
 
   composedKernel = composeResult.composed_code
   log(`Composed kernel: ${composeResult.composition_notes}`)
 
   // Verify composed kernel
   if (VERIFY) {
-    const composeVerify = await agent(`Verify this composed ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel against the original problem.
+    const composeVerify = await agentRetry(() => agent(`Verify this composed ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel against the original problem.
 
 # Composed Kernel
 \`\`\`python
@@ -1119,7 +1173,7 @@ ${USE_DRIVER ? driverSh('run.sh', `--kernel ${kernelFilename()} --test ${testFil
         },
         required: ['passed', 'verification_result'],
       },
-    })
+    }), { retries: 5, allowNull: true })
 
     if (composeVerify?.passed) {
       log('Composed kernel verified successfully')
@@ -1141,7 +1195,7 @@ phase('Report')
 const bestKernel = verifiedKernels.length > 0 ? verifiedKernels[0] : null
 const finalCode = composedKernel || (bestKernel ? bestKernel.code : null)
 
-const reportResult = await agent(`Generate a comprehensive synthesis report for this KernelAgent session.
+const reportResult = await agentRetry(() => agent(`Generate a comprehensive synthesis report for this KernelAgent session.
 
 # Problem
 ${problemDescription}
@@ -1202,7 +1256,7 @@ Then append:
     },
     required: ['outcome', 'summary'],
   },
-})
+}), { retries: 5, allowNull: true })
 
 log(`Synthesis ${reportResult?.outcome || 'unknown'}: ${reportResult?.summary || ''}`)
 

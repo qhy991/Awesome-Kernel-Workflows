@@ -81,6 +81,60 @@ function __unwrapArgs(rawArgs) {
 // eslint-disable-next-line no-global-assign
 args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // --- END inlined arg_guard ---
+
+// --- BEGIN inlined agent-retry scaffolding (from _meta/scaffolding/agent-retry.js) ---
+async function agentRetry(fn, opts) {
+  const retries = (opts && opts.retries != null) ? opts.retries : 5
+  let lastError = null
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const result = await fn()
+      if (result != null) return result
+      // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
+    } catch (e) {
+      lastError = e
+    }
+  }
+  if (lastError) throw lastError
+  // All attempts returned null (agent skipped mid-run OR a terminal subagent
+  // failure such as a sustained 429). FAIL-SAFE DEFAULT: throw an attributable
+  // error instead of returning null. A null return would later hit an unguarded
+  // deref (`diag.bottleneck_class`, `impl.code`, ...) and crash the run with a
+  // cryptic TypeError — issue #20. Throwing here makes the round abort cleanly
+  // with a recorded reason, and inside `parallel()` a throwing thunk simply
+  // resolves to a null slot that `.filter(Boolean)` drops (graceful). Callers
+  // that INTENTIONALLY degrade on a missing result opt out with `{ allowNull: true }`.
+  if (opts && opts.allowNull === true) return null
+  throw new Error(
+    `agentRetry: "${(opts && opts.label) || 'agent'}" returned null after ${retries + 1} attempt(s) ` +
+    `(agent skipped or terminal API failure after retries).`,
+  )
+}
+
+/**
+ * Null-guard a REQUIRED structured field. Throws a clear, attributable error
+ * (instead of a cryptic TypeError) when an agent returned null/malformed output,
+ * so the run fails loudly at the dereference rather than producing garbage.
+ */
+function expect(obj, field, ctx) {
+  if (obj == null || obj[field] == null) {
+    throw new Error(
+      `agentRetry: required field "${field}" is missing${ctx ? ' from ' + ctx : ''} ` +
+      `(agent returned null or a malformed result after retries).`,
+    )
+  }
+  return obj[field]
+}
+
+/**
+ * Null-guard an OPTIONAL structured field with a fallback (no throw).
+ * Use for deref points that have a sensible default (e.g. `[]`, `''`, `0`).
+ */
+function guard(obj, field, fallback) {
+  if (obj == null || obj[field] == null) return fallback
+  return obj[field]
+}
+// --- END inlined agent-retry scaffolding ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // This workflow does NOT use the generic entry scribe from
 // scripts/patch-genome-report.js (__genomeReport). Instead each phase's doer
@@ -345,7 +399,7 @@ let history = []  // [{turn, action, outcome, speedup, error}]
 phase('Setup')
 
 if (INPUT_MODE === 'generate_then_optimize') {
-  const generated = await agent(`No kernel_path was provided. Generate and verify an initial PyTorch model plus CUDA kernel scaffold before CUDAAgent optimization.
+  const generated = await agentRetry(() => agent(`No kernel_path was provided. Generate and verify an initial PyTorch model plus CUDA kernel scaffold before CUDAAgent optimization.
 
 # Problem Input
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
@@ -373,7 +427,7 @@ Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run
       },
       required: ['generated_kernel_path', 'initial_candidates', 'initial_generation_result'],
     },
-  })
+  }), { retries: 5 })
   initialCandidates = generated.initial_candidates || []
   initialGenerationResult = generated.initial_generation_result || { verified: false }
   generatedKernelPath = generated.generated_kernel_path || ''
@@ -382,7 +436,7 @@ Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run
   MODEL_PATH = generatedKernelPath
 }
 
-const setupResult = await agent(`You are a CUDA kernel optimization expert. Set up the optimization workspace.
+const setupResult = await agentRetry(() => agent(`You are a CUDA kernel optimization expert. Set up the optimization workspace.
 
 # Task:
 1. Read the PyTorch model from: ${MODEL_PATH}
@@ -415,7 +469,7 @@ Then append this one-line JSON, filling the bracketed parts from your analysis:
     },
     required: ['model_code', 'critical_operators'],
   },
-})
+}), { retries: 5 })
 
 modelCode = setupResult.model_code
 
@@ -425,14 +479,14 @@ modelCode = setupResult.model_code
 // confidence. Honored in the profile/refine prompt below; defaults keep the
 // happy-path ncu behavior unchanged if the decision is ignored. ---
 {
-  const _pd = await agent(
+  const _pd = await agentRetry(() => agent(
     `Classify the kernel under optimization. Source: ` +
     (MODEL_PATH ? `read ${MODEL_PATH}` : `operation "${OP_DESC}"`) + `.\n` +
     `Pick op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
     substrateInstruction('profiling/profiling_strategist.py',
       `resolve --backend-manifest ${BACKEND_MANIFEST} --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
     ` Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
-    { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+    { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   if (_pd && _pd.method) PROFILING_DECISION = _pd
 }
 log(`Profiling method: ${PROFILING_DECISION.method} (confidence=${PROFILING_DECISION.confidence})`)
@@ -449,7 +503,7 @@ let INTEGRATION_DECISION = { method: EMBEDDED ? INTEGRATION_PATTERN : 'standalon
   const _canStandaloneHint = EMBEDDED ? 'no' : 'uncertain'
   const _probe = JSON.stringify({ compiler: !!COMPILE_CMD, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
   if (_kernelForProbe) {
-    const _integ = await agent(
+    const _integ = await agentRetry(() => agent(
       `Read ${_kernelForProbe}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
       `(use no when the file cannot compile as a single TU — e.g. a project .cuh with project-only deps; ` +
       `the caller hinted can_standalone="${_canStandaloneHint}"). Then ` +
@@ -457,7 +511,7 @@ let INTEGRATION_DECISION = { method: EMBEDDED ? INTEGRATION_PATTERN : 'standalon
         `resolve --kernel "${_kernelForProbe}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
         `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
       ` Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
-      { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH })
+      { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
     if (_integ && _integ.method) INTEGRATION_DECISION = _integ
   }
 }
@@ -473,8 +527,8 @@ const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGR
 // candidate restores to a pristine original and the exit net can too.
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
-  await agent(`Byte-exact backup (once): run \`cp -a "${REFERENCE_FILE || MODEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm it exists.`,
-    { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH })
+  await agentRetry(() => agent(`Byte-exact backup (once): run \`cp -a "${REFERENCE_FILE || MODEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm it exists.`,
+    { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 // A-O1 closure: native_profiler needs a real profiler to run; CUDAAgent's native
 // profiler is ncu. If no ncu command is available, downgrade native_profiler ->
@@ -491,7 +545,7 @@ if (PROFILING_DECISION.method === 'native_profiler' && !NCU_CMD) {
 // =============================================================================
 phase('Profile')
 
-const profileResult = await agent(`You are a CUDA performance profiler. Profile the baseline PyTorch model.
+const profileResult = await agentRetry(() => agent(`You are a CUDA performance profiler. Profile the baseline PyTorch model.
 
 # Model Code:
 \`\`\`python
@@ -541,7 +595,7 @@ Then append:
     },
     required: ['eager_time_ms', 'compile_time_ms', 'bottlenecks', 'optimization_strategy'],
   },
-})
+}), { retries: 5 })
 
 eagerTime = profileResult.eager_time_ms || 1.0
 compileTime = profileResult.compile_time_ms || 1.0
@@ -602,7 +656,7 @@ for (currentAttempt = 0; currentAttempt < MAX_TURNS && !targetMet; currentAttemp
 
   let implResult
   try {
-  implResult = await withTurnTimeout(agent(`You are a CUDA kernel developer. Implement an optimized CUDA kernel for this PyTorch model.
+  implResult = await withTurnTimeout(agentRetry(() => agent(`You are a CUDA kernel developer. Implement an optimized CUDA kernel for this PyTorch model.
 
 # Model to Optimize:
 \`\`\`python
@@ -663,7 +717,7 @@ Then append (this is optimization attempt ${currentAttempt}):
       },
       required: ['kernel_code', 'binding_code', 'model_new_code'],
     },
-  }), `Implement turn ${currentAttempt + 1}`)
+  }), { retries: 5 }), `Implement turn ${currentAttempt + 1}`)
   } catch (e) {
     log(`  Turn ${currentAttempt + 1}: Implement watchdog tripped — stopping (${e.message})`)
     convergenceStatus = 'timeout'
@@ -737,7 +791,7 @@ Parse correctness (pass/fail) and latency STRICTLY from the test/benchmark comma
 
   let verifyResult
   try {
-  verifyResult = await withTurnTimeout(agent(`You are a CUDA kernel validator. Compile, verify, and benchmark this kernel implementation.${embeddedEvalBlock}
+  verifyResult = await withTurnTimeout(agentRetry(() => agent(`You are a CUDA kernel validator. Compile, verify, and benchmark this kernel implementation.${embeddedEvalBlock}
 
 # Kernel Code (kernel.cu):
 \`\`\`cuda
@@ -800,7 +854,7 @@ Then append, using the values you just measured (status="done" if correctness pa
       },
       required: ['compiled', 'correct', 'reward'],
     },
-  }), `Verify turn ${currentAttempt + 1}`)
+  }), { retries: 5 }), `Verify turn ${currentAttempt + 1}`)
   } catch (e) {
     log(`  Turn ${currentAttempt + 1}: Verify watchdog tripped — stopping (${e.message})`)
     convergenceStatus = 'timeout'
@@ -885,7 +939,7 @@ phase('Report')
 // guard) | budget_exhausted (ran out of MAX_TURNS without any of the above).
 const convergence_status = targetMet ? 'converged' : (convergenceStatus || 'budget_exhausted')
 
-const finalReport = await agent(`Write a concise optimization report.
+const finalReport = await agentRetry(() => agent(`Write a concise optimization report.
 
 # CUDA Agent Optimization Results
 - Adaptation scope: ${ADAPTATION_SCOPE}
@@ -913,14 +967,14 @@ Write:
 4. Remaining optimization opportunities`, {
   label: 'final-report',
   phase: 'Report',
-})
+}), { retries: 5 })
 
 // Exit restore (embedded_inplace safety net): the candidate eval restores after each
 // attempt, but force one final restore so the project file is byte-exact pristine on
 // exit regardless of how the loop terminated. No-op for standalone/embedded_dispatch.
 if (ORIGINAL_BACKUP) {
-  await agent(`Exit restore: run \`cp -a "${ORIGINAL_BACKUP}" "${REFERENCE_FILE || MODEL_PATH}"\` and confirm the project file is byte-exact pristine.`,
-    { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH })
+  await agentRetry(() => agent(`Exit restore: run \`cp -a "${ORIGINAL_BACKUP}" "${REFERENCE_FILE || MODEL_PATH}"\` and confirm the project file is byte-exact pristine.`,
+    { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 
 return {

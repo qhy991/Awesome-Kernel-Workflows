@@ -499,8 +499,8 @@ ${manifestResult.manifest_yaml}
 7. Emit phase('Setup') with the Setup phase agents
 8. Emit the main loop (for iterative/search: for loop controlled by iterations unless the source method requires a specific budget name)
 9. Inside loop: emit each loop_body phase with its agents, using correct parallelism pattern:
-   - "single" → await agent(...)
-   - "parallel_fan_out" → await parallel(array.map(item => () => agent(...)))
+   - "single" → await agentRetry(() => agent(...), { retries: 5 })
+   - "parallel_fan_out" → await parallel(array.map(item => () => agentRetry(() => agent(...), { retries: 5 })))
    - "pipeline_then_parallel" → await pipeline(items, item => parallel([...]))
 10. Never hardcode an evaluator/compiler/profiler command in Usage examples or agent prompts. Describe the JSON/artifact contract and consume user-provided command args.
 11. Emit epilogue (final report agent)
@@ -508,6 +508,7 @@ ${manifestResult.manifest_yaml}
 
 # Critical constraints:
 - Every agent() call MUST have: label, phase, schema (except final report which can omit schema)
+- NULL-SAFETY (issue #20): EVERY agent() call MUST be wrapped as agentRetry(() => agent(...), { retries: 5 }). A transient 429 / terminal API failure makes agent() return null, and dereferencing the result (result.field) crashes the whole run. Inline the agentRetry/expect/guard helper block from _meta/scaffolding/agent-retry.js ONCE, right after the arg_guard (copy it verbatim — the Workflow sandbox cannot import). By default agentRetry throws an attributable error on a null result (clean abort); pass { retries: 5, allowNull: true } ONLY for optional probes whose absence the workflow tolerates, and null-guard those results with guard(result, 'field', fallback) or (result && result.field) || fallback.
 - Every phase() call argument MUST match a title in meta.phases
 - Do NOT hand-write any genome/observability self-report. The live genome scribe
   (a __genomeReport() helper + a call after each phase()) is injected
@@ -588,7 +589,12 @@ ${workflowCode.workflow_code}
 - [ ] parallel() receives array of () => agent(...) thunks
 - [ ] pipeline() has correct signature
 
-## 8. Syntax
+## 8. Null-safety (issue #20)
+- [ ] Every agent() call is wrapped as agentRetry(() => agent(...), { retries: 5 })
+- [ ] The agentRetry/expect/guard helper block (from _meta/scaffolding/agent-retry.js) is inlined once after the arg_guard
+- [ ] No bare await agent(...) dereferenced without a null-guard (required results rely on agentRetry's default throw; optional results use { allowNull: true } + guard()/&& fallback)
+
+## 9. Syntax
 - [ ] Valid JavaScript (no TS annotations)
 - [ ] No undefined variable references
 - [ ] Template literals properly closed

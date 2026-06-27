@@ -1,0 +1,240 @@
+schema_version: '1.1'
+name: ascendc-kernel-optimization
+entrypoint: ascendc-kernel-optimization.js
+backend:
+  portability: vendor_locked
+  matrix_eligible: true
+  intrinsic_to: Ascend CANN (msprof) + MultiKernelBench ascendc_direct_launch
+  method_supported_backends:
+  - ascend
+  supported:
+  - ascend
+  default: ascend
+  notes: 'Ascend-native. Profiler = msprof (CANN). Compile + correctness + NPU-event
+    timing are coupled inside MultiKernelBench eval_single_runner.py via the
+    ascendc_direct_launch launcher (bisheng + cmake). requires_ncu = false. The
+    canonical Ascend entry that resolves issue #16 — Ascend tasks no longer STALL
+    at workflow selection.
+
+    '
+source:
+  paper_title: 'Proven session-local Ascend variant (promoted upstream)'
+  paper_url: ''
+  paper_venue: ''
+  repo_url: ''
+  commit_or_tag: ''
+  license: ''
+  notes: 'Derived from the session-local variant `generalist-ascend-optimization`
+    evolved across 910b-exp sessions 20260622-160108 / 20260623-{194914,190425,191018}
+    (see AKW-Exp/910b-exp/KEY-ISSUES.md §B). Generalized: task-specific (batched_matmul)
+    hints removed, canonical ascendc_direct_launch submission contract retained,
+    substrate ascend backend (_substrate/backends/ascend) wired as the driver,
+    issue #17 scaffolding (agentRetry + null-guard + turn-boundary + per-file write)
+    baked in.
+
+    '
+workflow:
+  name: ascendc-kernel-optimization
+  description: 'Canonical Ascend/AscendC kernel-optimization workflow for Ascend
+    910B NPUs: iterative plan->generate->evaluate->optimize->report using AscendC
+    (ascendc_direct_launch) and msprof profiling via the substrate ascend backend.'
+  when_to_use: 'When optimizing or generating a kernel on Ascend 910B2 (or a compatible
+    Ascend NPU) in AscendC. Requires the ascend substrate backend (_substrate/backends/ascend)
+    plus bisheng, torch_npu, and the MultiKernelBench eval harness (MULTIKERNELBENCH_ROOT).
+    Do NOT use for CUDA/Triton/ROCm/Metal targets.'
+  output_filename: ascendc-kernel-optimization.js
+  directory: AscendC/
+method:
+  category: iterative_self_improving
+  core_insight: 'Ascend-native iterative optimization. Each round profiles the current
+    best with msprof, picks ONE AscendC-specific improvement (Cube/MTE pipelining,
+    FRACTAL_NZ layout, tiling to L1/L0 buffers, dispatch folding), implements it as
+    an ascendc_direct_launch submission (kernel.cpp + pybind11.cpp + ModelNew.py),
+    and evaluates via the substrate ascend backend (compile+correctness+timing coupled
+    in eval_single_runner.py). Stagnation/target/budget gates stop the loop.'
+  feedback_signal:
+    type: throughput_delta
+    description: 'speedup = eager_latency / candidate_latency, with correctness gated;
+      msprof bottleneck class (Cube/MTE2/MTE3/vector/dispatch) drives the next plan.
+      Measured by the substrate ascend run.sh (eval_single_runner.py), never fabricated.'
+    tool: custom_bench
+    higher_is_better: true
+topology:
+  type: iterative
+  iterative:
+    iterations_arg: iterations
+    convergence_condition: 'Stop when target_speedup reached (converged), stagnation
+      limit hit (2 consecutive rounds with < 2% improvement -> stalled), or token
+      budget exhausted (budget_exhausted).'
+    state_variables:
+    - name: candidates
+      type: array
+      initial_value: '[]'
+      description: All evaluated AscendC submissions sorted by measured speedup
+    - name: bestSpeedup
+      type: number
+      initial_value: '0'
+      description: Best measured speedup across all rounds
+    - name: bestPath
+      type: string
+      initial_value: ''''''
+      description: Path to the best ascendc_direct_launch submission JSON
+    - name: stagnantRounds
+      type: number
+      initial_value: '0'
+      description: Consecutive rounds with < STAGNATION_EPS improvement
+phases:
+- name: Setup
+  detail: Read reference op + substrate ascend backend manifest; assert ascendc suitability
+  position: preamble
+- name: Generate
+  detail: Generate initial AscendC candidates in ascendc_direct_launch JSON (per-file Bash write)
+  position: preamble
+- name: Evaluate
+  detail: Build + correctness + timing via substrate ascend run.sh
+  position: loop_body
+- name: Optimize
+  detail: msprof -> plan -> implement (one turn = write+eval+return) -> test
+  position: loop_body
+- name: Report
+  detail: Final report + best kernel
+  position: epilogue
+args:
+  required:
+  - name: benchmark_command
+    type: string
+    description: 'Optional when backend_dir is provided (the ascend backend drives
+      eval). Otherwise: command that compiles+runs the ascendc_direct_launch submission
+      and writes JSON with compiled/correct/speedup/latencies.'
+    example: bash _substrate/backends/ascend/run.sh --artifact {kernel_path} --op {op} --mkb-root $MULTIKERNELBENCH_ROOT --out {result_path}
+  optional:
+  - name: kernel_path
+    type: string
+    default: ''''''
+    description: Path to an existing reference kernel to optimize; omit for generate_then_optimize
+    example: /path/to/reference_kernel.cpp
+  - name: problem_definition
+    type: string
+    default: ''''''
+    description: Textual problem definition for AscendC kernel generation
+  - name: problem_path
+    type: string
+    default: ''''''
+    description: Path to a problem definition file
+  - name: op_description
+    type: string
+    default: '''AscendC kernel optimization'''
+    description: Human-readable description of the target operation
+  - name: language
+    type: string
+    default: '''ascendc'''
+    description: 'Target language: ascendc (asserted by assertWorkflowSuitability)'
+  - name: target_gpu
+    type: string
+    default: '''Ascend910B2'''
+    description: Target Ascend NPU
+  - name: substrate_dir
+    type: string
+    default: '''_substrate'''
+    description: Path to the KerSor substrate directory
+  - name: backend_dir
+    type: string
+    default: '''_substrate/backends/ascend'''
+    description: Path to the ascend backend driver dir; empty -> fall back to benchmark_command
+  - name: mkb_root
+    type: string
+    default: ''''''
+    description: MultiKernelBench root (or set MULTIKERNELBENCH_ROOT); required by run.sh/profile.sh
+  - name: op
+    type: string
+    default: ''''''
+    description: MultiKernelBench op id passed to run.sh/profile.sh
+  - name: profile_command
+    type: string
+    default: ''''''
+    description: msprof command template; empty -> driver-resolved via backend_dir/profile.sh
+  - name: exp_dir
+    type: string
+    default: '''.'''
+    description: Directory for experiment artifacts
+  - name: iterations
+    type: number
+    default: '3'
+    description: Maximum optimization iterations
+  - name: breadth
+    type: number
+    default: '2'
+    description: Parallel candidates per round
+  - name: seed_candidates
+    type: number
+    default: '2'
+    description: Initial generation breadth
+  - name: target_speedup
+    type: number
+    default: '1.5'
+    description: Target speedup to reach before stopping
+  - name: note
+    type: string
+    default: ''''''
+    description: Free-form user guidance appended to every agent prompt
+correctness:
+  criteria:
+  - ascendc_direct_launch submission compiles via bisheng+cmake
+  - Output matches the reference within tolerance (torch_npu allclose or equivalent)
+  - No fabrication — measured values come from eval_single_runner.py result JSON
+  - 'NO HARNESS MANIPULATION: allocator/free-pool scrubbing forbidden (issue #17)'
+  check_type: runtime_comparison
+  reference_output: Reference kernel run via the same eval_single_runner.py
+return_fields:
+- name: input_mode
+  type: string
+  description: optimize_existing or generate_then_optimize
+  required: true
+- name: solver
+  type: string
+  description: Always 'ascendc-kernel-optimization'
+  required: true
+- name: topology
+  type: string
+  description: Always 'iterative'
+  required: true
+- name: overall_speedup
+  type: number
+  description: Best measured speedup across all rounds
+  required: true
+- name: best_kernel_code
+  type: string
+  description: Full contents of the best ascendc_direct_launch submission
+  required: true
+- name: best_kernel_path
+  type: string
+  description: Path to the best submission JSON
+  required: true
+- name: convergence_status
+  type: string
+  description: 'One of: converged, stalled, budget_exhausted'
+  required: true
+- name: candidates
+  type: array
+  description: Top evaluated candidates
+  required: true
+routing:
+  best_kernel_field: best_kernel_code
+  topology: iterative
+  requires_harness: true
+  languages:
+  - ascendc
+  backends:
+  - ascend
+  default_backend: ascend
+  method_category: iterative_self_improving
+  role: optimizer
+  speedup_field: overall_speedup
+  fidelity_boundary: substrate_reference
+  requires_ncu: false
+  integration_patterns:
+  - standalone
+  required_one_of:
+  - - kernel_path
+    - problem_definition
+    - problem_path

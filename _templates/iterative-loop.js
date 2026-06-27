@@ -105,18 +105,72 @@ function __unwrapArgs(rawArgs) {
 // eslint-disable-next-line no-global-assign
 args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // --- END inlined arg_guard ---
+
+// --- BEGIN inlined agent-retry scaffolding (from _meta/scaffolding/agent-retry.js) ---
+async function agentRetry(fn, opts) {
+  const retries = (opts && opts.retries != null) ? opts.retries : 5
+  let lastError = null
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const result = await fn()
+      if (result != null) return result
+      // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
+    } catch (e) {
+      lastError = e
+    }
+  }
+  if (lastError) throw lastError
+  // All attempts returned null (agent skipped mid-run OR a terminal subagent
+  // failure such as a sustained 429). FAIL-SAFE DEFAULT: throw an attributable
+  // error instead of returning null. A null return would later hit an unguarded
+  // deref (`diag.bottleneck_class`, `impl.code`, ...) and crash the run with a
+  // cryptic TypeError — issue #20. Throwing here makes the round abort cleanly
+  // with a recorded reason, and inside `parallel()` a throwing thunk simply
+  // resolves to a null slot that `.filter(Boolean)` drops (graceful). Callers
+  // that INTENTIONALLY degrade on a missing result opt out with `{ allowNull: true }`.
+  if (opts && opts.allowNull === true) return null
+  throw new Error(
+    `agentRetry: "${(opts && opts.label) || 'agent'}" returned null after ${retries + 1} attempt(s) ` +
+    `(agent skipped or terminal API failure after retries).`,
+  )
+}
+
+/**
+ * Null-guard a REQUIRED structured field. Throws a clear, attributable error
+ * (instead of a cryptic TypeError) when an agent returned null/malformed output,
+ * so the run fails loudly at the dereference rather than producing garbage.
+ */
+function expect(obj, field, ctx) {
+  if (obj == null || obj[field] == null) {
+    throw new Error(
+      `agentRetry: required field "${field}" is missing${ctx ? ' from ' + ctx : ''} ` +
+      `(agent returned null or a malformed result after retries).`,
+    )
+  }
+  return obj[field]
+}
+
+/**
+ * Null-guard an OPTIONAL structured field with a fallback (no throw).
+ * Use for deref points that have a sensible default (e.g. `[]`, `''`, `0`).
+ */
+function guard(obj, field, fallback) {
+  if (obj == null || obj[field] == null) return fallback
+  return obj[field]
+}
+// --- END inlined agent-retry scaffolding ---
 // --- BEGIN genome-report (auto-inserted by scripts/patch-genome-report.js) ---
 // Self-reported, work-plane (forgeable) stage trace for observability + the
 // recombiner. NOT a trust anchor — see _meta/genome-trajectory-schema.md.
 async function __genomeReport(phaseName, wfName) {
   try {
     const __dir = (typeof args !== 'undefined' && args && args.exp_dir) ? args.exp_dir : '.'
-    await agent(
+    await agentRetry(() => agent(
       'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
       'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
       'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
       { label: 'genome:' + phaseName, phase: phaseName }
-    )
+    ), { retries: 5 })
   } catch (__e) { /* observability must never break the workflow */ }
 }
 // --- END genome-report ---
@@ -181,13 +235,13 @@ for (let iter = 0; iter < {{MAX_ITER_VAR}}; iter++) {
 
   const plans = await parallel(
     Array.from({length: {{BREADTH_VAR}}}, (_, i) => () =>
-      agent(`{{PLAN_PROMPT_BASE}}
+      agentRetry(() => agent(`{{PLAN_PROMPT_BASE}}
 
 # YOUR FOCUS AREA: ${planAngles[i % planAngles.length]}`, {
         label: `plan-${iter}-${i}`,
         phase: 'Plan',
         schema: {{PLAN_SCHEMA}},
-      })
+      }), { retries: 5 })
     )
   )
 
@@ -203,14 +257,14 @@ for (let iter = 0; iter < {{MAX_ITER_VAR}}; iter++) {
     validPlans,
     (plan) => parallel(
       Array.from({length: {{SAMPLES_VAR}}}, (_, sampleIdx) => () =>
-        agent(`{{EXECUTE_PROMPT}}
+        agentRetry(() => agent(`{{EXECUTE_PROMPT}}
 
 # Plan: "${plan.title}"
 Details: ${plan.plan}`, {
           label: `impl-${iter}-${plan.title.substring(0, 15)}-v${sampleIdx}`,
           phase: 'Execute',
           schema: {{EXECUTE_SCHEMA}},
-        })
+        }), { retries: 5 })
       )
     )
   )
@@ -241,7 +295,7 @@ Details: ${plan.plan}`, {
 
   const evaluations = await parallel(
     allVariants.map((variant, varIdx) => () =>
-      agent(`{{EVALUATE_PROMPT}}
+      agentRetry(() => agent(`{{EVALUATE_PROMPT}}
 
 # Variant: ${variant.id} — Plan: "${variant.plan.title}"
 # Code:
@@ -251,7 +305,7 @@ ${variant.code.substring(0, 4000)}
         label: `eval-${variant.id}`,
         phase: 'Evaluate',
         schema: {{EVALUATE_SCHEMA}},
-      })
+      }), { retries: 5 })
     )
   )
 
@@ -312,7 +366,7 @@ ${variant.code.substring(0, 4000)}
   if (pairsToSummarize.length > 0) {
     const summaries = await parallel(
       pairsToSummarize.map((pair) => () =>
-        agent(`{{LEARN_PROMPT}}
+        agentRetry(() => agent(`{{LEARN_PROMPT}}
 
 # Slow Kernel:
 \`\`\`
@@ -329,7 +383,7 @@ ${pair.fast.substring(0, 2500)}
           label: `learn-${pair.plan_title.substring(0, 20)}`,
           phase: 'Learn',
           schema: {{LEARN_SCHEMA}},
-        })
+        }), { retries: 5 })
       )
     )
 
@@ -347,10 +401,10 @@ ${pair.fast.substring(0, 2500)}
 // =============================================================================
 // Final Report
 // =============================================================================
-const finalReport = await agent(`{{REPORT_PROMPT}}`, {
+const finalReport = await agentRetry(() => agent(`{{REPORT_PROMPT}}`, {
   label: 'final-report',
   phase: 'Iterate',
-})
+}), { retries: 5 })
 
 return {
   {{RETURN_OBJECT}}

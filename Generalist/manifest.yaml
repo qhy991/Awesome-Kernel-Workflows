@@ -9,6 +9,7 @@ backend:
   - cuda
   - triton
   - metax
+  - ascend
   default: cuda
 source:
   paper_title: KerSor Solver SDK — Best-of-Breed Reference Solver
@@ -524,6 +525,7 @@ routing:
   - cuda
   - triton
   - metax
+  - ascendc
   method_category: iterative_self_improving
   role: optimizer
   speedup_field: overall_speedup

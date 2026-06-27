@@ -43,12 +43,12 @@ const WORKFLOW_NAME = 'warpspeed-kernel-search'
 async function __genomeReport(phaseName, wfName) {
   try {
     const __dir = genomeDir()
-    await agent(
+    await agentRetry(() => agent(
       'Append exactly one line to ' + __dir + '/genome.jsonl (create it if missing; use a shell append: printf %s\\n ... >> file). ' +
       'The line must be this JSON on ONE line: {"workflow":"' + wfName + '","phase":"' + phaseName + '","ts":"<UTC>","status":"entered"}. ' +
       'Produce <UTC> by running: date -u +%Y-%m-%dT%H:%M:%SZ . Do nothing else; modify no other file. Echo the exact line you appended.',
       { label: 'genome:' + phaseName, phase: phaseName }
-    )
+    ), { retries: 5 })
   } catch (__e) { /* observability must never break the workflow */ }
 }
 
@@ -134,6 +134,60 @@ function __unwrapArgs(rawArgs) {
 // eslint-disable-next-line no-global-assign
 args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // --- END inlined arg_guard ---
+
+// --- BEGIN inlined agent-retry scaffolding (from _meta/scaffolding/agent-retry.js) ---
+async function agentRetry(fn, opts) {
+  const retries = (opts && opts.retries != null) ? opts.retries : 5
+  let lastError = null
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const result = await fn()
+      if (result != null) return result
+      // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
+    } catch (e) {
+      lastError = e
+    }
+  }
+  if (lastError) throw lastError
+  // All attempts returned null (agent skipped mid-run OR a terminal subagent
+  // failure such as a sustained 429). FAIL-SAFE DEFAULT: throw an attributable
+  // error instead of returning null. A null return would later hit an unguarded
+  // deref (`diag.bottleneck_class`, `impl.code`, ...) and crash the run with a
+  // cryptic TypeError — issue #20. Throwing here makes the round abort cleanly
+  // with a recorded reason, and inside `parallel()` a throwing thunk simply
+  // resolves to a null slot that `.filter(Boolean)` drops (graceful). Callers
+  // that INTENTIONALLY degrade on a missing result opt out with `{ allowNull: true }`.
+  if (opts && opts.allowNull === true) return null
+  throw new Error(
+    `agentRetry: "${(opts && opts.label) || 'agent'}" returned null after ${retries + 1} attempt(s) ` +
+    `(agent skipped or terminal API failure after retries).`,
+  )
+}
+
+/**
+ * Null-guard a REQUIRED structured field. Throws a clear, attributable error
+ * (instead of a cryptic TypeError) when an agent returned null/malformed output,
+ * so the run fails loudly at the dereference rather than producing garbage.
+ */
+function expect(obj, field, ctx) {
+  if (obj == null || obj[field] == null) {
+    throw new Error(
+      `agentRetry: required field "${field}" is missing${ctx ? ' from ' + ctx : ''} ` +
+      `(agent returned null or a malformed result after retries).`,
+    )
+  }
+  return obj[field]
+}
+
+/**
+ * Null-guard an OPTIONAL structured field with a fallback (no throw).
+ * Use for deref points that have a sensible default (e.g. `[]`, `''`, `0`).
+ */
+function guard(obj, field, fallback) {
+  if (obj == null || obj[field] == null) return fallback
+  return obj[field]
+}
+// --- END inlined agent-retry scaffolding ---
 
 assertWorkflowSuitability()
 
@@ -683,7 +737,7 @@ for (const key of Object.keys(baseOverrides)) {
   overrideSets.push(`--set ${key}=${JSON.stringify(JSON.stringify(baseOverrides[key]))}`)
 }
 
-const initResult = await agent(
+const initResult = await agentRetry(() => agent(
   [
     'Initialize a WarpSpeed kernel-search run (config materialization + preflight). Work strictly via the Bash/Read tools.',
     '',
@@ -718,7 +772,7 @@ const initResult = await agent(
     genomeFooter('Init'),
   ].join('\n'),
   { phase: 'Init', label: 'init:materialize', schema: INIT_SCHEMA }
-)
+), { retries: 5 })
 
 const init = classifyResult(initResult)
 if (init.state !== 'grounded') {
@@ -794,7 +848,7 @@ function taskContract(expId) {
 // =============================================================================
 
 phase('Calibrate'); await __genomeReport('Calibrate', WORKFLOW_NAME)
-const calResult = await agent(
+const calResult = await agentRetry(() => agent(
   [
     'Cross-device noise calibration for WarpSpeed (skip if already done).',
     '',
@@ -809,7 +863,7 @@ const calResult = await agent(
     taskContract('calibrate'),
   ].join('\n'),
   { phase: 'Calibrate', label: 'calibrate', schema: CAL_SCHEMA }
-)
+), { retries: 5 })
 const cal = classifyResult(calResult)
 if (cal.state !== 'grounded') {
   return { ok: false, grounded: false, error: `calibration failed: ${JSON.stringify(cal)}` }
@@ -826,7 +880,7 @@ phase('Seed'); await __genomeReport('Seed', WORKFLOW_NAME)
 // and reuse PROFILING_DECISION across Seed/Profile (don't re-resolve per round).
 {
   const _genDir = genomeDir()
-  const _pd = await agent(
+  const _pd = await agentRetry(() => agent(
     `Classify the kernel under optimization (op_class one of attention|gemm|elementwise|reduction|default; size one of tiny|small|large) from this context: ` +
     `editable kernel paths=${KERNEL_PATHS.join(', ')}; bench shape="${BENCH_SHAPE}"; task="${OP_DESC || '(none)'}". ` +
     `Pick the closest op_class and size (fuzzy is fine; use default/small if unsure). Then ` +
@@ -834,7 +888,7 @@ phase('Seed'); await __genomeReport('Seed', WORKFLOW_NAME)
       `resolve --backend-manifest ${PROFILING_MANIFEST} --task <op_class> --size <size> --cache ${_genDir}/prof_cache.json --trajectory ${_genDir}/genome.jsonl`) +
     ` Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}. Do NOT assign confidence yourself; relay exactly what the script stamped.`,
     { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Seed', schema: JSON_PASSTHROUGH }
-  )
+  ), { retries: 5, allowNull: true })
   if (_pd && _pd.method) PROFILING_DECISION = _pd
   log(`Profiling-strategist: method=${PROFILING_DECISION.method} confidence=${PROFILING_DECISION.confidence}`)
 }
@@ -853,14 +907,14 @@ let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', r
 {
   const _genDir = genomeDir()
   const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
-  const _integ = await agent(
+  const _integ = await agentRetry(() => agent(
     `Read ${PRIMARY_KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
     `(use no when the file cannot compile as a single translation unit — e.g. a llama.cpp .cuh with project-only deps). Then ` +
     substrateInstruction('integration/integration_strategist.py',
       `resolve --kernel "${PRIMARY_KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' --cache ${_genDir}/integ_cache.json --trajectory ${_genDir}/genome.jsonl`) +
     ` Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
     { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Seed', schema: JSON_PASSTHROUGH }
-  )
+  ), { retries: 5, allowNull: true })
   if (_integ && _integ.method) INTEGRATION_DECISION = _integ
 }
 log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
@@ -872,8 +926,8 @@ const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGR
 // so every serial candidate restores to a pristine original and the exit net can too.
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${genomeDir()}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
-  await agent(`Byte-exact backup (once): run \`cp -a "${PRIMARY_KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
-    { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Seed', schema: JSON_PASSTHROUGH })
+  await agentRetry(() => agent(`Byte-exact backup (once): run \`cp -a "${PRIMARY_KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+    { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Seed', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 // Unconditional exit-restore net for embedded_inplace: each serial candidate restores
 // after itself, but this guarantees the project operator file is pristine on EVERY exit
@@ -881,8 +935,8 @@ if (ORIGINAL_BACKUP) {
 async function __exitRestore() {
   if (!ORIGINAL_BACKUP) return
   try {
-    await agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${P.project_dir}/${PRIMARY_KERNEL_PATH}"\` and confirm.`,
-      { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH })
+    await agentRetry(() => agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${P.project_dir}/${PRIMARY_KERNEL_PATH}"\` and confirm.`,
+      { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH }), { retries: 5 })
   } catch (e) { /* restore is best-effort on the way out */ }
 }
 // A-O1 closure: the strategist may pick native_profiler (ncu) but ncu is absent on
@@ -901,7 +955,7 @@ const PROFILING_GUARD =
   `If method !== 'native_profiler', do NOT run ncu/compute-sanitizer-based profiling; measure throughput instead and stamp emitted bottlenecks with evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. ` +
   `If method === 'native_profiler', proceed as written.`
 
-const seedResult = await agent(
+const seedResult = await agentRetry(() => agent(
   [
     'Seed the WarpSpeed baseline checkpoint (skip if already seeded).',
     '',
@@ -921,7 +975,7 @@ const seedResult = await agent(
     taskContract('seed'),
   ].join('\n'),
   { phase: 'Seed', label: 'seed:baseline', schema: SEED_SCHEMA }
-)
+), { retries: 5 })
 const seed = classifyResult(seedResult)
 if (seed.state !== 'grounded') {
   await __exitRestore()
@@ -1123,9 +1177,9 @@ async function finishExp(spec, status, extra, iterCount) {
     status,
     review_iterations: iterCount || 0,
   }, extra || {})
-  const r = await agent(finishPrompt(spec, payload), {
+  const r = await agentRetry(() => agent(finishPrompt(spec, payload), {
     phase: 'Record', label: `${spec.exp_id}:finish`, schema: FINISH_SCHEMA,
-  })
+  }), { retries: 5, allowNull: true })
   const c = classifyResult(r)
   if (c.state !== 'grounded') log(`WARN: exp-finish not grounded for ${spec.exp_id} (recover-orphans will reconcile next round)`)
   return c
@@ -1145,9 +1199,9 @@ async function runCandidate(spec, snap) {
   let iters = 0
   for (let iter = 1; iter <= MAX_REVIEW_ITERS; iter++) {
     iters = iter
-    const implRes = classifyResult(await agent(implementorPrompt(spec, iter, objections), {
+    const implRes = classifyResult(await agentRetry(() => agent(implementorPrompt(spec, iter, objections), {
       phase: 'Generate', label: `${spec.exp_id}:impl${iter}`, schema: IMPL_SCHEMA,
-    }))
+    }), { retries: 5 }))
     if (implRes.state !== 'grounded') {
       await finishExp(spec, 'gen_failed', { failure_reason: `implementor not grounded: ${implRes.missing || implRes.error || 'unknown'}` }, iter)
       return { spec, status: 'gen_failed' }
@@ -1165,9 +1219,9 @@ async function runCandidate(spec, snap) {
       await finishExp(spec, 'incorrect', { failure_reason: impl.failure_reason || 'correctness failed in implementor loop', commit_hash: impl.commit }, iter)
       return { spec, status: 'incorrect' }
     }
-    const revRes = classifyResult(await agent(reviewerPrompt(spec, impl, iter), {
+    const revRes = classifyResult(await agentRetry(() => agent(reviewerPrompt(spec, impl, iter), {
       phase: 'Generate', label: `${spec.exp_id}:review${iter}`, schema: REVIEW_SCHEMA,
-    }))
+    }), { retries: 5 }))
     if (revRes.state !== 'grounded') {
       await finishExp(spec, 'review_rejected', { failure_reason: `review runner not grounded: ${revRes.missing || revRes.error || 'unknown'}`, commit_hash: impl.commit }, iter)
       return { spec, status: 'review_rejected' }
@@ -1194,9 +1248,9 @@ async function runCandidate(spec, snap) {
   }
 
   // ---- screen ----
-  const screenRes = classifyResult(await agent(screenPrompt(spec, impl), {
+  const screenRes = classifyResult(await agentRetry(() => agent(screenPrompt(spec, impl), {
     phase: 'Screen', label: `${spec.exp_id}:screen`, schema: SCREEN_SCHEMA,
-  }))
+  }), { retries: 5 }))
   if (screenRes.state !== 'grounded') {
     await finishExp(spec, 'gen_failed', { failure_reason: `screen failed: ${screenRes.missing || screenRes.error}`, commit_hash: impl.commit }, iters)
     return { spec, status: 'gen_failed' }
@@ -1213,25 +1267,25 @@ async function runCandidate(spec, snap) {
   const newBestClaim = sig && (best == null || projectedLat == null || projectedLat < best)
   let confirm = null
   if (shouldConfirm(screen.rel_speedup_pct, newBestClaim, CFG.CONFIRM_MARGIN_PCT)) {
-    const confRes = classifyResult(await agent(confirmPrompt(spec), {
+    const confRes = classifyResult(await agentRetry(() => agent(confirmPrompt(spec), {
       phase: 'Confirm', label: `${spec.exp_id}:confirm`, schema: CONFIRM_SCHEMA,
-    }))
+    }), { retries: 5 }))
     if (confRes.state === 'grounded') confirm = confRes.value
     else log(`WARN: confirm not grounded for ${spec.exp_id}; falling back to screen numbers`)
   }
 
   // ---- profile + diagnose (every screened candidate, incl. correct_slower) ----
   let prof = { cand: {}, parent: {}, ncu_path: null }
-  const profRes = classifyResult(await agent(profilePrompt(spec), {
+  const profRes = classifyResult(await agentRetry(() => agent(profilePrompt(spec), {
     phase: 'Profile', label: `${spec.exp_id}:ncu`, schema: PROFILE_SCHEMA,
-  }))
+  }), { retries: 5 }))
   if (profRes.state === 'grounded') prof = profRes.value
   else log(`WARN: profile not grounded for ${spec.exp_id}`)
 
   let analyst = null
-  const anaRes = classifyResult(await agent(analystPrompt(spec, screen, prof, impl, sig), {
+  const anaRes = classifyResult(await agentRetry(() => agent(analystPrompt(spec, screen, prof, impl, sig), {
     phase: 'Profile', label: `${spec.exp_id}:analyst`, schema: ANALYST_SCHEMA,
-  }))
+  }), { retries: 5 }))
   if (anaRes.state === 'grounded') analyst = anaRes.value
 
   // ---- status + record ----
@@ -1294,9 +1348,9 @@ async function runCandidateEmbedded(spec, snap) {
   let iters = 0
   for (let iter = 1; iter <= MAX_REVIEW_ITERS; iter++) {
     iters = iter
-    const implRes = classifyResult(await agent(implementorPrompt(spec, iter, objections), {
+    const implRes = classifyResult(await agentRetry(() => agent(implementorPrompt(spec, iter, objections), {
       phase: 'Generate', label: `${spec.exp_id}:impl${iter}`, schema: IMPL_SCHEMA,
-    }))
+    }), { retries: 5 }))
     if (implRes.state !== 'grounded') {
       await finishExp(spec, 'gen_failed', { failure_reason: `implementor not grounded: ${implRes.missing || implRes.error || 'unknown'}` }, iter)
       return { spec, status: 'gen_failed' }
@@ -1314,9 +1368,9 @@ async function runCandidateEmbedded(spec, snap) {
       await finishExp(spec, 'incorrect', { failure_reason: impl.failure_reason || 'correctness failed in implementor loop', commit_hash: impl.commit }, iter)
       return { spec, status: 'incorrect' }
     }
-    const revRes = classifyResult(await agent(reviewerPrompt(spec, impl, iter), {
+    const revRes = classifyResult(await agentRetry(() => agent(reviewerPrompt(spec, impl, iter), {
       phase: 'Generate', label: `${spec.exp_id}:review${iter}`, schema: REVIEW_SCHEMA,
-    }))
+    }), { retries: 5 }))
     if (revRes.state !== 'grounded') {
       await finishExp(spec, 'review_rejected', { failure_reason: `review runner not grounded: ${revRes.missing || revRes.error || 'unknown'}`, commit_hash: impl.commit }, iter)
       return { spec, status: 'review_rejected' }
@@ -1346,7 +1400,7 @@ async function runCandidateEmbedded(spec, snap) {
   const liveFile = `${P.project_dir}/${PRIMARY_KERNEL_PATH}`
   let embLatency = null, embMetrics = {}, embBclass = 'unknown', embCorrect = false
   if (INTEGRATION_DECISION.method === 'embedded_inplace' && ORIGINAL_BACKUP) {
-    const embResult = await agent(
+    const embResult = await agentRetry(() => agent(
       [
         `EMBEDDED-INPLACE EVAL (serial). Candidate: ${candFile} | project operator file: ${liveFile} | pristine backup: ${ORIGINAL_BACKUP}`,
         'Run IN ORDER (this candidate mutates the shared project operator file; ALWAYS restore at the end):',
@@ -1360,7 +1414,7 @@ async function runCandidateEmbedded(spec, snap) {
         `Parse latency_us + heuristic_bclass (memory_bound|compute_bound|latency_bound). Return {latency_us, heuristic_bclass, compiled, correct, metrics:{latency_us}}.`,
         taskContract(spec.exp_id),
       ].join('\n'),
-      { model: MODEL.profile, label: `${spec.exp_id}:embedded-inplace`, phase: 'Confirm', schema: JSON_PASSTHROUGH })
+      { model: MODEL.profile, label: `${spec.exp_id}:embedded-inplace`, phase: 'Confirm', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
     embLatency = embResult && embResult.latency_us != null ? Number(embResult.latency_us) : null
     embBclass = (embResult && embResult.heuristic_bclass) || 'unknown'
     embMetrics = (embResult && embResult.metrics) || { latency_us: embLatency }
@@ -1371,7 +1425,7 @@ async function runCandidateEmbedded(spec, snap) {
       ? __embeddedEvalPlan({ adapter: `python3 "${REGISTER_SCRIPT}"`, variant, source: candFile, projectRoot: PROJECT_ROOT, buildCmd: BUILD_CMD, testCmd: `${C.correctness} ${P.project_dir}/${BINARY_PATH}`, benchmarkCmd: `${C.confirm} ${P.project_dir}/${BINARY_PATH} --shape ${BENCH_SHAPE}` })
       : null
     if (_plan) {
-      const embResult = await agent(
+      const embResult = await agentRetry(() => agent(
         [
           'EMBEDDED-DISPATCH EVAL (serial). Run IN ORDER:',
           `1. Register: ${_plan.register}`,
@@ -1384,7 +1438,7 @@ async function runCandidateEmbedded(spec, snap) {
           `Parse latency_us + heuristic_bclass. Return {latency_us, heuristic_bclass, compiled, correct, metrics:{latency_us}}.`,
           taskContract(spec.exp_id),
         ].join('\n'),
-        { model: MODEL.profile, label: `${spec.exp_id}:embedded-dispatch`, phase: 'Confirm', schema: JSON_PASSTHROUGH })
+        { model: MODEL.profile, label: `${spec.exp_id}:embedded-dispatch`, phase: 'Confirm', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
       embLatency = embResult && embResult.latency_us != null ? Number(embResult.latency_us) : null
       embBclass = (embResult && embResult.heuristic_bclass) || 'unknown'
       embMetrics = (embResult && embResult.metrics) || { latency_us: embLatency }
@@ -1677,9 +1731,9 @@ let lastSnap = null
 for (let r = 1; r <= ITERATIONS; r++) {
   // ---- Plan ----
   phase('Plan'); await __genomeReport('Plan', WORKFLOW_NAME)
-  const snapRes = classifyResult(await agent(snapshotPrompt(null), {
+  const snapRes = classifyResult(await agentRetry(() => agent(snapshotPrompt(null), {
     phase: 'Plan', label: `r${r}:snapshot`, schema: SNAP_SCHEMA,
-  }))
+  }), { retries: 5 }))
   if (snapRes.state !== 'grounded') {
     stop = `snapshot failed: ${snapRes.missing || snapRes.error}`
     break
@@ -1701,9 +1755,9 @@ for (let r = 1; r <= ITERATIONS; r++) {
     let planned = []
     if (fresh > 0) {
       const quotas = allocationQuotas(fresh, CFG.ALLOCATION, snap.budget.quartile)
-      const planRes = classifyResult(await agent(plannerPrompt(snap, quotas, fresh), {
+      const planRes = classifyResult(await agentRetry(() => agent(plannerPrompt(snap, quotas, fresh), {
         phase: 'Plan', label: `r${round}:plan`, schema: PLAN_SCHEMA,
-      }))
+      }), { retries: 5 }))
       if (planRes.state !== 'grounded') { stop = 'planner failed'; break }
       planned = (planRes.value.specs || []).slice(0, fresh)
     }
@@ -1718,13 +1772,13 @@ for (let r = 1; r <= ITERATIONS; r++) {
   if (!specs.length) { stop = 'planner produced no specs'; break }
   log(`Round ${round}: ${specs.length} specs - ${specs.map(s => `${s.exp_id}[${s.type}:${(s.direction_tags || []).join('+') || '?'}]`).join(' ')}`)
 
-  const regRes = classifyResult(await agent(registerPrompt(specs.map(s => ({
+  const regRes = classifyResult(await agentRetry(() => agent(registerPrompt(specs.map(s => ({
     exp_id: s.exp_id, round, type: s.type, parent_commit: s.parent_commit,
     hypothesis: s.hypothesis, direction_tags: s.direction_tags,
     predicted_gain_pct: s.predicted_gain_pct, predicted_mechanism: s.predicted_mechanism,
     worktree_path: `${P.worktrees}/${s.exp_id}`, branch: s.branch, slug: s.slug,
     queued_id: s.queued_id || null,
-  })), round), { phase: 'Plan', label: `r${round}:register`, schema: REG_SCHEMA }))
+  })), round), { phase: 'Plan', label: `r${round}:register`, schema: REG_SCHEMA }), { retries: 5 }))
   if (regRes.state !== 'grounded') { stop = 'register failed'; break }
   const registeredIds = new Set((regRes.value.registered || []).map(x => x.exp_id))
   const runnable = specs.filter(s => registeredIds.has(s.exp_id))
@@ -1759,9 +1813,9 @@ for (let r = 1; r <= ITERATIONS; r++) {
     (snap.calibration || {}).cross_device_sigma_pct || 0,
     ...results.map(x => x.noise || 0)
   )
-  const ckptRes = classifyResult(await agent(checkpointsPrompt(results, round, roundNoise), {
+  const ckptRes = classifyResult(await agentRetry(() => agent(checkpointsPrompt(results, round, roundNoise), {
     phase: 'Record', label: `r${round}:checkpoints`, schema: CKPT_SCHEMA,
-  }))
+  }), { retries: 5 }))
   const rec = ckptRes.state === 'grounded' ? ckptRes.value : { merged: [], postmortem_due: [] }
   const mergedIds = new Set((rec.merged || []).map(m => m.exp_id))
 
@@ -1770,9 +1824,9 @@ for (let r = 1; r <= ITERATIONS; r++) {
     x.status !== 'gen_failed' // pure orchestration failures teach nothing durable
   )
   for (const chunk of chunkArray(lessonable, PARALLEL_AGENTS)) {
-    await parallel(chunk.map(x => () => agent(lessonPrompt(x.spec.exp_id), {
+    await parallel(chunk.map(x => () => agentRetry(() => agent(lessonPrompt(x.spec.exp_id), {
       phase: 'Record', label: `${x.spec.exp_id}:lesson`, schema: LESSON_SCHEMA,
-    })))
+    }), { retries: 5 })))
   }
 
   const roundSummary = {
@@ -1789,9 +1843,9 @@ for (let r = 1; r <= ITERATIONS; r++) {
   for (const ckCommit of due) {
     pmAttempted.add(ckCommit)
     log(`Post-mortem on blocked checkpoint ${ckCommit.slice(0, 10)}`)
-    const pmRes = classifyResult(await agent(postmortemPrompt(ckCommit), {
+    const pmRes = classifyResult(await agentRetry(() => agent(postmortemPrompt(ckCommit), {
       phase: 'Postmortem', label: `r${round}:pm:${ckCommit.slice(0, 8)}`, schema: PM_SCHEMA,
-    }))
+    }), { retries: 5 }))
     if (pmRes.state !== 'grounded') continue
     const pm = pmRes.value
     if (!pm.suspect_parent) { log('post-mortem returned no suspect_parent; skipping ablation'); continue }
@@ -1808,12 +1862,12 @@ for (let r = 1; r <= ITERATIONS; r++) {
       branch: `exp/r${round}/ablation-${slugify(pm.suspect_strategy)}`,
       round,
     }
-    const abReg = classifyResult(await agent(registerPrompt([{
+    const abReg = classifyResult(await agentRetry(() => agent(registerPrompt([{
       exp_id: abSpec.exp_id, round, type: 'ablation', parent_commit: abSpec.parent_commit,
       hypothesis: abSpec.hypothesis, direction_tags: abSpec.direction_tags,
       predicted_gain_pct: abSpec.predicted_gain_pct, predicted_mechanism: abSpec.predicted_mechanism,
       worktree_path: `${P.worktrees}/${abSpec.exp_id}`, branch: abSpec.branch, slug: abSpec.slug,
-    }], round), { phase: 'Postmortem', label: `r${round}:ablation:register`, schema: REG_SCHEMA }))
+    }], round), { phase: 'Postmortem', label: `r${round}:ablation:register`, schema: REG_SCHEMA }), { retries: 5 }))
     if (abReg.state !== 'grounded') continue
     const ab = await runCandidate(abSpec, snap)
 
@@ -1828,14 +1882,14 @@ for (let r = 1; r <= ITERATIONS; r++) {
     )
     log(`Ablation ${ab.spec.exp_id}: status=${ab.status} lat=${fmt(abLat)}us vs best=${fmt(best)}us -> blame ${confirmed ? 'CONFIRMED (rewinding)' : 'refuted (subtree kept)'}`)
     if (confirmed) {
-      await agent(rewindPrompt(pm, ab, round), {
+      await agentRetry(() => agent(rewindPrompt(pm, ab, round), {
         phase: 'Postmortem', label: `r${round}:rewind`, schema: REWIND_SCHEMA,
-      })
+      }), { retries: 5 })
       roundSummary.rewound = pm.suspect_checkpoint
     } else {
-      await agent(refutePrompt(pm, ab, round), {
+      await agentRetry(() => agent(refutePrompt(pm, ab, round), {
         phase: 'Postmortem', label: `r${round}:pm-refuted`, schema: LESSON_SCHEMA,
-      })
+      }), { retries: 5 })
     }
   }
 
@@ -1843,21 +1897,21 @@ for (let r = 1; r <= ITERATIONS; r++) {
   phase('Maintain'); await __genomeReport('Maintain', WORKFLOW_NAME)
   const doneIds = results.map(x => x.spec.exp_id)
   if (doneIds.length) {
-    await agent(cleanupPrompt(doneIds, round), {
+    await agentRetry(() => agent(cleanupPrompt(doneIds, round), {
       phase: 'Maintain', label: `r${round}:cleanup`, schema: CLEAN_SCHEMA,
-    })
+    }), { retries: 5 })
   }
   if (CFG.COMPACT_EVERY && round % CFG.COMPACT_EVERY === 0) {
-    await agent(compactPrompt(round), {
+    await agentRetry(() => agent(compactPrompt(round), {
       phase: 'Maintain', label: `r${round}:compact`, schema: COMPACT_SCHEMA,
-    })
+    }), { retries: 5 })
   }
   const nowTokens = tokensUsed()
   if (nowTokens != null && lastTokens != null && nowTokens > lastTokens) {
-    await agent(
+    await agentRetry(() => agent(
       `Record token usage: run ${C.wsdb} budget-add --json '{"tokens_used": ${nowTokens - lastTokens}}' and return written=true.\n\n${taskContract('maintain')}`,
       { phase: 'Maintain', label: `r${round}:tokens`, schema: FINISH_SCHEMA }
-    )
+    ), { retries: 5 })
   }
   if (nowTokens != null) lastTokens = nowTokens
 
@@ -1874,7 +1928,7 @@ if (!stop) stop = 'iteration_limit_reached'
 // =============================================================================
 
 phase('Report'); await __genomeReport('Report', WORKFLOW_NAME)
-const reportRes = classifyResult(await agent(
+const reportRes = classifyResult(await agentRetry(() => agent(
   [
     'Produce the final WarpSpeed report.',
     '',
@@ -1887,7 +1941,7 @@ const reportRes = classifyResult(await agent(
     genomeFooter('Report', 'note="final summary"'),
   ].filter(Boolean).join('\n'),
   { phase: 'Report', label: 'report', schema: REPORT_SCHEMA }
-))
+), { retries: 5 }))
 const rep = reportRes.state === 'grounded' ? reportRes.value : {}
 
 const baselineLat = rep.baseline_latency_us != null ? rep.baseline_latency_us : (seed.value.latency_us || null)
