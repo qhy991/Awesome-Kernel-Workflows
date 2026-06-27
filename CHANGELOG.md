@@ -25,6 +25,21 @@ for the versioning policy.
   run. KDA also gains a turn-boundary directive in its Implement prompt; the new
   AscendC workflow bakes in turn-boundary + per-file Bash write + NO HARNESS
   MANIPULATION.
+- **`agentRetry` fail-safe default + null-safety enforcement** (#20, P1). The
+  inlined `agentRetry` now THROWS an attributable error after exhausting retries
+  on a null-returning agent, instead of returning null — so a transient 429 /
+  terminal failure aborts the round cleanly with a recorded reason rather than
+  crashing later at an unguarded dereference (`diag.bottleneck_class`,
+  `impl.code`, …). Callers that intentionally degrade opt out with
+  `{ allowNull: true }` (migrated at ~238 optional-probe sites via a new codemod
+  `--allow-null` mode; results consumed inside `parallel()` need no opt-out —
+  `parallel()` resolves a thrown thunk to a null slot). A new `--refresh` mode
+  propagates canonical-helper edits to the 31 inlined copies idempotently.
+  Enforcement: coded linter `scripts/check-agent-retry-guards.js` + `node:test`
+  wrappers (`_meta/tools/test/agent-retry-*.test.js`) fail on a bare `agent()` or
+  an unguarded `allowNull` dereference; `_tools/generate-workflow.js` Phase-4 /
+  Validate now emit and check the scaffolding so generated workflows are born
+  safe; `_meta/templates/` + `_templates/` skeletons retrofitted.
 - **Ascend routing on the backend-agnostic universal workflows** (#16). `Generalist`
   and `KDA` (both `method_supported_backends: any`, `portability: clean`) now
   declare `ascendc`/`ascend` and route Ascend through the substrate ascend backend

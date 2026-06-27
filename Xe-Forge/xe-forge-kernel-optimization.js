@@ -98,7 +98,19 @@ async function agentRetry(fn, opts) {
     }
   }
   if (lastError) throw lastError
-  return null
+  // All attempts returned null (agent skipped mid-run OR a terminal subagent
+  // failure such as a sustained 429). FAIL-SAFE DEFAULT: throw an attributable
+  // error instead of returning null. A null return would later hit an unguarded
+  // deref (`diag.bottleneck_class`, `impl.code`, ...) and crash the run with a
+  // cryptic TypeError — issue #20. Throwing here makes the round abort cleanly
+  // with a recorded reason, and inside `parallel()` a throwing thunk simply
+  // resolves to a null slot that `.filter(Boolean)` drops (graceful). Callers
+  // that INTENTIONALLY degrade on a missing result opt out with `{ allowNull: true }`.
+  if (opts && opts.allowNull === true) return null
+  throw new Error(
+    `agentRetry: "${(opts && opts.label) || 'agent'}" returned null after ${retries + 1} attempt(s) ` +
+    `(agent skipped or terminal API failure after retries).`,
+  )
 }
 
 /**
@@ -261,7 +273,7 @@ Then append:
         required: ['xpu_available', 'kernel_spec', 'target_backend'],
       },
     }
-  ), { retries: 5 });
+  ), { retries: 5, allowNull: true });
 
   if (!setupResult || !setupResult.xpu_available) {
     log('Intel XPU not available or setup failed');
@@ -289,7 +301,7 @@ Then append:
       substrateInstruction('profiling/profiling_strategist.py',
         `resolve --backend-manifest ${BACKEND_MANIFEST} --task <op_class> --size <size> --cache ${EXPDIR}/prof_cache.json --trajectory ${EXPDIR}/genome.jsonl`) +
       ` Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
-      { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
+      { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
     if (_pd && _pd.method) PROFILING_DECISION = _pd
   }
   log(`Profiling method: ${PROFILING_DECISION.method} (confidence=${PROFILING_DECISION.confidence})`)
@@ -362,7 +374,7 @@ Then append:
         required: ['backend', 'kernel_code', 'initial_strategy'],
       },
     }
-  ), { retries: 5 });
+  ), { retries: 5, allowNull: true });
 
   if (!initialResult) {
     log('Failed to generate initial implementation');
@@ -451,7 +463,7 @@ Then append, using the values you just measured:
           required: ['cycle', 'gflops', 'bottleneck_type', 'optimization_opportunities'],
         },
       }
-    ), { retries: 5 });
+    ), { retries: 5, allowNull: true });
 
     if (!analysisResult) {
       log('Analysis failed, stopping CoVeR cycles');
@@ -553,7 +565,7 @@ Then append:
           required: ['cycle', 'strategies', 'rationale'],
         },
       }
-    ), { retries: 5 });
+    ), { retries: 5, allowNull: true });
 
     if (!planResult || planResult.strategies.length === 0) {
       log('Planning failed, stopping CoVeR cycles');
@@ -621,7 +633,7 @@ Then append:
           required: ['cycle', 'optimized_kernel_code', 'changes_applied'],
         },
       }
-    ), { retries: 5 });
+    ), { retries: 5, allowNull: true });
 
     if (!optimizeResult) {
       log('Optimization failed, stopping CoVeR cycles');
@@ -697,7 +709,7 @@ Then append, using the values you just measured (status="done" if correctness pa
           required: ['cycle', 'correctness_passed', 'performance_gflops', 'verification_passed'],
         },
       }
-    ), { retries: 5 });
+    ), { retries: 5, allowNull: true });
 
     if (!verifyResult) {
       log('Verification failed, stopping CoVeR cycles');
@@ -763,7 +775,7 @@ Return JSON:
             required: ['continue', 'reason'],
           },
         }
-      ), { retries: 5 });
+      ), { retries: 5, allowNull: true });
 
       if (refineDecision && !refineDecision.continue) {
         log(`Early termination: ${refineDecision.reason}`);
@@ -832,7 +844,7 @@ Then append, using the final results (speedup is best_gflops over baseline_gflop
         required: ['summary', 'cycles_completed', 'best_gflops'],
       },
     }
-  ), { retries: 5 });
+  ), { retries: 5, allowNull: true });
 
   // ============================================================================
   // Return final results

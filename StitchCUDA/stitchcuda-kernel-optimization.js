@@ -129,7 +129,19 @@ async function agentRetry(fn, opts) {
     }
   }
   if (lastError) throw lastError
-  return null
+  // All attempts returned null (agent skipped mid-run OR a terminal subagent
+  // failure such as a sustained 429). FAIL-SAFE DEFAULT: throw an attributable
+  // error instead of returning null. A null return would later hit an unguarded
+  // deref (`diag.bottleneck_class`, `impl.code`, ...) and crash the run with a
+  // cryptic TypeError — issue #20. Throwing here makes the round abort cleanly
+  // with a recorded reason, and inside `parallel()` a throwing thunk simply
+  // resolves to a null slot that `.filter(Boolean)` drops (graceful). Callers
+  // that INTENTIONALLY degrade on a missing result opt out with `{ allowNull: true }`.
+  if (opts && opts.allowNull === true) return null
+  throw new Error(
+    `agentRetry: "${(opts && opts.label) || 'agent'}" returned null after ${retries + 1} attempt(s) ` +
+    `(agent skipped or terminal API failure after retries).`,
+  )
 }
 
 /**
@@ -338,7 +350,7 @@ async function main() {
       `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
       `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
       { model: MODEL.mechanical, label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH }
-    ), { retries: 5 });
+    ), { retries: 5, allowNull: true });
     if (!DRIVER || DRIVER.present === false) {
       throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`);
     }
@@ -368,7 +380,7 @@ async function main() {
       `--kernel "${KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
       `--cache ${EXPDIR}/integ_cache.json --trajectory ${EXPDIR}/genome.jsonl\`. ` +
       `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
-      { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
+      { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
     if (_integ && _integ.method) INTEGRATION_DECISION = _integ
   }
   log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
@@ -468,7 +480,7 @@ Then append:
         required: ['cuda_version', 'target_architecture', 'kernel_spec'],
       },
     }
-  ), { retries: 5 });
+  ), { retries: 5, allowNull: true });
 
   if (!setupResult) {
     log('Setup failed');
@@ -567,7 +579,7 @@ Then append:
             required: ['diagnosis', 'alternative_approach', 'new_plan_summary'],
           },
         }
-      ), { retries: 5 });
+      ), { retries: 5, allowNull: true });
 
       if (replanResult) {
         log(`Replanning: ${replanResult.alternative_approach}`);
@@ -669,7 +681,7 @@ Then append:
           required: ['attempt', 'plan_summary', 'key_strategies', 'implementation_steps'],
         },
       }
-    ), { retries: 5 });
+    ), { retries: 5, allowNull: true });
 
     if (!planResult) {
       log('Planning failed, skipping this attempt');
@@ -730,7 +742,7 @@ Then append:
           required: ['attempt', 'kernel_code', 'kernel_name'],
         },
       }
-    ), { retries: 5 });
+    ), { retries: 5, allowNull: true });
 
     if (!codeResult) {
       log('Code generation failed, skipping this attempt');
@@ -757,14 +769,14 @@ Then append:
       const runOut = await agentRetry(() => agent(
         `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
         `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
-        { model: MODEL.profile, label: `driver-run-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5 });
+        { model: MODEL.profile, label: `driver-run-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true });
       // profiling-strategist gate: classify this attempt's kernel (op_class+size),
       // resolve the method via the shared strategist (cached), then branch.
       const _pd = await agentRetry(() => agent(
         `Read ${kPath}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then run exactly: ` +
         `\`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${driverPath('manifest.json')} --task <op_class> --size <size> --cache ${EXPDIR}/prof_cache.json --trajectory ${EXPDIR}/genome.jsonl\`.\n` +
         `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
-        { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5 });
+        { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true });
       if (_pd && _pd.method) PROFILING_DECISION = _pd
       let evidenceOut = null;
       if (PROFILING_DECISION.method === 'native_profiler') {
@@ -775,7 +787,7 @@ Then append:
         evidenceOut = await agentRetry(() => agent(
           `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
           `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-          { model: MODEL.mechanical, label: `driver-to-evidence-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5 });
+          { model: MODEL.mechanical, label: `driver-to-evidence-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true });
       } else {
         // Else path: rely on the existing run.sh/latency result; when method==='perf_heuristic',
         // normalize throughput via the strategist normalizer (substrate profiling/<normalizer>),
@@ -790,13 +802,13 @@ Then append:
             `Also write heuristic_bclass (memory_bound|compute_bound|latency_bound) based on the throughput ratio so diagnose.py does not fall to unknown. ` +
             `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, heuristic_bclass, coverage, source_backend}. ` +
             `Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'.`,
-            { model: MODEL.mechanical, label: `driver-perf-heuristic-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5 });
+            { model: MODEL.mechanical, label: `driver-perf-heuristic-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true });
         }
       }
       const diagOut = await agentRetry(() => agent(
         `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
         `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
-        { model: MODEL.mechanical, label: `driver-diagnose-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5 });
+        { model: MODEL.mechanical, label: `driver-diagnose-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true });
       const antiCheatOut = await agentRetry(() => agent(
         `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath}\`.\n` +
         `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
@@ -825,7 +837,7 @@ Then append:
           `2. Apply candidate: cp ${kPath} ${KERNEL_PATH}\n3. Build: ${BUILD_CMD}\n4. Test: ${TEST_CMD}\n5. Benchmark: ${BENCH_CMD || TEST_CMD}\n` +
           `6. ALWAYS restore: cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}\n` +
           `Parse latency_ms + heuristic_bclass (memory/compute/latency bound). Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
-          { model: MODEL.mechanical, label: `embedded-inplace-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5 });
+          { model: MODEL.mechanical, label: `embedded-inplace-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true });
         embLatency = Number(embResult?.latency_ms || 0);
         embBclass = embResult?.heuristic_bclass || 'unknown';
         embMetrics = embResult?.metrics || { latency_ms: embLatency };
@@ -837,7 +849,7 @@ Then append:
           const embResult = await agentRetry(() => agent(
             `EMBEDDED-DISPATCH EVAL (serial). Run IN ORDER:\n1. Register: ${_plan.register}\n2. Build: ${_plan.build}\n3. Test: ${_plan.test}\n4. Benchmark: ${_plan.benchmark}\n5. Unregister: ${_plan.unregister}\n${_plan.cleanupInvariant}\n` +
             `Parse latency_ms + heuristic_bclass. Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
-            { model: MODEL.mechanical, label: `embedded-dispatch-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5 });
+            { model: MODEL.mechanical, label: `embedded-dispatch-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true });
           embLatency = Number(embResult?.latency_ms || 0);
           embBclass = embResult?.heuristic_bclass || 'unknown';
           embMetrics = embResult?.metrics || { latency_ms: embLatency };
@@ -926,7 +938,7 @@ Then append, using the values you just measured (status="done" if verification_p
           required: ['attempt', 'compilation_success', 'correctness_passed', 'verification_passed'],
         },
       }
-    ), { retries: 5 });
+    ), { retries: 5, allowNull: true });
 
     if (!verifyResult) {
       log('Verification failed to run');
@@ -1044,7 +1056,7 @@ Then append:
         required: ['summary', 'best_gflops'],
       },
     }
-  ), { retries: 5 });
+  ), { retries: 5, allowNull: true });
 
   // ============================================================================
   // Return final results

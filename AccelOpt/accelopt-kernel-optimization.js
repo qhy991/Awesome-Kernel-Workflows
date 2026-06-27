@@ -120,7 +120,19 @@ async function agentRetry(fn, opts) {
     }
   }
   if (lastError) throw lastError
-  return null
+  // All attempts returned null (agent skipped mid-run OR a terminal subagent
+  // failure such as a sustained 429). FAIL-SAFE DEFAULT: throw an attributable
+  // error instead of returning null. A null return would later hit an unguarded
+  // deref (`diag.bottleneck_class`, `impl.code`, ...) and crash the run with a
+  // cryptic TypeError — issue #20. Throwing here makes the round abort cleanly
+  // with a recorded reason, and inside `parallel()` a throwing thunk simply
+  // resolves to a null slot that `.filter(Boolean)` drops (graceful). Callers
+  // that INTENTIONALLY degrade on a missing result opt out with `{ allowNull: true }`.
+  if (opts && opts.allowNull === true) return null
+  throw new Error(
+    `agentRetry: "${(opts && opts.label) || 'agent'}" returned null after ${retries + 1} attempt(s) ` +
+    `(agent skipped or terminal API failure after retries).`,
+  )
 }
 
 /**
@@ -860,7 +872,7 @@ if (USE_DRIVER) {
     substrateInstruction('profiling/profiling_strategist.py',
       `resolve --backend-manifest ${DRIVER_DIR}/manifest${DRIVER_EXT} --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
     ` Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
-    { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
+    { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   if (_pd && _pd.method) PROFILING_DECISION = _pd
 }
 
@@ -879,7 +891,7 @@ let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', r
     `--kernel "${KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
     `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
     `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
-    { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
+    { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   if (_integ && _integ.method) INTEGRATION_DECISION = _integ
 }
 log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
@@ -957,7 +969,7 @@ if (USE_DRIVER_STANDALONE) {
     `Parse latency_ms + heuristic_bclass (memory_bound|compute_bound|latency_bound) from the throughput so diagnose.py does not fall to unknown. ` +
     `Tag bottleneck evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. ` +
     `Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
-    { model: MODEL.profile, label: 'embedded-baseline', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
+    { model: MODEL.profile, label: 'embedded-baseline', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   bottleneckClass = embBaseline?.heuristic_bclass || 'unknown'
   const embMetrics = embBaseline?.metrics || { latency_ms: Number(embBaseline?.latency_ms || 0) }
   ncuSetup = {
@@ -1350,7 +1362,7 @@ Then append (iteration ${iter}, variant ${variant.id}; status="done" if correct 
           `2. Apply candidate: cp ${kPath} ${KERNEL_PATH}\n3. Build: ${BUILD_CMD}\n4. Test: ${TEST_CMD}\n5. Benchmark: ${PROJECT_BENCH_CMD || TEST_CMD}\n` +
           `6. ALWAYS restore: cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}\n` +
           `Parse latency_ms + heuristic_bclass (memory/compute/latency bound). Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
-          { model: MODEL.mechanical, label: `embedded-inplace-${variant.id}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
+          { model: MODEL.mechanical, label: `embedded-inplace-${variant.id}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
       } else if (INTEGRATION_DECISION.method === 'embedded_dispatch' && REGISTER_SCRIPT && PROJECT_ROOT) {
         const _plan = typeof __embeddedEvalPlan === 'function'
           ? __embeddedEvalPlan({ adapter: `python3 "${REGISTER_SCRIPT}"`, variant: variantTag, source: kPath, projectRoot: PROJECT_ROOT, buildCmd: BUILD_CMD, testCmd: TEST_CMD, benchmarkCmd: PROJECT_BENCH_CMD || TEST_CMD })
@@ -1359,7 +1371,7 @@ Then append (iteration ${iter}, variant ${variant.id}; status="done" if correct 
           embResult = await agentRetry(() => agent(
             `EMBEDDED-DISPATCH EVAL (serial). Run IN ORDER:\n1. Register: ${_plan.register}\n2. Build: ${_plan.build}\n3. Test: ${_plan.test}\n4. Benchmark: ${_plan.benchmark}\n5. Unregister: ${_plan.unregister}\n${_plan.cleanupInvariant}\n` +
             `Parse latency_ms + heuristic_bclass. Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
-            { model: MODEL.mechanical, label: `embedded-dispatch-${variant.id}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
+            { model: MODEL.mechanical, label: `embedded-dispatch-${variant.id}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
         }
       }
       if (embResult) {

@@ -78,7 +78,19 @@ async function agentRetry(fn, opts) {
     }
   }
   if (lastError) throw lastError
-  return null
+  // All attempts returned null (agent skipped mid-run OR a terminal subagent
+  // failure such as a sustained 429). FAIL-SAFE DEFAULT: throw an attributable
+  // error instead of returning null. A null return would later hit an unguarded
+  // deref (`diag.bottleneck_class`, `impl.code`, ...) and crash the run with a
+  // cryptic TypeError — issue #20. Throwing here makes the round abort cleanly
+  // with a recorded reason, and inside `parallel()` a throwing thunk simply
+  // resolves to a null slot that `.filter(Boolean)` drops (graceful). Callers
+  // that INTENTIONALLY degrade on a missing result opt out with `{ allowNull: true }`.
+  if (opts && opts.allowNull === true) return null
+  throw new Error(
+    `agentRetry: "${(opts && opts.label) || 'agent'}" returned null after ${retries + 1} attempt(s) ` +
+    `(agent skipped or terminal API failure after retries).`,
+  )
 }
 
 /**
@@ -561,7 +573,7 @@ Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, 
   label: 'profiling-strategist',
   phase: 'NCU Profile',
   schema: JSON_PASSTHROUGH,
-}), { retries: 5 })
+}), { retries: 5, allowNull: true })
 if (_pd && _pd.method) PROFILING_DECISION = _pd
 log(`Profiling-strategist: method=${PROFILING_DECISION.method} confidence=${PROFILING_DECISION.confidence}`)
 
@@ -583,7 +595,7 @@ let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', r
     `--kernel "${EMBEDDED_OP_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
     `--cache ${OUTPUT_DIR}/integ_cache.json --trajectory ${OUTPUT_DIR}/genome.jsonl\`. ` +
     `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
-    { model: MODEL.mechanical, label: 'integration-strategist', phase: 'NCU Profile', schema: JSON_PASSTHROUGH }), { retries: 5 })
+    { model: MODEL.mechanical, label: 'integration-strategist', phase: 'NCU Profile', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   if (_integ && _integ.method) INTEGRATION_DECISION = _integ
 }
 log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
@@ -829,7 +841,7 @@ Then append, using the values you just measured (this is tuning iteration ${iter
         `6. ALWAYS restore: cp -a ${ORIGINAL_BACKUP} ${EMBEDDED_OP_PATH}\n` +
         `Profiling-strategist method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'): use perf_heuristic throughput (no ncu). ` +
         `Parse latency_ms + heuristic_bclass (memory_bound|compute_bound|latency_bound). Return {latency_ms, heuristic_bclass, compiled, correct, avg_speedup, all_passed}.`,
-        { model: MODEL.profile, label: `embedded-inplace-${iter}`, phase: 'Tune', schema: JSON_PASSTHROUGH }), { retries: 5 })
+        { model: MODEL.profile, label: `embedded-inplace-${iter}`, phase: 'Tune', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
       embLatency = Number(embResult?.latency_ms || 0)
       embBclass = embResult?.heuristic_bclass || 'unknown'
       if (typeof embResult?.avg_speedup === 'number') tuneResult.avg_speedup = embResult.avg_speedup
@@ -844,7 +856,7 @@ Then append, using the values you just measured (this is tuning iteration ${iter
           `EMBEDDED-DISPATCH EVAL (serial). Run IN ORDER:\n1. Register: ${_plan.register}\n2. Build: ${_plan.build}\n3. Test: ${_plan.test}\n4. Benchmark: ${_plan.benchmark}\n5. Unregister: ${_plan.unregister}\n${_plan.cleanupInvariant}\n` +
           `Profiling-strategist method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'): use perf_heuristic throughput (no ncu). ` +
           `Parse latency_ms + heuristic_bclass. Return {latency_ms, heuristic_bclass, compiled, correct, avg_speedup, all_passed}.`,
-          { model: MODEL.profile, label: `embedded-dispatch-${iter}`, phase: 'Tune', schema: JSON_PASSTHROUGH }), { retries: 5 })
+          { model: MODEL.profile, label: `embedded-dispatch-${iter}`, phase: 'Tune', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
         embLatency = Number(embResult?.latency_ms || 0)
         embBclass = embResult?.heuristic_bclass || 'unknown'
         if (typeof embResult?.avg_speedup === 'number') tuneResult.avg_speedup = embResult.avg_speedup

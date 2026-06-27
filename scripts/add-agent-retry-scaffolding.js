@@ -18,6 +18,13 @@
 //
 // Idempotent: re-running leaves already-wrapped files unchanged.
 //
+// `--refresh` mode: instead of wrapping calls, REPLACE the existing inlined
+// helper block (text between the BEGIN/END agent-retry sentinels) with the
+// CURRENT canonical version from _meta/scaffolding/agent-retry.js. Use this after
+// editing the canonical helper to propagate the change to every workflow that
+// already inlined an older copy. Files lacking the sentinels (hand-edited or
+// never injected by this codemod) are skipped with a warning — never corrupted.
+//
 // Validation is the caller's job: run `node --check` on every output file and the
 // fidelity check. This script prints per-file wrap counts and exits non-zero if a
 // file's transform looked malformed (unbalanced parens after wrap).
@@ -221,6 +228,129 @@ function transformFile(file, helperBlock) {
   return { injected: !beforeHas, wrapped: sites.length }
 }
 
+// Splice the inlined helper block: replace the text from the BEGIN sentinel
+// through the END sentinel (inclusive) with the current canonical helperBlock.
+// Returns { out, refreshed }. refreshed=false (out unchanged) when the file has
+// no sentinel-bounded block — caller should skip+warn rather than corrupt a
+// hand-edited region.
+const BEGIN_SENTINEL = '// --- BEGIN inlined agent-retry scaffolding'
+const END_SENTINEL = '// --- END inlined agent-retry scaffolding ---'
+function refreshHelper(src, helperBlock) {
+  const begin = src.indexOf(BEGIN_SENTINEL)
+  if (begin === -1) return { out: src, refreshed: false }
+  const end = src.indexOf(END_SENTINEL, begin)
+  if (end === -1) return { out: src, refreshed: false } // malformed — bail, do not write
+  const spliceEnd = end + END_SENTINEL.length
+  return { out: src.slice(0, begin) + helperBlock + src.slice(spliceEnd), refreshed: true }
+}
+
+function refreshFile(file, helperBlock) {
+  const src = fs.readFileSync(file, 'utf8')
+  const { out, refreshed } = refreshHelper(src, helperBlock)
+  if (!refreshed) return { refreshed: false, note: 'no sentinel-bounded block found — skipped' }
+  if (out === src) return { refreshed: true, note: 'already current' }
+  fs.writeFileSync(file, out)
+  return { refreshed: true }
+}
+
+// --- --allow-null mode -------------------------------------------------------
+// With the fail-safe default (throw on terminal null), an agentRetry whose result
+// the workflow INTENTIONALLY treats as nullable must opt out via { allowNull: true }
+// or the round aborts instead of degrading. This migrates such call sites: for
+// every DIRECT assignment `X = await agentRetry(...)` whose variable X is later
+// used in a null-tolerant way (`X && X.field`, `X?.field`, `if (X …)` / `if (!X …)`),
+// add `allowNull: true` to that call's opts. Results consumed inside `parallel()`
+// thunks need NO migration — parallel() turns a thrown thunk into a null slot, so
+// the existing `(x && x.field) || fallback` degrade already works.
+function buildPairMaps(src, mask) {
+  const stack = []
+  const openToClose = new Map()
+  const closeToOpen = new Map()
+  for (let i = 0; i < src.length; i++) {
+    if (!mask[i]) continue
+    const c = src[i]
+    if (c === '(' || c === '{') stack.push({ ch: c, i })
+    else if (c === ')' || c === '}') {
+      const o = stack.pop()
+      if (o && ((c === ')' && o.ch === '(') || (c === '}' && o.ch === '{'))) {
+        openToClose.set(o.i, i); closeToOpen.set(i, o.i)
+      }
+    }
+  }
+  return { openToClose, closeToOpen }
+}
+
+// True iff `varName` is referenced in a null-tolerant way in CODE (mask=1) at or
+// after `afterIndex`. Scanning only code regions avoids false positives from a
+// variable name that happens to appear in a comment or a prompt-string example —
+// a required variable dereferenced directly (`X.field`) must NOT be opted out just
+// because a nearby comment/string mentions `X?.` or `if (X)`.
+function usedNullTolerant(src, mask, afterIndex, varName) {
+  const re = new RegExp(
+    `\\b${varName}\\b\\s*&&\\s*\\b${varName}\\b`
+    + `|\\b${varName}\\b\\?\\.`
+    + `|\\bif\\s*\\(\\s*!?\\s*\\b${varName}\\b\\s*[)&|]`,
+    'g',
+  )
+  let m
+  while ((m = re.exec(src)) !== null) {
+    if (m.index <= afterIndex) continue          // only usages AFTER the assignment/call
+    if (mask[m.index]) return true               // the reference is in code, not comment/string
+  }
+  return false
+}
+
+function findAgentRetryAssignSites(src, mask, maps) {
+  const sites = []
+  for (let i = 0; i < src.length; i++) {
+    if (src.substr(i, 10) !== 'agentRetry') continue
+    if (src[i + 10] !== '(') continue
+    if (/[A-Za-z0-9_$]/.test(src[i - 1] || '') || src[i - 1] === '.') continue
+    if (!mask[i]) continue
+    const openParen = i + 10
+    const closeParen = maps.openToClose.get(openParen)
+    if (closeParen === undefined) continue
+    // Only DIRECT assignments: 'X = await agentRetry(' or 'X = agentRetry('.
+    const look = src.slice(Math.max(0, i - 80), i)
+    const m = look.match(/([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:await\s+)?$/)
+    if (!m) continue // inside `() =>` / returned / etc — not a named local; skip
+    const varName = m[1]
+    // The opts object is the last {...} before closeParen.
+    let j = closeParen - 1
+    while (j > openParen && /\s/.test(src[j])) j--
+    if (src[j] !== '}') continue // no opts object literal — can't inject safely
+    const optsCloseBrace = j
+    const optsOpenBrace = maps.closeToOpen.get(optsCloseBrace)
+    if (optsOpenBrace === undefined) continue
+    sites.push({ callStart: i, varName, optsOpenBrace, optsCloseBrace, closeParen })
+  }
+  return sites
+}
+
+function migrateAllowNull(file) {
+  let src = fs.readFileSync(file, 'utf8')
+  const mask = buildCodeMask(src)
+  const maps = buildPairMaps(src, mask)
+  const sites = findAgentRetryAssignSites(src, mask, maps)
+  const migrated = []
+  for (let k = sites.length - 1; k >= 0; k--) { // last→first: indices stay valid
+    const s = sites[k]
+    if (!usedNullTolerant(src, mask, s.closeParen, s.varName)) continue
+    const optsSpan = src.slice(s.optsOpenBrace, s.optsCloseBrace + 1)
+    if (/\ballowNull\b/.test(optsSpan)) continue // idempotent
+    // Trim back over trailing whitespace inside the opts so we insert right after
+    // the last property → `{ retries: 5, allowNull: true }` (not `5 , …`).
+    let insAt = s.optsCloseBrace
+    while (insAt > s.optsOpenBrace + 1 && /\s/.test(src[insAt - 1])) insAt--
+    const contentPresent = insAt > s.optsOpenBrace + 1
+    const middle = contentPresent ? ', allowNull: true ' : 'allowNull: true '
+    src = src.slice(0, insAt) + middle + src.slice(s.optsCloseBrace)
+    migrated.push(s.varName)
+  }
+  if (migrated.length > 0) fs.writeFileSync(file, src)
+  return { migrated }
+}
+
 function listAllWorkflows() {
   // Only genuine workflow directories: top-level capitalized/alphabetic method
   // dirs. Skip underscore-prefixed substrate/meta dirs AND `scripts` (which holds
@@ -245,20 +375,48 @@ function listAllWorkflows() {
 
 function main() {
   const argv = process.argv.slice(2)
+  const refresh = argv.includes('--refresh')
+  const allowNull = argv.includes('--allow-null')
   const files = argv.includes('--all') ? listAllWorkflows() : argv.filter((a) => !a.startsWith('--'))
   if (files.length === 0) {
-    console.error('usage: add-agent-retry-scaffolding.js [--all | file1.js file2.js ...]')
+    console.error('usage: add-agent-retry-scaffolding.js [--all [--refresh | --allow-null] | file1.js ...]')
     process.exit(2)
   }
   const helperBlock = readHelperBlock()
   let totalWrapped = 0
+  let totalRefreshed = 0
+  let totalMigrated = 0
   for (const f of files) {
     const rel = path.relative(REPO, f)
-    const res = transformFile(f, helperBlock)
-    totalWrapped += res.wrapped
-    console.log(`${rel}: injected=${res.injected} wrapped=${res.wrapped}${res.note ? ' (' + res.note + ')' : ''}`)
+    if (refresh) {
+      const res = refreshFile(f, helperBlock)
+      if (res.refreshed) totalRefreshed++
+      console.log(`${rel}: refreshed=${res.refreshed}${res.note ? ' (' + res.note + ')' : ''}`)
+    } else if (allowNull) {
+      const res = migrateAllowNull(f)
+      totalMigrated += res.migrated.length
+      console.log(`${rel}: migrated=${res.migrated.length}${res.migrated.length ? ' (' + res.migrated.join(', ') + ')' : ''}`)
+    } else {
+      const res = transformFile(f, helperBlock)
+      totalWrapped += res.wrapped
+      console.log(`${rel}: injected=${res.injected} wrapped=${res.wrapped}${res.note ? ' (' + res.note + ')' : ''}`)
+    }
   }
-  console.log(`TOTAL wrapped ${totalWrapped} agent() call(s) across ${files.length} file(s).`)
+  if (refresh) console.log(`TOTAL refreshed ${totalRefreshed}/${files.length} file(s).`)
+  else if (allowNull) console.log(`TOTAL migrated ${totalMigrated} allowNull site(s) across ${files.length} file(s).`)
+  else console.log(`TOTAL wrapped ${totalWrapped} agent() call(s) across ${files.length} file(s).`)
 }
 
-main()
+// Exported for reuse by scripts/check-agent-retry-guards.js (the enforcement
+// linter) and its node:test wrapper. Run as a script (`node add-agent-retry-scaffolding.js`)
+// to apply transforms; require it for the analysis primitives.
+module.exports = {
+  buildCodeMask,
+  findAgentSites,
+  buildPairMaps,
+  findAgentRetryAssignSites,
+  usedNullTolerant,
+  listAllWorkflows,
+}
+
+if (require.main === module) main()

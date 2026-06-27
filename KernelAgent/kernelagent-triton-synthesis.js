@@ -68,7 +68,19 @@ async function agentRetry(fn, opts) {
     }
   }
   if (lastError) throw lastError
-  return null
+  // All attempts returned null (agent skipped mid-run OR a terminal subagent
+  // failure such as a sustained 429). FAIL-SAFE DEFAULT: throw an attributable
+  // error instead of returning null. A null return would later hit an unguarded
+  // deref (`diag.bottleneck_class`, `impl.code`, ...) and crash the run with a
+  // cryptic TypeError — issue #20. Throwing here makes the round abort cleanly
+  // with a recorded reason, and inside `parallel()` a throwing thunk simply
+  // resolves to a null slot that `.filter(Boolean)` drops (graceful). Callers
+  // that INTENTIONALLY degrade on a missing result opt out with `{ allowNull: true }`.
+  if (opts && opts.allowNull === true) return null
+  throw new Error(
+    `agentRetry: "${(opts && opts.label) || 'agent'}" returned null after ${retries + 1} attempt(s) ` +
+    `(agent skipped or terminal API failure after retries).`,
+  )
 }
 
 /**
@@ -382,7 +394,7 @@ if (USE_DRIVER) {
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
-    { model: MODEL.mechanical, label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
+    { model: MODEL.mechanical, label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   if (!DRIVER || DRIVER.present === false) {
     throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
   }
@@ -488,13 +500,13 @@ const _vp = await agentRetry(() => agent(
   `Classify the verification need for the parallel Generate screening phase as 'prune' (cheap early filter of many diverse seed candidates). Then ` +
   `run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/verification/verification_strategist.py resolve --need prune --host-probe '{"compiler":true,"harness_runnable":true,"reference_available":false}' --cache ${EXP_DIR}/verify_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.\n` +
   `Return its stdout JSON verbatim {method, evidence_source, confidence, requires, abstained_from, rationale}.`,
-  { model: MODEL.mechanical, label: 'verification-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
+  { model: MODEL.mechanical, label: 'verification-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
 if (_vp && _vp.method) VERIFICATION_PRUNE = _vp
 const _vc = await agentRetry(() => agent(
   `Classify the verification need for the final Verify/Compose acceptance phase as 'confirm' (deep acceptance of a surviving candidate). Then ` +
   `run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/verification/verification_strategist.py resolve --need confirm --host-probe '{"compiler":true,"harness_runnable":true,"reference_available":false}' --cache ${EXP_DIR}/verify_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.\n` +
   `Return its stdout JSON verbatim {method, evidence_source, confidence, requires, abstained_from, rationale}.`,
-  { model: MODEL.mechanical, label: 'verification-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
+  { model: MODEL.mechanical, label: 'verification-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
 if (_vc && _vc.method) VERIFICATION_CONFIRM = _vc
 log(`Verification-strategist: prune=${VERIFICATION_PRUNE.method}/${VERIFICATION_PRUNE.confidence} confirm=${VERIFICATION_CONFIRM.method}/${VERIFICATION_CONFIRM.confidence}`)
 
@@ -825,7 +837,7 @@ Then append, using the result you just measured (status="done" if the kernel pas
       const runOut = await agentRetry(() => agent(
         `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath} --test ${tPath} --result ${resultPath}`)}\n` +
         `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
-        { model: MODEL.profile, label: `driver-run-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5 })
+        { model: MODEL.profile, label: `driver-run-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
       await agentRetry(() => agent(
         `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
         `Return {ok, native_path}.`,
@@ -833,11 +845,11 @@ Then append, using the result you just measured (status="done" if the kernel pas
       const evidenceOut = await agentRetry(() => agent(
         `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
         `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-        { model: MODEL.mechanical, label: `driver-to-evidence-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5 })
+        { model: MODEL.mechanical, label: `driver-to-evidence-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
       const diagOut = await agentRetry(() => agent(
         `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
         `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
-        { model: MODEL.mechanical, label: `driver-diagnose-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5 })
+        { model: MODEL.mechanical, label: `driver-diagnose-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
       const antiCheatOut = await agentRetry(() => agent(
         `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${resultPath}\`.\n` +
         `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
@@ -1161,7 +1173,7 @@ ${USE_DRIVER ? driverSh('run.sh', `--kernel ${kernelFilename()} --test ${testFil
         },
         required: ['passed', 'verification_result'],
       },
-    }), { retries: 5 })
+    }), { retries: 5, allowNull: true })
 
     if (composeVerify?.passed) {
       log('Composed kernel verified successfully')
@@ -1244,7 +1256,7 @@ Then append:
     },
     required: ['outcome', 'summary'],
   },
-}), { retries: 5 })
+}), { retries: 5, allowNull: true })
 
 log(`Synthesis ${reportResult?.outcome || 'unknown'}: ${reportResult?.summary || ''}`)
 

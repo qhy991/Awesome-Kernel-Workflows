@@ -76,7 +76,19 @@ async function agentRetry(fn, opts) {
     }
   }
   if (lastError) throw lastError
-  return null
+  // All attempts returned null (agent skipped mid-run OR a terminal subagent
+  // failure such as a sustained 429). FAIL-SAFE DEFAULT: throw an attributable
+  // error instead of returning null. A null return would later hit an unguarded
+  // deref (`diag.bottleneck_class`, `impl.code`, ...) and crash the run with a
+  // cryptic TypeError — issue #20. Throwing here makes the round abort cleanly
+  // with a recorded reason, and inside `parallel()` a throwing thunk simply
+  // resolves to a null slot that `.filter(Boolean)` drops (graceful). Callers
+  // that INTENTIONALLY degrade on a missing result opt out with `{ allowNull: true }`.
+  if (opts && opts.allowNull === true) return null
+  throw new Error(
+    `agentRetry: "${(opts && opts.label) || 'agent'}" returned null after ${retries + 1} attempt(s) ` +
+    `(agent skipped or terminal API failure after retries).`,
+  )
 }
 
 /**
@@ -509,7 +521,7 @@ if (USE_DRIVER) {
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, lang_fence, impl_requirements, methods}.`,
-    { model: MODEL.mechanical, label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
+    { model: MODEL.mechanical, label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   if (!DRIVER || DRIVER.present === false) {
     throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
   }
@@ -535,7 +547,7 @@ if (USE_DRIVER) {
     `Read the operator spec for this run (${KERNEL_PATH || PROBLEM_PATH || 'the inline problem_definition'}) and classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${BACKEND_DIR}/manifest.json --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.\n` +
     `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
-    { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
+    { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   if (_pd && _pd.method) PROFILING_DECISION = _pd
 }
 
@@ -554,7 +566,7 @@ let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', r
     `--kernel "${_kForIntg}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
     `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
     `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
-    { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
+    { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   if (_integ && _integ.method) INTEGRATION_DECISION = _integ
 }
 log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
@@ -740,7 +752,7 @@ Then append (this is large-step proposal for candidate node-${searchStep + 1}-L)
         },
         required: ['kernel_code'],
       },
-    }), { retries: 5 })
+    }), { retries: 5, allowNull: true })
 
     newKernelCode = proposerResult?.kernel_code || ''
     expandNotes = proposerResult?.strategy || proposerResult?.novelty_vs_pool || ''
@@ -782,7 +794,7 @@ Return specific, surgical suggestions only.`, {
         },
         required: ['suggestions'],
       },
-    }), { retries: 5 })
+    }), { retries: 5, allowNull: true })
 
     const suggestions = reviserResult?.suggestions || [reviserDefaultHint()]
 
@@ -825,7 +837,7 @@ Then append (this is small-step surgical edit for candidate node-${searchStep + 
         },
         required: ['kernel_code'],
       },
-    }), { retries: 5 })
+    }), { retries: 5, allowNull: true })
 
     newKernelCode = tunerResult?.kernel_code || selectedNode.code || ''
     expandNotes = (tunerResult?.changes_applied || []).join('; ')
@@ -910,7 +922,7 @@ Then append, using the values you just measured (status="done" if the candidate 
     const runOut = await agentRetry(() => agent(
       `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kernelPath} --result ${resultPath}`)}\n` +
       `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
-      { model: MODEL.profile, label: `driver-run-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
+      { model: MODEL.profile, label: `driver-run-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
     let evidenceOut = null
     if (PROFILING_DECISION.method === 'native_profiler') {
       const profileOut = await agentRetry(() => agent(
@@ -920,7 +932,7 @@ Then append, using the values you just measured (status="done" if the candidate 
       evidenceOut = await agentRetry(() => agent(
         `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
         `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-        { model: MODEL.mechanical, label: `driver-to-evidence-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
+        { model: MODEL.mechanical, label: `driver-to-evidence-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
     } else {
       // Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'); do NOT run profile.sh / a native profiler.
       // run.sh above already produced throughput. When method='perf_heuristic', normalize that throughput into canonical metrics via the strategist normalizer.
@@ -930,13 +942,13 @@ Then append, using the values you just measured (status="done" if the candidate 
           `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend, heuristic_bclass}. ` +
           `Also write heuristic_bclass (memory_bound|compute_bound|latency_bound) based on the throughput ratio so diagnose.py does not fall to unknown. ` +
           `Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'.`,
-          { model: MODEL.mechanical, label: `driver-to-evidence-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
+          { model: MODEL.mechanical, label: `driver-to-evidence-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
       }
     }
     const diagOut = await agentRetry(() => agent(
       `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
       `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
-      { model: MODEL.mechanical, label: `driver-diagnose-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
+      { model: MODEL.mechanical, label: `driver-diagnose-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
     const antiCheatOut = await agentRetry(() => agent(
       `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kernelPath} --result ${resultPath}\`.\n` +
       `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
@@ -971,7 +983,7 @@ Then append, using the values you just measured (status="done" if the candidate 
         `2. Apply candidate: cp ${kernelPath} ${KERNEL_PATH}\n3. Build: ${BUILD_CMD}\n4. Test: ${TEST_CMD}\n5. Benchmark: ${BENCH_CMD || TEST_CMD}\n` +
         `6. ALWAYS restore: cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}\n` +
         `Parse latency_ms + heuristic_bclass (memory/compute/latency bound). Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
-        { model: MODEL.mechanical, label: `embedded-inplace-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
+        { model: MODEL.mechanical, label: `embedded-inplace-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
       embLatency = Number(embResult?.latency_ms || 0)
       embBclass = embResult?.heuristic_bclass || 'unknown'
       embMetrics = embResult?.metrics || { latency_ms: embLatency }
@@ -983,7 +995,7 @@ Then append, using the values you just measured (status="done" if the candidate 
         const embResult = await agentRetry(() => agent(
           `EMBEDDED-DISPATCH EVAL (serial). Run IN ORDER:\n1. Register: ${_plan.register}\n2. Build: ${_plan.build}\n3. Test: ${_plan.test}\n4. Benchmark: ${_plan.benchmark}\n5. Unregister: ${_plan.unregister}\n${_plan.cleanupInvariant}\n` +
           `Parse latency_ms + heuristic_bclass. Return {latency_ms, heuristic_bclass, compiled, correct, metrics:{latency_ms}}.`,
-          { model: MODEL.mechanical, label: `embedded-dispatch-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
+          { model: MODEL.mechanical, label: `embedded-dispatch-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
         embLatency = Number(embResult?.latency_ms || 0)
         embBclass = embResult?.heuristic_bclass || 'unknown'
         embMetrics = embResult?.metrics || { latency_ms: embLatency }
@@ -1104,7 +1116,7 @@ Then append:
       },
       required: ['rules'],
     },
-  }), { retries: 5 })
+  }), { retries: 5, allowNull: true })
 
   const before = skillMemory.length
   for (const rule of memoryResult?.rules || []) {

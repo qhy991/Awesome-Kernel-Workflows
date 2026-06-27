@@ -102,7 +102,19 @@ async function agentRetry(fn, opts) {
     }
   }
   if (lastError) throw lastError
-  return null
+  // All attempts returned null (agent skipped mid-run OR a terminal subagent
+  // failure such as a sustained 429). FAIL-SAFE DEFAULT: throw an attributable
+  // error instead of returning null. A null return would later hit an unguarded
+  // deref (`diag.bottleneck_class`, `impl.code`, ...) and crash the run with a
+  // cryptic TypeError — issue #20. Throwing here makes the round abort cleanly
+  // with a recorded reason, and inside `parallel()` a throwing thunk simply
+  // resolves to a null slot that `.filter(Boolean)` drops (graceful). Callers
+  // that INTENTIONALLY degrade on a missing result opt out with `{ allowNull: true }`.
+  if (opts && opts.allowNull === true) return null
+  throw new Error(
+    `agentRetry: "${(opts && opts.label) || 'agent'}" returned null after ${retries + 1} attempt(s) ` +
+    `(agent skipped or terminal API failure after retries).`,
+  )
 }
 
 /**
@@ -457,7 +469,7 @@ async function main() {
       substrateInstruction('profiling/profiling_strategist.py',
         `resolve --backend-manifest ${BACKEND_MANIFEST} --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
       ` Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
-      { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
+      { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
     if (_pd && _pd.method) PROFILING_DECISION = _pd
   }
   log(`Profiling method: ${PROFILING_DECISION.method} (confidence=${PROFILING_DECISION.confidence})`)
@@ -483,7 +495,7 @@ async function main() {
         `resolve --kernel "${KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
         `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
       ` Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
-      { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
+      { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
     if (_integ && _integ.method) INTEGRATION_DECISION = _integ
   }
   log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
@@ -588,7 +600,7 @@ Then append:
         required: ['kernel_name', 'optimization_space', 'forecaster_models', 'baseline_perf'],
       },
     }
-  ), { retries: 5 });
+  ), { retries: 5, allowNull: true });
 
   if (!setupResult) {
     log('Setup failed');
@@ -728,7 +740,7 @@ Then append (best_training_speedup is a measured speedup from training evaluatio
         required: ['training_samples', 'trained_models', 'best_training_speedup'],
       },
     }
-  ), { retries: 5 });
+  ), { retries: 5, allowNull: true });
 
   if (!trainingResult || trainingResult.trained_models.length === 0) {
     log('Forecaster training failed');
@@ -822,7 +834,7 @@ Then append:
         required: ['calibrated_models', 'ensemble_mae'],
       },
     }
-  ), { retries: 5 });
+  ), { retries: 5, allowNull: true });
 
   if (!calibrationResult) {
     log('Calibration failed');
@@ -944,7 +956,7 @@ Then append (candidate_id is the best config found; best_speedup is the measured
         required: ['simulations', 'total_executions', 'best_speedup', 'best_config'],
       },
     }
-  ), { retries: 5 });
+  ), { retries: 5, allowNull: true });
 
   if (!puctResult) {
     log('PUCT search failed');
@@ -1028,7 +1040,7 @@ Then append (candidate_id is the best refined config; best_refined_speedup is th
         required: ['refinement_executions', 'best_refined_speedup', 'best_refined_config'],
       },
     }
-  ), { retries: 5 });
+  ), { retries: 5, allowNull: true });
 
   if (!refinementResult) {
     log('Refinement failed, using PUCT result');
@@ -1129,7 +1141,7 @@ Then append (status="done" if correctness passed AND validation passed, else "er
         required: ['mean_speedup', 'correctness_passed', 'validation_passed'],
       },
     }
-  ), { retries: 5 });
+  ), { retries: 5, allowNull: true });
 
   if (!validationResult || !validationResult.validation_passed) {
     log('Validation failed');
@@ -1221,7 +1233,7 @@ Then append (speedup is the final best validated speedup number, or null if unav
         required: ['summary', 'best_speedup', 'total_executions'],
       },
     }
-  ), { retries: 5 });
+  ), { retries: 5, allowNull: true });
 
   // ============================================================================
   // Return final results

@@ -71,6 +71,60 @@ function __unwrapArgs(rawArgs) {
 args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // --- END inlined arg_guard ---
 
+// --- BEGIN inlined agent-retry scaffolding (from _meta/scaffolding/agent-retry.js) ---
+async function agentRetry(fn, opts) {
+  const retries = (opts && opts.retries != null) ? opts.retries : 5
+  let lastError = null
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const result = await fn()
+      if (result != null) return result
+      // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
+    } catch (e) {
+      lastError = e
+    }
+  }
+  if (lastError) throw lastError
+  // All attempts returned null (agent skipped mid-run OR a terminal subagent
+  // failure such as a sustained 429). FAIL-SAFE DEFAULT: throw an attributable
+  // error instead of returning null. A null return would later hit an unguarded
+  // deref (`diag.bottleneck_class`, `impl.code`, ...) and crash the run with a
+  // cryptic TypeError — issue #20. Throwing here makes the round abort cleanly
+  // with a recorded reason, and inside `parallel()` a throwing thunk simply
+  // resolves to a null slot that `.filter(Boolean)` drops (graceful). Callers
+  // that INTENTIONALLY degrade on a missing result opt out with `{ allowNull: true }`.
+  if (opts && opts.allowNull === true) return null
+  throw new Error(
+    `agentRetry: "${(opts && opts.label) || 'agent'}" returned null after ${retries + 1} attempt(s) ` +
+    `(agent skipped or terminal API failure after retries).`,
+  )
+}
+
+/**
+ * Null-guard a REQUIRED structured field. Throws a clear, attributable error
+ * (instead of a cryptic TypeError) when an agent returned null/malformed output,
+ * so the run fails loudly at the dereference rather than producing garbage.
+ */
+function expect(obj, field, ctx) {
+  if (obj == null || obj[field] == null) {
+    throw new Error(
+      `agentRetry: required field "${field}" is missing${ctx ? ' from ' + ctx : ''} ` +
+      `(agent returned null or a malformed result after retries).`,
+    )
+  }
+  return obj[field]
+}
+
+/**
+ * Null-guard an OPTIONAL structured field with a fallback (no throw).
+ * Use for deref points that have a sensible default (e.g. `[]`, `''`, `0`).
+ */
+function guard(obj, field, fallback) {
+  if (obj == null || obj[field] == null) return fallback
+  return obj[field]
+}
+// --- END inlined agent-retry scaffolding ---
+
 // =============================================================================
 // {{META_NAME}}
 // =============================================================================
@@ -105,11 +159,11 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // =============================================================================
 phase('Analyze')
 
-const analysis = await agent(`{{ANALYZE_PROMPT}}`, {
+const analysis = await agentRetry(() => agent(`{{ANALYZE_PROMPT}}`, {
   label: 'analyze-kernel',
   phase: 'Analyze',
   schema: {{ANALYZE_SCHEMA}},
-})
+}), { retries: 5 })
 
 log(`Analysis: ${analysis.opportunities?.length || 0} transformation opportunities identified`)
 
@@ -132,7 +186,7 @@ const transformResults = []
 
 const transforms = await pipeline(
   applicablePasses,
-  (pass, _, passIdx) => agent(`{{TRANSFORM_PROMPT}}
+  (pass, _, passIdx) => agentRetry(() => agent(`{{TRANSFORM_PROMPT}}
 
 # Pass: "${pass}" (${passIdx + 1}/${applicablePasses.length})
 
@@ -148,7 +202,7 @@ Apply this transformation pass. Output the complete transformed code.`, {
     label: `transform-${pass}`,
     phase: 'Transform',
     schema: {{TRANSFORM_SCHEMA}},
-  })
+  }), { retries: 5 })
 )
 
 // Accumulate transforms sequentially
@@ -166,7 +220,7 @@ log(`Transforms applied: ${transformResults.length}/${applicablePasses.length}`)
 // =============================================================================
 phase('Verify')
 
-const verification = await agent(`{{VERIFY_PROMPT}}
+const verification = await agentRetry(() => agent(`{{VERIFY_PROMPT}}
 
 # Original code:
 \`\`\`
@@ -184,7 +238,7 @@ Verify functional equivalence and check for introduced bugs.`, {
   label: 'verify-transforms',
   phase: 'Verify',
   schema: {{VERIFY_SCHEMA}},
-})
+}), { retries: 5 })
 
 log(`Verification: ${verification.is_correct ? 'PASSED' : 'FAILED'} — ${verification.issues?.length || 0} issues`)
 
@@ -193,7 +247,7 @@ log(`Verification: ${verification.is_correct ? 'PASSED' : 'FAILED'} — ${verifi
 // =============================================================================
 phase('Report')
 
-const finalReport = await agent(`{{REPORT_PROMPT}}
+const finalReport = await agentRetry(() => agent(`{{REPORT_PROMPT}}
 
 # Pipeline Results:
 - Passes applied: ${transformResults.length}
@@ -202,7 +256,7 @@ const finalReport = await agent(`{{REPORT_PROMPT}}
 - Transform chain: ${applicablePasses.join(' → ')}`, {
   label: 'final-report',
   phase: 'Report',
-})
+}), { retries: 5 })
 
 return {
   {{RETURN_OBJECT}}

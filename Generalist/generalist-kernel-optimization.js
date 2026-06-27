@@ -162,7 +162,19 @@ async function agentRetry(fn, opts) {
     }
   }
   if (lastError) throw lastError
-  return null
+  // All attempts returned null (agent skipped mid-run OR a terminal subagent
+  // failure such as a sustained 429). FAIL-SAFE DEFAULT: throw an attributable
+  // error instead of returning null. A null return would later hit an unguarded
+  // deref (`diag.bottleneck_class`, `impl.code`, ...) and crash the run with a
+  // cryptic TypeError — issue #20. Throwing here makes the round abort cleanly
+  // with a recorded reason, and inside `parallel()` a throwing thunk simply
+  // resolves to a null slot that `.filter(Boolean)` drops (graceful). Callers
+  // that INTENTIONALLY degrade on a missing result opt out with `{ allowNull: true }`.
+  if (opts && opts.allowNull === true) return null
+  throw new Error(
+    `agentRetry: "${(opts && opts.label) || 'agent'}" returned null after ${retries + 1} attempt(s) ` +
+    `(agent skipped or terminal API failure after retries).`,
+  )
 }
 
 /**
@@ -484,7 +496,7 @@ if (USE_DRIVER) {
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
-    { model: MODEL.mechanical, label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
+    { model: MODEL.mechanical, label: 'load-driver', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   if (!DRIVER || DRIVER.present === false) {
     throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
   }
@@ -586,7 +598,7 @@ let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', r
       { model: MODEL.mechanical, label: 'integration-classify', phase: 'Setup',
         schema: { type: 'object',
                   properties: { can_standalone: { type: 'string' }, reason: { type: 'string' } },
-                  required: ['can_standalone'] } }), { retries: 5 })
+                  required: ['can_standalone'] } }), { retries: 5, allowNull: true })
     canStandalone = (cls && cls.can_standalone) || 'uncertain'
   }
   log(`integration: can_standalone=${canStandalone}`)
@@ -600,7 +612,7 @@ let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', r
       `> ${decisionPath}\`. ` +
       `Then run exactly: \`cat ${decisionPath}\` and return its stdout JSON verbatim. ` +
       `Do not modify, summarize, or invent any field.`,
-      { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
+      { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
     if (_integ && _integ.method) INTEGRATION_DECISION = _integ
   } else {
     log('integration: no substrate_command_prefix set; keeping default standalone routing')
@@ -641,7 +653,7 @@ let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', no
     substrateInstruction('profiling/profiling_strategist.py',
       `resolve --backend-manifest ${_profManifest} --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
     ` Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
-    { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
+    { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   if (_pd && _pd.method) PROFILING_DECISION = _pd
 }
 
@@ -692,7 +704,7 @@ if (USE_DRIVER_STANDALONE) {
   const runOut = await agentRetry(() => agent(
     `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
     `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
-    { model: MODEL.profile, label: 'driver-run-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
+    { model: MODEL.profile, label: 'driver-run-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   let evidenceOut = null
   if (PROFILING_DECISION.method === 'native_profiler') {
     await agentRetry(() => agent(
@@ -702,7 +714,7 @@ if (USE_DRIVER_STANDALONE) {
     evidenceOut = await agentRetry(() => agent(
       `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
       `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-      { model: MODEL.mechanical, label: 'driver-to-evidence-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
+      { model: MODEL.mechanical, label: 'driver-to-evidence-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   } else {
     evidenceOut = await agentRetry(() => agent(
       `Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'); do NOT run a native profiler. ` +
@@ -714,7 +726,7 @@ if (USE_DRIVER_STANDALONE) {
           nsysEnrichSuffix()
         : `Return null for dram_pct/sm_pct/occupancy. `) +
       `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-      { model: MODEL.mechanical, label: 'driver-to-evidence-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
+      { model: MODEL.mechanical, label: 'driver-to-evidence-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   }
   await agentRetry(() => agent(
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
@@ -888,7 +900,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
       const evidenceOut = await agentRetry(() => agent(
         `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
         `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-        { model: MODEL.mechanical, label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
+        { model: MODEL.mechanical, label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
       await agentRetry(() => agent(
         `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
         `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
@@ -928,7 +940,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
     `Write this insight to ${EXP_DIR}/run-${iter}/insight.json:\n${JSON.stringify(roundInsightRaw)}\n` +
     `${substrateInstruction('verify_insight.py', `--insight ${EXP_DIR}/run-${iter}/insight.json --refuted ${refute.refuted ? 1 : 0}`)} ` +
     `Return its stdout JSON verbatim. If unavailable, return {verified:false, reason:"missing_substrate_command_prefix"}.`,
-    { label: `verify-insight-${iter}`, phase: 'Learn', schema: JSON_PASSTHROUGH, model: MODEL.mechanical }), { retries: 5 })
+    { label: `verify-insight-${iter}`, phase: 'Learn', schema: JSON_PASSTHROUGH, model: MODEL.mechanical }), { retries: 5, allowNull: true })
   verifiedInsights.push(verified)
   const producedMeasured = (verified && verified.confidence) === 'measured'
   log(`round insight confidence: ${(verified && verified.confidence) || 'n/a'}${refute.refuted ? ' (refuted -> downgraded)' : ''}`)

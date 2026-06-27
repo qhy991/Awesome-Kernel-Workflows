@@ -14,6 +14,12 @@
 // was the single highest-leverage robustness fix: round 3 then ran 14 agents over
 // 2.4h with zero crashes. See issues #16 / #17.
 //
+// #20 hardens this further with a FAIL-SAFE DEFAULT: after exhausting retries on a
+// null-returning agent, `agentRetry` THROWS an attributable error instead of
+// returning null — so the round aborts cleanly with a recorded reason rather than
+// crashing later at an unguarded deref. Pass `{ allowNull: true }` to opt OUT, for
+// the few sites that intentionally degrade on a missing result.
+//
 // CONSTRAINT: the Workflow runtime forbids `Date.now()` / `Math.random()` /
 // argless `new Date()` (they throw and would break resume) and exposes no
 // `sleep()`. So this wrapper does immediate bounded retries — which the on-host
@@ -32,11 +38,26 @@
 //     { retries: 5, label: 'inspect' },
 //   )
 //   const kernelCode = expect(inspection, 'kernel_code', 'inspect')
+//
+//   // For an OPTIONAL probe whose absence the workflow tolerates, opt out and
+//   // null-guard the result yourself (default-throw would otherwise abort):
+//   const gate = await agentRetry(
+//     () => agent(`...`, { label: 'gate', phase: 'Retrieve', schema: GATE_SCHEMA }),
+//     { retries: 5, label: 'gate', allowNull: true },
+//   )
+//   const allowed = guard(gate, 'allowed_methods', [])
 
 /**
  * Run an agent-producing thunk with bounded retries on null/throw.
  * `fn` must be `() => agent(prompt, opts)` (the call itself, deferred).
- * Returns the first non-null result, or null/throws after `retries+1` attempts.
+ * Returns the first non-null result. After `retries+1` attempts it FAILS-SAFE:
+ *   - rethrows the last thrown error if any attempt threw, else
+ *   - throws an attributable "returned null" error (the default), UNLESS
+ *     `opts.allowNull === true`, in which case it returns null for the caller to
+ *     null-guard explicitly (use `guard()` / `(x && x.field) || fallback`).
+ * The default-throw is deliberate: a silent null would be dereferenced later and
+ * crash the run with a cryptic TypeError (issue #20). Opt out ONLY where the
+ * caller intentionally degrades on a missing result.
  */
 async function agentRetry(fn, opts) {
   const retries = (opts && opts.retries != null) ? opts.retries : 5
@@ -51,7 +72,19 @@ async function agentRetry(fn, opts) {
     }
   }
   if (lastError) throw lastError
-  return null
+  // All attempts returned null (agent skipped mid-run OR a terminal subagent
+  // failure such as a sustained 429). FAIL-SAFE DEFAULT: throw an attributable
+  // error instead of returning null. A null return would later hit an unguarded
+  // deref (`diag.bottleneck_class`, `impl.code`, ...) and crash the run with a
+  // cryptic TypeError — issue #20. Throwing here makes the round abort cleanly
+  // with a recorded reason, and inside `parallel()` a throwing thunk simply
+  // resolves to a null slot that `.filter(Boolean)` drops (graceful). Callers
+  // that INTENTIONALLY degrade on a missing result opt out with `{ allowNull: true }`.
+  if (opts && opts.allowNull === true) return null
+  throw new Error(
+    `agentRetry: "${(opts && opts.label) || 'agent'}" returned null after ${retries + 1} attempt(s) ` +
+    `(agent skipped or terminal API failure after retries).`,
+  )
 }
 
 /**

@@ -87,7 +87,19 @@ async function agentRetry(fn, opts) {
     }
   }
   if (lastError) throw lastError
-  return null
+  // All attempts returned null (agent skipped mid-run OR a terminal subagent
+  // failure such as a sustained 429). FAIL-SAFE DEFAULT: throw an attributable
+  // error instead of returning null. A null return would later hit an unguarded
+  // deref (`diag.bottleneck_class`, `impl.code`, ...) and crash the run with a
+  // cryptic TypeError — issue #20. Throwing here makes the round abort cleanly
+  // with a recorded reason, and inside `parallel()` a throwing thunk simply
+  // resolves to a null slot that `.filter(Boolean)` drops (graceful). Callers
+  // that INTENTIONALLY degrade on a missing result opt out with `{ allowNull: true }`.
+  if (opts && opts.allowNull === true) return null
+  throw new Error(
+    `agentRetry: "${(opts && opts.label) || 'agent'}" returned null after ${retries + 1} attempt(s) ` +
+    `(agent skipped or terminal API failure after retries).`,
+  )
 }
 
 /**
@@ -332,7 +344,7 @@ const _vsp = await agentRetry(() => agent(
   `1. Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/verification/verification_strategist.py resolve --need prune --host-probe '<probe json>' --cache ${EXP_DIR}/verify_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`\n` +
   `2. Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/verification/verification_strategist.py resolve --need confirm --host-probe '<probe json>' --cache ${EXP_DIR}/verify_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`\n` +
   `Return JSON {prune: <stdout1 verbatim>, confirm: <stdout2 verbatim>} where each value has {method, confidence, evidence_source, requires, abstained_from, rationale}.`,
-  { model: MODEL.mechanical, label: 'verification-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
+  { model: MODEL.mechanical, label: 'verification-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
 if (_vsp && _vsp.prune && _vsp.prune.method) VERIFICATION_PRUNE = _vsp.prune
 if (_vsp && _vsp.confirm && _vsp.confirm.method) VERIFICATION_CONFIRM = _vsp.confirm
 
@@ -405,7 +417,7 @@ Then append (operator ${opName}, attempt ${attempt}):
         },
         required: ['kernel_code', 'wrapper_code'],
       },
-    }), { retries: 5 })
+    }), { retries: 5, allowNull: true })
 
     currentKernel = generateResult?.kernel_code || ''
     currentWrapper = generateResult?.wrapper_code || ''
@@ -465,7 +477,7 @@ Then append (operator ${opName}, status="done" if lint passed else "error"):
             },
             required: ['passed'],
           },
-        }), { retries: 5 })
+        }), { retries: 5, allowNull: true })
         llmCallsThisAttempt++
 
         if (lintResult?.passed) {
@@ -528,7 +540,7 @@ Then append, using the values you just measured (status="done" if all_passed, el
             },
             required: ['compiled', 'all_passed'],
           },
-        }), { retries: 5 })
+        }), { retries: 5, allowNull: true })
         llmCallsThisAttempt++
 
         if (testResult?.all_passed) {
@@ -593,7 +605,7 @@ Then append (operator ${opName}, attempt ${attempt}):
             },
             required: ['kernel_code', 'wrapper_code'],
           },
-        }), { retries: 5 })
+        }), { retries: 5, allowNull: true })
         llmCallsThisAttempt++
 
         if (debugResult?.kernel_code) {

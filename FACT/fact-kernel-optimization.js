@@ -93,7 +93,19 @@ async function agentRetry(fn, opts) {
     }
   }
   if (lastError) throw lastError
-  return null
+  // All attempts returned null (agent skipped mid-run OR a terminal subagent
+  // failure such as a sustained 429). FAIL-SAFE DEFAULT: throw an attributable
+  // error instead of returning null. A null return would later hit an unguarded
+  // deref (`diag.bottleneck_class`, `impl.code`, ...) and crash the run with a
+  // cryptic TypeError — issue #20. Throwing here makes the round abort cleanly
+  // with a recorded reason, and inside `parallel()` a throwing thunk simply
+  // resolves to a null slot that `.filter(Boolean)` drops (graceful). Callers
+  // that INTENTIONALLY degrade on a missing result opt out with `{ allowNull: true }`.
+  if (opts && opts.allowNull === true) return null
+  throw new Error(
+    `agentRetry: "${(opts && opts.label) || 'agent'}" returned null after ${retries + 1} attempt(s) ` +
+    `(agent skipped or terminal API failure after retries).`,
+  )
 }
 
 /**
@@ -334,7 +346,7 @@ Then append:
         required: ['cutlass_version', 'target_architecture', 'kernel_spec'],
       },
     }
-  ), { retries: 5 });
+  ), { retries: 5, allowNull: true });
 
   if (!setupResult) {
     log('Setup failed');
@@ -362,7 +374,7 @@ Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, 
     label: 'profiling-strategist',
     phase: 'Setup',
     schema: JSON_PASSTHROUGH,
-  }), { retries: 5 })
+  }), { retries: 5, allowNull: true })
   if (_pd && _pd.method) PROFILING_DECISION = _pd
   log(`Profiling-strategist: method=${PROFILING_DECISION.method} confidence=${PROFILING_DECISION.confidence}`)
 
@@ -391,7 +403,7 @@ Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, 
       `--kernel "${_integProbeKernel || args.exp_dir + '/_fact_target'}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
       `--cache ${args.exp_dir}/integ_cache.json --trajectory ${args.exp_dir}/genome.jsonl\`. ` +
       `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
-      { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
+      { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
     if (_integ && _integ.method) INTEGRATION_DECISION = _integ
   }
   log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
@@ -524,7 +536,7 @@ Then append:
         required: ['exemplars_analyzed', 'patterns_discovered', 'discovery_summary'],
       },
     }
-  ), { retries: 5 });
+  ), { retries: 5, allowNull: true });
 
   if (!discoveryResult || discoveryResult.patterns_discovered.length === 0) {
     log('Pattern discovery failed or no patterns found');
@@ -623,7 +635,7 @@ Then append:
         required: ['patterns_realized', 'realization_summary'],
       },
     }
-  ), { retries: 5 });
+  ), { retries: 5, allowNull: true });
 
   if (!realizationResult || realizationResult.patterns_realized.length === 0) {
     log('Pattern realization failed');
@@ -728,7 +740,7 @@ Then append:
         required: ['candidates_generated', 'composed_kernels', 'composition_summary'],
       },
     }
-  ), { retries: 5 });
+  ), { retries: 5, allowNull: true });
 
   if (!compositionResult || compositionResult.composed_kernels.length === 0) {
     log('Pattern composition failed');
@@ -814,7 +826,7 @@ Then append (status="done" if ablation completed, else "error"):
         required: ['kernels_ablated', 'ablation_results', 'critical_patterns'],
       },
     }
-  ), { retries: 5 });
+  ), { retries: 5, allowNull: true });
 
   if (!ablationResult) {
     log('Ablation studies failed');
@@ -973,7 +985,7 @@ Then append, using the values you just measured (status="done" if the best kerne
         required: ['kernels_evaluated', 'evaluation_results', 'best_kernel'],
       },
     }
-  ), { retries: 5 });
+  ), { retries: 5, allowNull: true });
 
   if (!evaluationResult) {
     log('Evaluation failed');
@@ -1045,7 +1057,7 @@ Then append (speedup is the best speedup vs baseline, or null if unavailable):
         required: ['summary', 'best_gflops'],
       },
     }
-  ), { retries: 5 });
+  ), { retries: 5, allowNull: true });
 
   // ============================================================================
   // Return final results

@@ -149,7 +149,19 @@ async function agentRetry(fn, opts) {
     }
   }
   if (lastError) throw lastError
-  return null
+  // All attempts returned null (agent skipped mid-run OR a terminal subagent
+  // failure such as a sustained 429). FAIL-SAFE DEFAULT: throw an attributable
+  // error instead of returning null. A null return would later hit an unguarded
+  // deref (`diag.bottleneck_class`, `impl.code`, ...) and crash the run with a
+  // cryptic TypeError — issue #20. Throwing here makes the round abort cleanly
+  // with a recorded reason, and inside `parallel()` a throwing thunk simply
+  // resolves to a null slot that `.filter(Boolean)` drops (graceful). Callers
+  // that INTENTIONALLY degrade on a missing result opt out with `{ allowNull: true }`.
+  if (opts && opts.allowNull === true) return null
+  throw new Error(
+    `agentRetry: "${(opts && opts.label) || 'agent'}" returned null after ${retries + 1} attempt(s) ` +
+    `(agent skipped or terminal API failure after retries).`,
+  )
 }
 
 /**
@@ -876,7 +888,7 @@ phase('Seed'); await __genomeReport('Seed', WORKFLOW_NAME)
       `resolve --backend-manifest ${PROFILING_MANIFEST} --task <op_class> --size <size> --cache ${_genDir}/prof_cache.json --trajectory ${_genDir}/genome.jsonl`) +
     ` Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}. Do NOT assign confidence yourself; relay exactly what the script stamped.`,
     { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Seed', schema: JSON_PASSTHROUGH }
-  ), { retries: 5 })
+  ), { retries: 5, allowNull: true })
   if (_pd && _pd.method) PROFILING_DECISION = _pd
   log(`Profiling-strategist: method=${PROFILING_DECISION.method} confidence=${PROFILING_DECISION.confidence}`)
 }
@@ -902,7 +914,7 @@ let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', r
       `resolve --kernel "${PRIMARY_KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' --cache ${_genDir}/integ_cache.json --trajectory ${_genDir}/genome.jsonl`) +
     ` Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
     { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Seed', schema: JSON_PASSTHROUGH }
-  ), { retries: 5 })
+  ), { retries: 5, allowNull: true })
   if (_integ && _integ.method) INTEGRATION_DECISION = _integ
 }
 log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
@@ -1167,7 +1179,7 @@ async function finishExp(spec, status, extra, iterCount) {
   }, extra || {})
   const r = await agentRetry(() => agent(finishPrompt(spec, payload), {
     phase: 'Record', label: `${spec.exp_id}:finish`, schema: FINISH_SCHEMA,
-  }), { retries: 5 })
+  }), { retries: 5, allowNull: true })
   const c = classifyResult(r)
   if (c.state !== 'grounded') log(`WARN: exp-finish not grounded for ${spec.exp_id} (recover-orphans will reconcile next round)`)
   return c
@@ -1402,7 +1414,7 @@ async function runCandidateEmbedded(spec, snap) {
         `Parse latency_us + heuristic_bclass (memory_bound|compute_bound|latency_bound). Return {latency_us, heuristic_bclass, compiled, correct, metrics:{latency_us}}.`,
         taskContract(spec.exp_id),
       ].join('\n'),
-      { model: MODEL.profile, label: `${spec.exp_id}:embedded-inplace`, phase: 'Confirm', schema: JSON_PASSTHROUGH }), { retries: 5 })
+      { model: MODEL.profile, label: `${spec.exp_id}:embedded-inplace`, phase: 'Confirm', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
     embLatency = embResult && embResult.latency_us != null ? Number(embResult.latency_us) : null
     embBclass = (embResult && embResult.heuristic_bclass) || 'unknown'
     embMetrics = (embResult && embResult.metrics) || { latency_us: embLatency }
@@ -1426,7 +1438,7 @@ async function runCandidateEmbedded(spec, snap) {
           `Parse latency_us + heuristic_bclass. Return {latency_us, heuristic_bclass, compiled, correct, metrics:{latency_us}}.`,
           taskContract(spec.exp_id),
         ].join('\n'),
-        { model: MODEL.profile, label: `${spec.exp_id}:embedded-dispatch`, phase: 'Confirm', schema: JSON_PASSTHROUGH }), { retries: 5 })
+        { model: MODEL.profile, label: `${spec.exp_id}:embedded-dispatch`, phase: 'Confirm', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
       embLatency = embResult && embResult.latency_us != null ? Number(embResult.latency_us) : null
       embBclass = (embResult && embResult.heuristic_bclass) || 'unknown'
       embMetrics = (embResult && embResult.metrics) || { latency_us: embLatency }
