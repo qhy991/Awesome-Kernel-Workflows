@@ -566,7 +566,7 @@ log(`Kernel: ${setupResult.op_type} (${detectedLang}) | Functions: ${setupResult
 await agentRetry(() => agent(`Create the optimization workspace:
 
 \`\`\`bash
-mkdir -p ${EXP_DIR}/{variants,round-logs,failed-rounds,ncu-profiles}
+mkdir -p ${EXP_DIR}/{variants,round-logs,failed-rounds,profile-artifacts}
 \`\`\`
 
 Create ${EXP_DIR}/TRAPS.md:
@@ -649,7 +649,7 @@ if (PROFILING_DECISION.method === 'native_profiler' && !NCU_BINARY) {
 }
 
 // Establish baseline (NCU profile if available, else benchmark)
-let baselineNcuProfile = ''
+let baselineProfileSummary = ''
 let baselineLatency = null
 
 if (HARNESS_PATH || HARNESS_BUILD_CMD) {
@@ -700,13 +700,13 @@ Return structured profile results.`, { model: MODEL.profile,
   baselineLatency = ncuSetup.latency_ms
   bestScore = baselineLatency
   baselineScore = baselineLatency
-  baselineNcuProfile = `
-## NCU Profile (Baseline)
+  baselineProfileSummary = `
+## Native Profile (Baseline)
 - Latency: ${ncuSetup.latency_ms} ms | SM: ${ncuSetup.sm_throughput_pct || 'N/A'}% | DRAM: ${ncuSetup.dram_throughput_pct || 'N/A'}%
 - Occupancy: ${ncuSetup.achieved_occupancy_pct || 'N/A'}% | Regs: ${ncuSetup.registers_per_thread || 'N/A'}
 - Top Stall: ${ncuSetup.top_stall_reason || 'N/A'} (${ncuSetup.top_stall_pct || 'N/A'}%) | Sectors/Req: ${ncuSetup.sectors_per_request || 'N/A'}
 - Diagnosis: ${ncuSetup.bottleneck_diagnosis}
-- NCU Rules: ${(ncuSetup.ncu_rule_suggestions || []).map(s => `- ${s}`).join('\n') || 'N/A'}`
+- Profiler Rules: ${(ncuSetup.ncu_rule_suggestions || []).map(s => `- ${s}`).join('\n') || 'N/A'}`
   log(`Baseline: ${baselineLatency}ms | ${ncuSetup.bottleneck_diagnosis}`)
 } else if (BENCHMARK_CMD) {
   const benchResult = await agentRetry(() => agent(`Run benchmark to establish baseline.
@@ -785,7 +785,7 @@ for (let round = 0; round < ROUNDS; round++) {
 ${bestKernelCode.substring(0, 4000)}
 \`\`\`
 
-${baselineNcuProfile ? `# NCU PROFILING DATA (REAL MEASURED DATA):\n${baselineNcuProfile}` : '# No NCU data. Use static code analysis.'}
+${baselineProfileSummary ? `# NATIVE PROFILING DATA (REAL MEASURED DATA):\n${baselineProfileSummary}` : '# No native profile data. Use static code analysis.'}
 
 # Performance: Best=${bestScore} | Baseline=${baselineScore} | Speedup=${baselineScore ? (baselineScore / bestScore).toFixed(2) : 'N/A'}x
 ${experienceSection}
@@ -799,7 +799,7 @@ ${dslHint}
 ${benchMethodology}
 
 # Requirements:
-1. CITE the specific bottleneck (NCU metric or code pattern)
+1. CITE the specific bottleneck (native profile metric or code pattern)
 2. Name the exact code region and transformation
 3. Prefer STRUCTURAL changes over parameter tuning
 4. Estimate expected improvement
@@ -825,6 +825,7 @@ Optimization levers (pick ONE):
           properties: {
             title: { type: 'string' },
             bottleneck: { type: 'string' },
+            profile_evidence: { type: 'string' },
             ncu_evidence: { type: 'string' },
             hypothesis: { type: 'string' },
             expected_impact: { type: 'string' },
@@ -859,7 +860,7 @@ ${bestKernelCode.substring(0, 4000)}
 
 # Hypothesis: "${plan.title}"
 Bottleneck: ${plan.bottleneck}
-Evidence: ${plan.ncu_evidence || 'static analysis'}
+Evidence: ${plan.profile_evidence || plan.ncu_evidence || 'static analysis'}
 Plan: ${plan.hypothesis}
 
 # DSL Guidance:
@@ -1028,6 +1029,10 @@ Return benchmark results.`, {
           // profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}');
           // do NOT run profile.sh. run.sh above already gave throughput; normalize it via the strategist's normalizer.
           const _norm = PROFILING_DECISION.normalizer || 'perf_to_evidence.py'
+          await agentRetry(() => agent(
+            `Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'); do NOT run the native profiler. ` +
+            `Candidate kernel: ${kPath}. Use driver-run-${envIdx} throughput as the profiling source and return {ok:true, native_path:null, method:'${PROFILING_DECISION.method}', latency_ms:${(runOut && runOut.latency_ms) || 'null'}}.`,
+            { model: MODEL.profile, label: `driver-profile-${envIdx}`, phase: 'Iterate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
           evidenceOut = await agentRetry(() => agent(
             `Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'); do NOT run profile.sh. ` +
             `run.sh returned latency_ms=${(runOut && runOut.latency_ms) || 'null'}. ` +
@@ -1257,7 +1262,7 @@ Return verdict.`, {
 # Score: ${roundBest.score} (${roundBest.speedup.toFixed(2)}x vs baseline)
 # Parent: ${currentParentName}
 # Hypothesis: ${roundBest.plan.title}
-# Evidence: ${roundBest.plan.ncu_evidence || roundBest.plan.bottleneck}
+# Evidence: ${roundBest.plan.profile_evidence || roundBest.plan.ncu_evidence || roundBest.plan.bottleneck}
 # Iter: ${roundBest.iterLabel}
 
 # Kernel Code:
@@ -1531,7 +1536,7 @@ ${traps.map((t, i) => `${i + 1}. ${t}`).join('\n')}
 ${bestKernelCode.substring(0, 3000)}
 \`\`\`
 
-${baselineNcuProfile ? `## Initial NCU Diagnosis:\n${baselineNcuProfile.substring(0, 800)}` : ''}
+${baselineProfileSummary ? `## Initial Native Profile Diagnosis:\n${baselineProfileSummary.substring(0, 800)}` : ''}
 
 Write a report covering:
 1. Optimization journey (what was tried, what worked, what didn't)

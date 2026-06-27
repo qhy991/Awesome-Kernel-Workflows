@@ -4,7 +4,7 @@ export const meta = {
   whenToUse: 'When you want one directly-callable kernel optimizer that internalizes the universal best-of-breed components (the 7 composable axes) with a single beam search topology. For cross-topology coverage, orchestrate with KerSor instead.',
   phases: [
     { title: 'Setup', detail: 'Read kernel + baseline, init beam, locate substrate scripts' },
-    { title: 'Profile', detail: 'Profile current best (ncu/benchmark) into normalized metrics' },
+    { title: 'Profile', detail: 'Profile current best (native profiler/benchmark) into normalized metrics' },
     { title: 'Diagnose', detail: 'diagnose.py -> shared bottleneck_class (Layer C)' },
     { title: 'Retrieve', detail: 'memory_store.py retrieve + method_gate.py allowed_methods (Layers D, E)' },
     { title: 'Plan', detail: 'Generate BREADTH plans, gated to allowed_methods, with grounded anchors' },
@@ -696,6 +696,7 @@ if (PROFILING_DECISION.method === 'native_profiler' && !NCU_CMD) {
 }
 
 function nsysEnrichSuffix() {
+  if (USE_DRIVER && DRIVER_BACKEND_ID !== 'cuda') return ''
   return (
     `Path B (nsys enrich): if \`nsys\` is on PATH, you MAY run a short nsys timeline profile wrapping the same harness ` +
     `(e.g. \`nsys profile -o ${EXP_DIR}/prof.nsys-rep --trace=cuda,nvtx --sample=none --force-overwrite=true <harness argv>\`) ` +
@@ -705,9 +706,13 @@ function nsysEnrichSuffix() {
 }
 
 function perfHeuristicProfileHint(evalCmd) {
+  const profilerTerm = USE_DRIVER ? 'the native profiler' : 'ncu'
+  const measurementInstruction = USE_DRIVER
+    ? `Use the substrate driver run result for throughput and derive memory-vs-compute-bound hints from it; `
+    : `Run the benchmark command \`${evalCmd}\` for throughput and derive memory-vs-compute-bound hints from it; `
   return (
-    `Profiling-strategist chose method='perf_heuristic' (confidence='${PROFILING_DECISION.confidence}'); do NOT run ncu. ` +
-    `Run the benchmark command \`${evalCmd}\` for throughput and derive memory-vs-compute-bound hints from it; ` +
+    `Profiling-strategist chose method='perf_heuristic' (confidence='${PROFILING_DECISION.confidence}'); do NOT run ${profilerTerm}. ` +
+    measurementInstruction +
     `tag any bottleneck evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. ` +
     `In metrics, set evidence='profile_heuristic' and either heuristic_bclass (memory_bound|compute_bound|latency_occupancy|overhead_bound) ` +
     `or bottleneck_hint (short free text, e.g. "L2/memory bound at 55% SM"); use null heuristic_bclass only if truly unknown. ` +
@@ -715,50 +720,79 @@ function perfHeuristicProfileHint(evalCmd) {
   )
 }
 
+async function runDriverMetricsEnvelope({ suffix, phaseName, kernelPath, artifactPath, resultPath, profilePath }) {
+  await agentRetry(() => agent(
+    `${driverSh('build.sh', `--source ${kernelPath} --out ${artifactPath}`)}\n` +
+    `Return its stdout JSON verbatim.`,
+    { model: MODEL.mechanical, label: `driver-build-${suffix}`, phase: phaseName, schema: JSON_PASSTHROUGH }), { retries: 5 })
+  const runOut = await agentRetry(() => agent(
+    `${driverSh('run.sh', `--artifact ${artifactPath} --kernel ${kernelPath}`)}\n` +
+    `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
+    { model: MODEL.profile, label: `driver-run-${suffix}`, phase: phaseName, schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
+  const profileOut = await agentRetry(() => agent(
+    PROFILING_DECISION.method === 'native_profiler'
+      ? `${driverSh('profile.sh', `--artifact ${artifactPath} --kernel ${kernelPath} --out ${profilePath}`)}\n` +
+        `Return {ok, native_path}.`
+      : `Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'); do NOT run the native profiler. ` +
+        `Use driver-run-${suffix} throughput as the profiling source and return {ok:true, native_path:null, method:'${PROFILING_DECISION.method}', latency_ms:${(runOut && runOut.latency_ms) || 'null'}}.`,
+    { model: MODEL.profile, label: `driver-profile-${suffix}`, phase: phaseName, schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
+  let evidenceOut = null
+  if (PROFILING_DECISION.method === 'native_profiler') {
+    const nativePath = (profileOut && (profileOut.native_path || profileOut.native_profile)) || profilePath
+    evidenceOut = await agentRetry(() => agent(
+      `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${nativePath}\`.\n` +
+      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+      { model: MODEL.mechanical, label: `driver-to-evidence-${suffix}`, phase: phaseName, schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
+  } else if (PROFILING_DECISION.method === 'perf_heuristic') {
+    const normalizer = PROFILING_DECISION.normalizer || 'perf_to_evidence.py'
+    evidenceOut = await agentRetry(() => agent(
+      `Profiling-strategist chose method='perf_heuristic' (confidence='${PROFILING_DECISION.confidence}'); normalize driver-run-${suffix} throughput with the substrate normalizer. ` +
+      `${substrateInstruction('profiling/' + normalizer, `--baseline ${resultPath} --peak-gflops <device_peak_gflops> --peak-gbs <device_peak_gbs>`)} ` +
+      `Read device peaks from ${BACKEND_DIR}/manifest.json if present; otherwise estimate and say so. ` +
+      `Tag emitted bottlenecks as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. ` +
+      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+      { model: MODEL.mechanical, label: `driver-to-evidence-${suffix}`, phase: phaseName, schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
+  } else {
+    evidenceOut = await agentRetry(() => agent(
+      `Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'); do not run a native profiler. ` +
+      `Return canonical metrics with latency_ms from driver-run-${suffix} when available and null for missing counters.`,
+      { model: MODEL.mechanical, label: `driver-to-evidence-${suffix}`, phase: phaseName, schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
+  }
+  await agentRetry(() => agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+    `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
+    { model: MODEL.mechanical, label: `driver-diagnose-${suffix}`, phase: phaseName, schema: JSON_PASSTHROUGH }), { retries: 5 })
+  await agentRetry(() => agent(
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kernelPath} --result ${resultPath}\`.\n` +
+    `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
+    { model: MODEL.mechanical, label: `driver-anti-cheat-${suffix}`, phase: phaseName, schema: JSON_PASSTHROUGH }), { retries: 5 })
+
+  const metrics = (evidenceOut && evidenceOut.metrics) || {}
+  const latency = metrics.latency_ms != null ? metrics.latency_ms : (runOut && runOut.latency_ms)
+  return {
+    compiled: runOut && runOut.compiled !== undefined ? !!runOut.compiled : true,
+    correct: runOut && runOut.correct !== undefined ? !!runOut.correct : true,
+    candidate_latency_ms: latency == null ? null : Number(latency),
+    eager_latency_ms: null,
+    compile_latency_ms: null,
+    speedup: null,
+    metrics: { latency_ms: latency == null ? null : Number(latency), ...metrics },
+  }
+}
+
 // --- Baseline driver envelope (Layer-A, standalone driver-path only) ---
 if (USE_DRIVER_STANDALONE) {
   const kPath = KERNEL_PATH || `${EXP_DIR}/baseline.kernel`
   const buildOut = `${EXP_DIR}/baseline.artifact`
   const profOut = `${EXP_DIR}/baseline.prof.native`
-  await agentRetry(() => agent(
-    `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
-    `Return its stdout JSON verbatim.`,
-    { model: MODEL.mechanical, label: 'driver-build-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
-  const runOut = await agentRetry(() => agent(
-    `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
-    `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
-    { model: MODEL.profile, label: 'driver-run-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
-  let evidenceOut = null
-  if (PROFILING_DECISION.method === 'native_profiler') {
-    await agentRetry(() => agent(
-      `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
-      `Return {ok, native_path}.`,
-      { model: MODEL.profile, label: 'driver-profile-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
-    evidenceOut = await agentRetry(() => agent(
-      `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
-      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-      { model: MODEL.mechanical, label: 'driver-to-evidence-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
-  } else {
-    evidenceOut = await agentRetry(() => agent(
-      `Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'); do NOT run a native profiler. ` +
-      `Use the already-collected run.sh throughput from driver-run-setup (latency_ms${runOut && runOut.latency_ms != null ? ` = ${runOut.latency_ms}` : ''}). ` +
-      (PROFILING_DECISION.method === 'perf_heuristic'
-        ? `Normalize that throughput into canonical metrics via ` +
-          substrateInstruction('profiling/' + (PROFILING_DECISION.normalizer || 'perf_to_evidence.py'), `--baseline ${EXP_DIR}/baseline.result.json`) +
-          ` Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. ` +
-          nsysEnrichSuffix()
-        : `Return null for dram_pct/sm_pct/occupancy. `) +
-      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-      { model: MODEL.mechanical, label: 'driver-to-evidence-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
-  }
-  await agentRetry(() => agent(
-    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
-    `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
-    { model: MODEL.mechanical, label: 'driver-diagnose-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
-  await agentRetry(() => agent(
-    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/baseline.result.json\`.\n` +
-    `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
-    { model: MODEL.mechanical, label: 'driver-anti-cheat-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
+  await runDriverMetricsEnvelope({
+    suffix: 'setup',
+    phaseName: 'Setup',
+    kernelPath: kPath,
+    artifactPath: buildOut,
+    resultPath: `${EXP_DIR}/baseline.result.json`,
+    profilePath: profOut,
+  })
 }
 
 for (let iter = 1; iter <= ITERATIONS; iter++) {
@@ -776,24 +810,33 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
 
   // ---- Profile (Layer C input) ----
   phase('Profile')
-  const metrics = await agentRetry(() => agent(
-    `Profile the current best kernel and produce normalized metrics.\n` +
-    `Kernel: ${best.code_path}\nOp: ${OP}\n` +
-    (PROFILING_DECISION.method === 'native_profiler' && NCU_CMD && EVAL_CMD
-      ? `Run the user-provided ncu_command: \`${NCU_CMD}\` and the benchmark command \`${EVAL_CMD}\`.\n`
-      : PROFILING_DECISION.method === 'perf_heuristic' && EVAL_CMD
-        ? perfHeuristicProfileHint(EVAL_CMD)
-        : EVAL_CMD
-          ? `Run the benchmark command \`${EVAL_CMD}\` (writes a JSON result file).\n`
-          : `No benchmark_command provided; do not invent an evaluator. Return missing/null measured metrics.\n`) +
-    `Return the JSON exactly per the schema: compiled, correct, candidate_latency_ms, ` +
-    `eager_latency_ms, compile_latency_ms, speedup, and metrics{dram_pct, sm_pct, occupancy, latency_ms}. ` +
-    `Use null for unknown numbers. Do not fabricate; missing => null.` +
-    `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\n` +
-    `Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\n` +
-    `Then append:\n` +
-    `{"workflow":"${WORKFLOW_NAME}","phase":"Profile","ts":"<ts>","status":"done","candidate_id":"iter-${iter}-best","technique":"profile","speedup":<measured speedup as number or null>,"note":"<measured latency_ms + dominant metric (dram_pct/sm_pct/occupancy), one line>"}`,
-    { model: MODEL.profile, label: `profile-${iter}`, phase: 'Profile', schema: METRICS_SCHEMA, model: MODEL.profile }), { retries: 5 })
+  const metrics = USE_DRIVER_STANDALONE
+    ? await runDriverMetricsEnvelope({
+        suffix: `profile-${iter}`,
+        phaseName: 'Profile',
+        kernelPath: best.code_path,
+        artifactPath: `${EXP_DIR}/run-${iter}/best.artifact`,
+        resultPath: `${EXP_DIR}/run-${iter}/best.result.json`,
+        profilePath: `${EXP_DIR}/run-${iter}/best.prof.native`,
+      })
+    : await agentRetry(() => agent(
+      `Profile the current best kernel and produce normalized metrics.\n` +
+      `Kernel: ${best.code_path}\nOp: ${OP}\n` +
+      (PROFILING_DECISION.method === 'native_profiler' && NCU_CMD && EVAL_CMD
+        ? `Run the user-provided ncu_command: \`${NCU_CMD}\` and the benchmark command \`${EVAL_CMD}\`.\n`
+        : PROFILING_DECISION.method === 'perf_heuristic' && EVAL_CMD
+          ? perfHeuristicProfileHint(EVAL_CMD)
+          : EVAL_CMD
+            ? `Run the benchmark command \`${EVAL_CMD}\` (writes a JSON result file).\n`
+            : `No benchmark_command provided; do not invent an evaluator. Return missing/null measured metrics.\n`) +
+      `Return the JSON exactly per the schema: compiled, correct, candidate_latency_ms, ` +
+      `eager_latency_ms, compile_latency_ms, speedup, and metrics{dram_pct, sm_pct, occupancy, latency_ms}. ` +
+      `Use null for unknown numbers. Do not fabricate; missing => null.` +
+      `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\n` +
+      `Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\n` +
+      `Then append:\n` +
+      `{"workflow":"${WORKFLOW_NAME}","phase":"Profile","ts":"<ts>","status":"done","candidate_id":"iter-${iter}-best","technique":"profile","speedup":<measured speedup as number or null>,"note":"<measured latency_ms + dominant metric (dram_pct/sm_pct/occupancy), one line>"}`,
+      { model: MODEL.profile, label: `profile-${iter}`, phase: 'Profile', schema: METRICS_SCHEMA }), { retries: 5 })
 
   // ---- Diagnose (Layer C, deterministic script) ----
   phase('Diagnose')
@@ -908,30 +951,14 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
       const kPath = evaluated[ci].code_path
       const buildOut = `${EXP_DIR}/run-${iter}/cand-${ci + 1}.artifact`
       const profOut = `${EXP_DIR}/run-${iter}/cand-${ci + 1}.prof.native`
-      await agentRetry(() => agent(
-        `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
-        `Return its stdout JSON verbatim.`,
-        { model: MODEL.mechanical, label: `driver-build-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
-      const runOut = await agentRetry(() => agent(
-        `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
-        `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
-        { model: MODEL.profile, label: `driver-run-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
-      await agentRetry(() => agent(
-        `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
-        `Return {ok, native_path}.`,
-        { model: MODEL.profile, label: `driver-profile-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
-      const evidenceOut = await agentRetry(() => agent(
-        `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
-        `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-        { model: MODEL.mechanical, label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
-      await agentRetry(() => agent(
-        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
-        `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
-        { model: MODEL.mechanical, label: `driver-diagnose-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
-      await agentRetry(() => agent(
-        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/run-${iter}/cand-${ci + 1}.result.json\`.\n` +
-        `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
-        { model: MODEL.mechanical, label: `driver-anti-cheat-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
+      await runDriverMetricsEnvelope({
+        suffix,
+        phaseName: 'Evaluate',
+        kernelPath: kPath,
+        artifactPath: buildOut,
+        resultPath: `${EXP_DIR}/run-${iter}/cand-${ci + 1}.result.json`,
+        profilePath: profOut,
+      })
     }
   }
 

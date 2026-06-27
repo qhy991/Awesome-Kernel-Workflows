@@ -45,7 +45,7 @@ const RETURNS = {
   'hypothesis-0-0': {
     title: 'vec-loads',
     bottleneck: 'mem',
-    ncu_evidence: 'na',
+    profile_evidence: 'na',
     hypothesis: 'h',
     expected_impact: '1.2x',
     risk: 'r',
@@ -71,7 +71,7 @@ const RETURNS = {
 
 const CUDA_TOKENS = [
   /(?:^|\s)nvcc(?=\s|$)/,
-  /(?:^|\s)ncu(?=\s|$)/,
+  /\bncu\b/i,
   /PYBIND11_MODULE/,
   /cuda_runtime\.h/,
   /```cuda\b/,
@@ -80,10 +80,8 @@ const CUDA_TOKENS = [
 //   - __global__/__syncthreads excluded: AKO4X's generic read-baseline
 //     prompt lists them as illustrative examples ("especially __global__
 //     or @triton.jit functions") — language-agnostic, not CUDA-only.
-//   - nvcc/ncu use word-isolated patterns to avoid matching the hard-coded
-//     workspace path EXP_DIR/ncu-profiles/ which is an artifact directory
-//     created on the legacy NCU-harness path but never written under the
-//     driver path (no ncu_binary => no profiler invocation).
+//   - ncu is case-insensitive: driver-backed prompts must route profiling
+//     vocabulary through substrate/native-profiler terms, not legacy NCU names.
 
 test('ako4x triton dry-run: USE_DRIVER on, no CUDA tokens leak into any rendered prompt', async () => {
   const caps = await capturePrompts({ workflowPath: WORKFLOW, args: ARGS, agentReturns: RETURNS })
@@ -142,12 +140,12 @@ test('ako4x triton dry-run: full per-attempt Layer-A envelope labels emitted (bu
   }
 })
 
-test('ako4x triton dry-run: to-evidence + diagnose + anti-cheat reference substrate helpers', async () => {
+test('ako4x triton dry-run: normalizer + diagnose + anti-cheat reference substrate helpers', async () => {
   const caps = await capturePrompts({ workflowPath: WORKFLOW, args: ARGS, agentReturns: RETURNS })
   const evidence = caps.find(c => c.label === 'driver-to-evidence-0')
   assert.ok(evidence, 'to-evidence call must be present')
-  assert.match(evidence.prompt, /_substrate\/backends\/triton\/to_evidence\.py/,
-    `to-evidence prompt should reference triton driver to_evidence.py: ${evidence.prompt.slice(0, 200)}`)
+  assert.match(evidence.prompt, /_substrate\/profiling\/perf_to_evidence\.py/,
+    `perf-heuristic prompt should reference substrate perf_to_evidence.py: ${evidence.prompt.slice(0, 200)}`)
   const diagnose = caps.find(c => c.label === 'driver-diagnose-0')
   assert.match(diagnose.prompt, /_substrate\/diagnose\.py/,
     'diagnose must reference substrate-collapse diagnose.py')
