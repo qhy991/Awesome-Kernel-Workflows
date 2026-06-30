@@ -1,0 +1,55 @@
+# Single source of truth for the ascend substrate run.sh CLI contract (issue #25).
+# The while/case parser in run.sh is GENERATED from this file by
+# _substrate/backends/_gen_flag_parser.py (between the AUTO-GENERATED sentinels).
+# Required-arg checks, ARTIFACT=$KERNEL_SRC fallback, and op-resolution logic
+# remain hand-authored in run.sh.
+accepted_flags:
+  - name: artifact
+    dest: ARTIFACT
+    type: path
+    required: false
+    source_arg: kernel_path
+  - name: kernel
+    dest: KERNEL_SRC
+    type: path
+    required: false
+    source_arg: kernel_path
+  - name: problem
+    dest: PROBLEM
+    type: path
+    required: false
+    source_arg: problem_path
+  - name: out
+    aliases:
+      - result
+    dest: OUT
+    type: path
+    required: true
+    source_arg: result_path
+  - name: op
+    dest: OP
+    type: string
+    required: false
+  - name: language
+    dest: LANGUAGE
+    type: string
+    required: false
+  - name: mkb-root
+    dest: MKB_ROOT
+    type: path
+    required: false
+  - name: eval-runner
+    dest: EVAL_RUNNER
+    type: path
+    required: false
+  - name: baseline-latency
+    dest: BASELINE_LATENCY
+    type: float
+    required: false
+  - name: reps
+    aliases:
+      - rtol
+      - atol
+      - baseline
+    dest: null
+    required: false

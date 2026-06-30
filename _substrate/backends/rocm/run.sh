@@ -34,23 +34,27 @@ err_envelope() {
 
 ARTIFACT="" PROBLEM="" OUT="" REPS=50 RTOL="1e-3" ATOL="1e-3" BASELINE="both"
 TEST_CMD="" BENCH_CMD="" CORRECT_REGEX="" LATENCY_REGEX="" BASELINE_LATENCY=""
+# BEGIN AUTO-GENERATED FLAG PARSER — regenerate from flags.yaml via _substrate/backends/_gen_flag_parser.py
+# flags.yaml sha256=467574f6ccee2a96
+# DO NOT EDIT BETWEEN SENTINELS — edit flags.yaml and re-run: python3 _substrate/backends/_gen_flag_parser.py --write rocm
 while [ $# -gt 0 ]; do
   case "$1" in
-    --artifact)        ARTIFACT="${2:-}"; shift 2 ;;
-    --problem)         PROBLEM="${2:-}"; shift 2 ;;
-    --out)             OUT="${2:-}"; shift 2 ;;
-    --reps)            REPS="${2:-}"; shift 2 ;;
-    --rtol)            RTOL="${2:-}"; shift 2 ;;
-    --atol)            ATOL="${2:-}"; shift 2 ;;
-    --baseline)        BASELINE="${2:-}"; shift 2 ;;
-    --test-cmd)        TEST_CMD="${2:-}"; shift 2 ;;
-    --bench-cmd)       BENCH_CMD="${2:-}"; shift 2 ;;
-    --correct-regex)   CORRECT_REGEX="${2:-}"; shift 2 ;;
-    --latency-regex)   LATENCY_REGEX="${2:-}"; shift 2 ;;
+    --artifact)         ARTIFACT="${2:-}"; shift 2 ;;
+    --problem)          PROBLEM="${2:-}"; shift 2 ;;
+    --out)              OUT="${2:-}"; shift 2 ;;
+    --reps)             REPS="${2:-}"; shift 2 ;;
+    --rtol)             RTOL="${2:-}"; shift 2 ;;
+    --atol)             ATOL="${2:-}"; shift 2 ;;
+    --baseline)         BASELINE="${2:-}"; shift 2 ;;
+    --test-cmd)         TEST_CMD="${2:-}"; shift 2 ;;
+    --bench-cmd)        BENCH_CMD="${2:-}"; shift 2 ;;
+    --correct-regex)    CORRECT_REGEX="${2:-}"; shift 2 ;;
+    --latency-regex)    LATENCY_REGEX="${2:-}"; shift 2 ;;
     --baseline-latency) BASELINE_LATENCY="${2:-}"; shift 2 ;;
     *) err_envelope "unknown arg: $1" 3 ;;
   esac
 done
+# END AUTO-GENERATED FLAG PARSER
 
 # Mode 2: in-codebase test/bench commands.
 if [ -n "$TEST_CMD" ] || [ -n "$BENCH_CMD" ]; then

@@ -1,0 +1,59 @@
+# Single source of truth for the rocm substrate run.sh CLI contract (issue #25).
+# The while/case parser in run.sh is GENERATED from this file by
+# _substrate/backends/_gen_flag_parser.py (between the AUTO-GENERATED sentinels).
+# Required-arg checks and mode-2 test/bench logic remain hand-authored in run.sh.
+accepted_flags:
+  - name: artifact
+    dest: ARTIFACT
+    type: path
+    required: true
+    source_arg: kernel_path
+  - name: problem
+    dest: PROBLEM
+    type: path
+    required: true
+    source_arg: problem_path
+  - name: out
+    dest: OUT
+    type: path
+    required: true
+    source_arg: result_path
+  - name: reps
+    dest: REPS
+    type: int
+    required: false
+    default: 5
+  - name: rtol
+    dest: RTOL
+    type: float
+    required: false
+    default: 1e-3
+  - name: atol
+    dest: ATOL
+    type: float
+    required: false
+    default: 1e-3
+  - name: baseline
+    dest: BASELINE
+    type: path
+    required: false
+  - name: test-cmd
+    dest: TEST_CMD
+    type: string
+    required: false
+  - name: bench-cmd
+    dest: BENCH_CMD
+    type: string
+    required: false
+  - name: correct-regex
+    dest: CORRECT_REGEX
+    type: string
+    required: false
+  - name: latency-regex
+    dest: LATENCY_REGEX
+    type: string
+    required: false
+  - name: baseline-latency
+    dest: BASELINE_LATENCY
+    type: float
+    required: false
