@@ -27,6 +27,12 @@ workflow:
   output_filename: fact-kernel-synthesis.js
   directory: FACT/
 routing:
+  accepts:
+    problem_type:
+    - 'cutlass-pattern-synthesis'
+    - 'cutlass-gemm-optimization'
+    - 'gpu-kernel-optimization'
+    constraints: []
   best_kernel_field: null
   topology: refinement
   requires_harness: true

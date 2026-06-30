@@ -190,6 +190,11 @@ template:
   - cross_round_memory
   - harness_retrospective_mode3
 routing:
+  accepts:
+    problem_type:
+    - 'gpu-kernel-optimization'
+    - 'kernel-generation'
+    constraints: []
   best_kernel_field: best_kernel_code
   topology: iterative
   requires_harness: false

@@ -444,6 +444,11 @@ template:
   - behavioral_clustering
   - ncu_profiling
 routing:
+  accepts:
+    problem_type:
+    - 'gpu-kernel-optimization'
+    - 'kernel-search'
+    constraints: []
   best_kernel_field: best_kernel_code
   topology: bandit
   requires_harness: true

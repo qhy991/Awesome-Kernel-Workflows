@@ -37,6 +37,10 @@ workflow:
   output_filename: kernelblaster-kernel-optimization.js
   directory: KernelBlaster/
 routing:
+  accepts:
+    problem_type:
+    - 'cuda-kernel-optimization'
+    constraints: []
   best_kernel_field: best_kernel_code
   topology: iterative
   requires_harness: true

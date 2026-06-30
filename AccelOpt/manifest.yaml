@@ -37,6 +37,11 @@ workflow:
   output_filename: accelopt-kernel-optimization.js
   directory: AccelOpt/
 routing:
+  accepts:
+    problem_type:
+    - 'cuda-kernel-optimization'
+    - 'cuda-kernel-generation'
+    constraints: []
   best_kernel_field: best_kernel_code
   topology: iterative
   requires_harness: false

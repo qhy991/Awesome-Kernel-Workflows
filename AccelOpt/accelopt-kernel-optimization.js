@@ -164,13 +164,12 @@ function guard(obj, field, fallback) {
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
 // treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
-const WORKFLOW_SUITABILITY = {
+// Method metadata (eligibility moved to manifest routing.accepts; backend axis
+// consumed by resolveBackend()). Kept fields are still referenced below.
+const WORKFLOW_META = {
   method_supported_backends: ['cuda', 'triton', 'metax'],
   default_backend: 'cuda',
   requires_capability: { bottleneck_classes: [], metrics: ['dram_pct', 'sm_pct'] },
-  supported_problem_types: ['cuda-kernel-optimization', 'cuda-kernel-generation'],
-  problem_types: ['existing CUDA kernel optimization', 'CUDA generation from problem_definition with benchmark contract'],
-  reason: 'AccelOpt is intrinsic to native-profiler metrics (dram_pct/sm_pct) — NCU-class on NVIDIA (cuda, triton), mcProfiler/mcTracer-class on MetaX (metax) — with a present driver.',
 }
 
 function normalizeSuitabilityValue(value) {
@@ -192,9 +191,6 @@ function normalizeSuitabilityValue(value) {
   return aliases[raw] || raw
 }
 
-function supportsSuitabilityValue(supported, requested) {
-  return supported.includes(requested) || supported.some(value => value.endsWith(`-${requested}`))
-}
 
 function resolveBackend() {
   const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
@@ -204,39 +200,13 @@ function resolveBackend() {
   }
   if (b) return b
   if (l) return l
-  const ms = WORKFLOW_SUITABILITY.method_supported_backends
+  const ms = WORKFLOW_META.method_supported_backends
   if (Array.isArray(ms) && ms.length === 1) return normalizeSuitabilityValue(ms[0])
-  return WORKFLOW_SUITABILITY.default_backend
+  return WORKFLOW_META.default_backend
 }
 
-function assertWorkflowSuitability() {
-  const backend = resolveBackend()
 
-  const ms = WORKFLOW_SUITABILITY.method_supported_backends
-  if (ms !== 'any' && !ms.map(normalizeSuitabilityValue).includes(backend)) {
-    throw new Error(
-      `${WORKFLOW_NAME}'s method does not support backend="${backend}". ` +
-      `Method-supported: ${ms.join(', ')}. Reason: ${WORKFLOW_SUITABILITY.reason}`
-    )
-  }
-
-  const requestedProblemType = normalizeSuitabilityValue(args.problem_type)
-  if (requestedProblemType && requestedProblemType !== 'auto') {
-    const supportedProblemTypes = (WORKFLOW_SUITABILITY.supported_problem_types || []).map(normalizeSuitabilityValue)
-    if (supportedProblemTypes.length && !supportsSuitabilityValue(supportedProblemTypes, requestedProblemType)) {
-      throw new Error(
-        `${WORKFLOW_NAME} is not suitable for problem_type="${args.problem_type}". ` +
-        `Supported problem types: ${WORKFLOW_SUITABILITY.supported_problem_types.join(', ')}. ` +
-        `Typical use cases: ${WORKFLOW_SUITABILITY.problem_types.join('; ')}. ` +
-        `Reason: ${WORKFLOW_SUITABILITY.reason}`
-      )
-    }
-  }
-
-  return backend
-}
-
-const BACKEND = assertWorkflowSuitability()
+const BACKEND = resolveBackend()
 
 // =============================================================================
 // AccelOpt Self-Improving Kernel Optimization Workflow (NCU-Enhanced, v2)
@@ -734,7 +704,7 @@ if (USE_DRIVER) {
     `2. Run exactly: \`cat ${DRIVER_DIR}/idioms${DRIVER_EXT}\` and parse JSON.\n` +
     `If either is missing, return {present:false, reason:"no driver for backend ${BACKEND}"}.\n` +
     `Also compare manifest.capabilities against the required capability floor ` +
-    `${JSON.stringify(WORKFLOW_SUITABILITY.requires_capability)};\n` +
+    `${JSON.stringify(WORKFLOW_META.requires_capability)};\n` +
     `if a required metric/class is missing return {present:true, capability_ok:false, missing:[...]}.\n` +
     `Return {present, capability_ok, missing, backend_id, source_ext, lang_fence, hw_vendor,\n` +
     `  profiler_name|null, profiler_format, capability_metrics, supported_classes, problem_types,\n` +

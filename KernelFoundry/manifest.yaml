@@ -36,6 +36,12 @@ workflow:
   output_filename: kernelfoundry-kernel-optimization.js
   directory: KernelFoundry/
 routing:
+  accepts:
+    problem_type:
+    - 'gpu-kernel-optimization'
+    - 'kernel-generation'
+    - 'kernel-search'
+    constraints: []
   best_kernel_field: best_kernel_code
   topology: evolutionary
   requires_harness: false

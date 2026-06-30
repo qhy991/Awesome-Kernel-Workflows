@@ -408,6 +408,10 @@ template:
   - custom_profiling
   - early_stopping
 routing:
+  accepts:
+    problem_type:
+    - 'cuda-kernel-optimization'
+    constraints: []
   best_kernel_field: best_kernel_code
   topology: refinement
   requires_harness: false

@@ -31,6 +31,10 @@ workflow:
   output_filename: cutlassgemm-gemm-optimization.js
   directory: CutlassGEMM/
 routing:
+  accepts:
+    problem_type:
+    - 'cutlass-gemm-optimization'
+    constraints: []
   best_kernel_field: null
   topology: iterative
   requires_harness: true

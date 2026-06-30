@@ -308,6 +308,11 @@ template:
   - adaptive_replanning
   - early_termination
 routing:
+  accepts:
+    problem_type:
+    - 'cuda-kernel-generation'
+    - 'cuda-kernel-optimization'
+    constraints: []
   best_kernel_field: null
   topology: iterative
   requires_harness: true

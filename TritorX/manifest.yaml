@@ -32,6 +32,11 @@ workflow:
   output_filename: tritorx-operator-generation.js
   directory: TritorX/
 routing:
+  accepts:
+    problem_type:
+    - 'aten-triton-operator-generation'
+    - 'operator-generation'
+    constraints: []
   best_kernel_field: best_kernel_code
   topology: fsm
   requires_harness: false

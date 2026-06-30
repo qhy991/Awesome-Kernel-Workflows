@@ -79,25 +79,20 @@ test('legacy path: language=cuda is accepted by suitability guard', async () => 
   assert.ok(caps.length > 0)
 })
 
-test('legacy path: language=triton is REJECTED by suitability guard', async () => {
-  await assert.rejects(
-    run({ language: 'triton' }, minimalReturns),
-    (err) => {
-      assert.match(err.message, /not suitable for language="triton"/)
-      assert.match(err.message, /Supported languages\/backends: cuda/)
-      return true
-    },
-  )
-})
-
-test('legacy path: language=sycl is REJECTED by suitability guard', async () => {
-  await assert.rejects(
-    run({ language: 'sycl' }, minimalReturns),
-    (err) => {
-      assert.match(err.message, /not suitable for language="sycl"/)
-      return true
-    },
-  )
+// Eligibility (language/problem_type) moved to manifest routing.accepts and is
+// enforced by the KerSor selector (KerSor #31). The in-workflow suitability
+// gate was removed (issue #24), so an off-list language no longer throws the
+// "not suitable for language" error inside the workflow — it either proceeds
+// or fails later for an unrelated reason.
+test('legacy path: off-list language no longer rejected by in-workflow suitability guard', async () => {
+  for (const lang of ['triton', 'sycl']) {
+    try {
+      await run({ language: lang }, minimalReturns)
+    } catch (e) {
+      assert.doesNotMatch(e.message, /not suitable for language/,
+        `language=${lang}: in-workflow suitability gate removed; eligibility is selector-enforced from manifest routing.accepts`)
+    }
+  }
 })
 
 test('§6.4: args.backend + args.language conflict (post-normalize) -> throws naming both', async () => {

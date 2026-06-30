@@ -491,7 +491,7 @@ ${manifestResult.manifest_yaml}
 
 # Generation Rules:
 1. Start with \`export const meta = {...}\` — fill from manifest workflow.* and phases[].name/detail
-2. Immediately after meta, emit \`WORKFLOW_SUITABILITY\` with supported_languages, supported_problem_types, problem_types, reason, plus \`assertWorkflowSuitability()\` that hard-fails only when explicit \`args.language\` or \`args.problem_type\` is incompatible
+2. Do NOT emit a \`WORKFLOW_SUITABILITY\` const or \`assertWorkflowSuitability()\` — workflow eligibility (language, problem_type, backend) lives in manifest \`routing.accepts:\` and is enforced by the KerSor selector (issue #24). Emit only the args-normalization helper(s) (e.g. \`normalizeSuitabilityValue\`) if the workflow needs backend/language aliasing for arg-conflict checks.
 3. Add header comment block documenting: source paper, usage example with all args, arg descriptions
 4. Emit const declarations for all args (required without default, optional with || default)
 5. Emit canonical input resolution: optimize args.kernel_path when present; otherwise require args.problem_definition or args.problem_path, generate seed_candidates initial kernels, verify with test_command or benchmark_command, and optimize the best verified seed
@@ -562,10 +562,9 @@ ${workflowCode.workflow_code}
 - [ ] Each phase has title and detail strings
 - [ ] meta.name is kebab-case
 
-## 2. Suitability contract
-- [ ] WORKFLOW_SUITABILITY exists immediately after meta
-- [ ] supported_languages, supported_problem_types, problem_types, and reason are present
-- [ ] assertWorkflowSuitability() checks explicit args.language and args.problem_type before work starts
+## 2. Eligibility contract (issue #24)
+- [ ] No `WORKFLOW_SUITABILITY` const and no `assertWorkflowSuitability()` function in the .js
+- [ ] manifest `routing.accepts.problem_type` declares the workflow's supported problem types
 
 ## 3. Phase consistency
 - [ ] Every phase() call matches a meta.phases title

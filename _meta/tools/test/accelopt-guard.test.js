@@ -32,20 +32,30 @@ test('backend:"triton" is method-supported (does NOT throw at the guard)', async
   await assert.doesNotReject(run({ backend: 'triton' }), /does not support backend/)
 })
 
-test('backend:"metal" -> throws naming the supported set', async () => {
-  await assert.rejects(run({ backend: 'metal' }), (err) => {
-    assert.match(err.message, /backend="metal"/)
-    assert.match(err.message, /cuda/)
-    assert.match(err.message, /triton/)
-    return true
-  })
+// Backend eligibility (method_supported_backends) moved to manifest; the
+// in-workflow throw was removed (#24). Off-list backends no longer throw inside
+// the workflow — resolveBackend() returns the (normalized) backend and the
+// workflow proceeds; eligibility is selector-enforced from manifest.
+test('backend:"metal" no longer rejected in-workflow (eligibility moved to manifest)', async () => {
+  try {
+    const caps = await run({ backend: 'metal' })
+    assert.ok(caps.length > 0, 'workflow proceeds; backend eligibility is selector-enforced')
+  } catch (e) {
+    assert.doesNotMatch(e.message, /does not support backend|backend="metal"/,
+      'in-workflow backend gate removed; method_supported_backends now lives in manifest')
+  }
 })
 
 test('conflicting backend:"triton" + language:"cuda" -> throws', async () => {
   await assert.rejects(run({ backend: 'triton', language: 'cuda' }), /Conflicting args/)
 })
 
-test('hip alias normalizes (backend:"hip" -> rocm, rejected, names rocm not hip)', async () => {
-  await assert.rejects(run({ backend: 'hip' }),
-    (err) => { assert.match(err.message, /backend="rocm"/); return true })
+test('hip alias normalizes to rocm and proceeds (eligibility moved to selector)', async () => {
+  try {
+    const caps = await run({ backend: 'hip' })
+    assert.ok(caps.length > 0, 'workflow proceeds with normalized backend')
+  } catch (e) {
+    assert.doesNotMatch(e.message, /does not support backend|backend="rocm"/,
+      'in-workflow backend gate removed')
+  }
 })
