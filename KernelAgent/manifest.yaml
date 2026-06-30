@@ -499,6 +499,11 @@ template:
   customizations:
   - iterative_refinement
 routing:
+  accepts:
+    problem_type:
+    - 'triton-kernel-generation'
+    - 'operator-generation'
+    constraints: []
   best_kernel_field: best_kernel_code
   topology: refinement
   requires_harness: true

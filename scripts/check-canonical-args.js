@@ -158,19 +158,14 @@ for (const file of walk(root)) {
   }
 
   if (isTopLevelWorkflow(file)) {
-    const requiredSuitabilitySnippets = [
-      'const WORKFLOW_SUITABILITY =',
-      'supported_languages:',
-      'supported_problem_types:',
-      'problem_types:',
-      'reason:',
-      'function assertWorkflowSuitability()',
-      'assertWorkflowSuitability()',
-    ]
-    for (const snippet of requiredSuitabilitySnippets) {
-      if (!text.includes(snippet)) {
-        failures.push(`${file}: missing workflow suitability contract snippet: ${snippet}`)
-      }
+    // Issue #24: per-workflow assertWorkflowSuitability was removed; eligibility
+    // now lives in manifest routing.accepts and is enforced by the KerSor
+    // selector. Forbid the old pattern so it can't be reintroduced by scaffolding.
+    if (/\bfunction\s+assertWorkflowSuitability\s*\(/.test(text)) {
+      failures.push(`${file}: defines assertWorkflowSuitability — eligibility moved to manifest routing.accepts (issue #24)`)
+    }
+    if (/^\s*const\s+WORKFLOW_SUITABILITY\s*=/.test(text)) {
+      failures.push(`${file}: defines WORKFLOW_SUITABILITY const — moved to manifest routing.accepts (issue #24)`)
     }
   }
 

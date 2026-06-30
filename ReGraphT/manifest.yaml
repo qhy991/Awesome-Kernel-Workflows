@@ -373,6 +373,11 @@ template:
   - custom_profiling
   - early_stopping
 routing:
+  accepts:
+    problem_type:
+    - 'cuda-kernel-optimization'
+    - 'kernel-search'
+    constraints: []
   best_kernel_field: best_kernel_code
   topology: graph_search
   requires_harness: true

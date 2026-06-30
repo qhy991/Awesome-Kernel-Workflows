@@ -36,6 +36,11 @@ workflow:
   output_filename: argus-kernel-optimization.js
   directory: ARGUS/
 routing:
+  accepts:
+    problem_type:
+    - 'invariant-guided-kernel-optimization'
+    - 'gpu-kernel-optimization'
+    constraints: []
   best_kernel_field: best_kernel_code
   topology: iterative
   requires_harness: false

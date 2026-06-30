@@ -36,6 +36,9 @@ workflow:
   output_filename: llamacpp-embedded-search.js
   directory: LlamacppEmbeddedSearch/
 routing:
+  accepts:
+    problem_type: []
+    constraints: []
   requires_embedded_registration: true
   best_kernel_field: best_kernel_code
   framework_integrator_fallback: true

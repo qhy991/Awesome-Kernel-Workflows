@@ -28,6 +28,11 @@ workflow:
   output_filename: xe-forge-kernel-optimization.js
   directory: Xe-Forge/
 routing:
+  accepts:
+    problem_type:
+    - 'xpu-kernel-optimization'
+    - 'triton-kernel-optimization'
+    constraints: []
   best_kernel_field: null
   topology: refinement
   requires_harness: true

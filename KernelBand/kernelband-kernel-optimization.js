@@ -113,12 +113,6 @@ function guard(obj, field, fallback) {
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
 // treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
-const WORKFLOW_SUITABILITY = {
-  supported_languages: ['triton', 'cuda'],
-  supported_problem_types: ['gpu-kernel-optimization', 'kernel-search'],
-  problem_types: ['bandit-guided CUDA/Triton kernel search', 'hardware-aware profiling and pruning'],
-  reason: 'KernelBand needs CUDA/Triton-style profiling features and evaluator rewards; unsupported languages lack the required feature/mask contract.',
-}
 
 function normalizeSuitabilityValue(value) {
   const raw = String(value || '').trim().toLowerCase().replace(/_/g, '-')
@@ -139,36 +133,6 @@ function normalizeSuitabilityValue(value) {
   return aliases[raw] || raw
 }
 
-function supportsSuitabilityValue(supported, requested) {
-  return supported.includes(requested) || supported.some(value => value.endsWith(`-${requested}`))
-}
-
-function assertWorkflowSuitability() {
-  const requestedLanguage = normalizeSuitabilityValue(args.language)
-  if (requestedLanguage && requestedLanguage !== 'auto') {
-    const supported = WORKFLOW_SUITABILITY.supported_languages.map(normalizeSuitabilityValue)
-    if (!supported.includes(requestedLanguage)) {
-      throw new Error(
-        `${WORKFLOW_NAME} is not suitable for language="${args.language}". ` +
-        `Supported languages/backends: ${WORKFLOW_SUITABILITY.supported_languages.join(', ')}. ` +
-        `Reason: ${WORKFLOW_SUITABILITY.reason}`
-      )
-    }
-  }
-
-  const requestedProblemType = normalizeSuitabilityValue(args.problem_type)
-  if (requestedProblemType && requestedProblemType !== 'auto') {
-    const supportedProblemTypes = (WORKFLOW_SUITABILITY.supported_problem_types || []).map(normalizeSuitabilityValue)
-    if (supportedProblemTypes.length && !supportsSuitabilityValue(supportedProblemTypes, requestedProblemType)) {
-      throw new Error(
-        `${WORKFLOW_NAME} is not suitable for problem_type="${args.problem_type}". ` +
-        `Supported problem types: ${WORKFLOW_SUITABILITY.supported_problem_types.join(', ')}. ` +
-        `Typical use cases: ${WORKFLOW_SUITABILITY.problem_types.join('; ')}. ` +
-        `Reason: ${WORKFLOW_SUITABILITY.reason}`
-      )
-    }
-  }
-}
 
 function resolveBackendAxis() {
   const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
@@ -184,9 +148,6 @@ function resolveBackendAxis() {
 const RESOLVED_BACKEND = resolveBackendAxis()
 const USE_DRIVER = !!args.backend_dir
 
-if (!USE_DRIVER) {
-  assertWorkflowSuitability()
-}
 
 // =============================================================================
 // KernelBand: Steering LLM-based Kernel Optimization via Hardware-Aware

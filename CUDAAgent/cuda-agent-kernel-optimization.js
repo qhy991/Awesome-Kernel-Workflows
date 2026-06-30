@@ -196,64 +196,6 @@ function __embeddedEvalPlan(ctx) {
 }
 // --- END embedded-eval substrate ---
 
-const WORKFLOW_SUITABILITY = {
-  supported_languages: ['cuda', 'metal'],
-  supported_problem_types: ['cuda-kernel-generation', 'cuda-kernel-optimization', 'gpu-kernel-optimization'],
-  problem_types: ['PyTorch model/operator to custom CUDA/Metal ops', 'GPU inference-time profile/implement/verify/refine loop'],
-  reason: 'CUDA Agent in this repo targets CUDA custom operators and CUDA profiling/evaluation feedback.',
-}
-
-function normalizeSuitabilityValue(value) {
-  const raw = String(value || '').trim().toLowerCase().replace(/_/g, '-')
-  const aliases = {
-    'c++': 'cpp',
-    cxx: 'cpp',
-    cplusplus: 'cpp',
-    cute: 'cute-dsl',
-    hip: 'rocm',
-    'intel-xpu': 'xpu',
-    optimize: 'kernel-optimization',
-    optimization: 'kernel-optimization',
-    generate: 'kernel-generation',
-    generation: 'kernel-generation',
-    explain: 'performance-explanation',
-    explanation: 'performance-explanation',
-  }
-  return aliases[raw] || raw
-}
-
-function supportsSuitabilityValue(supported, requested) {
-  return supported.includes(requested) || supported.some(value => value.endsWith(`-${requested}`))
-}
-
-function assertWorkflowSuitability() {
-  const requestedLanguage = normalizeSuitabilityValue(args.language)
-  if (requestedLanguage && requestedLanguage !== 'auto') {
-    const supported = WORKFLOW_SUITABILITY.supported_languages.map(normalizeSuitabilityValue)
-    if (!supported.includes(requestedLanguage)) {
-      throw new Error(
-        `${WORKFLOW_NAME} is not suitable for language="${args.language}". ` +
-        `Supported languages/backends: ${WORKFLOW_SUITABILITY.supported_languages.join(', ')}. ` +
-        `Reason: ${WORKFLOW_SUITABILITY.reason}`
-      )
-    }
-  }
-
-  const requestedProblemType = normalizeSuitabilityValue(args.problem_type)
-  if (requestedProblemType && requestedProblemType !== 'auto') {
-    const supportedProblemTypes = (WORKFLOW_SUITABILITY.supported_problem_types || []).map(normalizeSuitabilityValue)
-    if (supportedProblemTypes.length && !supportsSuitabilityValue(supportedProblemTypes, requestedProblemType)) {
-      throw new Error(
-        `${WORKFLOW_NAME} is not suitable for problem_type="${args.problem_type}". ` +
-        `Supported problem types: ${WORKFLOW_SUITABILITY.supported_problem_types.join(', ')}. ` +
-        `Typical use cases: ${WORKFLOW_SUITABILITY.problem_types.join('; ')}. ` +
-        `Reason: ${WORKFLOW_SUITABILITY.reason}`
-      )
-    }
-  }
-}
-
-assertWorkflowSuitability()
 
 // =============================================================================
 // CUDA Agent: Skill-Integrated Multi-Turn Kernel Optimization

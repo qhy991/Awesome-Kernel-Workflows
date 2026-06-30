@@ -367,6 +367,11 @@ template:
   - custom_profiling
   - early_stopping
 routing:
+  accepts:
+    problem_type:
+    - 'cuda-kernel-generation'
+    - 'cuda-kernel-optimization'
+    constraints: []
   best_kernel_field: best_kernel_code
   topology: iterative
   requires_harness: true

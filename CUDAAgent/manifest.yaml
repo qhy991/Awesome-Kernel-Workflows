@@ -35,6 +35,12 @@ workflow:
   output_filename: cudaagent-kernel-optimization.js
   directory: CUDAAgent/
 routing:
+  accepts:
+    problem_type:
+    - 'cuda-kernel-generation'
+    - 'cuda-kernel-optimization'
+    - 'gpu-kernel-optimization'
+    constraints: []
   best_kernel_field: best_kernel_code
   topology: iterative
   requires_harness: false

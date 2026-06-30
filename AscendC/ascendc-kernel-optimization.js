@@ -110,47 +110,6 @@ function guard(obj, field, fallback) {
 
 const WORKFLOW_NAME = 'ascendc-kernel-optimization'
 
-const WORKFLOW_SUITABILITY = {
-  supported_languages: ['ascendc'],
-  supported_problem_types: ['ascend-kernel-optimization', 'ascend-kernel-generation'],
-  problem_types: [
-    'AscendC kernel optimization on Ascend 910B NPUs via msprof + ascendc_direct_launch',
-    'AscendC kernel generation from problem_definition with a validation command',
-  ],
-  reason: 'This workflow is Ascend-native: it targets AscendC on Ascend NPUs, profiles with msprof (CANN), and delegates compile/correctness/timing to the MultiKernelBench ascendc_direct_launch runner. It is not suitable for CUDA/Triton/ROCm/Metal targets.',
-}
-
-function normalizeSuitabilityValue(value) {
-  const raw = String(value || '').trim().toLowerCase().replace(/_/g, '-')
-  const aliases = { 'ascend-c': 'ascendc', 'c++': 'cpp', cxx: 'cpp', cplusplus: 'cpp' }
-  return aliases[raw] || raw
-}
-
-function assertWorkflowSuitability() {
-  const requestedLanguage = normalizeSuitabilityValue(args.language)
-  if (requestedLanguage && requestedLanguage !== 'auto') {
-    const supported = WORKFLOW_SUITABILITY.supported_languages.map(normalizeSuitabilityValue)
-    if (!supported.includes(requestedLanguage)) {
-      throw new Error(
-        `${WORKFLOW_NAME} is not suitable for language="${args.language}". ` +
-        `Supported languages/backends: ${WORKFLOW_SUITABILITY.supported_languages.join(', ')}. ` +
-        `Reason: ${WORKFLOW_SUITABILITY.reason}`,
-      )
-    }
-  }
-  const requestedProblemType = normalizeSuitabilityValue(args.problem_type)
-  if (requestedProblemType && requestedProblemType !== 'auto') {
-    const supportedProblemTypes = (WORKFLOW_SUITABILITY.supported_problem_types || []).map(normalizeSuitabilityValue)
-    if (supportedProblemTypes.length && !supportedProblemTypes.includes(requestedProblemType)) {
-      throw new Error(
-        `${WORKFLOW_NAME} is not suitable for problem_type="${args.problem_type}". ` +
-        `Supported problem types: ${WORKFLOW_SUITABILITY.supported_problem_types.join(', ')}. ` +
-        `Reason: ${WORKFLOW_SUITABILITY.reason}`,
-      )
-    }
-  }
-}
-assertWorkflowSuitability()
 
 // --- args ---
 const KERNEL_PATH = args.kernel_path || ''
