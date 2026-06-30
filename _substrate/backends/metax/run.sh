@@ -25,6 +25,9 @@ err_envelope() {
 }
 
 ARTIFACT="" PROBLEM="" OUT="" REPS=50 RTOL="1e-3" ATOL="1e-3" BASELINE="both"
+# BEGIN AUTO-GENERATED FLAG PARSER — regenerate from flags.yaml via _substrate/backends/_gen_flag_parser.py
+# flags.yaml sha256=067a79294b2ca090
+# DO NOT EDIT BETWEEN SENTINELS — edit flags.yaml and re-run: python3 _substrate/backends/_gen_flag_parser.py --write metax
 while [ $# -gt 0 ]; do
   case "$1" in
     --artifact) ARTIFACT="${2:-}"; shift 2 ;;
@@ -37,6 +40,7 @@ while [ $# -gt 0 ]; do
     *) err_envelope "unknown arg: $1" 3 ;;
   esac
 done
+# END AUTO-GENERATED FLAG PARSER
 
 [ -n "$ARTIFACT" ] || err_envelope "missing --artifact" 3
 [ -n "$PROBLEM" ]  || err_envelope "missing --problem" 3

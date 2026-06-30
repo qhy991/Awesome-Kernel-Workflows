@@ -29,21 +29,25 @@ err_envelope() {
 
 ARTIFACT="" KERNEL_SRC="" PROBLEM="" OUT="" OP="${MKB_OP:-}" LANGUAGE="ascendc_direct_launch"
 MKB_ROOT="${MULTIKERNELBENCH_ROOT:-}" EVAL_RUNNER="" BASELINE_LATENCY=""
+# BEGIN AUTO-GENERATED FLAG PARSER — regenerate from flags.yaml via _substrate/backends/_gen_flag_parser.py
+# flags.yaml sha256=78e1f056565cbbe1
+# DO NOT EDIT BETWEEN SENTINELS — edit flags.yaml and re-run: python3 _substrate/backends/_gen_flag_parser.py --write ascend
 while [ $# -gt 0 ]; do
   case "$1" in
-    --artifact)         ARTIFACT="${2:-}"; shift 2 ;;
-    --kernel)           KERNEL_SRC="${2:-}"; shift 2 ;;   # workflow .js passes the raw solver output here
-    --problem)          PROBLEM="${2:-}"; shift 2 ;;
-    --out|--result)     OUT="${2:-}"; shift 2 ;;          # workflow .js uses --result; SDK uses --out
-    --op)               OP="${2:-}"; shift 2 ;;
-    --language)         LANGUAGE="${2:-}"; shift 2 ;;
-    --mkb-root)         MKB_ROOT="${2:-}"; shift 2 ;;
-    --eval-runner)      EVAL_RUNNER="${2:-}"; shift 2 ;;
-    --baseline-latency) BASELINE_LATENCY="${2:-}"; shift 2 ;;
-    --reps|--rtol|--atol|--baseline) shift 2 ;;   # accepted for parity; MKB controls these
+    --artifact)                      ARTIFACT="${2:-}"; shift 2 ;;
+    --kernel)                        KERNEL_SRC="${2:-}"; shift 2 ;;
+    --problem)                       PROBLEM="${2:-}"; shift 2 ;;
+    --out|--result)                  OUT="${2:-}"; shift 2 ;;
+    --op)                            OP="${2:-}"; shift 2 ;;
+    --language)                      LANGUAGE="${2:-}"; shift 2 ;;
+    --mkb-root)                      MKB_ROOT="${2:-}"; shift 2 ;;
+    --eval-runner)                   EVAL_RUNNER="${2:-}"; shift 2 ;;
+    --baseline-latency)              BASELINE_LATENCY="${2:-}"; shift 2 ;;
+    --reps|--rtol|--atol|--baseline) shift 2 ;;
     *) err_envelope "unknown arg: $1" 3 ;;
   esac
 done
+# END AUTO-GENERATED FLAG PARSER
 
 # The submission to evaluate is the build.sh artifact; fall back to the raw --kernel source.
 [ -n "$ARTIFACT" ] || ARTIFACT="$KERNEL_SRC"
