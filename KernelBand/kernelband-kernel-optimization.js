@@ -527,13 +527,13 @@ if (USE_DRIVER_STANDALONE) {
     `Return its stdout JSON verbatim.`,
     { model: MODEL.mechanical, label: 'driver-build-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
   const runOut = await agentRetry(() => agent(
-    `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+    `${driverSh('run.sh', `--artifact ${buildOut} --problem ${PROBLEM_PATH} --out ${buildOut}.run.json`)}\n` +
     `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
     { model: MODEL.profile, label: 'driver-run-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   let evidenceOut
   if (PROFILING_DECISION.method === 'native_profiler') {
     await agentRetry(() => agent(
-      `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+      `${driverSh('profile.sh', `--artifact ${buildOut} --problem ${PROBLEM_PATH} --out ${buildOut}.run.json --out ${profOut}`)}\n` +
       `Return {ok, native_path}.`,
       { model: MODEL.profile, label: 'driver-profile-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
     evidenceOut = await agentRetry(() => agent(
@@ -545,7 +545,7 @@ if (USE_DRIVER_STANDALONE) {
       `Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'); do NOT run a native profiler (profile.sh). ` +
       `Use the run.sh latency/throughput from above. ` +
       (PROFILING_DECISION.method === 'perf_heuristic'
-        ? `Normalize that throughput into canonical metrics via \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/${PROFILING_DECISION.normalizer || 'perf_to_evidence.py'} --artifact ${buildOut} --kernel ${kPath} --out ${profOut}\`. Tag every emitted bottleneck with evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. `
+        ? `Normalize that throughput into canonical metrics via \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/${PROFILING_DECISION.normalizer || 'perf_to_evidence.py'} --artifact ${buildOut} --problem ${PROBLEM_PATH} --out ${buildOut}.run.json --out ${profOut}\`. Tag every emitted bottleneck with evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. `
         : ``) +
       `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend, profiler_available:false}.`,
       { model: MODEL.profile, label: 'driver-perf-evidence-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
@@ -937,13 +937,13 @@ Then append, using the values you just measured (status="done" if it compiled AN
       `Return its stdout JSON verbatim.`,
       { model: MODEL.mechanical, label: `driver-build-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
     const runOut = await agentRetry(() => agent(
-      `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+      `${driverSh('run.sh', `--artifact ${buildOut} --problem ${PROBLEM_PATH} --out ${buildOut}.run.json`)}\n` +
       `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
       { model: MODEL.profile, label: `driver-run-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
     let evidenceOut
     if (PROFILING_DECISION.method === 'native_profiler') {
       await agentRetry(() => agent(
-        `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+        `${driverSh('profile.sh', `--artifact ${buildOut} --problem ${PROBLEM_PATH} --out ${buildOut}.run.json --out ${profOut}`)}\n` +
         `Return {ok, native_path}.`,
         { model: MODEL.profile, label: `driver-profile-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
       evidenceOut = await agentRetry(() => agent(
@@ -958,7 +958,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
         `Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'); do NOT run profile.sh. ` +
         `run.sh returned latency_ms=${(runOut && runOut.latency_ms) || 'null'}. ` +
         (PROFILING_DECISION.method === 'perf_heuristic'
-          ? `Normalize that throughput into canonical metrics via \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/${_norm} --artifact ${buildOut} --kernel ${kPath} --out ${profOut}\`. ` +
+          ? `Normalize that throughput into canonical metrics via \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/${_norm} --artifact ${buildOut} --problem ${PROBLEM_PATH} --out ${buildOut}.run.json --out ${profOut}\`. ` +
             `Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. ` +
             `Also write heuristic_bclass (memory_bound|compute_bound|latency_bound) from the throughput ratio so diagnose.py does not fall to unknown. `
           : ``) +

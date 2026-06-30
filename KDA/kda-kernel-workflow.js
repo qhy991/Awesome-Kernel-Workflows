@@ -807,14 +807,14 @@ Then append, using the values you just measured (status="done" if correctness pa
       `Return its stdout JSON verbatim.`,
       { model: MODEL.mechanical, label: `driver-build-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH }), { retries: 5 })
     const runOut = await agentRetry(() => agent(
-      `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+      `${driverSh('run.sh', `--artifact ${buildOut} --problem ${PROBLEM_PATH} --out ${buildOut}.run.json`)}\n` +
       `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
       { model: MODEL.profile, label: `driver-run-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
     let evidenceOut = null
     let diagOut = null
     if (PROFILING_DECISION.method === 'native_profiler') {
       await agentRetry(() => agent(
-        `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+        `${driverSh('profile.sh', `--artifact ${buildOut} --problem ${PROBLEM_PATH} --out ${buildOut}.run.json --out ${profOut}`)}\n` +
         `Return {ok, native_path}.`,
         { model: MODEL.profile, label: `driver-profile-${candidateId}`, phase: 'Validate', schema: JSON_PASSTHROUGH }), { retries: 5 })
       evidenceOut = await agentRetry(() => agent(
