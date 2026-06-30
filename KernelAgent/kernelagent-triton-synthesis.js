@@ -510,8 +510,11 @@ const _vc = await agentRetry(() => agent(
 if (_vc && _vc.method) VERIFICATION_CONFIRM = _vc
 log(`Verification-strategist: prune=${VERIFICATION_PRUNE.method}/${VERIFICATION_PRUNE.confidence} confirm=${VERIFICATION_CONFIRM.method}/${VERIFICATION_CONFIRM.confidence}`)
 
-// Initialize experiment directory
-sessionDir = `${EXP_DIR}/session_${Date.now()}`
+// Initialize experiment directory. Deterministic identifier: the dispatch
+// envelope carries run_index/round_index; fall back to 'run' if absent. MUST
+// NOT use the wall-clock here — the Workflow runtime forbids nondeterministic
+// built-ins (they throw and break resume). See issue #22.
+sessionDir = `${EXP_DIR}/session_${args.run_index || args.round_index || 'run'}`
 log(`Session directory: ${sessionDir}`)
 
 // =============================================================================
