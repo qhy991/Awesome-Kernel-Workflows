@@ -66,25 +66,16 @@ test('legacy path: no backend_dir, language=cuda -> renders cuda vocabulary, no 
     'legacy path must NOT issue load-driver agent (USE_DRIVER off-by-default)')
 })
 
-test('legacy path: language=triton is REJECTED by suitability guard (KernelSkill is CUDA-only)', async () => {
-  await assert.rejects(
-    run({ language: 'triton' }, minimalReturns),
-    (err) => {
-      assert.match(err.message, /not suitable for language="triton"/)
-      assert.match(err.message, /Supported languages\/backends: cuda/)
-      return true
-    },
-  )
-})
-
-test('legacy path: language=sycl is REJECTED by suitability guard (KernelSkill is CUDA-only)', async () => {
-  await assert.rejects(
-    run({ language: 'sycl' }, minimalReturns),
-    (err) => {
-      assert.match(err.message, /not suitable for language="sycl"/)
-      return true
-    },
-  )
+// Eligibility moved to manifest routing.accepts; in-workflow gate removed (#24).
+test('legacy path: off-list language no longer rejected by in-workflow suitability guard (KernelSkill is CUDA-only)', async () => {
+  for (const lang of ['triton', 'sycl']) {
+    try {
+      await run({ language: lang }, minimalReturns)
+    } catch (e) {
+      assert.doesNotMatch(e.message, /not suitable for language/,
+        `language=${lang}: in-workflow suitability gate removed; eligibility is selector-enforced from manifest routing.accepts`)
+    }
+  }
 })
 
 test('§6.4: args.backend + args.language conflict (post-normalize) -> throws naming both', async () => {

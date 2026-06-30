@@ -197,64 +197,6 @@ function __embeddedEvalPlan(ctx) {
 }
 // --- END embedded-eval substrate ---
 
-const WORKFLOW_SUITABILITY = {
-  supported_languages: ['cuda', 'metal'],
-  supported_problem_types: ['cuda-kernel-optimization', 'gpu-kernel-optimization', 'kernel-search'],
-  problem_types: ['CUDA/GPU/Metal kernel search with speedup forecaster', 'PUCT optimization with execute-or-abstain feedback'],
-  reason: 'GPU Forecasters expects GPU speedup evaluator feedback and a CUDA/Metal-oriented search/evaluation loop.',
-}
-
-function normalizeSuitabilityValue(value) {
-  const raw = String(value || '').trim().toLowerCase().replace(/_/g, '-')
-  const aliases = {
-    'c++': 'cpp',
-    cxx: 'cpp',
-    cplusplus: 'cpp',
-    cute: 'cute-dsl',
-    hip: 'rocm',
-    'intel-xpu': 'xpu',
-    optimize: 'kernel-optimization',
-    optimization: 'kernel-optimization',
-    generate: 'kernel-generation',
-    generation: 'kernel-generation',
-    explain: 'performance-explanation',
-    explanation: 'performance-explanation',
-  }
-  return aliases[raw] || raw
-}
-
-function supportsSuitabilityValue(supported, requested) {
-  return supported.includes(requested) || supported.some(value => value.endsWith(`-${requested}`))
-}
-
-function assertWorkflowSuitability() {
-  const requestedLanguage = normalizeSuitabilityValue(args.language)
-  if (requestedLanguage && requestedLanguage !== 'auto') {
-    const supported = WORKFLOW_SUITABILITY.supported_languages.map(normalizeSuitabilityValue)
-    if (!supported.includes(requestedLanguage)) {
-      throw new Error(
-        `${WORKFLOW_NAME} is not suitable for language="${args.language}". ` +
-        `Supported languages/backends: ${WORKFLOW_SUITABILITY.supported_languages.join(', ')}. ` +
-        `Reason: ${WORKFLOW_SUITABILITY.reason}`
-      )
-    }
-  }
-
-  const requestedProblemType = normalizeSuitabilityValue(args.problem_type)
-  if (requestedProblemType && requestedProblemType !== 'auto') {
-    const supportedProblemTypes = (WORKFLOW_SUITABILITY.supported_problem_types || []).map(normalizeSuitabilityValue)
-    if (supportedProblemTypes.length && !supportsSuitabilityValue(supportedProblemTypes, requestedProblemType)) {
-      throw new Error(
-        `${WORKFLOW_NAME} is not suitable for problem_type="${args.problem_type}". ` +
-        `Supported problem types: ${WORKFLOW_SUITABILITY.supported_problem_types.join(', ')}. ` +
-        `Typical use cases: ${WORKFLOW_SUITABILITY.problem_types.join('; ')}. ` +
-        `Reason: ${WORKFLOW_SUITABILITY.reason}`
-      )
-    }
-  }
-}
-
-assertWorkflowSuitability()
 
 const PROBLEM_DEFINITION = args.problem_definition || ''
 const PROBLEM_PATH = args.problem_path || ''

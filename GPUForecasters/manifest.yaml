@@ -29,6 +29,12 @@ workflow:
   output_filename: gpuforecasters-kernel-optimization.js
   directory: GPUForecasters/
 routing:
+  accepts:
+    problem_type:
+    - 'cuda-kernel-optimization'
+    - 'gpu-kernel-optimization'
+    - 'kernel-search'
+    constraints: []
   best_kernel_field: null
   known_broken: 'Script bug: ''meta is not defined'' at runtime (reproduced on AMD-395
     20260612-195934 run-4). Also reported ML-simulated speedups without compiling.

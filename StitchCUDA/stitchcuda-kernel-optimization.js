@@ -174,12 +174,6 @@ function guard(obj, field, fallback) {
 // treats this file as already handled. See _meta/genome-trajectory-schema.md.
 const EXPDIR = args.exp_dir || '.'
 
-const WORKFLOW_SUITABILITY = {
-  supported_languages: ['cuda'],
-  supported_problem_types: ['cuda-kernel-generation', 'cuda-kernel-optimization'],
-  problem_types: ['Planner/Coder/Verifier CUDA synthesis', 'CUDA generation and iterative replanning from problem definition'],
-  reason: 'StitchCUDA is specifically a CUDA synthesis workflow and expects CUDA compile/test/benchmark contracts.',
-}
 
 function normalizeSuitabilityValue(value) {
   const raw = String(value || '').trim().toLowerCase().replace(/_/g, '-')
@@ -200,36 +194,6 @@ function normalizeSuitabilityValue(value) {
   return aliases[raw] || raw
 }
 
-function supportsSuitabilityValue(supported, requested) {
-  return supported.includes(requested) || supported.some(value => value.endsWith(`-${requested}`))
-}
-
-function assertWorkflowSuitability() {
-  const requestedLanguage = normalizeSuitabilityValue(args.language)
-  if (requestedLanguage && requestedLanguage !== 'auto') {
-    const supported = WORKFLOW_SUITABILITY.supported_languages.map(normalizeSuitabilityValue)
-    if (!supported.includes(requestedLanguage)) {
-      throw new Error(
-        `${WORKFLOW_NAME} is not suitable for language="${args.language}". ` +
-        `Supported languages/backends: ${WORKFLOW_SUITABILITY.supported_languages.join(', ')}. ` +
-        `Reason: ${WORKFLOW_SUITABILITY.reason}`
-      )
-    }
-  }
-
-  const requestedProblemType = normalizeSuitabilityValue(args.problem_type)
-  if (requestedProblemType && requestedProblemType !== 'auto') {
-    const supportedProblemTypes = (WORKFLOW_SUITABILITY.supported_problem_types || []).map(normalizeSuitabilityValue)
-    if (supportedProblemTypes.length && !supportsSuitabilityValue(supportedProblemTypes, requestedProblemType)) {
-      throw new Error(
-        `${WORKFLOW_NAME} is not suitable for problem_type="${args.problem_type}". ` +
-        `Supported problem types: ${WORKFLOW_SUITABILITY.supported_problem_types.join(', ')}. ` +
-        `Typical use cases: ${WORKFLOW_SUITABILITY.problem_types.join('; ')}. ` +
-        `Reason: ${WORKFLOW_SUITABILITY.reason}`
-      )
-    }
-  }
-}
 
 function resolveBackendAxis() {
   const b = args.backend ? normalizeSuitabilityValue(args.backend) : null
@@ -245,9 +209,6 @@ function resolveBackendAxis() {
 const RESOLVED_BACKEND = resolveBackendAxis()
 const USE_DRIVER = !!args.backend_dir
 
-if (!USE_DRIVER) {
-  assertWorkflowSuitability()
-}
 
 // --- Backend driver wiring (P5c Stage B; off-by-default; legacy path byte-identical) ---
 const BACKEND_DIR = args.backend_dir || ''

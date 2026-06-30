@@ -226,6 +226,11 @@ testing:
   node_suite: WarpSpeed/tests/node/run_node_tests.sh (real flock/calibrate/screen/confirm/NCU
     on the GPU node)
 routing:
+  accepts:
+    problem_type:
+    - 'cuda-kernel-optimization'
+    - 'kernel-search'
+    constraints: []
   best_kernel_field: best_commit
   all_args:
   - exp_dir

@@ -52,55 +52,6 @@ async function __genomeReport(phaseName, wfName) {
   } catch (__e) { /* observability must never break the workflow */ }
 }
 
-const WORKFLOW_SUITABILITY = {
-  supported_languages: ['cuda'],
-  supported_problem_types: ['cuda-kernel-optimization', 'kernel-search'],
-  problem_types: ['multi-GPU rewindable kernel-optimization search', 'experiment-driven CUDA tuning with checkpoint tree and BitLessons memory'],
-  reason: 'WarpSpeed drives NVIDIA-specific tooling (NCU sections, compute-sanitizer, clock locking) and assumes exclusive access to a multi-GPU node plus a project-owned correctness harness.',
-}
-
-function normalizeSuitabilityValue(value) {
-  const raw = String(value || '').trim().toLowerCase().replace(/_/g, '-')
-  const aliases = {
-    'c++': 'cpp',
-    cxx: 'cpp',
-    cplusplus: 'cpp',
-    cute: 'cute-dsl',
-    hip: 'rocm',
-    'intel-xpu': 'xpu',
-    optimize: 'kernel-optimization',
-    optimization: 'kernel-optimization',
-    generate: 'kernel-generation',
-    generation: 'kernel-generation',
-  }
-  return aliases[raw] || raw
-}
-
-function assertWorkflowSuitability() {
-  const requestedLanguage = normalizeSuitabilityValue(args && typeof args === 'object' ? args.language : '')
-  if (requestedLanguage && requestedLanguage !== 'auto') {
-    const supported = WORKFLOW_SUITABILITY.supported_languages.map(normalizeSuitabilityValue)
-    if (!supported.includes(requestedLanguage)) {
-      throw new Error(
-        `${WORKFLOW_NAME} is not suitable for language="${requestedLanguage}". ` +
-        `Supported: ${WORKFLOW_SUITABILITY.supported_languages.join(', ')}. ` +
-        `Reason: ${WORKFLOW_SUITABILITY.reason}`
-      )
-    }
-  }
-  const requestedProblemType = normalizeSuitabilityValue(args && typeof args === 'object' ? args.problem_type : '')
-  if (requestedProblemType && requestedProblemType !== 'auto') {
-    const supported = (WORKFLOW_SUITABILITY.supported_problem_types || []).map(normalizeSuitabilityValue)
-    if (supported.length && !supported.includes(requestedProblemType) &&
-        !supported.some(v => v.endsWith(`-${requestedProblemType}`))) {
-      throw new Error(
-        `${WORKFLOW_NAME} is not suitable for problem_type="${requestedProblemType}". ` +
-        `Supported: ${WORKFLOW_SUITABILITY.supported_problem_types.join(', ')}. ` +
-        `Reason: ${WORKFLOW_SUITABILITY.reason}`
-      )
-    }
-  }
-}
 
 // --- BEGIN inlined arg_guard (Workflow runtime parses scripts as bare scripts,
 //                              not ES modules; static imports are rejected) ---
@@ -189,7 +140,6 @@ function guard(obj, field, fallback) {
 }
 // --- END inlined agent-retry scaffolding ---
 
-assertWorkflowSuitability()
 
 // --- BEGIN inlined grounding contract (mirrors _substrate/grounding.js) ---
 const GROUNDING_INSTRUCTION = [

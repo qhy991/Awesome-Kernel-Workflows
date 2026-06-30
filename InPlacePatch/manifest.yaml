@@ -36,6 +36,9 @@ workflow:
   output_filename: inplacepatch-kernel-optimization.js
   directory: InPlacePatch/
 routing:
+  accepts:
+    problem_type: []
+    constraints: []
   best_kernel_field: best_kernel_code
   topology: iterative
   requires_harness: true

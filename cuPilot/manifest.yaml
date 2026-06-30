@@ -35,6 +35,10 @@ workflow:
   output_filename: cupilot-kernel-optimization.js
   directory: cuPilot/
 routing:
+  accepts:
+    problem_type:
+    - 'cuda-kernel-optimization'
+    constraints: []
   best_kernel_field: best_kernel_code
   topology: evolutionary
   requires_harness: false

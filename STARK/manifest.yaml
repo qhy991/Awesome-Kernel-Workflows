@@ -500,6 +500,11 @@ template:
   - backtracking
   - early_stopping
 routing:
+  accepts:
+    problem_type:
+    - 'cuda-kernel-optimization'
+    - 'kernel-search'
+    constraints: []
   best_kernel_field: best_kernel_code
   topology: tree
   requires_harness: false

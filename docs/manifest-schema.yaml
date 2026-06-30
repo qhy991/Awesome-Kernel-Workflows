@@ -27,15 +27,22 @@
 # =============================================================================
 
 # ---------------------------------------------------------------------------
-# ROUTING (v1.2) — KerSor selector contract; merged from legacy workflow_metadata.json
+# ROUTING (v1.3) — KerSor selector contract; merged from legacy workflow_metadata.json
 # ---------------------------------------------------------------------------
 # Top-level `routing:` on the primary entrypoint, or `variants[].routing` for
 # additional .js files in the same directory. Consumed by KerSor generate-catalog.sh.
+# v1.3 (issue #24): `accepts:` is the single source of truth for eligibility
+# previously hidden in per-workflow assertWorkflowSuitability. The selector
+# hard-filters on routing.languages/backends/integration_patterns AND
+# accepts.problem_type/constraints. Workflows no longer self-gate eligibility.
 routing:
   method_category: ""        # [R for routing] iterative_self_improving | tree_exploration | ...
   topology: ""               # [R for routing] iterative | tree | mcts | ...
   languages: []              # [R for routing] cuda, triton, rocm, ...
   backends: []               # [O] explicit backend ids (defaults to languages)
+  accepts:                   # [R] issue #24 — eligibility axes previously hidden in JS
+    problem_type: []         # supported problem types (migrated from WORKFLOW_SUITABILITY.supported_problem_types)
+    constraints: []          # reserved: structured limits, e.g. [{head_dim: {max: 128}}]; empty for all current workflows
   requires_ncu: false
   requires_harness: false
   role: optimizer            # optimizer | generator | diagnostic

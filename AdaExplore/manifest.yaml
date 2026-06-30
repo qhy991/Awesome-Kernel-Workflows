@@ -17,6 +17,11 @@ backend:
 
     '
 routing:
+  accepts:
+    problem_type:
+    - 'triton-kernel-optimization'
+    - 'triton-kernel-generation'
+    constraints: []
   best_kernel_field: best_kernel_code
   topology: mcts
   requires_harness: true

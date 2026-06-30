@@ -34,6 +34,10 @@ workflow:
   output_filename: keet-performance-explanation.js
   directory: KEET/
 routing:
+  accepts:
+    problem_type:
+    - 'performance-explanation'
+    constraints: []
   best_kernel_field: null
   topology: pipeline
   requires_harness: false

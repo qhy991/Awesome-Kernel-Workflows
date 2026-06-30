@@ -122,64 +122,6 @@ function guard(obj, field, fallback) {
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
 // treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
-const WORKFLOW_SUITABILITY = {
-  supported_languages: ['cutlass', 'cuda', 'cpp'],
-  supported_problem_types: ['cutlass-gemm-optimization'],
-  problem_types: ['CUTLASS GEMM multi-config dispatch tuning', 'SOL-ExecBench GEMM optimization'],
-  reason: 'CutlassGEMM is specific to CUTLASS/CUDA C++ GEMM dispatch tuning, not arbitrary kernel generation.',
-}
-
-function normalizeSuitabilityValue(value) {
-  const raw = String(value || '').trim().toLowerCase().replace(/_/g, '-')
-  const aliases = {
-    'c++': 'cpp',
-    cxx: 'cpp',
-    cplusplus: 'cpp',
-    cute: 'cute-dsl',
-    hip: 'rocm',
-    'intel-xpu': 'xpu',
-    optimize: 'kernel-optimization',
-    optimization: 'kernel-optimization',
-    generate: 'kernel-generation',
-    generation: 'kernel-generation',
-    explain: 'performance-explanation',
-    explanation: 'performance-explanation',
-  }
-  return aliases[raw] || raw
-}
-
-function supportsSuitabilityValue(supported, requested) {
-  return supported.includes(requested) || supported.some(value => value.endsWith(`-${requested}`))
-}
-
-function assertWorkflowSuitability() {
-  const requestedLanguage = normalizeSuitabilityValue(args.language)
-  if (requestedLanguage && requestedLanguage !== 'auto') {
-    const supported = WORKFLOW_SUITABILITY.supported_languages.map(normalizeSuitabilityValue)
-    if (!supported.includes(requestedLanguage)) {
-      throw new Error(
-        `${WORKFLOW_NAME} is not suitable for language="${args.language}". ` +
-        `Supported languages/backends: ${WORKFLOW_SUITABILITY.supported_languages.join(', ')}. ` +
-        `Reason: ${WORKFLOW_SUITABILITY.reason}`
-      )
-    }
-  }
-
-  const requestedProblemType = normalizeSuitabilityValue(args.problem_type)
-  if (requestedProblemType && requestedProblemType !== 'auto') {
-    const supportedProblemTypes = (WORKFLOW_SUITABILITY.supported_problem_types || []).map(normalizeSuitabilityValue)
-    if (supportedProblemTypes.length && !supportsSuitabilityValue(supportedProblemTypes, requestedProblemType)) {
-      throw new Error(
-        `${WORKFLOW_NAME} is not suitable for problem_type="${args.problem_type}". ` +
-        `Supported problem types: ${WORKFLOW_SUITABILITY.supported_problem_types.join(', ')}. ` +
-        `Typical use cases: ${WORKFLOW_SUITABILITY.problem_types.join('; ')}. ` +
-        `Reason: ${WORKFLOW_SUITABILITY.reason}`
-      )
-    }
-  }
-}
-
-assertWorkflowSuitability()
 
 // =============================================================================
 // CutlassGEMM v2: CUTLASS GEMM Optimization for SOL-ExecBench

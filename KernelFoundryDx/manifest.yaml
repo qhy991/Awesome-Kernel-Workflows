@@ -493,6 +493,11 @@ template:
   - hint_library_reinforcement
   - anti_cheating_validation
 routing:
+  accepts:
+    problem_type:
+    - 'triton-kernel-optimization'
+    - 'triton-kernel-generation'
+    constraints: []
   best_kernel_field: best_kernel_code
   topology: evolutionary
   requires_harness: true

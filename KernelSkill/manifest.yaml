@@ -35,6 +35,11 @@ workflow:
   output_filename: kernelskill-kernel-optimization.js
   directory: KernelSkill/
 routing:
+  accepts:
+    problem_type:
+    - 'cuda-kernel-optimization'
+    - 'cuda-kernel-generation'
+    constraints: []
   best_kernel_field: best_kernel_code
   topology: iterative
   requires_harness: true

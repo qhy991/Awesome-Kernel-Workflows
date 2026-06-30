@@ -16,6 +16,13 @@ backend:
 
     '
 routing:
+  accepts:
+    problem_type:
+    - 'cuda-kernel-optimization'
+    - 'cuda-kernel-generation'
+    - 'ascend-kernel-optimization'
+    - 'ascend-kernel-generation'
+    constraints: []
   best_kernel_field: best_candidate
   topology: iterative
   requires_harness: false

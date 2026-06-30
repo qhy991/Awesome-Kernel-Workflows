@@ -506,12 +506,7 @@ ${manifestResult.manifest_yaml}
 
 # Generation Rules:
 1. Start with \`export const meta = {...}\` — fill from manifest workflow.* and phases[].name/detail
-2. Immediately after meta, emit \`WORKFLOW_SUITABILITY\` with the §6.4 split:
-   - \`method_supported_backends\` (from manifest \`backend.supported\`; \`['any']\` for clean methods),
-   - \`default_backend\` (from manifest \`backend.default\`; may be \`null\`),
-   - \`requires_capability\` (from manifest \`backend.requires_capability\`; \`{}\` if absent),
-   - \`supported_problem_types\`, \`problem_types\`, \`reason\` (unchanged from v1.0).
-   Plus \`assertWorkflowSuitability()\` that hard-fails when explicit \`args.backend\` is not in \`method_supported_backends\`, when \`args.problem_type\` is incompatible, or when a manifest declares \`portability: method_intrinsic\` and \`args.backend\` is off-list (throwing the intrinsic-reason message verbatim). Preserve the legacy \`supported_languages\` key as an alias of \`method_supported_backends\` for one minor version (v1.2).
+2. Do NOT emit a \`WORKFLOW_SUITABILITY\` const or \`assertWorkflowSuitability()\` — eligibility (language, problem_type, backend) lives in manifest \`routing.accepts:\` and is enforced by the KerSor selector (issue #24). If the workflow resolves a backend from args, emit a small \`resolveBackend()\` helper (plus a \`WORKFLOW_META\` const holding only \`method_supported_backends\` / \`default_backend\` / \`requires_capability\` when those are referenced downstream) — but it must NOT throw on eligibility; it only normalizes/derives the backend. Keep \`normalizeSuitabilityValue\` only if used for arg-conflict checks.
 3. Add header comment block documenting: source paper, usage example with all args, arg descriptions
 4. Emit const declarations for all args (required without default, optional with || default)
 5. Emit canonical input resolution: optimize args.kernel_path when present; otherwise require args.problem_definition or args.problem_path, generate seed_candidates initial kernels, verify with test_command or benchmark_command, and optimize the best verified seed
@@ -587,10 +582,10 @@ ${workflowCode.workflow_code}
 - [ ] Each phase has title and detail strings
 - [ ] meta.name is kebab-case
 
-## 2. Suitability contract
-- [ ] WORKFLOW_SUITABILITY exists immediately after meta
-- [ ] supported_languages, supported_problem_types, problem_types, and reason are present
-- [ ] assertWorkflowSuitability() checks explicit args.language and args.problem_type before work starts
+## 2. Eligibility contract (issue #24)
+- [ ] No `WORKFLOW_SUITABILITY` const and no `assertWorkflowSuitability()` function in the .js
+- [ ] manifest `routing.accepts.problem_type` declares supported problem types
+- [ ] any `resolveBackend()`/`WORKFLOW_META` only derives the backend — it must NOT throw on eligibility
 
 ## 3. Phase consistency
 - [ ] Every phase() call matches a meta.phases title
