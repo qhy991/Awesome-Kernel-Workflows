@@ -737,13 +737,13 @@ Then append, using the values you just measured (status="done" if it compiled an
       `Return its stdout JSON verbatim.`,
       { model: MODEL.mechanical, label: `driver-build-${iteration}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
     const runOut = await agentRetry(() => agent(
-      `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)}\n` +
+      `${driverSh('run.sh', `--artifact ${buildOut} --problem ${PROBLEM_PATH} --out ${buildOut}.run.json`)}\n` +
       `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
       { model: MODEL.profile, label: `driver-run-${iteration}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
     let evidenceOut
     if (PROFILING_DECISION.method === 'native_profiler') {
       await agentRetry(() => agent(
-        `${driverSh('profile.sh', `--artifact ${buildOut} --kernel ${kPath} --out ${profOut}`)}\n` +
+        `${driverSh('profile.sh', `--artifact ${buildOut} --problem ${PROBLEM_PATH} --out ${buildOut}.run.json --out ${profOut}`)}\n` +
         `Return {ok, native_path}.`,
         { model: MODEL.profile, label: `driver-profile-${iteration}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
       evidenceOut = await agentRetry(() => agent(
@@ -756,7 +756,7 @@ Then append, using the values you just measured (status="done" if it compiled an
       // normalize throughput via the strategist normalizer.
       const _normalizer = PROFILING_DECISION.normalizer || 'perf_to_evidence.py'
       evidenceOut = await agentRetry(() => agent(
-        `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath}`)} already produced throughput above. ` +
+        `${driverSh('run.sh', `--artifact ${buildOut} --problem ${PROBLEM_PATH} --out ${buildOut}.run.json`)} already produced throughput above. ` +
         `If method='perf_heuristic', normalize it into canonical metrics via ` +
         `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/${_normalizer} --baseline ${EXP_DIR}/astra_iter_${iteration}.result.json\`. ` +
         `Tag every emitted bottleneck as evidence='profile_heuristic', confidence='${PROFILING_DECISION.confidence}'. ` +

@@ -759,7 +759,7 @@ Then append, using the values you just measured (status="done" only if compiled 
         `Return its stdout JSON verbatim.`,
         { model: MODEL.mechanical, label: `driver-build-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
       const runOut = await agentRetry(() => agent(
-        `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath} --result ${rPath}`)}\n` +
+        `${driverSh('run.sh', `--artifact ${buildOut} --problem ${DRIVER_PROBLEM_PATH} --out ${rPath}`)}\n` +
         `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
         { model: MODEL.profile, label: `driver-run-${iteration}-${sample}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
       let profilePointer = null

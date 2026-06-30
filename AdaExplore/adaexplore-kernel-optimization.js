@@ -289,7 +289,7 @@ function reviserDefaultHint() {
 }
 function evaluateRunInstruction() {
   if (!USE_DRIVER) return LEGACY_EVALUATE_RUN_INSTRUCTION
-  return `${driverSh('run.sh', '--kernel {kernel_path} --result {result_path}')} If the driver run.sh exits non-zero, mark compiled=false, correct=false, speedup=0 and capture stderr.`
+  return `${driverSh('run.sh', '--artifact {kernel_path} --problem ${PROBLEM_PATH} --out {result_path}')} If the driver run.sh exits non-zero, mark compiled=false, correct=false, speedup=0 and capture stderr.`
 }
 
 if (!KERNEL_PATH && !OPERATOR_SPEC && !PROBLEM_PATH) {
@@ -811,7 +811,7 @@ Then append (this is small-step surgical edit for candidate node-${searchStep + 
     : `${EXP_DIR}/kernels/step_${searchStep + 1}_${isLargeStep ? 'large' : 'small'}.py`
   const resultPath = `${EXP_DIR}/eval/step_${searchStep + 1}_result.json`
   const evaluatorCommand = USE_DRIVER
-    ? `${SH ? SH + ' ' : ''}${BACKEND_DIR}/run.sh --kernel ${kernelPath} --result ${resultPath}`
+    ? `${SH ? SH + ' ' : ''}${BACKEND_DIR}/run.sh --artifact ${kernelPath} --problem ${PROBLEM_PATH} --out ${resultPath}`
     : renderCommand(evaluatorCommandTemplate, {
     kernel_path: kernelPath,
     result_path: resultPath,
@@ -881,7 +881,7 @@ Then append, using the values you just measured (status="done" if the candidate 
       `Return its stdout JSON verbatim.`,
       { model: MODEL.mechanical, label: `driver-build-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
     const runOut = await agentRetry(() => agent(
-      `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kernelPath} --result ${resultPath}`)}\n` +
+      `${driverSh('run.sh', `--artifact ${buildOut} --problem ${PROBLEM_PATH} --out ${resultPath}`)}\n` +
       `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
       { model: MODEL.profile, label: `driver-run-${searchStep + 1}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
     let evidenceOut = null
