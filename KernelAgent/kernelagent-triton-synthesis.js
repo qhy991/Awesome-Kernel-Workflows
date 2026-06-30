@@ -799,7 +799,7 @@ Then append, using the result you just measured (status="done" if the kernel pas
         `Return its stdout JSON verbatim.`,
         { model: MODEL.mechanical, label: `driver-build-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5 })
       const runOut = await agentRetry(() => agent(
-        `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath} --test ${tPath} --result ${resultPath}`)}\n` +
+        `${driverSh('run.sh', `--artifact ${buildOut} --problem ${PROBLEM_PATH} --out ${resultPath}`)}\n` +
         `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
         { model: MODEL.profile, label: `driver-run-${candidate.id}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
       await agentRetry(() => agent(

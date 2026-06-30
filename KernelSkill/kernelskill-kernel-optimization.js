@@ -852,7 +852,7 @@ Then append, using the values you just measured (status="done" if compiles AND c
       `Return its stdout JSON verbatim.`,
       { model: MODEL.mechanical, label: `driver-build-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
     const runOut = await agentRetry(() => agent(
-      `${driverSh('run.sh', `--artifact ${buildOut} --kernel ${kPath} --result ${resultPath}`)}\n` +
+      `${driverSh('run.sh', `--artifact ${buildOut} --problem ${REFERENCE_PATH} --out ${resultPath}`)}\n` +
       `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
       { model: MODEL.profile, label: `driver-run-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
     // Gate the native profiler on the profiling-strategist's deterministic method.

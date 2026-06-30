@@ -37,32 +37,35 @@ test('(a) every substrate run.sh parser is in sync with its flags.yaml', () => {
     `substrate parsers out of sync with flags.yaml (regenerate via _gen_flag_parser.py --write <backend>):\n${fails.join('\n')}`)
 })
 
-test('(b) REPORT-ONLY: workflow call-sites passing non-common substrate flags (--kernel/--result/--test)', () => {
-  // These flags are NOT in the common cuda/metal/metax/triton/rocm schema (ascend
-  // accepts --kernel/--result as aliases; no substrate accepts bare --test). They
-  // are the PR 2b fix targets. Reported, not enforced, in PR 2a.
+test('(b) ENFORCING: run.sh substrate calls (driverSh("run.sh",...) with --artifact) use schema-declared flag names only', () => {
+  // PR 2b: the EVALUATE driver-run pattern `driverSh('run.sh', '--artifact ... --kernel ... --result ...')`
+  // was fixed to use the schema-declared names (--artifact/--problem/--out). No run.sh call that passes
+  // --artifact may also pass the legacy --kernel/--result/--test (not in cuda/metal/metax/triton/rocm
+  // flags.yaml; rejected with "unknown arg" exit 3).
+  //
+  // Out of scope (left as a separate, documented case): KernelAgent's VERIFY-only run.sh calls
+  // `driverSh('run.sh', '--kernel X --test Y')` (no --artifact) — a different source-based verify
+  // contract that does not match run.sh's run-artifact contract and needs its own resolution.
+  // profile.sh calls (different script), anti_cheat.py / integ_probe `resolve --kernel` (different
+  // tools with their own CLIs) are also not run.sh and not flagged here.
   const skip = new Set(['_tools', '_meta', '_substrate', '_templates', 'scripts', 'node_modules', '.git'])
-  const re = /--(?:kernel|result|test)\b/g
-  const hits = []
+  const legacy = /--(?:kernel|result|test)\b/
+  const fails = []
   for (const entry of fs.readdirSync(ROOT, { withFileTypes: true })) {
     if (!entry.isDirectory() || skip.has(entry.name)) continue
     const dir = path.join(ROOT, entry.name)
     for (const f of fs.readdirSync(dir)) {
       if (!f.endsWith('.js')) continue
       const full = path.join(dir, f)
-      const src = fs.readFileSync(full, 'utf8')
-      const lines = src.split('\n')
+      const lines = fs.readFileSync(full, 'utf8').split('\n')
       for (let i = 0; i < lines.length; i++) {
-        if (re.test(lines[i])) hits.push(`${path.relative(ROOT, full)}:${i + 1}: ${lines[i].trim().slice(0, 120)}`)
-        re.lastIndex = 0
+        const l = lines[i]
+        if (/driverSh\(['"]run\.sh['"]/.test(l) && /--artifact/.test(l) && legacy.test(l)) {
+          fails.push(`${path.relative(ROOT, full)}:${i + 1}: ${l.trim().slice(0, 140)}`)
+        }
       }
     }
   }
-  // Non-blocking: log only.
-  if (hits.length) {
-    console.log(`[substrate-flags-contract (b) REPORT-ONLY] ${hits.length} call-site(s) pass non-common substrate flags (PR 2b targets):\n${hits.join('\n')}`)
-  } else {
-    console.log('[substrate-flags-contract (b) REPORT-ONLY] no non-common substrate flag call-sites found')
-  }
-  assert.ok(true)
+  assert.equal(fails.length, 0,
+    `run.sh calls (with --artifact) still pass legacy flags (--kernel/--result/--test) rejected by the substrate parser:\n${fails.join('\n')}`)
 })

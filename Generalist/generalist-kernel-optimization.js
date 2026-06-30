@@ -687,12 +687,12 @@ async function runDriverMetricsEnvelope({ suffix, phaseName, kernelPath, artifac
     `Return its stdout JSON verbatim.`,
     { model: MODEL.mechanical, label: `driver-build-${suffix}`, phase: phaseName, schema: JSON_PASSTHROUGH }), { retries: 5 })
   const runOut = await agentRetry(() => agent(
-    `${driverSh('run.sh', `--artifact ${artifactPath} --kernel ${kernelPath}`)}\n` +
+    `${driverSh('run.sh', `--artifact ${artifactPath} --problem ${PROBLEM_PATH} --out ${artifactPath}.run.json`)}\n` +
     `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
     { model: MODEL.profile, label: `driver-run-${suffix}`, phase: phaseName, schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   const profileOut = await agentRetry(() => agent(
     PROFILING_DECISION.method === 'native_profiler'
-      ? `${driverSh('profile.sh', `--artifact ${artifactPath} --kernel ${kernelPath} --out ${profilePath}`)}\n` +
+      ? `${driverSh('profile.sh', `--artifact ${artifactPath} --problem ${PROBLEM_PATH} --out ${artifactPath}.run.json --out ${profilePath}`)}\n` +
         `Return {ok, native_path}.`
       : `Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'); do NOT run the native profiler. ` +
         `Use driver-run-${suffix} throughput as the profiling source and return {ok:true, native_path:null, method:'${PROFILING_DECISION.method}', latency_ms:${(runOut && runOut.latency_ms) || 'null'}}.`,
