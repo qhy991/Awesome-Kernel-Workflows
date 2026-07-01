@@ -492,6 +492,13 @@ ${manifestResult.manifest_yaml}
 # Generation Rules:
 1. Start with \`export const meta = {...}\` — fill from manifest workflow.* and phases[].name/detail
 2. Do NOT emit a \`WORKFLOW_SUITABILITY\` const or \`assertWorkflowSuitability()\` — workflow eligibility (language, problem_type, backend) lives in manifest \`routing.accepts:\` and is enforced by the KerSor selector (issue #24). Emit only the args-normalization helper(s) (e.g. \`normalizeSuitabilityValue\`) if the workflow needs backend/language aliasing for arg-conflict checks.
+2a. **Runtime & contract anti-patterns (all CI-enforced — a PR with any of these hard-fails).** Avoiding them by construction is cheaper than getting the PR bounced:
+   - **No \`Date.now()\`, \`Math.random()\`, or argless \`new Date()\`** anywhere in the workflow. They break Workflow-tool resume. Enforced by \`_meta/tools/test/kernelagent-runtime-patterns.test.js\` + KerSor catalog forbidden-API scan. Root cause: AWK #22, KerSor #31. Use \`args.run_index\` / \`args.round_index\` for unique ids.
+   - **No line-leading ESM \`import\`** — the entrypoint is loaded as a script.
+   - **Wrap every \`await agent()\` in \`agentRetry(fn, {retries, allowNull})\`.** Bare \`agent()\` returning null on 429 crashes via property deref. Enforced by \`agent-retry-guard-lint.test.js\`. Root cause: AWK #20.
+   - **Substrate CLI: use \`--artifact\` / \`--problem\` / \`--out\`, never \`--kernel\` / \`--test\` / \`--result\`.** Each substrate declares its accepted flags in \`_substrate/backends/<B>/flags.yaml\`; \`--kernel/--test/--result\` are rejected with \`exit 3\` on cuda/metal/metax/triton. Enforced by \`substrate-flags-contract.test.js\` (part b). Root cause: AWK #25.
+   - **All file writes go to \`args.exp_dir\`, not process CWD.** Writing to CWD requires \`collect-stray-outputs.sh\` sweep.
+   - **manifest \`routing.accepts.problem_type\` must be non-empty and match capability.** Empty = "accepts any", only for meta workflows without eligibility. KerSor selector filters at catalog time.
 3. Add header comment block documenting: source paper, usage example with all args, arg descriptions
 4. Emit const declarations for all args (required without default, optional with || default)
 5. Emit canonical input resolution: optimize args.kernel_path when present; otherwise require args.problem_definition or args.problem_path, generate seed_candidates initial kernels, verify with test_command or benchmark_command, and optimize the best verified seed
