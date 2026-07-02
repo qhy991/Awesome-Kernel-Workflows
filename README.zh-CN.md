@@ -79,12 +79,20 @@ Awesome-Kernel-Workflows/
 │   ├── astra-kernel-optimization.js
 │   ├── manifest.yaml
 │   └── README.md
+├── AutoMegaKernel/              # AMK megakernel schedule search adapter
+│   ├── automegakernel-megakernel-optimization.js
+│   ├── manifest.yaml
+│   └── README.md
 ├── CUDALLM/                     # CUDA 生成的 Feature Search and Reinforcement
 │   ├── cudallm-fsr-kernel-generation.js
 │   ├── manifest.yaml
 │   └── README.md
 ├── CutlassGEMM/                 # CUTLASS GEMM 多配置调度调优
 │   ├── cutlass-gemm-optimization.js
+│   └── README.md
+├── GemmPTX/                     # 基于 PTX/SASS 证据的 GEMM 指令路径优化
+│   ├── gemmptx-gemm-optimization.js
+│   ├── manifest.yaml
 │   └── README.md
 ├── FACT/                        # CUTLASS 模式组合式合成
 │   ├── fact-kernel-optimization.js
@@ -151,8 +159,10 @@ Workflow 文件遵循 Claude Code 约定：导出 `meta`（名称、描述、阶
 | [STARK](STARK/) | CUDA（默认）· Triton via driver（experimental） | `cuda-kernel-optimization`, `kernel-search` | 多 Agent 规划/调试的 CUDA tree-search refinement | 非 CUDA 后端，除非有对应 code-context adapter |
 | [ReGraphT](ReGraphT/) | CUDA（默认）· Triton via driver（experimental） | `cuda-kernel-optimization`, `kernel-search` | CUDA reasoning graph 和 Monte Carlo graph search | 非 CUDA 优化轨迹 |
 | [Astra](Astra/) | CUDA（默认）· Triton via driver（experimental） | `cuda-kernel-optimization` | 已有生产 CUDA/PyBind kernel，具备 tests 和 profiling | 从零生成 Triton/SYCL |
+| [AutoMegaKernel](AutoMegaKernel/) | CUDA via AutoMegaKernel（method-intrinsic；外部 harness） | `amk-schedule-search`, `megakernel-synthesis`, `llama-megakernel-optimization` | 已有 AMK checkout；Llama-family CUDA megakernel 的 `ScheduleConfig` + `kernel_knobs` schedule search | 普通 standalone CUDA/Triton/CUTLASS kernel；缺少 AMK checkout；high-batch serving throughput |
 | [CUDA-LLM](CUDALLM/) | CUDA（默认）· Triton via driver（experimental） | `cuda-kernel-generation`, `cuda-kernel-optimization` | 基于 task spec 的 CUDA feature search / reinforcement | 非 CUDA 输出语言 |
 | [CutlassGEMM](CutlassGEMM/) | CUTLASS / C++（method-intrinsic） | `cutlass-gemm-optimization` | CUTLASS GEMM / SOL-ExecBench dispatch 调优 | CUTLASS GEMM 之外的通用 elementwise/attention kernel |
+| [GemmPTX](GemmPTX/) | CUDA/CuTe/CUTLASS（vendor-locked: PTX/SASS 反汇编） | `gemm-ptx-optimization`, `cuda-gemm-ptx-optimization`, `gemm-instruction-optimization` | 已有 GEMM kernel，且需要用 PTX/SASS 证据证明指令路径选择 | 通用 compute-bound kernel；缺少反汇编/benchmark/正确性契约 |
 | [FACT](FACT/) | CUTLASS / C++（method-intrinsic） | `cutlass-pattern-synthesis`, `cutlass-gemm-optimization` | CUTLASS pattern 发现、实现、组合和消融 | 独立 Triton/SYCL kernels |
 | [GPU Forecasters](GPUForecasters/) | CUDA（vendor-locked: ncu） | `cuda-kernel-optimization`, `kernel-search` | 带 speedup forecaster 和 execute/abstain 反馈的 CUDA/GPU 搜索 | 没有 GPU 执行或预测器校准反馈的任务 |
 | [InPlacePatch](InPlacePatch/) | CUDA/ROCm（vendor-locked: nvcc/hipcc） | `embedded-kernel-optimization` | 基于项目原生 build/test/benchmark 的字节精确 in-place kernel patch | 基于 exp_dir 的独立 kernel 工作流 |
@@ -189,8 +199,10 @@ Workflow 文件遵循 Claude Code 约定：导出 `meta`（名称、描述、阶
 | [STARK](STARK/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Tree](https://img.shields.io/badge/tree--search-darkblue?style=flat) ![MultiAgent](https://img.shields.io/badge/multi--agent-teal?style=flat) ![Grounded](https://img.shields.io/badge/grounded--instruction-green?style=flat) ![DynamicContext](https://img.shields.io/badge/dynamic--context-orange?style=flat) | Setup → Select(ε-greedy) → Plan/Code/Debug → Evaluate → Update | [arXiv:2510.16996](https://arxiv.org/abs/2510.16996)（Meta/Duke 2025） |
 | [ReGraphT](ReGraphT/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Tree](https://img.shields.io/badge/tree--search-darkblue?style=flat) ![RAG](https://img.shields.io/badge/RAG-orange?style=flat) ![ReasoningGraph](https://img.shields.io/badge/reasoning--graph-teal?style=flat) ![MCGS](https://img.shields.io/badge/MCGS-darkblue?style=flat) | BuildGraph → Select(MCGS) → Generate → Evaluate → UpdateGraph | [arXiv:2510.19873](https://arxiv.org/abs/2510.19873)（中科院/华南理工 2025） |
 | [Astra](Astra/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![MultiAgent](https://img.shields.io/badge/multi--agent-teal?style=flat) ![Profiling](https://img.shields.io/badge/profiling-green?style=flat) ![SGLang](https://img.shields.io/badge/SGLang-orange?style=flat) | Setup → Test/Profile → Plan → Code → Evaluate → Record | [arXiv:2509.07506](https://arxiv.org/abs/2509.07506)（Stanford/SJTU/NJU 2025） |
+| [AutoMegaKernel](AutoMegaKernel/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Megakernel](https://img.shields.io/badge/megakernel-333?style=flat) ![ScheduleSearch](https://img.shields.io/badge/schedule--search-darkblue?style=flat) ![ExternalHarness](https://img.shields.io/badge/external--harness-teal?style=flat) ![Verification](https://img.shields.io/badge/verification-green?style=flat) | Doctor → ProposeSurface → EvalBaseline → Loop/Autoresearch → Audit | [arXiv:2606.09682](https://arxiv.org/abs/2606.09682) / [AMK](https://github.com/RightNow-AI/AutoMegaKernel) |
 | [CUDA-LLM](CUDALLM/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) ![FeatureSearch](https://img.shields.io/badge/feature--search-teal?style=flat) ![Reinforcement](https://img.shields.io/badge/reinforcement-red?style=flat) | Catalog → SelectFeatures → Generate → Evaluate → Reinforce | [arXiv:2506.09092](https://arxiv.org/abs/2506.09092)（2025） |
 | [CutlassGEMM](CutlassGEMM/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![C++](https://img.shields.io/badge/C%2B%2B-00599C?style=flat&logo=c%2B%2B&logoColor=white) ![CUTLASS](https://img.shields.io/badge/CUTLASS-76B900?style=flat) ![NCU](https://img.shields.io/badge/NCU-555?style=flat) ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) ![Dispatch](https://img.shields.io/badge/multi--config--dispatch-teal?style=flat) | 分析 → 生成配置 → Profile(NCU) → 调优调度 → 验证 | [CUTLASS](https://github.com/NVIDIA/cutlass) / [SOL-ExecBench](https://github.com/NVIDIA/SOL-ExecBench) |
+| [GemmPTX](GemmPTX/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![PTX](https://img.shields.io/badge/PTX%2FSASS-555?style=flat) ![GEMM](https://img.shields.io/badge/GEMM-333?style=flat) ![Evidence](https://img.shields.io/badge/disassembly--evidence-green?style=flat) ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) | HardwareCensus → GEMMSignature → InstructionPlan → DisassembleVerify → Profile → Decide | AKW 工程 workflow |
 | [FACT](FACT/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![C++](https://img.shields.io/badge/C%2B%2B-00599C?style=flat&logo=c%2B%2B&logoColor=white) ![CUTLASS](https://img.shields.io/badge/CUTLASS-76B900?style=flat) ![Pipeline](https://img.shields.io/badge/pipeline-purple?style=flat) ![Ablation](https://img.shields.io/badge/ablation-green?style=flat) | 发现 → 实现 → 组合 → 消融 | [FACT 项目](https://github.com/Project-FACT/FACT) |
 | [GPU Forecasters](GPUForecasters/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![Tree](https://img.shields.io/badge/tree--search-darkblue?style=flat) ![PUCT](https://img.shields.io/badge/PUCT-darkblue?style=flat) ![Forecasting](https://img.shields.io/badge/speedup--forecaster-teal?style=flat) ![Abstain](https://img.shields.io/badge/abstain-orange?style=flat) | 训练预测器 → Select(PUCT) → 预测/执行 → 更新 | [arXiv:2605.31464](https://arxiv.org/abs/2605.31464) |
 | [KernelBlaster](KernelBlaster/) | ![CUDA](https://img.shields.io/badge/CUDA-76B900?style=flat&logo=nvidia&logoColor=white) ![NCU](https://img.shields.io/badge/NCU-555?style=flat) ![Iterative](https://img.shields.io/badge/iterative-blue?style=flat) ![Experience](https://img.shields.io/badge/experience--memory-orange?style=flat) ![ICRL](https://img.shields.io/badge/in--context--RL-red?style=flat) | Profile/分类 → 检索 → 应用 → 评估 → 奖励/更新 | [arXiv:2602.14293](https://arxiv.org/abs/2602.14293) |
@@ -235,8 +247,10 @@ Workflow 文件遵循 Claude Code 约定：导出 `meta`（名称、描述、阶
 | [STARK](STARK/) | `tree_exploration` | epsilon-greedy tree + Plan/Code/Debug 角色 | 编译、正确性、runtime | tree memory、leaderboard、dynamic contexts | 方法形状保真，角色分离主要由 prompt 表达 |
 | [ReGraphT](ReGraphT/) | `tree_exploration` | reasoning graph 上的 MCGS | evaluator JSON：speedup/correctness | CUDA reasoning graph、selected paths | 只覆盖 training-free inference/search 阶段 |
 | [Astra](Astra/) | `multi_stage_refinement` | 多 Agent 生产内核优化循环 | tests、profiling、speedup | run log、reintegration notes、best result | 无源 repo/runtime 时属于 idea-preserving |
+| [AutoMegaKernel](AutoMegaKernel/) | `search_based` | 委托给 AMK loop/autoresearch 的结构化 ScheduleConfig + kernel_knobs 搜索 | AMK validate-before-launch、全模型正确性、latency/roofline verdict | best config、rows/results.tsv、flywheel corpus | 严格 adapter 到外部 AMK harness；不是独立重写 |
 | [CUDA-LLM](CUDALLM/) | `iterative_self_improving` | Feature Search and Reinforcement 循环 | 编译/正确性/latency reward | feature catalog、feature scores、candidates | workflow adaptation，不复现模型训练 |
 | [CutlassGEMM](CutlassGEMM/) | `iterative_self_improving` | NCU 引导的 CUTLASS 多配置 dispatch 调优循环 | SOL-ExecBench 正确性/speedup、NCU 指标、MFU | tile configs、dispatch thresholds、per-M performance regimes | 面向 CUTLASS GEMM 调优的工程 workflow adaptation |
+| [GemmPTX](GemmPTX/) | `iterative_self_improving` | 单候选指令假设循环，profile 前必须先通过 PTX/SASS 验证 | compile/test/benchmark/disassemble 命令，可选 NCU/profile 指标 | candidate history、verified instruction paths、hypothesis_not_realized dead ends | 面向 GEMM 指令路径调优的 AKW 原创 workflow adaptation |
 | [FACT](FACT/) | `multi_stage_refinement` | 模式发现、实现、组合与消融 | CUTLASS 编译/正确性/性能和消融 speedup | pattern registry、dependency graph、composed candidates | 组合式合成 workflow，方法形状保真但有简化 |
 | [GPU Forecasters](GPUForecasters/) | `tree_exploration` | learned forecaster + abstain 引导的 PUCT tree search | GPU speedup evaluator、forecast/abstain 校准 | forecaster model、search tree、GPU iterations ledger | workflow adaptation；严格性依赖真实 surrogate 训练/校准 |
 | [KernelBlaster](KernelBlaster/) | `iterative_self_improving` | 按硬件性能状态索引的 MAIC-RL rollout | NCU Elapsed Cycles、正确性、reward | optimization database、trajectory、replay buffer | 带持久记忆的 in-context RL adaptation |

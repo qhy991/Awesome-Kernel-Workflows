@@ -1,0 +1,196 @@
+schema_version: '1.1'
+name: automegakernel-megakernel-optimization
+entrypoint: automegakernel-megakernel-optimization.js
+backend:
+  portability: method_intrinsic
+  matrix_eligible: false
+  intrinsic_to: AutoMegaKernel
+  method_supported_backends:
+  - cuda
+  supported:
+  - cuda
+  default: cuda
+  notes: 'Strict adapter to the external AutoMegaKernel harness. The workflow does
+    not reimplement AMK''s VM, schedule validator, instruction ABI, lowering, or
+    benchmark oracle; it requires an existing AMK checkout and delegates all
+    authoritative correctness and latency evidence to AMK commands.'
+source:
+  paper_title: 'AutoMegaKernel: A Statically-Checked Agent Harness for Self-Retargeting Megakernel Synthesis'
+  paper_url: https://arxiv.org/abs/2606.09682
+  paper_venue: arXiv 2026
+  repo_url: https://github.com/RightNow-AI/AutoMegaKernel
+  commit_or_tag: ''
+  license: MIT
+  notes: 'Adapter derived from the AMK harness contract: doctor/propose/eval/loop/autoresearch
+    over ScheduleConfig + kernel_knobs. The fidelity boundary is strict adapter
+    to AMK, not standalone reproduction.'
+workflow:
+  name: automegakernel-megakernel-optimization
+  description: Strict adapter workflow for AutoMegaKernel schedule-space search over
+    ScheduleConfig + kernel_knobs, validated and measured by the AMK harness.
+  when_to_use: Use when the target is an AutoMegaKernel-supported Llama-family CUDA
+    megakernel and the caller can provide an existing AMK checkout. The workflow
+    drives AMK propose/eval/loop/autoresearch and audits AMK's correctness-first
+    evidence contract.
+  output_filename: automegakernel-megakernel-optimization.js
+  directory: AutoMegaKernel/
+routing:
+  accepts:
+    problem_type:
+    - amk-schedule-search
+    - megakernel-synthesis
+    - llama-megakernel-optimization
+    constraints: []
+  best_kernel_field: best_config
+  topology: iterative
+  requires_harness: true
+  languages:
+  - cuda
+  backends:
+  - cuda
+  method_category: search_based
+  role: optimizer
+  speedup_field: speedup
+  fidelity_boundary: strict_adapter_to_external_harness
+  required_args:
+  - amk_root
+  - model
+  - target_gpu
+  all_args:
+  - amk_root
+  - model
+  - target_gpu
+  - mode
+  - iterations
+  - minutes
+  - device
+  - amk_command
+  - overnight
+  - cold
+  - min_speedup
+  - exp_dir
+  integration_patterns:
+  - external_harness
+  requires_ncu: false
+inputs:
+  supports_existing_kernel: false
+  supports_problem_definition: false
+  required_one_of:
+  - amk_root
+  generation:
+    enabled: false
+    seed_candidates_arg: ''
+    output_arg: best_config
+    requires_correctness_evidence: true
+method:
+  category: search_based
+  core_insight: 'AMK moves the agent edit surface away from raw CUDA and into a
+    structured ScheduleConfig plus kernel_knobs space. A frozen VM/lowering path
+    validates deadlock/race safety before launch, then the AMK oracle gates latency
+    on full-model correctness and keep/revert policy.'
+  feedback_signal:
+    type: throughput_delta
+    description: AMK-reported speedup from correctness-gated latency of a valid
+      megakernel schedule versus AMK's own incumbent/baseline.
+    tool: automegakernel-harness
+    higher_is_better: true
+topology:
+  type: search
+  search:
+    search_space_description: 'AutoMegaKernel ScheduleConfig typed knobs plus optional
+      kernel_knobs returned by amk propose.'
+    sampler: external_harness
+    pruning_strategy: AMK keep/revert rule: keep only valid+correct candidates with
+      a measured latency win over the incumbent.
+    budget_arg: iterations
+  iterative:
+    iterations_arg: iterations
+    convergence_condition: AMK loop/autoresearch stop condition or adapter min_speedup.
+    state_variables:
+    - name: best_config
+      type: object
+      initial_value: '{}'
+      description: Best AMK ScheduleConfig/kernel_knobs object returned by AMK.
+    - name: best_verdict
+      type: object
+      initial_value: '{}'
+      description: Best AMK verdict with valid/correct/latency/roofline evidence.
+phases:
+- name: Setup
+  detail: Verify AutoMegaKernel checkout, CLI, target GPU, and harness availability.
+  position: preamble
+- name: Surface
+  detail: Read incumbent ScheduleConfig and editable search_space from AMK.
+  position: preamble
+- name: Baseline
+  detail: Evaluate the incumbent schedule with AMK correctness and latency gates.
+  position: preamble
+- name: Search
+  detail: Run AMK loop or autoresearch over ScheduleConfig + kernel_knobs.
+  position: loop_body
+- name: Audit
+  detail: Check that reported latency numbers are paired with correct=true and valid=true.
+  position: epilogue
+- name: Report
+  detail: Return the best AMK config/verdict and fidelity boundary.
+  position: epilogue
+args:
+  required:
+  - name: amk_root
+    type: string
+    description: Path to an existing AutoMegaKernel checkout.
+    example: /abs/path/AutoMegaKernel
+  - name: model
+    type: string
+    description: AMK model id such as toy, toy-2L, or a supported HuggingFace id.
+    example: toy
+  - name: target_gpu
+    type: string
+    description: AMK GpuTarget id.
+    example: rtx5090
+  optional:
+  - name: mode
+    type: string
+    default: "'loop'"
+    description: loop or autoresearch.
+    example: loop
+  - name: iterations
+    type: number
+    default: '8'
+    description: Number of AMK loop trials, or autoresearch iters when minutes is unset.
+    example: '16'
+  - name: minutes
+    type: number
+    default: 'null'
+    description: Wall-clock minutes for AMK autoresearch.
+    example: '480'
+  - name: device
+    type: string
+    default: "'auto'"
+    description: AMK device selector.
+    example: cuda
+  - name: amk_command
+    type: string
+    default: "'amk'"
+    description: AMK executable name or path.
+    example: amk
+  - name: overnight
+    type: boolean
+    default: 'false'
+    description: Pass AMK overnight mode when mode is autoresearch.
+    example: 'true'
+  - name: cold
+    type: boolean
+    default: 'false'
+    description: Pass AMK cold-start mode when mode is autoresearch.
+    example: 'false'
+  - name: min_speedup
+    type: number
+    default: '1.01'
+    description: Required speedup for ok=true.
+    example: '1.05'
+  - name: exp_dir
+    type: string
+    default: "'.'"
+    description: Adapter scratch directory for genome lines and incumbent config.
+    example: /tmp/amk-akw-run
