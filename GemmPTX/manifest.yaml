@@ -1,0 +1,121 @@
+schema_version: '1.1'
+name: gemmptx-gemm-optimization
+entrypoint: gemmptx-gemm-optimization.js
+backend:
+  portability: vendor_locked
+  matrix_eligible: false
+  intrinsic_to: NVIDIA CUDA PTX/SASS GEMM instruction path
+  method_supported_backends:
+  - cuda
+  supported:
+  - cuda
+  - cute
+  - cutlass
+  - cpp
+  default: cuda
+  notes: 'GEMM-specific CUDA/CuTe/CUTLASS optimizer. It is PTX/SASS-evidence
+    driven: candidates cannot be treated as successful instruction-path changes
+    unless compile/test/disassemble evidence proves the expected PTX or SASS
+    regex was observed.'
+source:
+  paper_title: ''
+  paper_url: ''
+  repo_url: ''
+  notes: 'Original AKW engineering workflow inspired by human GEMM tuning practice:
+    hardware census -> GEMM signature -> instruction hypothesis -> compile/test
+    -> PTX/SASS disassembly gate -> benchmark/profile -> accept/reject. It is
+    not a reproduction of a single paper.'
+workflow:
+  name: gemmptx-gemm-optimization
+  description: GEMM-specific CUDA/CuTe/CUTLASS optimization loop driven by hardware
+    census, PTX/SASS instruction evidence, correctness, benchmark, and optional
+    NCU profiling.
+  when_to_use: Use for existing CUDA/CuTe/CUTLASS GEMM kernels when the goal is
+    to choose and verify instruction paths such as mma.sync, wgmma.mma_async,
+    cp.async/TMA, or tcgen05/TMEM from real disassembly and measured performance.
+  output_filename: gemmptx-gemm-optimization.js
+  directory: GemmPTX/
+routing:
+  accepts:
+    problem_type:
+    - gemm-ptx-optimization
+    - cuda-gemm-ptx-optimization
+    - gemm-instruction-optimization
+    constraints:
+    - existing_kernel
+    - disassembly_evidence
+  best_kernel_field: best_kernel_path
+  topology: iterative
+  requires_harness: true
+  languages:
+  - cuda
+  - cute
+  - cutlass
+  - cpp
+  backends:
+  - cuda
+  method_category: iterative_self_improving
+  role: optimizer
+  speedup_field: best_speedup
+  fidelity_boundary: workflow_adaptation
+  required_args:
+  - kernel_path
+  - compile_command
+  - test_command
+  - benchmark_command
+  - disassemble_command
+  all_args:
+  - kernel_path
+  - problem_path
+  - problem_definition
+  - language
+  - target_gpu
+  - hardware_probe_command
+  - compile_command
+  - test_command
+  - benchmark_command
+  - disassemble_command
+  - profile_command
+  - ncu_command
+  - iterations
+  - min_speedup
+  - exp_dir
+  integration_patterns:
+  - standalone
+  - project_native
+  requires_ncu: false
+inputs:
+  supports_existing_kernel: true
+  supports_problem_definition: false
+  required_one_of:
+  - kernel_path
+  generation:
+    supports_generation: false
+evidence:
+  correctness:
+    owner: test_command
+    required: true
+    contract: 'Writes or prints JSON with compiled/correct status for {candidate_path}.'
+  performance:
+    owner: benchmark_command
+    required: true
+    contract: 'Writes or prints JSON with latency_ms or speedup for {candidate_path}.'
+  instruction:
+    owner: disassemble_command
+    required: true
+    contract: 'Writes or prints JSON with PTX/SASS artifact paths, observed_instructions,
+      registers_per_thread, shared_mem_bytes, spills, and missing_expected_instructions.'
+  profiling:
+    owner: profile_command or ncu_command
+    required: false
+    contract: 'Optional NCU/native profile JSON with SM%, tensor pipe, L2 hit,
+      DRAM%, occupancy, and stall reasons.'
+state:
+  artifacts:
+  - exp_dir/report.md
+  - exp_dir/history.json
+  - exp_dir/genome.jsonl
+  - exp_dir/candidates/<candidate_id>/
+  memory:
+  - per-run candidate history
+  - lessons/dead ends in report.md

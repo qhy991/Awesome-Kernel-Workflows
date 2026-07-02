@@ -10,6 +10,28 @@ for the versioning policy.
 
 ### Added
 
+- **GemmPTX workflow `GemmPTX/`**. Adds a GEMM-specific CUDA/CuTe/CUTLASS
+  optimizer that works from hardware census and PTX/SASS instruction evidence:
+  candidates must compile, pass correctness, and prove the expected
+  `mma.sync` / `wgmma.mma_async` / TMA / `tcgen05` path via disassembly before
+  benchmark/profile evidence can promote them. This gives users a workflow for
+  instruction-path GEMM tuning while explicitly avoiding generic compute-bound
+  claims. The workflow now ships a local `gemmptx-instruction-evidence` skill
+  with architecture/instruction mapping and PTX/SASS evidence gates; count/badge
+  32 → 33.
+  (`GemmPTX/`, `README.md`, `README.zh-CN.md`,
+  `_meta/tools/test/gemmptx-contract.test.js`, `badges/workflows.json`)
+- **AutoMegaKernel adapter workflow `AutoMegaKernel/`**. Adds the first strict
+  external-harness adapter in AKW: `automegakernel-megakernel-optimization.js`,
+  bilingual README, manifest, and a contract test. The workflow requires an
+  existing AutoMegaKernel checkout and delegates authoritative ScheduleConfig /
+  `kernel_knobs` search, validate-before-launch, correctness, latency/roofline
+  evidence, and keep/revert to AMK (`amk propose/eval/loop/autoresearch`), so it
+  is not a standalone CUDA optimizer or AMK reimplementation. Count/badge 31 →
+  32.
+  (`AutoMegaKernel/`, `README.md`, `README.zh-CN.md`,
+  `_meta/tools/test/automegakernel-adapter-contract.test.js`,
+  `badges/workflows.json`)
 - **Canonical Ascend/AscendC workflow `AscendC/`** (#16, P0). A first-class,
   Ascend-native catalog entry (`ascendc-kernel-optimization.js` + README EN/zh +
   `manifest.yaml`) derived from the proven session-local variant evolved across

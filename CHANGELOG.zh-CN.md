@@ -42,6 +42,24 @@
 
 ### 新增（Added）
 
+- **GemmPTX workflow `GemmPTX/`**。新增一个 GEMM 专用的 CUDA/CuTe/CUTLASS
+  optimizer，从硬件资源探测和 PTX/SASS 指令证据出发：候选必须先编译、通过正确性，
+  并用反汇编证明预期的 `mma.sync` / `wgmma.mma_async` / TMA / `tcgen05`
+  指令路径确实出现，之后才允许用 benchmark/profile 证据晋升。它为用户提供
+  GEMM 指令路径调优 workflow，同时明确不声称覆盖通用 compute-bound 优化。该
+  workflow 现在随附本地 `gemmptx-instruction-evidence` skill，记录架构/指令映射
+  和 PTX/SASS 证据门；count/badge 32 → 33。
+  (`GemmPTX/`, `README.md`, `README.zh-CN.md`,
+  `_meta/tools/test/gemmptx-contract.test.js`, `badges/workflows.json`)
+- **AutoMegaKernel adapter workflow `AutoMegaKernel/`**。新增 AKW 第一条严格
+  external-harness adapter：`automegakernel-megakernel-optimization.js`、中英文
+  README、manifest 与契约测试。该 workflow 依赖已有 AutoMegaKernel checkout，
+  并把权威的 ScheduleConfig / `kernel_knobs` 搜索、validate-before-launch、正确性、
+  latency/roofline 证据和 keep/revert 委托给 AMK（`amk propose/eval/loop/autoresearch`），
+  因此它不是 standalone CUDA optimizer，也不是 AMK 独立重写。Count/badge 31 → 32。
+  (`AutoMegaKernel/`, `README.md`, `README.zh-CN.md`,
+  `_meta/tools/test/automegakernel-adapter-contract.test.js`,
+  `badges/workflows.json`)
 - **权威 Ascend/AscendC workflow `AscendC/`**（#16，P0）。新增一条 Ascend 原生的
   catalog 条目（`ascendc-kernel-optimization.js` + 中英文 README + `manifest.yaml`），
   源自 910b-exp 多个 session 中演化并验证的 session-local 变体。面向 Ascend 910B 上的
