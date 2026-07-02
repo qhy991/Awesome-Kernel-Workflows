@@ -10,6 +10,18 @@ for the versioning policy.
 
 ### Added
 
+- **`fair_baseline_id` → `baseline_id` output contract (#32).** CUDAAgent,
+  KDA, AKO4X, KernelFoundry declare `fair_baseline_id` in `routing.all_args`
+  (so KerSor #39(a) pushes the frozen `contract.env::baseline_id` into
+  dispatch-args) and echo `baseline_id: args.fair_baseline_id || null` as the
+  first field of the workflow return object (= `run-N/output.json`). KerSor
+  #39(c) Check 2c already compares it to the frozen contract and vetoes
+  wrong-baseline speedups; this is the missing AKW consumer. Input
+  (`fair_baseline_id`, spec-frozen expectation) and output (`baseline_id`,
+  workflow's measured axis) names differ deliberately. Other
+  `resolveBackendAxis` workflows adopt via the same 2-line pattern when a
+  session surfaces the need.
+
 - **GemmPTX workflow `GemmPTX/`**. Adds a GEMM-specific CUDA/CuTe/CUTLASS
   optimizer that works from hardware census and PTX/SASS instruction evidence:
   candidates must compile, pass correctness, and prove the expected
@@ -83,6 +95,19 @@ for the versioning policy.
   per-workflow `manifest.yaml`. Schema reference moved to `docs/manifest-schema.yaml`.
 
 ### Fixed
+
+- **Wall-clock watchdog for ARGUS/KSearch + KSearch run-level circuit breaker
+  (#30, #31a).** `withTurnTimeout` (per-turn `Promise.race(setTimeout)` cap,
+  parity with CUDAAgent #12/#14) extracted to `_meta/scaffolding/turn-timeout.js`
+  and inlined into ARGUS (eval-bearing turns) and KSearch (Generate chain +
+  run-level `RUN_STAGNATION_LIMIT` breaker: stop early after N consecutive
+  cycles with no global-best improvement). A hung non-eval `agent()` turn no
+  longer stalls the run indefinitely.
+- **load-driver degrades to legacy path on transient agent failure (#31b).**
+  KDA, KernelFoundry, ReGraphT: a transient `load-driver` null (sustained 429
+  after retries) now warns + continues without idioms instead of aborting the
+  round; `present===false` still throws. Downstream DRIVER field derefs are
+  guarded behind the non-null branch.
 
 - **Collapsed residual profiling coupling in driver-backed workflows.** `Generalist`
   now profiles the baseline, current-best, and candidate attempts through a shared
