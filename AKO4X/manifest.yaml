@@ -196,6 +196,12 @@ routing:
     - 'kernel-generation'
     constraints: []
   best_kernel_field: best_kernel_code
+  # #32: declare fair_baseline_id so KerSor #39(a) (resolve-args.sh) pushes the
+  # frozen contract.env::baseline_id into dispatch-args as args.fair_baseline_id.
+  # The workflow echoes it back as output.baseline_id; check-acceptance-gate.sh
+  # Check 2c compares that to contract.env::baseline_id (absent -> gate skips).
+  all_args:
+  - fair_baseline_id
   topology: iterative
   requires_harness: false
   languages:
