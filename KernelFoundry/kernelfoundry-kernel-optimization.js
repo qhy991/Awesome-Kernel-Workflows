@@ -929,6 +929,7 @@ if (ORIGINAL_BACKUP) {
 }
 
 return {
+  baseline_id: args.fair_baseline_id || null,  // #32: echo the frozen fair baseline KerSor handed us (contract.env::baseline_id via dispatch-args.json); null when undeclared -> check-acceptance-gate.sh Check 2c skips (back-compat).
   input_mode: INPUT_MODE,
   problem_definition: TASK_SPEC,
   problem_path: PROBLEM_PATH,
