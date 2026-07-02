@@ -118,6 +118,28 @@ function guard(obj, field, fallback) {
   return obj[field]
 }
 // --- END inlined agent-retry scaffolding ---
+
+// --- BEGIN inlined turn-timeout scaffolding (from _meta/scaffolding/turn-timeout.js) ---
+// Per-turn wall-clock watchdog (parity with CUDAAgent #12/#14). KSearch already
+// bounds the *eval* step with EVAL_TIMEOUT_SEC (shell `timeout Ns`), but a hung
+// non-eval agent() turn (propose/select/generate stalled in_progress) had no
+// wall-clock cap and could stall the search indefinitely. Wrapping the generate
+// doer turn bounds it; on expiry the attempt loop breaks (treated like
+// stagnation) and the search continues with the next cycle rather than hanging.
+const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn wall-clock cap
+function withTurnTimeout(promise, label) {
+  if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return promise
+  let timer
+  const guard = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)),
+      TURN_TIMEOUT_MS)
+  })
+  return Promise.race([promise, guard]).finally(() => {
+    if (typeof clearTimeout === 'function') clearTimeout(timer)
+  })
+}
+// --- END inlined turn-timeout scaffolding ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
@@ -199,6 +221,7 @@ const TARGET_GPU = args.target_gpu || 'H100'
 const MAX_CYCLES = args.iterations || 10
 const ATTEMPTS_PER_CYCLE = args.attempts_per_cycle || 5
 const STAGNATION_WINDOW = args.stagnation_window || 3
+const RUN_STAGNATION_LIMIT = args.run_stagnation_limit || 3  // #31a: consecutive cycles with no global-best improvement -> stop early (parity with CUDAAgent STAGNATION_LIMIT). A cycle where the doer kept failing lands here too, since a failed cycle produces no new global best.
 const MAX_DIFFICULTY = args.max_difficulty || 4
 const BENCH_CMD = args.benchmark_command || ''
 const TEST_CMD = args.test_command || ''
@@ -273,6 +296,7 @@ let decisionTree = null
 let solutionDb = []
 let bestSolution = null
 let bestMetric = null
+let runStagnation = 0  // #31a: consecutive cycles with no global-best improvement (run-level circuit breaker)
 let baselineMetric = null
 let specText = ''
 let cycleCount = 0
@@ -568,6 +592,7 @@ log(`Dimensions: ${(initResult.design_dimensions || []).join(', ')}`)
 
 for (let cycle = 0; cycle < MAX_CYCLES; cycle++) {
   log(`\n=== Cycle ${cycle + 1}/${MAX_CYCLES} | Best: ${bestMetric?.toFixed(3) || 'N/A'}x | Solutions: ${solutionDb.length} ===`)
+  const bestAtCycleStart = bestMetric  // #31a: snapshot global best at cycle start to detect run-level stagnation
 
   // ===========================================================================
   // Cycle Start: Propose action nodes to ensure frontier has enough candidates
@@ -715,9 +740,10 @@ Then append:
 
     let genResult
 
+    try {
     if (isFirstAttempt) {
       // Attempt 1: generate from action (with or without base code)
-      genResult = await agentRetry(() => agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. Generate a high-performance kernel implementing a SPECIFIC optimization action.
+      genResult = await withTurnTimeout(agentRetry(() => agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. Generate a high-performance kernel implementing a SPECIFIC optimization action.
 
 # Operation: ${OP_DESC} (${opType})
 # Target: ${TARGET_GPU}
@@ -762,11 +788,11 @@ Then append:
           },
           required: ['code'],
         },
-      }), { retries: 5, allowNull: true })
+      }), { retries: 5, allowNull: true }), `gen-${cycle}-${attempt}`)
     } else if (!hasPassedInCycle) {
       // Attempts 2+, NO passing solution yet: DEBUG prompt
       // Uses currentRawCode (last attempt's code) as the buggy code to fix
-      genResult = await agentRetry(() => agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. The previous attempt has bugs or fails correctness. Debug and fix it.
+      genResult = await withTurnTimeout(agentRetry(() => agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. The previous attempt has bugs or fails correctness. Debug and fix it.
 
 # Operation: ${OP_DESC} (${opType})
 # Target: ${TARGET_GPU}
@@ -812,11 +838,11 @@ Then append:
           },
           required: ['code'],
         },
-      }), { retries: 5, allowNull: true })
+      }), { retries: 5, allowNull: true }), `debug-${cycle}-${attempt}`)
     } else {
       // Attempts 2+, HAVE a passing solution: IMPROVE prompt
       // Focus on performance, not correctness
-      genResult = await agentRetry(() => agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. You have a working solution — improve its performance.
+      genResult = await withTurnTimeout(agentRetry(() => agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. You have a working solution — improve its performance.
 
 # Operation: ${OP_DESC} (${opType})
 # Target: ${TARGET_GPU}
@@ -862,7 +888,11 @@ Then append:
           },
           required: ['code'],
         },
-      }), { retries: 5, allowNull: true })
+      }), { retries: 5, allowNull: true }), `improve-${cycle}-${attempt}`)
+    }
+    } catch (e) {
+      log(`  Cycle ${cycle + 1} attempt ${attempt + 1}: turn watchdog tripped — ending cycle (${e && e.message ? e.message : e})`)
+      break
     }
 
     if (!genResult || !genResult.code) continue
@@ -1178,6 +1208,21 @@ Then append:
       log(`Backtracked: ${backtrackResult.failure_analysis || 'action too hard'}`)
       log(`Recovery: ${(backtrackResult.recovery_actions || []).join(', ')}`)
     }
+  }
+
+  // #31a: Run-level circuit breaker (parity with CUDAAgent STAGNATION_LIMIT). If
+  // the global best has not improved for RUN_STAGNATION_LIMIT consecutive cycles,
+  // the search has plateaued — stop early instead of burning the remaining
+  // MAX_CYCLES budget. (A cycle where the doer kept failing also lands here:
+  // it produces no new global best, so bestMetric is unchanged at cycle end.)
+  if (bestMetric === bestAtCycleStart) {
+    runStagnation++
+  } else {
+    runStagnation = 0
+  }
+  if (runStagnation >= RUN_STAGNATION_LIMIT) {
+    log(`Run-level stagnation: no global-best improvement for ${runStagnation} consecutive cycles — stopping early (parity: CUDAAgent STAGNATION_LIMIT).`)
+    break
   }
 
   cycleCount++
