@@ -120,6 +120,27 @@ function guard(obj, field, fallback) {
   return obj[field]
 }
 // --- END inlined agent-retry scaffolding ---
+
+// --- BEGIN inlined turn-timeout scaffolding (from _meta/scaffolding/turn-timeout.js) ---
+// Per-turn wall-clock watchdog (parity with CUDAAgent #12/#14). ARGUS is a linear
+// pipeline (no MAX_TURNS loop), so a single hung doer turn (Validator/Lowering
+// runs build+test+bench behind the agent) stalls the whole run. Wrapping the
+// eval-bearing turns bounds them; on expiry the `turn-timeout:` reject propagates
+// and aborts the round cleanly (#20-style) instead of hanging.
+const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn wall-clock cap
+function withTurnTimeout(promise, label) {
+  if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return promise
+  let timer
+  const guard = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)),
+      TURN_TIMEOUT_MS)
+  })
+  return Promise.race([promise, guard]).finally(() => {
+    if (typeof clearTimeout === 'function') clearTimeout(timer)
+  })
+}
+// --- END inlined turn-timeout scaffolding ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // Each phase's doer appends a rich line to <exp_dir>/genome.jsonl as its final
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
@@ -491,7 +512,7 @@ bestKernelCode = setupResult.kernel_code
 const computationType = setupResult.computation_type
 
 // Run baseline benchmark if available
-const baselineResult = await agentRetry(() => agent(`You are a GPU kernel validator. Run the baseline kernel to establish performance.
+const baselineResult = await withTurnTimeout(agentRetry(() => agent(`You are a GPU kernel validator. Run the baseline kernel to establish performance.
 
 # Kernel: ${KERNEL_PATH}
 # Test command: ${TEST_CMD || '(not provided; do not infer from project structure)'}
@@ -521,7 +542,7 @@ Return baseline metrics.`, {
     },
     required: ['throughput_tflops'],
   },
-}), { retries: 5 })
+}), { retries: 5 }), 'baseline-eval')
 
 bestThroughput = baselineResult.throughput_tflops || 0
 candidateBeam = [{ code: bestKernelCode, throughput: bestThroughput, label: 'baseline' }]
@@ -810,7 +831,7 @@ Return after writing the file.`, { label: `write-candidate-${outerIter}`, phase:
     }
   }
 
-  const validateResult = await agentRetry(() => agent(`You are the ARGUS Validator Agent (Section 6).
+  const validateResult = await withTurnTimeout(agentRetry(() => agent(`You are the ARGUS Validator Agent (Section 6).
 Validate the transformed kernel through invariant checking, unit tests, and profiling.
 
 # Transformed Kernel:
@@ -1100,7 +1121,7 @@ Write:
 5. Recommendations for further optimization`, {
   label: 'final-report',
   phase: 'Learn',
-}), { retries: 5 })
+}), { retries: 5 }), 'validate')
 
 // embedded_inplace exit safety net: unconditionally restore the pristine original
 // so the project is left byte-exact regardless of how the loop terminated.
