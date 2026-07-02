@@ -362,17 +362,27 @@ if (USE_DRIVER) {
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
     { model: MODEL.mechanical, label: 'load-driver', phase: 'Inspect', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
-  if (!DRIVER || DRIVER.present === false) {
+  // #31b: load-driver fallback. The agent is `{ allowNull: true }`, so a
+  // transient failure (sustained 429 / agent skipped) returns null after
+  // retries — distinct from `present===false` (the manifest explicitly says no
+  // driver, a real config error). The workflow sandbox cannot cat+parse the
+  // JSON files directly (all Bash runs through agent()), so on a transient null
+  // we degrade to the legacy path (no idioms) with a loud warning rather than
+  // aborting the whole round. `present===false` still throws.
+  if (!DRIVER) {
+    log(`WARNING: load-driver agent returned null after retries — continuing without backend idioms (legacy path). Verify ${BACKEND_DIR}/manifest.json + idioms.json are readable by the agent.`)
+  } else if (DRIVER.present === false) {
     throw new Error(`No backend driver present at ${BACKEND_DIR}. Provide a valid backend_dir or omit it for the legacy path.`)
+  } else {
+    if (RESOLVED_BACKEND && DRIVER.backend_id && normalizeSuitabilityValue(DRIVER.backend_id) !== RESOLVED_BACKEND) {
+      throw new Error(`backend_dir manifest backend_id="${DRIVER.backend_id}" conflicts with args.backend/language="${RESOLVED_BACKEND}".`)
+    }
+    DRIVER_LANG_FENCE = DRIVER.lang_fence || DRIVER_LANG_FENCE
+    DRIVER_IMPL_REQUIREMENTS = DRIVER.impl_requirements || ''
+    DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT
+    DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID
+    log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
   }
-  if (RESOLVED_BACKEND && DRIVER.backend_id && normalizeSuitabilityValue(DRIVER.backend_id) !== RESOLVED_BACKEND) {
-    throw new Error(`backend_dir manifest backend_id="${DRIVER.backend_id}" conflicts with args.backend/language="${RESOLVED_BACKEND}".`)
-  }
-  DRIVER_LANG_FENCE = DRIVER.lang_fence || DRIVER_LANG_FENCE
-  DRIVER_IMPL_REQUIREMENTS = DRIVER.impl_requirements || ''
-  DRIVER_SOURCE_EXT = DRIVER.source_ext || DRIVER_SOURCE_EXT
-  DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID
-  log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
 }
 
 if (INPUT_MODE === 'generate_then_optimize') {
