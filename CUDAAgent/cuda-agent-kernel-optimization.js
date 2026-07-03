@@ -752,6 +752,16 @@ ${implResult.model_new_code.substring(0, 2000)}
 
 # Validation Steps:
 
+## Step 0: Isolated verify workspace (#37 — no strays in the project tree)
+Create ALL verification artifacts you author (test harnesses, kernel copies,
+reference arrays, result files, `.verify_*` dirs, `verify_*` / `test_*`
+sentinels) under `${EXP_DIR}/verify/attempt-${currentAttempt}/` — `mkdir -p` it
+first. Do NOT write any verify artifact to the project root or the current
+working directory; those leak into the user's tree as strays. Run the
+user-provided `${COMPILE_CMD}` / `${VERIFY_CMD}` / `${PROFILE_CMD}` where they
+expect to run (they may require the project root as CWD), but any file YOU
+create goes under `${EXP_DIR}/verify/`.
+
 ## Step 1: Compile
 ${COMPILE_CMD ? `Run: ${COMPILE_CMD}` : 'No compile_command provided; perform static compileability review only.'}
 Check for compilation errors.
