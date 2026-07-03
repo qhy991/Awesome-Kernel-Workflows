@@ -1403,7 +1403,7 @@ Write your proposals to ${EXP_DIR}/proposals.md with format:
 
 ## proposal-1
 - **scope**: <file path to edit>
-- **evidence pointer**: <ITERATIONS.md line / commit SHA / bench output>
+- **evidence pointer**: <${EXP_DIR}/round-logs/round-${round + 1}-iterations.md line / commit SHA / bench output>
 - **patch**: <diff or new content>
 - **predicted utility**: <one sentence>
 - **rationale**: <prose>
