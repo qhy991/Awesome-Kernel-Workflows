@@ -22,6 +22,16 @@ for the versioning policy.
   `resolveBackendAxis` workflows adopt via the same 2-line pattern when a
   session surfaces the need.
 
+- **profiling-strategist `used_tools` contract field + `--deny-tools` (#36).**
+  `perf_heuristic`'s contract is "no Nsight tools, use harness timing" — now
+  explicit: the decision carries `used_tools` (`native_profiler` = primary +
+  available `optional_tools` like nsys/cuobjdump; `perf_heuristic`/`static` =
+  `[]`, even when Nsight tools are probed available). `cuobjdump` added to
+  `PROBE_TOOLS` (was never probed). New `--deny-tools` arg makes the declarative
+  "no Nsight this run" (previously only implicit via `ncu_binary=""`) a canonical
+  contract: a denied primary tool forces `perf_heuristic` + `used_tools=[]`
+  regardless of host probe. Tests S12–S14.
+
 - **GemmPTX workflow `GemmPTX/`**. Adds a GEMM-specific CUDA/CuTe/CUTLASS
   optimizer that works from hardware census and PTX/SASS instruction evidence:
   candidates must compile, pass correctness, and prove the expected
@@ -95,6 +105,23 @@ for the versioning policy.
   per-workflow `manifest.yaml`. Schema reference moved to `docs/manifest-schema.yaml`.
 
 ### Fixed
+
+- **CUDAAgent verify phase routes artifacts to `${EXP_DIR}/verify/` (#37).**
+  The verify/test loop ran in the project-root CWD, so the agent created
+  `.verify_*/` dirs + stray files (verify_task, verify_candidate3,
+  test_harness.py, kernel.py, test_kernel.py) there — 8–20 strays per round
+  into the user's tree. The standalone Verify prompt now directs all authored
+  artifacts to `${EXP_DIR}/verify/attempt-N/` (user-provided
+  compile/test/profile commands still run where they expect). Runtime stray —
+  a prompt directive, not fully enforceable; wsr-analyze should confirm the
+  drop. (Earlier mis-attribution to AKO4X `ITERATIONS.md` corrected: that's a
+  separate hygiene fix, #38.)
+- **AKO4X proposals evidence-pointer references the real iteration-log path
+  (#38, hygiene).** The template said `<ITERATIONS.md line>` but no such file
+  is written (the log lives at `${EXP_DIR}/round-logs/round-N-iterations.md`);
+  a bare reference could prompt the agent to create a stray `ITERATIONS.md`.
+  Pointed at the real path. Added `stray-files-static-guard.test.js` (static
+  bare-path guard — does NOT catch runtime strays, the #37 scope).
 
 - **Wall-clock watchdog for ARGUS/KSearch + KSearch run-level circuit breaker
   (#30, #31a).** `withTurnTimeout` (per-turn `Promise.race(setTimeout)` cap,
