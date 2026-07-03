@@ -11,6 +11,8 @@ Usage:
   perf_to_evidence.py --baseline base.txt [--candidate cand.txt]
                       --peak-gflops 9800 --peak-gbs 800
                       [--strategy-id vec_float4]
+  perf_to_evidence.py --baseline base.json --run-json '{"output":"..."}'
+                      --peak-gflops 9800 --peak-gbs 800
 Emits the canonical per-attempt record on stdout. With --candidate it also
 computes speedup and tags the attempt validated_win / failed_strategy, then
 prints the channel-3 `attempt_evidence` object AccelOpt actually consumes.
@@ -125,10 +127,82 @@ def to_channel3(rec, strategy_id):
             "metrics": rec["metrics"], "transfer_items": items}
 
 
+def parse_json_baseline(data):
+    """Parse a baseline JSON (baseline-measurement.json or ksearch_root.result.json shape)
+    into the same row format as parse_perf() so the rest of the pipeline works unchanged."""
+    rows = []
+    if "baseline_ms" in data:
+        ms = data["baseline_ms"]
+        rows.append({
+            "op": "fused_shared_expert_mlp", "params": "geomean_over_16_workloads",
+            "us": ms * 1000.0,
+            "gflops": None, "gbs": None,
+        })
+        per_workload = data.get("per_workload_latency_ms", {})
+        for m_str, lat in sorted(per_workload.items(), key=lambda x: int(x[0])):
+            m = int(m_str)
+            # 6 * M * 2048 * 7168 FLOPs per workload
+            flops = 6 * m * 2048 * 7168
+            # 4 * M * 7168 + 3 * 2048 * 7168 bytes per workload
+            bytes_total = 4 * m * 7168 + 3 * 2048 * 7168
+            rows.append({
+                "op": "fused_shared_expert_mlp", "params": f"M={m}",
+                "us": lat * 1000.0,
+                "gflops": flops / 1e9 / (lat / 1000.0),
+                "gbs": bytes_total / 1e9 / (lat / 1000.0),
+            })
+    elif "latency_ms" in data:
+        rows.append({
+            "op": "fused_shared_expert_mlp", "params": "single",
+            "us": data["latency_ms"] * 1000.0,
+            "gflops": None, "gbs": None,
+        })
+    return rows
+
+
+def parse_run_json(raw_json_str):
+    """Parse a --run-json inline JSON string into a {op, params, us, gflops, gbs} row."""
+    run_data = json.loads(raw_json_str)
+    output_str = run_data.get("output", "{}")
+    try:
+        output = json.loads(output_str)
+    except (json.JSONDecodeError, TypeError):
+        output = {}
+
+    candidate_latency_ms = output.get("candidate_latency_ms")
+    eager_latency_ms = output.get("eager_latency_ms")
+    ok = output.get("ok", False)
+    compiled = output.get("compiled", False)
+    correct = output.get("correct", False)
+    error = output.get("error")
+
+    # Pick the best available latency
+    if candidate_latency_ms is not None and candidate_latency_ms > 0:
+        us = candidate_latency_ms * 1000.0
+    elif eager_latency_ms is not None and eager_latency_ms > 0:
+        us = eager_latency_ms * 1000.0
+    else:
+        us = 0.0
+
+    return {
+        "op": "fused_shared_expert_mlp",
+        "params": "run-json",
+        "us": us,
+        "gflops": None,
+        "gbs": None,
+        "_ok": ok,
+        "_compiled": compiled,
+        "_correct": correct,
+        "_error": error,
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--baseline", required=True)
     ap.add_argument("--candidate")
+    ap.add_argument("--run-json", default=None,
+                    help="Inline JSON string of candidate run result (alternative to --candidate file)")
     ap.add_argument("--peak-gflops", type=float, required=True)
     ap.add_argument("--peak-gbs", type=float, required=True)
     ap.add_argument("--strategy-id", default="candidate_v1")
@@ -136,31 +210,45 @@ def main():
                     help="verdict from the correctness_command (test-backend-ops test mode)")
     a = ap.parse_args()
 
-    base = parse_perf(open(a.baseline).read())
+    # --- Load baseline ---
+    raw = open(a.baseline).read()
+    # Try JSON first, fall back to text perf format
+    if raw.strip().startswith("{"):
+        base = parse_json_baseline(json.loads(raw))
+    else:
+        base = parse_perf(raw)
     if not base:
         sys.exit("no perf rows parsed from baseline")
     brow = max(base, key=lambda r: r["us"])  # worst variant = the one worth optimizing
 
     speedup = correct = None
     crow = brow
-    if a.candidate:
+    if a.run_json:
+        # --run-json mode: parse candidate from inline JSON
+        crow = parse_run_json(a.run_json)
+        correct = crow.get("_correct", (a.correct == "pass"))
+        crow_ok = crow.get("_ok", True)
+        crow_compiled = crow.get("_compiled", True)
+        crow_error = crow.get("_error")
+        # A kernel that fails or has no latency has no meaningful speedup
+        if crow["us"] > 0 and correct and crow_ok:
+            speedup = round(brow["us"] / crow["us"], 4)
+        else:
+            speedup = None
+    elif a.candidate:
         cand = parse_perf(open(a.candidate).read())
-        # match the same op/params if present, else worst
         crow = next((r for r in cand if r["op"] == brow["op"] and r["params"] == brow["params"]),
                     max(cand, key=lambda r: r["us"]))
-        correct = (a.correct == "pass")  # real verdict from correctness_command (test mode)
-        # a kernel that fails correctness has no meaningful speedup (bus contract:
-        # an incorrect attempt may not claim speedup > 1.0)
+        correct = (a.correct == "pass")
         speedup = round(brow["us"] / crow["us"], 4) if correct else None
 
-    rec = evidence_record(crow if a.candidate else brow, a.peak_gflops, a.peak_gbs,
-                          attempt_id="a2" if a.candidate else "a1",
-                          parent_id="a1" if a.candidate else None,
-                          speedup=speedup, correct=(correct if a.candidate else True),
-                          strategy_id=a.strategy_id, evaluated=bool(a.candidate))
+    rec = evidence_record(crow if (a.candidate or a.run_json) else brow, a.peak_gflops, a.peak_gbs,
+                          attempt_id="a2" if (a.candidate or a.run_json) else "a1",
+                          parent_id="a1" if (a.candidate or a.run_json) else None,
+                          speedup=speedup, correct=(correct if (a.candidate or a.run_json) else True),
+                          strategy_id=a.strategy_id, evaluated=bool(a.candidate or a.run_json))
     print(json.dumps(rec, indent=2))
-    if a.candidate:
-        # pure JSON to stderr so it can be redirected to a consumable file
+    if a.candidate or a.run_json:
         sys.stderr.write(json.dumps(to_channel3(rec, a.strategy_id), indent=2) + "\n")
 
 
