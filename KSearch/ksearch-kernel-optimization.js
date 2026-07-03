@@ -586,11 +586,32 @@ decisionTree = initResult.decision_tree
 log(`World model initialized: ${initResult.node_count} nodes, ${initResult.open_actions} open actions`)
 log(`Dimensions: ${(initResult.design_dimensions || []).join(', ')}`)
 
+// #43: resume from checkpoint if present (mechanical agent reads it verbatim).
+// Captures the 5 in-memory state vars (decisionTree, solutionDb, bestSolution,
+// bestMetric, cycleCount) so a crashed search resumes at the next cycle instead
+// of losing cycles 1..N. Uses the existing mechanical-agent file-IO pattern
+// (same as load-driver); zero new sandbox dependencies.
+const _checkpoint = await agentRetry(() => agent(
+  `Read ${EXP_DIR}/checkpoint.json (if it exists) and return its contents as a parsed JSON object, verbatim.\n` +
+  `If the file does not exist, return {"present": false}. Do NOT modify, summarize, or re-encode the JSON.\n` +
+  `Return the parsed object.`,
+  { model: MODEL.mechanical, label: 'load-checkpoint', phase: 'Setup', schema: JSON_PASSTHROUGH }),
+  { retries: 3, allowNull: true })
+let _startCycle = 0
+if (_checkpoint && _checkpoint.present !== false && _checkpoint.cycle != null) {
+  decisionTree = _checkpoint.decisionTree || decisionTree
+  solutionDb = _checkpoint.solutionDb || solutionDb
+  bestSolution = _checkpoint.bestSolution || bestSolution
+  if (_checkpoint.bestMetric != null) bestMetric = _checkpoint.bestMetric
+  _startCycle = Math.min(Number(_checkpoint.cycle) || 0, MAX_CYCLES)
+  log(`RESUMED from checkpoint: cycle ${_startCycle}, best ${bestMetric != null ? bestMetric.toFixed(3) + 'x' : 'N/A'}, ${solutionDb.length} solutions`)
+}
+
 // =============================================================================
 // Search Cycles — Select → Generate/Improve → Evaluate → Refine/Backtrack
 // =============================================================================
 
-for (let cycle = 0; cycle < MAX_CYCLES; cycle++) {
+for (let cycle = _startCycle; cycle < MAX_CYCLES; cycle++) {
   log(`\n=== Cycle ${cycle + 1}/${MAX_CYCLES} | Best: ${bestMetric?.toFixed(3) || 'N/A'}x | Solutions: ${solutionDb.length} ===`)
   const bestAtCycleStart = bestMetric  // #31a: snapshot global best at cycle start to detect run-level stagnation
 
@@ -1209,6 +1230,22 @@ Then append:
       log(`Recovery: ${(backtrackResult.recovery_actions || []).join(', ')}`)
     }
   }
+
+  // #43: checkpoint write at cycle end — persist the 5 state vars so a crashed
+  // search resumes at the next cycle (see load-checkpoint at startup). Mechanical
+  // agent writes the JSON verbatim (same pattern as AKO4X state.json).
+  // runtime_metadata is a static loop-counter-derived marker — NO Date.now()
+  // (forbidden in workflow runtime) — so postmortem can tell a cycle-end
+  // checkpoint from a mid-cycle crash.
+  await agentRetry(() => agent(
+    `Write exactly this JSON to ${EXP_DIR}/checkpoint.json (overwrite; do not modify, reformat, or re-encode):\n` +
+    '```json\n' + JSON.stringify({
+      cycle: cycle + 1,
+      decisionTree, bestMetric, bestSolution, solutionDb,
+      runtime_metadata: { checkpoint_written_at: 'cycle-' + (cycle + 1) + '-end', workflow: WORKFLOW_NAME },
+    }, null, 2) + '\n```',
+    { model: MODEL.mechanical, label: `checkpoint-${cycle}`, phase: 'Refine', schema: JSON_PASSTHROUGH }),
+    { retries: 3, allowNull: true })
 
   // #31a: Run-level circuit breaker (parity with CUDAAgent STAGNATION_LIMIT). If
   // the global best has not improved for RUN_STAGNATION_LIMIT consecutive cycles,
