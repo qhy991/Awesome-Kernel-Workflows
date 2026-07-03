@@ -939,6 +939,9 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
   const roundInsightRaw = {
     kind: 'bottleneck', directive: 'explore',
     claim: `bottleneck_class=${bclass} dominates ${OP} at this shape`,
+    actionable_hint: ({memory_bound: 'reduce DRAM traffic (tile for reuse, coalesce loads, shared memory)',
+                      compute_bound: 'raise arithmetic intensity (tensor cores / SIMT-efficient ops, cut redundant work)',
+                      latency_bound: 'raise occupancy / cut latency (larger blocks, fewer serial deps, pipeline)'})[bclass] || 're-examine the profile for the dominant cost and pick the next action',
     evidence: NCU_CMD ? 'ncu' : 'benchmark', confidence: 'measured', source_round: iter,
   }
   const refute = await agentRetry(() => agent(
