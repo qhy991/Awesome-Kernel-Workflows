@@ -32,6 +32,16 @@ for the versioning policy.
   contract: a denied primary tool forces `perf_heuristic` + `used_tools=[]`
   regardless of host probe. Tests S12–S14.
 
+- **KSearch cycle checkpoint — write + resume (#43).** The 5 in-memory state
+  vars (decisionTree, solutionDb, bestSolution, bestMetric, cycleCount) are now
+  persisted to `${EXP_DIR}/checkpoint.json` at each cycle end (mechanical agent)
+  and restored at startup, so a crashed search resumes at the next cycle instead
+  of losing cycles 1..N. `runtime_metadata.checkpoint_written_at` is a static
+  loop-counter-derived marker (no `Date.now()`) for postmortem. The API-exponential-
+  backoff half of #43 was skipped — the runtime exposes no `sleep()` and
+  `setTimeout`-as-blocking-sleep would hang under a non-real-time source; spun
+  off as issue #47 (runtime-layer).
+
 - **GemmPTX workflow `GemmPTX/`**. Adds a GEMM-specific CUDA/CuTe/CUTLASS
   optimizer that works from hardware census and PTX/SASS instruction evidence:
   candidates must compile, pass correctness, and prove the expected
@@ -122,6 +132,20 @@ for the versioning policy.
   a bare reference could prompt the agent to create a stray `ITERATIONS.md`.
   Pointed at the real path. Added `stray-files-static-guard.test.js` (static
   bare-path guard — does NOT catch runtime strays, the #37 scope).
+
+- **CUDAAgent `TARGET_SPEEDUP` handles "none" (explore mode) (#41).**
+  `args.target_speedup || 1.05` kept the truthy string "none" when explore mode
+  passed `target_speedup="none"`, breaking the numeric sites (NaN division /
+  comparison). Now parses to a positive number, else null = no target (explore:
+  run to MAX_TURNS / stagnation); the three numeric sites guard `null`. Missing
+  keeps the 1.05 default for back-compat.
+- **KSearch `anti_cheat.py` calls use `--source`/`--metrics` (#42).** The two
+  calls passed `--kernel`/`--result`, but the script's argparse requires
+  `--source`/`--metrics` — argparse rejected the call and the anti_cheat check
+  silently failed. Lagged the #25 substrate sync. (`integration_strategist.py
+  --kernel` is correct and preserved — that script accepts `--kernel`.) Same
+  flag-mismatch exists in KDA/KernelFoundry/KernelFoundryDx/ReGraphT — propagate
+  separately.
 
 - **Wall-clock watchdog for ARGUS/KSearch + KSearch run-level circuit breaker
   (#30, #31a).** `withTurnTimeout` (per-turn `Promise.race(setTimeout)` cap,
