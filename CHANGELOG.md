@@ -10,6 +10,22 @@ for the versioning policy.
 
 ### Added
 
+- **`actionable_hint` mandatory across the evidence contract (#48).** An
+  insight is no longer just a claim (what we observed) — it must carry an
+  `actionable_hint` (what the next round should do about it).
+  - `_substrate/evidence_schema.py`: `_validate_item` rejects an insight with
+    an empty `actionable_hint`; the TEMPLATE documents the field.
+  - `_substrate/profiling/perf_to_evidence.py`: new `_hint_for(bclass)` maps
+    memory/compute/latency bottleneck classes to concrete next-steps; every
+    emitted insight (bottleneck, validated_win, failed_strategy) + the
+    channel-3 transfer_items carry it.
+  - Generalist + AccelOpt emitters: `roundInsightRaw` derives the hint key
+    from `bclass`; `insightItems` carry an "apply this learning" hint.
+  - Out of scope: WarpSpeed lessons use a separate schema
+    (type/mechanism/scope via its own lessons DB, not evidence_schema-validated).
+  - New test: `_meta/tools/test/actionable-hint-contract.test.js` (5 assertions);
+    S11 (evidence_schema validates perf_to_evidence output) stays 21/0.
+
 - **`fair_baseline_id` → `baseline_id` output contract (#32).** CUDAAgent,
   KDA, AKO4X, KernelFoundry declare `fair_baseline_id` in `routing.all_args`
   (so KerSor #39(a) pushes the frozen `contract.env::baseline_id` into
