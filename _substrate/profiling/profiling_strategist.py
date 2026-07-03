@@ -39,7 +39,7 @@ import sys, os, json, argparse, shutil, subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_REGISTRY = os.path.join(HERE, "profiler_registry.json")
-PROBE_TOOLS = ("ncu", "nsys", "rocprof", "msprof", "xcrun", "vtune")
+PROBE_TOOLS = ("ncu", "nsys", "cuobjdump", "rocprof", "msprof", "xcrun", "vtune")
 
 # --- task knowledge: what a task most needs, and the full set it would ask for ---
 PRIMARY_METRIC = {
@@ -92,13 +92,21 @@ def _build_native(manifest, registry):
     ev = "ncu" if name == "ncu" else registry["native_stamp"]["evidence"]
     return {**registry["native_stamp"], "evidence": ev,
             "profiler": name, "tool": tool,
+            "optional_tools": list(manifest.get("optional_tools", [])),
             "metrics": [m for m, ok in caps.items() if ok],
             "normalizer": (manifest.get("profiler") or {}).get("to_evidence", "to_evidence.py")}
 
 
-def _gate_ok(md, host, primary):
+def _gate_ok(md, host, primary, deny=()):
     kind = md.get("kind")
     if kind == "native_profiler":
+        # #36: deny_tools is a declarative contract (e.g. user sets ncu_binary=""
+        # + "NO NCU THIS RUN" in op_description). If the primary tool is denied,
+        # the native method is off-limits regardless of host probe; fall to
+        # perf_heuristic (harness timing, no Nsight-family tools) rather than
+        # silently borrowing nsys/cuobjdump.
+        if md.get("tool") in deny:
+            return False, f"tool '{md.get('tool')}' denied by deny_tools"
         if not host.get(md.get("tool")):
             return False, f"tool '{md.get('tool')}' absent"
         # hardware-agnostic gate: a native profiler is useful only if it yields
@@ -121,7 +129,23 @@ def _gate_ok(md, host, primary):
     return False, "unknown method kind"
 
 
-def resolve(manifest, task, size, host, registry):
+def _used_tools(md, host, deny):
+    """Tools the chosen method WILL invoke (#36 contract field).
+    native_profiler: primary + available optional_tools (not denied) — so the
+      decision is honest that nsys/cuobjdump will be used alongside ncu.
+    perf_heuristic / static / derive: [] — harness timing and source read use NO
+      Nsight-family tools, even if probed available. perf_heuristic's contract is
+      'no Nsight, use harness timing'; surfacing [] makes the exclusion explicit
+      instead of leaving the tools silently probed-but-unused."""
+    if md.get("kind") == "native_profiler":
+        primary = md.get("tool")
+        opts = [t for t in md.get("optional_tools", [])
+                if t and t != primary and host.get(t) and t not in deny]
+        return ([primary] if primary and primary not in deny else []) + opts
+    return []
+
+
+def resolve(manifest, task, size, host, registry, deny=()):
     """DETERMINISTIC for any backend whose manifest declares a profiler. (backend,
     task, host) -> routing decision via a GENERIC ladder; native comes from manifest."""
     backend_id = manifest.get("backend_id")
@@ -137,6 +161,7 @@ def resolve(manifest, task, size, host, registry):
             "method_kind": "derive", "evidence_source": None, "confidence": None,
             "normalizer": None, "requested_metrics": want, "primary_metric": primary,
             "profiler_name": None, "profile_invoke": None, "abstained_from": [],
+            "used_tools": [],
             "rationale": "no backend manifest -> agent must derive a profiling adapter, then cache it back",
             "autonomy_directive": {"action": "derive_profiling_adapter",
                                    "must_emit": ["tool", "invoke", "metrics", "normalizer"],
@@ -150,7 +175,7 @@ def resolve(manifest, task, size, host, registry):
         md = native if step == "native" else fb.get(step)
         if not md:
             tried.append((step, "not declared")); continue
-        ok, why = _gate_ok(md, host, primary)
+        ok, why = _gate_ok(md, host, primary, deny)
         if ok:
             return {
                 "cache_key": f"{backend_id}|{task}|{size}|{host_sig}",
@@ -164,6 +189,7 @@ def resolve(manifest, task, size, host, registry):
                 "coverage_expected": [m for m in want if m in md.get("metrics", [])],
                 "primary_metric": primary,
                 "profile_invoke": (manifest.get("profiler") or {}).get("invoke") if step == "native" else None,
+                "used_tools": _used_tools(md, host, deny),
                 "abstained_from": [t for (t, _w) in tried],
                 "rationale": f"{step}: {why}",
             }
@@ -172,6 +198,7 @@ def resolve(manifest, task, size, host, registry):
             "method_kind": "static", "evidence_source": "llm_inferred", "confidence": "hypothesized",
             "normalizer": None, "requested_metrics": want, "primary_metric": primary,
             "profiler_name": "source-read", "abstained_from": [t for (t, _w) in tried],
+            "used_tools": [],
             "rationale": "no runnable method; source read only"}
 
 
@@ -184,7 +211,8 @@ def get_decision(a):
     registry = _load(a.registry or DEFAULT_REGISTRY)
     _name, native_tool = native_tool_for(manifest, registry)
     host = probe_host(json.loads(a.host_probe) if a.host_probe else None, extra_tools=(native_tool,))
-    fresh = resolve(manifest, a.task, a.size, host, registry)
+    deny = {t.strip() for t in (a.deny_tools or "").split(",") if t.strip()}
+    fresh = resolve(manifest, a.task, a.size, host, registry, deny=deny)
     if a.cache:
         cache = _load(a.cache)
         if fresh["cache_key"] in cache:
@@ -210,6 +238,10 @@ def main():
         p.add_argument("--host-probe")
         p.add_argument("--cache")
         p.add_argument("--trajectory")
+        p.add_argument("--deny-tools", default="",
+                       help="comma-separated tools to forbid, e.g. 'ncu,nsys,cuobjdump' "
+                            "(declarative 'no Nsight this run' contract; forces perf_heuristic "
+                            "with used_tools=[] regardless of host probe)")
         if name == "run":
             p.add_argument("--baseline"); p.add_argument("--candidate")
             p.add_argument("--peak-gflops", type=float, default=5200)

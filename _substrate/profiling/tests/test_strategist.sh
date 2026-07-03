@@ -45,6 +45,20 @@ $ST run --backend-manifest $B/cuda/manifest.json --task attention --host-probe '
 $SCHEMA s_ev.json >/dev/null 2>&1
 chk "S11 e2e -> schema-legal evidence" "$?" 0
 chk "S11 evidence source"        "$(python3 -c 'import json;print([i["evidence"] for i in json.load(open("s_ev.json"))["insights"] if i["kind"]=="bottleneck"][0])')" profile_heuristic
+
+# #36: perf_heuristic honors the 'no Nsight' contract — used_tools=[] (no nsys/
+# cuobjdump borrow even when probed available), and deny_tools forces perf_heuristic
+# regardless of host probe.
+J=$($ST resolve --backend-manifest $B/cuda/manifest.json --task gemm --host-probe '{"ncu":false,"nsys":true}')
+chk "S12 cuda/no-ncu+nsys->perf" "$(g "$J" method)" perf_heuristic
+chk "S12 used_tools empty (no Nsight borrow)" "$(g "$J" used_tools)" "[]"
+J=$($ST resolve --backend-manifest $B/cuda/manifest.json --task gemm --host-probe '{"ncu":true,"nsys":true}')
+chk "S13 cuda+ncu+nsys->native"  "$(g "$J" method)" native_profiler
+chk "S13 used_tools ncu+nsys"    "$(g "$J" used_tools)" "['ncu', 'nsys']"
+J=$($ST resolve --backend-manifest $B/cuda/manifest.json --task gemm --host-probe '{"ncu":true,"nsys":true}' --deny-tools ncu,nsys,cuobjdump)
+chk "S14 deny_tools->perf"       "$(g "$J" method)" perf_heuristic
+chk "S14 used_tools empty (denied)" "$(g "$J" used_tools)" "[]"
+
 rm -f empty_manifest.json sycl_manifest.json cache.json traj.jsonl s_ev.json
 echo "================  $pass passed, $fail failed  ================"
 exit $fail
