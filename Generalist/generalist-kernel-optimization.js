@@ -206,7 +206,6 @@ function guard(obj, field, fallback) {
 // action. The "__genomeReport" mention is a sentinel so patch-genome-report.js
 // treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
-
 function normalizeSuitabilityValue(value) {
   const raw = String(value || '').trim().toLowerCase().replace(/_/g, '-')
   const aliases = {
