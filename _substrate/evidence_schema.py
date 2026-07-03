@@ -23,7 +23,8 @@ TEMPLATE = {
     "metrics": {"latency_ms": None, "dram_pct": None, "sm_pct": None, "occupancy": None},
     "best_kernel": None, "convergence_status": "unknown",
     "insights": [{"kind": "bottleneck", "directive": "explore", "evidence": "ncu",
-                  "confidence": "measured", "claim": "..."}],
+                  "confidence": "measured", "claim": "...",
+                  "actionable_hint": "concrete next-step the next round can act on (e.g. 'tile to 128, stage A through shared memory')"}],
     "failed_strategies": [],
 }
 
@@ -37,6 +38,11 @@ def _validate_item(it, errs, where):
             errs.append(f"{where}.{field}={it.get(field)!r} not in {sorted(allowed)}")
     if not it.get("claim"):
         errs.append(f"{where}.claim missing/empty")
+    # #48: an insight must carry an actionable_hint — a concrete next-step the next
+    # round can act on (not just an observation). claim = what we saw; hint = what
+    # to do about it. Without it, downstream rounds get a diagnosis with no action.
+    if not it.get("actionable_hint"):
+        errs.append(f"{where}.actionable_hint missing/empty")
 
 
 def normalize(d):
