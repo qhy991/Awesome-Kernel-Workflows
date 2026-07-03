@@ -274,7 +274,17 @@ const OP_DESC = args.op_description || 'PyTorch model'
 const VERIFY_CMD = args.test_command || ''
 const PROFILE_CMD = args.profile_command || ''
 const COMPILE_CMD = args.compile_command || ''
-const TARGET_SPEEDUP = args.target_speedup || 1.05
+// #41: explore mode passes target_speedup="none" (or any non-numeric) — `|| 1.05`
+// would keep the truthy string "none", breaking the numeric sites below (NaN
+// division / comparison). Parse to a positive number, or null = no target
+// (explore: run to MAX_TURNS / stagnation, targetMet stays false). Missing
+// (undefined) keeps the 1.05 default for back-compat.
+const TARGET_SPEEDUP = (() => {
+  const raw = args.target_speedup
+  if (raw == null) return 1.05
+  const v = parseFloat(raw)
+  return Number.isFinite(v) && v > 0 ? v : null
+})()
 const MAX_TURNS = args.max_turns || 15
 // --- Watchdog / stall guards (parity with Generalist's STAGNATION/DRY guards) ---
 // The loop used to be bounded ONLY by MAX_TURNS: a single hung Implement/Verify turn
@@ -613,7 +623,7 @@ ${modelCode.substring(0, 3000)}
 # Baseline Performance:
 - Eager: ${eagerTime}ms
 - torch.compile: ${compileTime}ms
-- Target: >${TARGET_SPEEDUP}x speedup over torch.compile (=${(compileTime / TARGET_SPEEDUP).toFixed(3)}ms)
+- Target: ${TARGET_SPEEDUP !== null ? `>${TARGET_SPEEDUP}x speedup over torch.compile (=${(compileTime / TARGET_SPEEDUP).toFixed(3)}ms)` : 'explore (no numeric target — run to MAX_TURNS / stagnation)'}
 ${historyContext}${proactiveKnowledgeHint}${embeddedProposalBlock}
 
 # CUDA Agent Workspace Requirements:
@@ -845,8 +855,8 @@ Then append, using the values you just measured (status="done" if correctness pa
     log(`  NEW BEST: ${bestSpeedup.toFixed(2)}x vs compile (reward=${verifyResult.reward})`)
   }
 
-  // Check if target met
-  if (verifyResult.correct && (verifyResult.speedup_vs_compile || 0) >= TARGET_SPEEDUP) {
+  // Check if target met (#41: skip when TARGET_SPEEDUP is null — explore mode has no numeric target)
+  if (TARGET_SPEEDUP !== null && verifyResult.correct && (verifyResult.speedup_vs_compile || 0) >= TARGET_SPEEDUP) {
     targetMet = true
     log(`  TARGET MET: ${verifyResult.speedup_vs_compile?.toFixed(2)}x ≥ ${TARGET_SPEEDUP}x`)
   } else {
@@ -900,7 +910,7 @@ const finalReport = await agentRetry(() => agent(`Write a concise optimization r
 - Baseline compile: ${compileTime}ms
 - Best kernel time: ${compileTime / (bestSpeedup || 1)}ms
 - Best speedup vs compile: ${bestSpeedup.toFixed(2)}x
-- Target: ${TARGET_SPEEDUP}x | ${targetMet ? 'ACHIEVED' : 'NOT MET'}
+- Target: ${TARGET_SPEEDUP !== null ? `${TARGET_SPEEDUP}x | ${targetMet ? 'ACHIEVED' : 'NOT MET'}` : 'explore (no target)'}
 - Turns used: ${currentAttempt}/${MAX_TURNS}
 - Convergence status: ${convergence_status}
 
