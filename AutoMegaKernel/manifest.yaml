@@ -100,8 +100,8 @@ topology:
     search_space_description: 'AutoMegaKernel ScheduleConfig typed knobs plus optional
       kernel_knobs returned by amk propose.'
     sampler: external_harness
-    pruning_strategy: AMK keep/revert rule: keep only valid+correct candidates with
-      a measured latency win over the incumbent.
+    pruning_strategy: 'AMK keep/revert rule: keep only valid+correct candidates with
+      a measured latency win over the incumbent.'
     budget_arg: iterations
   iterative:
     iterations_arg: iterations
