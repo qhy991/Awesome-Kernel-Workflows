@@ -62,6 +62,18 @@ def classify(row, peak_gflops, peak_gbs):
            f"no throughput axis reported at {row['us']:.1f}us/run -> assume latency bound"
 
 
+def _hint_for(bclass):
+    """#48: actionable_hint for a bottleneck insight — a concrete next-step the
+    next round can act on, derived deterministically from the bottleneck class.
+    claim = what we measured; hint = what to do about it."""
+    return {
+        "memory_bound": "reduce DRAM traffic: tile for reuse, coalesce loads, stage inputs through shared memory",
+        "compute_bound": "raise arithmetic intensity: use tensor cores / SIMT-efficient ops, remove redundant work",
+        "latency_bound": "raise occupancy / cut latency: larger thread blocks, fewer serial dependencies, pipeline stages",
+    }.get(bclass, "re-examine the profile for the dominant cost and pick the next optimization action")
+
+
+
 def evidence_record(row, peak_gflops, peak_gbs, *, attempt_id, parent_id,
                     speedup, correct, strategy_id, evaluated):
     bclass, metrics, claim = classify(row, peak_gflops, peak_gbs)
@@ -71,22 +83,26 @@ def evidence_record(row, peak_gflops, peak_gbs, *, attempt_id, parent_id,
         "evidence": "profile_heuristic",   # <-- the whole point: NOT "ncu"
         "confidence": "inferred",          # <-- degraded from "measured", still bus-legal
         "claim": f"{row['op']}({row['params']}): {claim}",
+        "actionable_hint": _hint_for(bclass),
     }]
     failed = []
     if evaluated:
         if correct and speedup is not None and speedup > 1.0:
             insights.append({"kind": "validated_win", "directive": "reuse",
                              "evidence": "benchmark", "confidence": "measured",
-                             "claim": f"strategy '{strategy_id}' gave {speedup:.2f}x (test-backend-ops perf, correctness PASS)"})
+                             "claim": f"strategy '{strategy_id}' gave {speedup:.2f}x (test-backend-ops perf, correctness PASS)",
+                             "actionable_hint": "re-apply this transformation to adjacent ops / the next candidate"})
         else:
             why = "correctness FAIL" if not correct else f"no speedup ({speedup:.2f}x)"
             insights.append({"kind": "failed_strategy", "directive": "avoid",
                              "evidence": "benchmark", "confidence": "measured",
-                             "claim": f"strategy '{strategy_id}' rejected: {why}"})
+                             "claim": f"strategy '{strategy_id}' rejected: {why}",
+                             "actionable_hint": "do not re-propose as-is; if revisiting, change the failing axis (correctness/perf) first"})
             failed.append({"id": strategy_id, "kind": "failed_strategy",
                            "directive": "avoid", "evidence": "benchmark",
                            "confidence": "measured",
-                           "claim": f"strategy '{strategy_id}' rejected: {why}"})
+                           "claim": f"strategy '{strategy_id}' rejected: {why}",
+                           "actionable_hint": "do not re-propose as-is; if revisiting, change the failing axis (correctness/perf) first"})
     return {
         "attempt_id": attempt_id, "parent_id": parent_id,
         "compiled": True, "correct": correct, "speedup": speedup,
@@ -99,10 +115,12 @@ def evidence_record(row, peak_gflops, peak_gbs, *, attempt_id, parent_id,
 def to_channel3(rec, strategy_id):
     """AccelOpt channel-3 shape: transfer_items[] with kind='failed_strategy' -> hard constraint."""
     items = [{"id": (i.get("claim", "")[:40]), "kind": i["kind"], "directive": i["directive"],
-              "evidence": i["evidence"], "claim": i["claim"]} for i in rec["insights"]]
+              "evidence": i["evidence"], "claim": i["claim"],
+              "actionable_hint": i.get("actionable_hint", "")} for i in rec["insights"]]
     for fs in rec["failed_strategies"]:
         items.append({"id": fs["id"], "kind": "failed_strategy", "directive": "avoid",
-                      "evidence": "benchmark", "claim": fs["claim"]})
+                      "evidence": "benchmark", "claim": fs["claim"],
+                      "actionable_hint": fs.get("actionable_hint", "")})
     return {"round": 2, "source": "test-backend-ops(perf+test); no NCU",
             "metrics": rec["metrics"], "transfer_items": items}
 

@@ -1642,6 +1642,7 @@ if (USE_DRIVER) {
     evidence: IDIOMS.profiler_name ? 'ncu' : 'profile_heuristic',
     confidence: 'inferred',
     claim: e,
+    actionable_hint: 'apply this learning when generating / improving the next candidate',
   }))
   const built = await agentRetry(() => agent(
     `Build a Layer-A evidence envelope for this AccelOpt run, then validate it.\n` +
