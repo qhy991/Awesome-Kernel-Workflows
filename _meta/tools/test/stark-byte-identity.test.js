@@ -9,8 +9,9 @@
 //   (3) re-run the capture with --agent-returns into the golden,
 //   (4) commit the new golden + new SHA alone, explaining the intent.
 // Byte-identity is CONDITIONAL on args.rng_seed=42 (pinned in the
-// fixture). Without rng_seed, selectNode() falls through to native
-// Math.random() and the gate is N/A.
+// fixture). selectNode()'s RNG is ALWAYS seeded (rng_seed when pinned, else a
+// fixed deterministic seed of 1 — never Math.random(); see AWK #50), so the
+// capture is deterministic regardless.
 // Stage-A commit SHA: 6c75cefc289dfc0acd20276502befe8137c88f3a
 const { test } = require('node:test')
 const assert = require('node:assert/strict')

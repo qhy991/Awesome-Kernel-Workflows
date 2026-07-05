@@ -159,3 +159,40 @@ test('manifest backend_id mismatch with args.backend -> throws', async () => {
     },
   )
 })
+
+// AWK #51: the internal verifier must NOT hardcode rtol/atol=1e-3 — that wrongly
+// rejects correct fp16/bf16 kernels (024: 4/4 correct candidates failed allclose).
+// Tolerance is resolved args.rtol/atol > dtype-aware default > 1e-3, and injected
+// into the generated test harness.
+test('§#51: tolerance is dtype-aware — fp16 output loosens allclose to rtol/atol=0.01', async () => {
+  const caps = await run(
+    { seed_candidates: 1, iterations: 1, verify: false },
+    {
+      'setup-problem': {
+        problem_definition: 'fp16 op', input_tensors: [], operations: ['x'],
+        output_spec: { shape: '[B,N]', dtype: 'float16' }, complexity_signals: [],
+      },
+    },
+  )
+  const st = caps.find(c => c.label === 'setup-test')
+  assert.ok(st, 'setup-test prompt must be captured')
+  assert.match(st.prompt, /rtol=0\.01, atol=0\.01/,
+    'fp16 output must loosen allclose tolerance to 0.01 (AWK #51 — fixes 024 false-rejects of correct fp16 kernels)')
+  assert.ok(!/atol=1e-3/.test(st.prompt), 'must not retain the old hardcoded atol=1e-3')
+})
+
+test('§#51: explicit args.rtol/args.atol override the dtype default', async () => {
+  const caps = await run(
+    { seed_candidates: 1, iterations: 1, verify: false, rtol: 0.05, atol: 0.05 },
+    {
+      'setup-problem': {
+        problem_definition: 'fp32 op', input_tensors: [], operations: ['x'],
+        output_spec: { shape: '[B,N]', dtype: 'float32' }, complexity_signals: [],
+      },
+    },
+  )
+  const st = caps.find(c => c.label === 'setup-test')
+  assert.ok(st, 'setup-test prompt must be captured')
+  assert.match(st.prompt, /rtol=0\.05, atol=0\.05/,
+    'explicit args.rtol/atol must override the dtype default (AWK #51 — spec tolerance knob)')
+})
