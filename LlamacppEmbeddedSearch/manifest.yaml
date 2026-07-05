@@ -71,6 +71,7 @@ variants:
     best_kernel_field: best_kernel_code
     framework_integrator_fallback: true
     topology: graph_search
+    seed_contract: iterative
     requires_harness: true
     languages:
     - metal
