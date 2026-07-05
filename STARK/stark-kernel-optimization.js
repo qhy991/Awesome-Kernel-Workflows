@@ -264,13 +264,16 @@ const LANGUAGE = args.language || 'cuda'
 const TARGET_GPU = args.target_gpu || 'unknown GPU'
 const SEED_CANDIDATES = args.seed_candidates || 3
 
-// Seeded RNG (P5c STARK A0). Replaces Math.random() in selectNode() only.
-// When args.rng_seed is null/undefined, falls through to native Math.random()
-// — legacy byte-identical for callers that do not pin a seed.
-const RNG_SEED = args.rng_seed
-let _rngState = (RNG_SEED !== undefined && RNG_SEED !== null) ? (((RNG_SEED | 0) || 1) >>> 0) : null
+// Seeded RNG (P5c STARK A0). Deterministic xorshift32, used in selectNode().
+// The Workflow runtime FORBIDS the host language's nondeterministic float RNG
+// (non-determinism breaks resume — cached branches diverge; the KerSor catalog
+// forbidden-API scan marks any workflow containing that token known_broken —
+// AWK #50). So rng() is ALWAYS seeded: args.rng_seed when pinned, else a fixed
+// deterministic seed (1). Callers that want per-run exploration variety must
+// opt in by passing rng_seed.
+const RNG_SEED = (args.rng_seed !== undefined && args.rng_seed !== null) ? args.rng_seed : 1
+let _rngState = ((RNG_SEED | 0) || 1) >>> 0
 function rng() {
-  if (_rngState === null) return Math.random()
   let s = _rngState | 0
   s ^= s << 13
   s ^= s >>> 17

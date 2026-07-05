@@ -413,6 +413,20 @@ Then append:
 problemDescription = setupResult.problem_definition
 log(`Problem parsed: ${setupResult.operations.length} ops detected`)
 
+// Numerical tolerance for the correctness check (AWK #51). Resolution order:
+// explicit args.rtol/args.atol → dtype-aware default (from the parsed output
+// spec) → 1e-3. The previous hardcoded 1e-3 wrongly rejected correct fp16/bf16
+// kernels (024: 4/4 correct candidates failed allclose).
+function defaultTol(dtype) {
+  const d = (dtype || '').toLowerCase()
+  if (/(b?float16|^half|bf16|fp16|torch\.float16|torch\.bfloat16)/.test(d)) return { rtol: 1e-2, atol: 1e-2 }
+  if (/(float64|^double|fp64|torch\.float64)/.test(d)) return { rtol: 1e-5, atol: 1e-5 }
+  return { rtol: 1e-3, atol: 1e-3 }
+}
+const _outDtype = (setupResult.output_spec && setupResult.output_spec.dtype) || ''
+const RTOL = args.rtol != null ? args.rtol : defaultTol(_outDtype).rtol
+const ATOL = args.atol != null ? args.atol : defaultTol(_outDtype).atol
+
 // Generate test harness
 const testResult = await agentRetry(() => agent(`You are a ${langToken(LEGACY_HARNESS_LANG_TOKEN)} kernel test engineer. Generate a Python test harness for the following problem.
 
@@ -432,8 +446,9 @@ The test harness must:
 3. Run the kernel function and compare output against a PyTorch reference
 4. Print "PASS" if output matches within tolerance, "FAIL" otherwise
 5. Exit with code 0 on success, 1 on failure
-6. Use torch.allclose with rtol=1e-3, atol=1e-3 for float comparison
+6. Use torch.allclose with rtol=${RTOL}, atol=${ATOL} for float comparison
 7. Test with at least 2 different input sizes if applicable
+8. Time the kernel with torch.cuda.Event (or time.perf_counter for CPU/triton) over a warm-up + measured runs and print exactly one line \`LATENCY_MS=<median_ms>\` so the verifier can record the measured latency signal (AWK #51)
 
 Return ONLY the Python test code (no markdown, no explanation).`, {
   label: 'setup-test',
@@ -718,6 +733,7 @@ ${testCode.substring(0, 3000)}
 4. Capture stdout, stderr, and exit code
 5. If exit code is 0 and output contains "PASS", the kernel is verified
 6. If exit code is non-zero or output contains "FAIL", report the error
+7. Parse the measured kernel latency from a \`LATENCY_MS=<value>\` line in stdout (the harness prints it); set latency_ms to that number, or null if absent (AWK #51 — measured latency signal so correct+fast kernels can be rewarded, not just pass/fail)
 
 # Verification Depth (verification-strategist, confirm acceptance)
 Verification-strategist selected method='${VERIFICATION_CONFIRM.method}' (confidence='${VERIFICATION_CONFIRM.confidence}', evidence='${VERIFICATION_CONFIRM.evidence_source}'). Honor it: if method==='reference_test', run the full PyTorch reference numerical comparison and tag the verdict evidence='correctness'. If 'smoke_test', compile+run for shape/finiteness only, tag evidence='runtime'. If 'compile_lint', compile+lint only (no execution), tag evidence='compile'. If 'static', reason from source only (evidence='llm_inferred'). Never fabricate a pass verdict you did not actually run.
@@ -734,6 +750,7 @@ Return a JSON object with:
 - stderr: captured standard error
 - error_summary: brief description of failure reason (null if passed)
 - verification_result: 'pass' | 'fail' | 'timeout' | 'error'
+- latency_ms: number (measured kernel latency parsed from the harness LATENCY_MS line, or null if absent)
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -751,6 +768,7 @@ Then append, using the result you just measured (status="done" if the kernel pas
           stderr: { type: 'string' },
           error_summary: { type: 'string' },
           verification_result: { type: 'string', enum: ['pass', 'fail', 'timeout', 'error'] },
+          latency_ms: { type: 'number' },
         },
         required: ['passed', 'verification_result'],
       },
@@ -778,6 +796,7 @@ Then append, using the result you just measured (status="done" if the kernel pas
         target_id: candidate.target_id,
         test_output: result.stdout,
         verification_result: result.verification_result,
+        latency_ms: result.latency_ms != null ? result.latency_ms : null,
         approach: candidate.approach,
       })
     } else {
@@ -980,13 +999,14 @@ ${candidate.code.substring(0, 4000)}
 ${testCode.substring(0, 3000)}
 \`\`\`
 
-${USE_DRIVER ? driverSh('run.sh', `--kernel ${kernelFilename()} --test ${testFilename()}`) + '\n' : ''}Execute the test and report results. Return JSON with:
+${USE_DRIVER ? driverSh('run.sh', `--kernel ${kernelFilename()} --test ${testFilename()}`) + '\n' : ''}Execute the test and report results. Parse the measured kernel latency from a \`LATENCY_MS=<value>\` line in stdout (null if absent). Return JSON with:
 - passed: boolean
 - exit_code: number
 - stdout: string
 - stderr: string
 - error_summary: string or null
-- verification_result: 'pass' | 'fail' | 'timeout' | 'error'`, {
+- verification_result: 'pass' | 'fail' | 'timeout' | 'error'
+- latency_ms: number or null (AWK #51)`, {
         label: `reverify-${candidate.id}-r${currentRound}`,
         phase: 'Refine',
         model: MODEL.mechanical,
@@ -999,6 +1019,7 @@ ${USE_DRIVER ? driverSh('run.sh', `--kernel ${kernelFilename()} --test ${testFil
             stderr: { type: 'string' },
             error_summary: { type: 'string' },
             verification_result: { type: 'string', enum: ['pass', 'fail', 'timeout', 'error'] },
+            latency_ms: { type: 'number' },
           },
           required: ['passed', 'verification_result'],
         },
@@ -1024,7 +1045,8 @@ ${USE_DRIVER ? driverSh('run.sh', `--kernel ${kernelFilename()} --test ${testFil
           target_id: candidate.target_id,
           test_output: result.stdout,
           verification_result: result.verification_result,
-          approach: candidate.appach,
+          latency_ms: result.latency_ms != null ? result.latency_ms : null,
+          approach: candidate.approach,
         })
       } else {
         candidate.status = 'failed'

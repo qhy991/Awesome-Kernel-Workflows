@@ -791,6 +791,8 @@ ${wmSection}
 3. Must be functionally correct (outputs within rtol=${RTOL}, atol=${ATOL})
 4. Target ${TARGET_GPU} architecture
 5. Include all necessary imports/headers
+6. PATCH-FIRST / NO-TRUNCATION (AWK #52): emit the kernel from the first line to the LAST closing brace. When parent code exists, edit ONLY the action-relevant spans and preserve the rest verbatim — do NOT rewrite unrelated regions (large whole-file rewrites are the #1 cause of mid-kernel truncation). Do NOT emit a skeleton/stub body. Your output is checked by \`${SUBSTRATE}/code_integrity.py\` — truncated or empty-body output is rejected and the attempt is discarded.
+7. NATIVE INTRINSICS FOR THE TARGET ARCH (AWK #53): on Blackwell sm_100 use \`tcgen05.mma\` (+ TMEM) — not Hopper \`wgmma\`/\`mma.async\`; on Hopper sm_90 use \`wgmma\`. See \`${SUBSTRATE}/knowledge/sm100-blackwell.md\` (reference; arch-mismatch gating is enforced vendor-neutrally at the KerSor injection layer, KerSor #70).
 
 Return the complete kernel code.
 
@@ -1031,6 +1033,13 @@ Then append, using the values you just measured (status="done" if it compiled AN
         `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --source ${kPath} --metrics ${EXP_DIR}/cycle_${cycle}_a${attempt}.result.json\`.\n` +
         `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
         { model: MODEL.mechanical, label: `driver-anti-cheat-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
+      // AWK #52: code-integrity gate — reject truncated / stub-body kernels before
+      // their "speedup" can enter the beam/memory. Catches the 018 (6/6 truncated)
+      // and L2-054 (whole-file stub) failure modes that anti_cheat does not see.
+      await agentRetry(() => agent(
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/code_integrity.py --source ${kPath}\`.\n` +
+        `Return stdout JSON verbatim {valid, flags}. A non-zero exit (valid=false) means the candidate was truncated or is a stub — record it as a failed attempt and do not promote it.`,
+        { model: MODEL.mechanical, label: `driver-code-integrity-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
       evalResult.driver_envelope = {
         latency_ms: Number((runOut && runOut.latency_ms) || 0),
         bottleneck_class: (diagOut && diagOut.bottleneck_class) || 'unknown',

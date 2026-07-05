@@ -1,6 +1,7 @@
 'use strict'
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const path = require('node:path')
 const { capturePrompts } = require(path.resolve(__dirname, '..', 'print-workflow-prompts.js'))
 
@@ -124,4 +125,14 @@ test('manifest backend_id mismatch with args.backend -> throws', async () => {
       return true
     },
   )
+})
+
+// AWK #50: the Workflow runtime FORBIDS Math.random() (non-determinism breaks
+// resume; the KerSor catalog forbidden-API scan marks any workflow containing
+// it known_broken). STARK's selectNode() RNG must always be seeded.
+test('§#50: workflow body contains no Math.random() — always-seeded RNG', () => {
+  const src = fs.readFileSync(WORKFLOW, 'utf8')
+  assert.ok(!/Math\s*\.\s*random\s*\(/.test(src),
+    'STARK must not call Math.random() — the KerSor catalog flags it known_broken (AWK #50). ' +
+    'selectNode() rng() must be deterministically seeded.')
 })
