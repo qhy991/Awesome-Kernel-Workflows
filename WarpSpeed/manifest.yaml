@@ -261,6 +261,7 @@ routing:
   - test_command
   - benchmark_command
   topology: tree
+  seed_contract: iterative
   requires_harness: true
   languages:
   - cuda

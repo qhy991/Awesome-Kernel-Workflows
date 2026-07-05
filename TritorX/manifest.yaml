@@ -39,6 +39,7 @@ routing:
     constraints: []
   best_kernel_field: best_kernel_code
   topology: fsm
+  seed_contract: greenfield
   requires_harness: false
   languages:
   - triton

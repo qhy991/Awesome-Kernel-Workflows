@@ -37,6 +37,7 @@ routing:
     constraints: []
   best_kernel_field: null
   topology: iterative
+  seed_contract: greenfield
   requires_harness: true
   languages:
   - cuda

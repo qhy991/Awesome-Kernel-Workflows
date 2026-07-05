@@ -70,6 +70,7 @@ routing:
   - tree_depth
   - tree_depth_limit
   topology: tree
+  seed_contract: hybrid
   requires_harness: true
   languages:
   - cuda

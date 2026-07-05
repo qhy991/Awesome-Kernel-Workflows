@@ -506,6 +506,7 @@ routing:
     constraints: []
   best_kernel_field: best_kernel_code
   topology: refinement
+  seed_contract: greenfield
   requires_harness: true
   languages:
   - triton

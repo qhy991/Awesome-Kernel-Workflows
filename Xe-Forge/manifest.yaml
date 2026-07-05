@@ -35,6 +35,7 @@ routing:
     constraints: []
   best_kernel_field: null
   topology: refinement
+  seed_contract: greenfield
   requires_harness: true
   languages:
   - triton

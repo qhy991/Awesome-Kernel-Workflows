@@ -50,6 +50,7 @@ routing:
   all_args:
   - fair_baseline_id
   topology: evolutionary
+  seed_contract: hybrid
   requires_harness: false
   languages:
   - cuda
