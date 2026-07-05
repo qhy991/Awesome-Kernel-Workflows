@@ -8,6 +8,45 @@ for the versioning policy.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-05
+
+### Added
+
+- **`_substrate/code_integrity.py` — code-integrity gate (#52).** Deterministic
+  static gate rejecting truncated source (unbalanced braces / dangling opener —
+  the 018 KSearch 6/6 truncation) and stub bodies (empty/placeholder — the
+  L2-054 whole-file-Write stub) before a candidate's "speedup" enters memory.
+  Wired into KSearch per-attempt verify; KSearch gen prompt gained a
+  patch-first / no-truncation contract. 11 unit tests.
+- **`_substrate/knowledge/sm100-blackwell.md` (#53, split).** Blackwell/sm_100
+  reference (tcgen05 vs Hopper wgmma, TMEM budget, M-packing prerequisite). The
+  NVIDIA-only `arch_lint.py` was reverted — arch-mismatch gating is done
+  vendor-neutrally at the KerSor injection layer (KerSor #70).
+- **`routing.seed_contract` on every workflow manifest (#55).** Each of 32
+  manifests + the llamacpp-metal variant declares `greenfield` / `iterative` /
+  `hybrid`, classified by reading each solver's `.js`. KerSor collects it to
+  gate/warn when a provided seed would be silently discarded (KerSor #74).
+
+### Changed
+
+- **STARK RNG no longer falls back to `Math.random()` (#50).** Always seeded
+  (`args.rng_seed`, else a fixed deterministic seed); the forbidden token is
+  gone so KerSor's catalog scan no longer marks it `known_broken`.
+- **KernelAgent verifier tolerance is spec-driven (#50 doer half; KerSor #73).**
+  `args.rtol/atol` > dtype-aware default (fp16/bf16 → 1e-2, fp32 → 1e-3,
+  fp64 → 1e-5) instead of a hardcoded 1e-3 (the 024 false-reject of 4/4 correct
+  bf16 candidates); verify + reverify now capture a `LATENCY_MS` measured-latency
+  signal instead of pass/fail only.
+
+### Fixed
+
+- `AutoMegaKernel/manifest.yaml` unquoted-colon scalar (`pruning_strategy`) that
+  aborted KerSor catalog generation mid-parse.
+- `kernelagent-triton-synthesis` reverify record typo (`candidate.appach` →
+  `candidate.approach`).
+
+## [Unreleased] — historical (pre-0.7.0, never version-sectioned)
+
 ### Added
 
 - **`actionable_hint` mandatory across the evidence contract (#48).** An
