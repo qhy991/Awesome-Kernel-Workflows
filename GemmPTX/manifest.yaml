@@ -46,6 +46,7 @@ routing:
     - disassembly_evidence
   best_kernel_field: best_kernel_path
   topology: iterative
+  seed_contract: iterative
   requires_harness: true
   languages:
   - cuda

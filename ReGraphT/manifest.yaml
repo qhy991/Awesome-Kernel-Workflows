@@ -380,6 +380,7 @@ routing:
     constraints: []
   best_kernel_field: best_kernel_code
   topology: graph_search
+  seed_contract: hybrid
   requires_harness: true
   languages:
   - cuda
