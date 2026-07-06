@@ -6,7 +6,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 project adheres to [Semantic Versioning](https://semver.org/). See `AGENTS.md`
 for the versioning policy.
 
-## [Unreleased]
+## [0.8.0] - 2026-07-07
+
+### Added
+
+- **Kernel-as-file authoring contract (#58/#59/#61).** AKO4X, KSearch, and
+  KernelFoundryDx candidate-emission agents now write the kernel to an absolute
+  `${exp_dir}/variants/<id>.<ext>` path and return `variant_path` (the file is
+  the single source of truth inside the workflow; the `code` string is a
+  display/compat payload that may truncate for >20KB kernels under the
+  StructuredOutput cap). All internal consumption (smoke/bench/eval/archive)
+  reads the full source from the path — `code.substring(0, 4000)` is orientation
+  only. Losing candidates now persist to `exp_dir/variants/` before worktree
+  teardown (#58). Returns carry `best_kernel_path` alongside `best_kernel_code`.
+  (Orchestrator consumer-side: KerSor `materialize-best-kernel.sh` prefers the
+  path, falls back to the code string, and flags `truncation_detected` when both
+  are present and the file is larger — a live truncation detector turning the
+  ~20KB cap from speculation into measured data.)
+
+### Changed
+
+- **AKO4X `Workflow()` guaranteed return (#56).** The multi-round loop is
+  wrapped in try/catch; an abnormal exit (e.g. a bench `agentRetry` exhausting
+  retries after a deterministic ptxas hang) surfaces as `dispatch_failed` +
+  `failure_reason` in the return, so the orchestrator always gets a structured
+  result — was: a thrown error leaving `output.json` blocked for 6+ hours.
+  Bench + smoke `agentRetry` retries reduced 5→1 (deterministic hangs no longer
+  retried 6× at harness-timeout cost).
+- **AKO4X honest convergence (#57).** Zero-candidate rounds (every impl agent
+  failed to spawn — e.g. worktree creation in a non-git dir) no longer tick
+  `consecutive_no_improve`; the convergence guard requires ≥1 evaluated
+  candidate across the session, else exits `dispatch_failed`/`round_empty`.
+  Returns carry `round_empty` so the orchestrator routes the next round to a
+  different workflow.
+- **KernelFoundryDx directive→mutation binding (#60).** `args.mandatory_directive`
+  pins one island per iteration (rotating) to the directive as a REQUIRED prompt
+  section, with a cheap textual acceptance gate (the candidate's
+  `change_summary` must reference the directive, else rejected before eval). The
+  hint library is seeded from the directive. KerSor `resolve-args.sh` sources
+  `mandatory_directive` from `contract.env.mandatory_directive`; the KFdx
+  manifest declares it in `routing.all_args`.
 
 ## [0.7.0] - 2026-07-05
 
