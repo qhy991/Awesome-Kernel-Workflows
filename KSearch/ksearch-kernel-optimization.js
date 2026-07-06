@@ -741,6 +741,7 @@ Then append:
   phase('Generate')
 
   let cycleBestCode = null
+  let cycleBestPath = null  // AWK #59: path of the cycle-best candidate (authoritative; code is compat)
   let cycleBestEval = null
   let cycleBestScore = -1
   let currentRawCode = null  // tracks the LAST generated code (for debug prompts)
@@ -764,6 +765,7 @@ Then append:
     try {
     if (isFirstAttempt) {
       // Attempt 1: generate from action (with or without base code)
+      const variantPath = ksearchNodeKernelPath(`cycle_${cycle}_a${attempt}`)  // AWK #58/#59: absolute path the gen agent writes to (survives teardown; driver envelope already reads from this kPath)
       genResult = await withTurnTimeout(agentRetry(() => agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. Generate a high-performance kernel implementing a SPECIFIC optimization action.
 
 # Operation: ${OP_DESC} (${opType})
@@ -793,8 +795,9 @@ ${wmSection}
 5. Include all necessary imports/headers
 6. PATCH-FIRST / NO-TRUNCATION (AWK #52): emit the kernel from the first line to the LAST closing brace. When parent code exists, edit ONLY the action-relevant spans and preserve the rest verbatim — do NOT rewrite unrelated regions (large whole-file rewrites are the #1 cause of mid-kernel truncation). Do NOT emit a skeleton/stub body. Your output is checked by \`${SUBSTRATE}/code_integrity.py\` — truncated or empty-body output is rejected and the attempt is discarded.
 7. NATIVE INTRINSICS FOR THE TARGET ARCH (AWK #53): on Blackwell sm_100 use \`tcgen05.mma\` (+ TMEM) — not Hopper \`wgmma\`/\`mma.async\`; on Hopper sm_90 use \`wgmma\`. See \`${SUBSTRATE}/knowledge/sm100-blackwell.md\` (reference; arch-mismatch gating is enforced vendor-neutrally at the KerSor injection layer, KerSor #70).
+8. PERSIST (AWK #58/#59): Write the COMPLETE kernel to ${variantPath} (absolute path — the single source of truth for eval + the driver envelope; \`code\` is a display/compat payload only and may truncate for >20KB kernels). Return variant_path = this path.
 
-Return the complete kernel code.
+Return the complete kernel code + variant_path.
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -805,11 +808,12 @@ Then append:
         schema: {
           type: 'object',
           properties: {
+            variant_path: { type: 'string' },
             code: { type: 'string' },
             implementation_notes: { type: 'string' },
             design_choices: { type: 'array', items: { type: 'string' } },
           },
-          required: ['code'],
+          required: ['variant_path', 'code'],
         },
       }), { retries: 5, allowNull: true }), `gen-${cycle}-${attempt}`)
     } else if (!hasPassedInCycle) {
@@ -932,7 +936,10 @@ Then append:
 
 WALL-CLOCK BUDGET: ${EVAL_TIMEOUT_SEC}s for this whole eval attempt (compile + correctness + benchmark combined). If you exceed it on correctness alone with no benchmark latency yet, RETURN EARLY with {is_valid:false, latency_ms:null, metric_value:null, reason:"timeout_in_correctness"} — do not keep retrying. A budget-exceeded attempt is itself useful signal; a 90-minute correctness loop is not.
 
-# Kernel Code:
+# Kernel Source (authoritative — Read the FULL kernel from this path; the snippet below is orientation only, AWK #61):
+${genResult.variant_path || 'n/a'}
+
+# Kernel Code (orientation snippet):
 \`\`\`${langToken(LANGUAGE)}
 ${genResult.code.substring(0, 4000)}
 \`\`\`
@@ -1091,6 +1098,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
     solutionDb.push({
       id: `cycle_${cycle}_attempt_${attempt}`,
       code: genResult.code,
+      variant_path: genResult.variant_path || null,  // AWK #59
       eval: evalResult,
       node_id: activeNodeId,
     })
@@ -1101,6 +1109,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
     // Update cycle best (K-Search: only update if passed AND score > cycle_best_score)
     if (allPassed && roundScore > cycleBestScore) {
       cycleBestCode = genResult.code
+      cycleBestPath = genResult.variant_path || cycleBestPath  // AWK #59
       cycleBestEval = evalResult
       cycleBestScore = roundScore
       hasPassedInCycle = true
@@ -1137,7 +1146,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
     // Update global best
     if (bestMetric === null || cycleBestScore > bestMetric) {
       bestMetric = cycleBestScore
-      bestSolution = { code: cycleBestCode, eval: cycleBestEval, node_id: activeNodeId }
+      bestSolution = { code: cycleBestCode, path: cycleBestPath, eval: cycleBestEval, node_id: activeNodeId }
       log(`NEW GLOBAL BEST: ${bestMetric.toFixed(3)}x vs baseline`)
     }
 
@@ -1341,6 +1350,7 @@ return {
   },
   best_metric: bestMetric,
   best_solution_code: bestSolution?.code || '',
+  best_kernel_path: bestSolution?.path || null,  // AWK #59: authoritative file path (orchestrator prefers this; best_solution_code is the compat string)
   cycles_completed: cycleCount,
   solutions_evaluated: solutionDb.length,
   decision_tree: decisionTree,

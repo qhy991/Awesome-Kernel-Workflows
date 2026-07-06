@@ -254,6 +254,11 @@ const PROBLEM_DEFINITION = args.problem_definition || ''
 const OP_DESC = args.op_description || 'PyTorch operator (to Triton kernel)'
 const TARGET_GPU = args.target_gpu || 'RTX 5090'
 const ISLANDS = args.islands || 3
+// AWK #60: a mandatory directive (e.g. "Cody-Waite exp2 FMA polynomial on the
+// softmax axis") dispatched by KerSor. When set, one island per iteration is
+// pinned to it as a REQUIRED mutation objective + a cheap textual acceptance
+// check, so a high-leverage named move can no longer be ignored for 8 rounds.
+const MANDATORY_DIRECTIVE = args.mandatory_directive || ''
 const ITERATIONS = args.iterations || 6
 const POPULATION_SIZE = args.population_size || 4
 const SEED_CANDIDATES = args.seed_candidates || 3
@@ -307,6 +312,13 @@ function langToken(legacy) {
 }
 function kernelFilename() {
   return USE_DRIVER ? `kernel${DRIVER_SOURCE_EXT}` : LEGACY_KERNEL_FILENAME
+}
+
+// AWK #58/#59: per-candidate variant path (ABSOLUTE — EXP_DIR is outside any
+// worktree), so the candidate source persists after teardown. This path is the
+// single source of truth inside the workflow; `code` is display/compat only.
+function kfdxVariantPath(iter, islIdx) {
+  return `${EXP_DIR}/variants/iter${iter}-isl${islIdx}/${kernelFilename()}`
 }
 
 // --- Island roles (role-specialized system prompts; the "multi-experts" axis) ---
@@ -674,12 +686,32 @@ for (let isl = 0; isl < ISLANDS; isl++) {
 }
 log(`Initialized ${islands.length} islands: ${islands.map(i => i.role.name).join(', ')}`)
 
+// AWK #60 fix 3: seed the hint library from the mandatory directive so the
+// bottleneck_class-keyed retrieval can surface it to non-pinned islands too.
+if (MANDATORY_DIRECTIVE) {
+  hintLibrary.push({
+    id: 'mandatory-directive',
+    trigger: 'dispatch directive',
+    bottleneck_class: '',
+    context: OP_DESC,
+    suggestion: MANDATORY_DIRECTIVE,
+    success_count: 0, use_count: 0, avg_speedup: 1.0,
+  })
+  log(`Seeded hint library with mandatory directive: "${MANDATORY_DIRECTIVE.substring(0, 80)}"`)
+}
+
 // =============================================================================
 // Multi-Island Diagnosis-Driven Evolution Loop
 // =============================================================================
 
 for (let iter = 0; iter < ITERATIONS; iter++) {
   log(`\n=== Iteration ${iter + 1}/${ITERATIONS} | Best: ${bestSpeedup ? bestSpeedup.toFixed(2) + 'x' : 'N/A'} | Evaluated: ${totalEvaluated} ===`)
+
+  // AWK #60 fix 1: pin one island per iteration to the mandatory directive (rotating
+  // so every island role sees it over time). That island's mutation prompt gets the
+  // directive verbatim as a REQUIRED objective, not diluted inside op_description.
+  const pinnedIsl = MANDATORY_DIRECTIVE ? (iter % islands.length) : -1
+  if (pinnedIsl >= 0) log(`Iteration ${iter + 1}: directive-pinned island = ${islands[pinnedIsl].role.name} (AWK #60)`)
 
   // ===========================================================================
   // Phase: Evolve — each island mutates a parent (parallel across islands)
@@ -693,9 +725,11 @@ for (let iter = 0; iter < ITERATIONS; iter++) {
         ? [...island.population].sort((a, b) => (b.speedup || 0) - (a.speedup || 0))[0]
         : null
       const parentCode = parent ? parent.code : (seedPool[0] ? seedPool[0].code : '')
+      const parentPath = parent && parent.variant_path ? parent.variant_path : null  // AWK #60 fix 4: full parent view via path when available
       const parentDiag = parent && parent.diagnosis ? parent.diagnosis : null
       const bottleneckClass = parentDiag ? parentDiag.limiter : null
       const hintSection = buildHintSection(island.role, bottleneckClass)
+      const variantPath = kfdxVariantPath(iter, islIdx)  // AWK #58/#59
       // History context for this island
       const histLines = island.archive.slice(-3).map((a, k) =>
         `  - gen ${k}: ${a.correct ? 'correct' : 'INCORRECT'}, ${a.speedup ? a.speedup.toFixed(2) + 'x' : 'n/a'}${a.diagnosis ? ', ' + (a.diagnosis.limiter || a.diagnosis.failure_mode || '') : ''}`
@@ -711,7 +745,7 @@ ${island.role.focus}
 # Iteration: ${iter + 1}/${ITERATIONS}
 
 # Parent kernel (your starting point — produce a MUTATION/improvement of this):
-\`\`\`python
+${parentPath ? `\n# Full parent kernel (Read for complete context — the snippet below is orientation only, AWK #60 fix 4/#61): ${parentPath}\n` : ''}\`\`\`python
 ${parentCode.substring(0, 4000)}
 \`\`\`
 
@@ -723,11 +757,17 @@ ${histLines}
 # Relevant hints from the shared experience library (apply those that fit your role + the diagnosis):
 ${hintSection}
 
-# Your task:
+${(islIdx === pinnedIsl) ? `# REQUIRED MUTATION OBJECTIVE (AWK #60 — this island is directive-pinned for iteration ${iter + 1}):
+You MUST make this mutation implement the following mandatory directive verbatim — it is the PRIMARY objective for this candidate, not optional context:
+"${MANDATORY_DIRECTIVE}"
+Your change_summary MUST reference this directive (name the technique you applied). A candidate that ignores the directive will be rejected before eval.
+
+` : ''}# Your task:
 Generate ONE new Triton kernel variant that improves on the parent FROM YOUR ISLAND'S PERSPECTIVE (${island.role.name}). Stay correct. All math must remain in Triton (no torch-op cheating).
 Cite which hint(s) you applied (by their text) so we can track hint usefulness.
+PERSIST (AWK #58/#59): Write the COMPLETE kernel to ${variantPath} (absolute path — exp_dir is outside your worktree; the file survives teardown and is the single source of truth for eval/archive). Return variant_path = this path; the \`code\` field is a display/compat payload only.
 
-Return JSON with the complete code, the applied hint(s), and a one-line summary of the change.
+Return JSON with variant_path, the complete code, the applied hint(s), and a one-line summary of the change.
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -738,11 +778,12 @@ Then append:
         schema: {
           type: 'object',
           properties: {
+            variant_path: { type: 'string' },
             code: { type: 'string' },
             applied_hints: { type: 'array', items: { type: 'string' } },
             change_summary: { type: 'string' },
           },
-          required: ['code'],
+          required: ['variant_path', 'code'],
         },
       }), { retries: 5 })
     })
@@ -756,7 +797,21 @@ Then append:
   const variants = []
   for (let islIdx = 0; islIdx < islands.length; islIdx++) {
     const m = mutations[islIdx]
-    if (m && m.code) variants.push({ islIdx, code: m.code, applied_hints: m.applied_hints || [], change_summary: m.change_summary || '' })
+    if (!m || !m.code) continue
+    // AWK #60 fix 2: acceptance check — a directive-pinned island's change_summary
+    // must reference the directive (cheap textual gate). Reject before eval.
+    if (islIdx === pinnedIsl && MANDATORY_DIRECTIVE) {
+      const summary = (m.change_summary || '').toLowerCase()
+      const directiveWords = MANDATORY_DIRECTIVE.toLowerCase()
+        .split(/[^a-z0-9-]+/).filter(w => w.length > 4)
+      const referenced = directiveWords.some(w => summary.includes(w))
+      if (!referenced) {
+        log(`[iter ${iter + 1}] REJECTED directive-pinned island ${islands[islIdx].role.name}: change_summary does not reference the mandatory directive (AWK #60).`)
+        islands[islIdx].archive.push({ correct: false, speedup: null, diagnosis: { failure_mode: 'directive_ignored', rationale: `change_summary did not reference: ${MANDATORY_DIRECTIVE.substring(0, 80)}` } })
+        continue
+      }
+    }
+    variants.push({ islIdx, code: m.code, variant_path: m.variant_path, applied_hints: m.applied_hints || [], change_summary: m.change_summary || '' })
   }
 
   const evals = await parallel(
@@ -768,7 +823,7 @@ Then append:
 # PyTorch-eager baseline latency: ${baselineLatency}ms
 
 # Candidate (island role: ${islands[v.islIdx].role.name}):
-\`\`\`python
+${v.variant_path ? `# Full candidate source (Read for complete context — AWK #61): ${v.variant_path}\n` : ''}\`\`\`python
 ${v.code.substring(0, 4000)}
 \`\`\`
 
@@ -927,7 +982,7 @@ Then append, using the values you just measured (status="done" if it compiled an
 - runtime characterization: ${e.runtime_characterization || 'n/a'}
 - error (if any): ${e.error_summary || 'none'}
 
-# Candidate code (head):
+# Candidate code (head — full source at ${v.variant_path || 'n/a'}, AWK #61):
 \`\`\`python
 ${v.code.substring(0, 2500)}
 \`\`\`
@@ -1000,7 +1055,7 @@ Then append (status="done" for a performance diagnosis, "error" for a failure di
       rationale: d.rationale,
     } : null
 
-    const member = { code: v.code, speedup: correct ? speedup : null, correct, diagnosis }
+    const member = { code: v.code, variant_path: v.variant_path || null, speedup: correct ? speedup : null, correct, diagnosis }  // AWK #59: carry variant_path so the next round's parent has a full-view path
 
     // Insert into population; keep top POPULATION_SIZE by speedup (correct first)
     island.population.push(member)
@@ -1055,7 +1110,7 @@ Then append (status="done" for a performance diagnosis, "error" for a failure di
     }
     if (correct && (bestSpeedup === null || speedup > bestSpeedup)) {
       bestSpeedup = speedup
-      bestKernel = { code: v.code, speedup, correct: true, island: island.role.name, iteration: iter + 1 }
+      bestKernel = { code: v.code, variant_path: v.variant_path || null, speedup, correct: true, island: island.role.name, iteration: iter + 1 }
       log(`NEW GLOBAL BEST: ${speedup.toFixed(2)}x from island ${island.role.name}`)
     }
   }
@@ -1129,6 +1184,8 @@ return {
   input_mode: INPUT_MODE,
   problem_definition: PROBLEM_DEFINITION,
   problem_path: TASK_PATH,
+  best_kernel_code: bestKernel ? bestKernel.code : null,
+  best_kernel_path: bestKernel ? (bestKernel.variant_path || null) : null,  // AWK #59: authoritative file path (orchestrator prefers this; best_kernel_code is the compat string that may truncate for >20KB kernels)
   generated_kernel_path: bestKernel?.path || '',
   initial_candidates: evolutionTrajectory.filter(e => e.type === 'seed'),
   initial_generation_result: {
@@ -1137,7 +1194,6 @@ return {
   },
   baseline_latency_ms: baselineLatency,
   best_speedup: bestSpeedup,
-  best_kernel_code: bestKernel ? bestKernel.code : null,
   best_kernel_island: bestKernel ? bestKernel.island : null,
   iterations_completed: ITERATIONS,
   islands_count: islands.length,
