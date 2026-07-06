@@ -502,6 +502,8 @@ routing:
   topology: evolutionary
   seed_contract: greenfield
   requires_harness: true
+  all_args:
+  - mandatory_directive  # AWK #60: KerSor resolve-args pushes contract.env.mandatory_directive so the directive-pinned island + acceptance gate fire
   languages:
   - triton
   - metax
