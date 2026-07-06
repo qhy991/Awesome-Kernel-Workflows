@@ -284,6 +284,17 @@ function ako4xIterKernelPath(round, iterCount) {
   return `${EXP_DIR}/variants/r${round + 1}_iter${iterCount}/kernel${ext}`
 }
 
+// AWK #58/#59: per-candidate variant path. ABSOLUTE (EXP_DIR is outside the impl
+// agent's worktree), so the candidate source persists after worktree teardown.
+// This path is the single source of truth inside the workflow; the `code` string
+// returned alongside is a display/compat payload only (may truncate for >20KB
+// kernels — the orchestrator prefers best_kernel_path, AWK #59).
+function ako4xCandidatePath(round, plan, si) {
+  const ext = USE_DRIVER ? (DRIVER_SOURCE_EXT || '.py') : '.py'
+  const slug = plan.title.substring(0, 20).replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()
+  return `${EXP_DIR}/variants/r${round + 1}-${slug}-v${si}/kernel${ext}`
+}
+
 if (!KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
   throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
 }
@@ -371,12 +382,16 @@ let deadEnds = []              // tried-and-failed directions with WHY
 let traps = []                 // cross-variant silent-bug patterns (→ TRAPS.md)
 let bestScore = null
 let bestKernelCode = null
+let bestKernelPath = null  // AWK #59: absolute path to the current-best kernel file (authority); bestKernelCode is the compat/display string
 let bestVariantName = null
 let baselineScore = null
 let baselineKernelCode = null
 let roundHistory = []          // archive of all rounds
 let consecutiveNoImprove = 0
 let currentParentName = 'original'
+let evaluatedCandidateCount = 0  // AWK #57: a session that never evaluated a candidate must exit dispatch_failed, not converged
+let sessionRoundEmpty = false    // AWK #57: set if any round produced zero evaluated candidates
+let __dispatchFailed = null      // AWK #56: abnormal-exit reason; surfaced as dispatch_failed so the orchestrator always gets a structured return
 
 // =============================================================================
 // AKO4X SKILLs Reference
@@ -520,6 +535,7 @@ const fenceLang = USE_DRIVER
   : detectedLang
 baselineKernelCode = setupResult.kernel_code
 bestKernelCode = baselineKernelCode
+bestKernelPath = KERNEL_PATH || null  // AWK #59: if optimizing an existing kernel file, the baseline path is authoritative
 
 log(`Kernel: ${setupResult.op_type} (${detectedLang}) | Functions: ${setupResult.key_functions.join(', ')}`)
 
@@ -701,6 +717,15 @@ Return the baseline performance metric.`, {
 // =============================================================================
 // Multi-Round Loop
 // =============================================================================
+// AWK #56: wrap the loop so an abnormal exit (e.g. a bench agentRetry exhausting
+// retries after a deterministic ptxas hang) still returns a structured result to
+// the orchestrator instead of throwing out of Workflow(). The orchestrator builds
+// run-N/output.json from this return value; a thrown error leaves it blocked.
+// (#57 fix 4 — worktree git-preflight — intentionally NOT added: correctness is
+// already covered by the empty-round handling above; preflight is efficiency-only
+// and the user confirmed the deferral. A git-check agent would also add a per-
+// dispatch agent call + fixture burden for marginal gain.)
+try {
 for (let round = 0; round < ROUNDS; round++) {
   if (typeof budget !== 'undefined' && budget.total && budget.remaining() < EST_PER_ROUND) { log(`token budget ~exhausted — stop`); break }
 
@@ -811,13 +836,15 @@ Optimization levers (pick ONE):
 
     // Implement variants for this hypothesis
     const impls = await parallel(
-      Array.from({length: SAMPLES_PER_HYPOTHESIS}, (_, si) => () =>
-        agentRetry(() => agent(`Implement this optimization hypothesis as a complete, working kernel.
+      Array.from({length: SAMPLES_PER_HYPOTHESIS}, (_, si) => () => {
+        const variantPath = ako4xCandidatePath(round, plan, si)
+        return agentRetry(() => agent(`Implement this optimization hypothesis as a complete, working kernel.
 
 # Original Kernel:
 \`\`\`${fenceLang}
 ${bestKernelCode.substring(0, 4000)}
 \`\`\`
+${bestKernelPath ? `\n# Full parent kernel (read for complete context — the snippet above is orientation only): ${bestKernelPath}` : ''}
 
 # Hypothesis: "${plan.title}"
 Bottleneck: ${plan.bottleneck}
@@ -834,11 +861,12 @@ ${dslHint}
 4. Keep function signature unchanged
 5. Add comment at top explaining the optimization
 6. This is variant ${si + 1}/${SAMPLES_PER_HYPOTHESIS}
+7. PERSIST (AWK #58/#59): Write the COMPLETE kernel to ${variantPath} (absolute path — exp_dir is OUTSIDE your worktree, so the file survives worktree teardown). This file is the single source of truth for all downstream agents (smoke/bench/archive); the \`code\` field you also return is a display/compat payload only (it may truncate for large kernels — the orchestrator prefers variant_path).
 
-# Anti-patterns (dead-ends from previous rounds):
+# Anti-patterns (dead-end patterns from previous rounds):
 ${deadEndsSection}
 
-Return the complete kernel code.
+Return {variant_path: "${variantPath}", code: <complete kernel>, implementation_notes: <brief>}. The kernel on disk at variant_path is authoritative.
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -851,16 +879,28 @@ Then append (this variant is round ${round + 1}, hypothesis "${plan.title}", sam
           schema: {
             type: 'object',
             properties: {
+              variant_path: { type: 'string' },
               code: { type: 'string' },
               implementation_notes: { type: 'string' },
             },
-            required: ['code'],
+            required: ['variant_path', 'code'],
           },
         }), { retries: 5 })
+      }
       )
     )
 
     // For each implemented variant: smoke test → full bench → log
+    // AWK #57: a round that produced zero evaluated candidates (every impl agent
+    // failed to spawn — e.g. worktree creation in a non-git dir) must NOT tick
+    // the convergence accountant; it is a workflow-internal failure, not a
+    // measured no-improve.
+    const evaluatedThisRound = impls.filter(Boolean).length
+    evaluatedCandidateCount += evaluatedThisRound
+    if (evaluatedThisRound === 0) {
+      sessionRoundEmpty = true
+      log(`Round ${round + 1}: ZERO candidates evaluated (impl agents failed to spawn) — not ticking consecutiveNoImprove (AWK #57).`)
+    }
     for (const impl of impls.filter(Boolean)) {
       if (iterCount >= ITERS_PER_ROUND) break
       iterCount++
@@ -878,7 +918,10 @@ Then append (this variant is round ${round + 1}, hypothesis "${plan.title}", sam
       if (smokeCmd) {
         const smokeResult = await agentRetry(() => agent(`Run smoke test for this kernel variant. This is a COMPILE + CORRECTNESS check only — NOT a performance verdict.
 
-# Kernel Code:
+# Kernel Source (authoritative — Read the FULL kernel from this path; the snippet below is orientation only, AWK #61):
+${impl.variant_path}
+
+# Kernel Code (orientation snippet):
 \`\`\`${fenceLang}
 ${impl.code.substring(0, 4000)}
 \`\`\`
@@ -903,7 +946,7 @@ Return pass/fail with error details if failed.`, {
             },
             required: ['passed'],
           },
-        }), { retries: 5 })
+        }), { retries: 1 })  // AWK #56: smoke failures are usually deterministic (compile/correctness) — don't retry 5× at harness-timeout cost
 
         smokePassed = smokeResult.passed
         if (!smokePassed) {
@@ -925,7 +968,10 @@ Return pass/fail with error details if failed.`, {
       // --- Full bench (AKO4X: run in background, draft next hypothesis while it runs) ---
       const benchResult = await agentRetry(() => agent(`Run the full benchmark for this kernel variant. This IS the performance verdict.
 
-# Kernel Code:
+# Kernel Source (authoritative — Read the FULL kernel from this path; the snippet below is orientation only, AWK #61):
+${impl.variant_path}
+
+# Kernel Code (orientation snippet):
 \`\`\`${fenceLang}
 ${impl.code.substring(0, 4000)}
 \`\`\`
@@ -955,7 +1001,7 @@ Return benchmark results.`, {
           },
           required: ['score'],
         },
-      }), { retries: 5 })
+      }), { retries: 1 })  // AWK #56: a hanging bench (e.g. ptxas on a 30 MB PTX) is deterministic — don't retry 5× × 3600s timeout (was the T+7h22m silent window)
 
       const speedup = baselineScore ? baselineScore / benchResult.score : benchResult.speedup || 1.0
       const passed = benchResult.passed_workloads || 'N/N'
@@ -1073,6 +1119,7 @@ Return benchmark results.`, {
             roundBest = {
               plan: plan,
               code: impl.code,
+              variant_path: impl.variant_path,  // AWK #59: authoritative path (code is display/compat)
               notes: impl.implementation_notes,
               score: benchResult.score,
               speedup: speedup,
@@ -1080,6 +1127,7 @@ Return benchmark results.`, {
               benchResult: benchResult,
             }
             bestKernelCode = impl.code
+            bestKernelPath = impl.variant_path  // AWK #59: path is authoritative; survives where the code string may truncate
             bestScore = benchResult.score
             log(`[${iterLabel}] NEW ROUND BEST: ${speedup.toFixed(2)}x`)
           }
@@ -1226,14 +1274,17 @@ Return verdict.`, {
 # Evidence: ${roundBest.plan.profile_evidence || roundBest.plan.ncu_evidence || roundBest.plan.bottleneck}
 # Iter: ${roundBest.iterLabel}
 
-# Kernel Code:
+# Kernel Source (authoritative — the FULL kernel is at this path; the snippet below is orientation only, AWK #59):
+${roundBest.variant_path}
+
+# Kernel Code (orientation snippet):
 \`\`\`${fenceLang}
 ${roundBest.code.substring(0, 5000)}
 \`\`\`
 
 # Instructions:
 1. mkdir -p ${EXP_DIR}/variants/${variantName}/
-2. Write kernel to ${EXP_DIR}/variants/${variantName}/kernel.py (or appropriate extension)
+2. COPY the full kernel from ${roundBest.variant_path} to ${EXP_DIR}/variants/${variantName}/kernel.py (do NOT rewrite the body from the snippet — the variant_path file is the complete, untruncated source, AWK #59). Then prepend the 5-section header below at the top of that file.
 3. Add 5-section header at the TOP of the kernel file:
 
 \`\`\`python
@@ -1328,9 +1379,14 @@ Execute this step.`, {
         deadEnds.push(`Library delegation: using ${libDelegationCheck.banned_libs_found?.join(', ')} as core compute is NOT allowed. The operator's core compute must be hand-written (DSL/.cu/CUTLASS-instantiated kernel). (WHY: pre-built libraries don't represent the agent's optimization work)`)
       }
     }
-  } else {
+  } else if (evaluatedThisRound > 0) {
     consecutiveNoImprove++
-    log(`No improvement this round. Consecutive no-improve: ${consecutiveNoImprove}`)
+    log(`No improvement this round (evaluated ${evaluatedThisRound} candidate(s)). Consecutive no-improve: ${consecutiveNoImprove}`)
+  } else {
+    // AWK #57: zero candidates evaluated this round — workflow-internal failure
+    // (impl agents failed to spawn). Do NOT tick convergence; the convergence
+    // guard below requires ≥1 evaluated candidate across the session to fire.
+    log(`Round ${round + 1}: zero candidates evaluated — round_empty (AWK #57).`)
   }
 
   // Archive failed rounds (AKO4X MASTER.md step 9)
@@ -1458,9 +1514,22 @@ Execute.`, {
 
   // Stopping conditions
   if (consecutiveNoImprove >= 2) {
-    log('STOPPING: 2 consecutive rounds with no improvement.')
+    // AWK #57: converged requires ≥1 evaluated candidate across the session.
+    // Two empty rounds no longer tick (else-branch above), so reaching here via
+    // the normal path implies real measured no-improves — but guard explicitly
+    // in case the accountant is reached some other way with zero evaluation.
+    if (evaluatedCandidateCount === 0) {
+      __dispatchFailed = new Error('convergence guard tripped with zero evaluated candidates (AWK #57)')
+      log('STOPPING: convergence guard reached but NO candidates were ever evaluated — dispatch_failed.')
+    } else {
+      log('STOPPING: 2 consecutive rounds with no improvement (converged).')
+    }
     break
   }
+}
+} catch (e) {
+  __dispatchFailed = e
+  log(`ABNORMAL EXIT (AWK #56): ${e.message} — surfacing as dispatch_failed so the orchestrator can materialize output.json.`)
 }
 
 // =============================================================================
@@ -1517,7 +1586,10 @@ if (ORIGINAL_BACKUP) {
 }
 
 return {
-  baseline_id: args.fair_baseline_id || null,  // #32: echo the frozen fair baseline KerSor handed us (contract.env::baseline_id via dispatch-args.json); null when undeclared -> check-acceptance-gate.sh Check 2c skips (back-compat).
+  baseline_id: args.fair_baseline_id || null,  // #32: echo the frozen fair baseline KerSor handed us (contract.env::baseline_id via dispatch-args.json); null when undeclared -> check-acceptance-gate.sh Check 2c skips (back-compat). Kept first — the baseline-id contract guard requires baseline_id be the first return field.
+  dispatch_failed: __dispatchFailed ? true : undefined,  // AWK #56: orchestrator builds output.json from this return; always structured, never a thrown hang
+  failure_reason: __dispatchFailed ? __dispatchFailed.message : (sessionRoundEmpty && evaluatedCandidateCount === 0 ? 'round_empty: zero candidates evaluated across session (AWK #57)' : undefined),
+  round_empty: (sessionRoundEmpty && evaluatedCandidateCount === 0) ? true : undefined,  // AWK #57: orchestrator routes next round to a different workflow
   input_mode: INPUT_MODE,
   problem_definition: PROBLEM_DEFINITION,
   problem_path: PROBLEM_PATH,
@@ -1533,5 +1605,6 @@ return {
   traps: traps,
   round_history: roundHistory,
   best_kernel_code: bestKernelCode,
+  best_kernel_path: bestKernelPath,  // AWK #59: authoritative file path (orchestrator prefers this; best_kernel_code is the compat string that may truncate for >20KB kernels)
   report: finalReport,
 }
