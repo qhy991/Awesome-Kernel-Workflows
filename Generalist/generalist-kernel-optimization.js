@@ -723,7 +723,7 @@ async function runDriverMetricsEnvelope({ suffix, phaseName, kernelPath, artifac
     `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
     { model: MODEL.mechanical, label: `driver-diagnose-${suffix}`, phase: phaseName, schema: JSON_PASSTHROUGH }), { retries: 5 })
   await agentRetry(() => agent(
-    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kernelPath} --result ${resultPath}\`.\n` +
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --source ${kernelPath} --metrics ${resultPath}\`.\n` +
     `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
     { model: MODEL.mechanical, label: `driver-anti-cheat-${suffix}`, phase: phaseName, schema: JSON_PASSTHROUGH }), { retries: 5 })
 
