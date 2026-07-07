@@ -185,6 +185,7 @@ function withTurnTimeout(promise, label) {
 // treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 
+// --- BEGIN inlined backend-axis (resolve) scaffolding (from _meta/scaffolding/backend-axis.js) ---
 function normalizeSuitabilityValue(value) {
   const raw = String(value || '').trim().toLowerCase().replace(/_/g, '-')
   const aliases = {
@@ -218,6 +219,7 @@ function resolveBackendAxis() {
 }
 const RESOLVED_BACKEND = resolveBackendAxis()
 const USE_DRIVER = !!args.backend_dir
+// --- END inlined backend-axis (resolve) scaffolding ---
 
 
 // =============================================================================
@@ -321,10 +323,12 @@ const BUILD_CMD = args.build_command || ''
 const BENCH_CMD = args.benchmark_command || EVAL_CMD || ''
 const REGISTER_SCRIPT = args.register_script || ''
 
+// --- BEGIN inlined backend-axis (driver) scaffolding (from _meta/scaffolding/backend-axis.js) ---
 function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
 function driverSh(script, cliArgs) {
   return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
 }
+// --- END inlined backend-axis (driver) scaffolding ---
 function workspaceKernelPath(stepIndex, isLarge, ext) {
   return `${EXP_DIR}/kernels/step_${stepIndex + 1}_${isLarge ? 'large' : 'small'}${ext}`
 }

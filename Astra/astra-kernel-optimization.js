@@ -190,6 +190,7 @@ function withTurnTimeout(promise, label) {
 // treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 
+// --- BEGIN inlined backend-axis (resolve) scaffolding (from _meta/scaffolding/backend-axis.js) ---
 function normalizeSuitabilityValue(value) {
   const raw = String(value || '').trim().toLowerCase().replace(/_/g, '-')
   const aliases = {
@@ -223,6 +224,7 @@ function resolveBackendAxis() {
 }
 const RESOLVED_BACKEND = resolveBackendAxis()
 const USE_DRIVER = !!args.backend_dir
+// --- END inlined backend-axis (resolve) scaffolding ---
 
 
 // =============================================================================
@@ -326,10 +328,12 @@ if (USE_DRIVER && INTEGRATION_MODE === 'sglang' && RESOLVED_BACKEND && RESOLVED_
   )
 }
 
+// --- BEGIN inlined backend-axis (driver) scaffolding (from _meta/scaffolding/backend-axis.js) ---
 function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
 function driverSh(script, cliArgs) {
   return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
 }
+// --- END inlined backend-axis (driver) scaffolding ---
 
 let DRIVER = null
 let DRIVER_LANG_FENCE = LEGACY_FENCE_TOKEN
