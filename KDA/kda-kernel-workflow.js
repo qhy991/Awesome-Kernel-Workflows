@@ -77,7 +77,7 @@ function __unwrapArgs(rawArgs) {
 // eslint-disable-next-line no-global-assign
 args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 
-// --- BEGIN typed-args (channel ② experience_excerpts) ---
+// --- BEGIN inlined typed-args (from _meta/scaffolding/typed-args.js) ---
 // Cross-session priors travel here as a typed array (see KerSor
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
@@ -117,7 +117,7 @@ function __attemptBlock() {
   }
   return parts.join('\n') + '\n'
 }
-// --- END typed-args ---
+// --- END inlined typed-args ---
 // --- END inlined arg_guard ---
 
 // --- BEGIN inlined agent-retry scaffolding (from _meta/scaffolding/agent-retry.js) ---
