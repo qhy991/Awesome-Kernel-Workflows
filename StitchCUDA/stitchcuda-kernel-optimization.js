@@ -775,7 +775,7 @@ Then append:
         `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
         { model: MODEL.mechanical, label: `driver-diagnose-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true });
       const antiCheatOut = await agentRetry(() => agent(
-        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --source ${kPath}\`.\n` +
+        `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --source ${kPath} --metrics ${buildOut}.run.json\`.\n` +
         `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
         { model: MODEL.mechanical, label: `driver-anti-cheat-${attempt}`, phase: 'Verify', schema: JSON_PASSTHROUGH }), { retries: 5 });
       driverEnvelope = {
