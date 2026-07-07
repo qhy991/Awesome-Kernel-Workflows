@@ -6,6 +6,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 project adheres to [Semantic Versioning](https://semver.org/). See `AGENTS.md`
 for the versioning policy.
 
+## [0.9.0] - 2026-07-07
+
+### Added
+
+- **公用组件提炼 — 7 SSOT components extracted + propagated.** A systematic
+  audit of 32 workflows found ~100 instances of byte-identical code copy-pasted
+  across files (with drift). Each was extracted to a `_meta/scaffolding/<name>.js`
+  SSOT + a `scripts/patch-<name>.js` codemod + a guard test (drift detection):
+  - **backend-axis** (#62): `normalizeSuitabilityValue` / `resolveBackendAxis` /
+    `driverPath` / `driverSh` — 15 workflows wrapped (4 drifters resolved;
+    AccelOpt kept as documented semantic divergence).
+  - **substrate-invocation** (#63): `substrateAntiCheat` builder — SSOT for the
+    anti_cheat.py CLI flag schema (the #42 root-cause fix).
+  - **arg-guard** (#65): `__unwrapArgs` — 32/32 now byte-match the SSOT (5 older
+    copies re-synced in #69, including AscendC which gained the key=value regex).
+  - **embedded-eval** (#65): `EMBEDDING_CONTRACT` + `__embeddedEvalPlan` — 6/6.
+  - **typed-args** (#66): KerSor ②③ channel block (`EXPERIENCE_EXCERPTS` /
+    `ATTEMPT_EVIDENCE` / `FAILED_STRATEGY_IDS` + helpers) — propagated from 5 to
+    all 33 workflows (contract completeness; consts degrade to null/[] when
+    absent; surfacing in prompts is a per-workflow follow-up).
+  - **turn-timeout** (#67): `withTurnTimeout` watchdog — propagated from 3 to all
+    33 workflows (capability available; call-site activation is per-workflow).
+
+### Fixed
+
+- **#42 anti_cheat flag drift** (#63): 17 workflows passed `--kernel`/`--result`
+  to anti_cheat.py (argparse requires `--source`/`--metrics`); the check silently
+  failed for every candidate. Fixed everywhere via codemod; guard test prevents
+  recurrence.
+- **StitchCUDA anti_cheat missing --metrics** (#64): the call was `--source` only
+  (argparse would reject); fixed to pass `--metrics ${buildOut}.run.json`.
+- **backend-axis drift resolved** (#68): AKO4X/AdaExplore/Astra turned out to be
+  byte-identical to the SSOT after the ①/③ merges — wrapped.
+- **arg-guard drift resolved** (#69): 5 workflows had an older `__unwrapArgs`
+  (AscendC lacked the key=value regex; 4 had a slightly older regex). Re-synced
+  to the canonical; 0 drift remaining.
+
 ## [0.8.0] - 2026-07-07
 
 ### Added
