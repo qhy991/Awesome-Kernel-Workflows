@@ -45,10 +45,11 @@ test('SSOT: arg-guard.js + embedded-eval.js define the canonical functions', () 
 
 test('every workflow with __unwrapArgs byte-matches the arg-guard SSOT (or is a known drift)', () => {
   const canon = canonUnwrap()
-  // Known drift: these have an OLDER/different __unwrapArgs (not re-codemod'd to
-  // the canonical). Surfaced for manual review (normalize via patch-arg-guard.js
-  // --refresh, or confirm intentional). If this set changes, update the snapshot.
-  const KNOWN_DRIFT = new Set(['AscendC', 'AutoMegaKernel', 'InPlacePatch', 'LlamacppEmbeddedSearch', 'WarpSpeed'])
+  // All workflows with __unwrapArgs now byte-match the SSOT (the 5 previously
+  // drifted — AscendC/AutoMegaKernel/InPlacePatch/LlamacppEmbeddedSearch/WarpSpeed —
+  // were re-synced to the canonical, including AscendC which gained the key=value
+  // regex). An empty set here means any NEW drift fails CI.
+  const KNOWN_DRIFT = new Set([])
   let count = 0
   const unexpected = []
   for (const f of workflowFiles()) {

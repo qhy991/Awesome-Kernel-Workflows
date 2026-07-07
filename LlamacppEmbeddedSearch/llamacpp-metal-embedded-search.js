@@ -32,6 +32,8 @@ const WORKFLOW_NAME = 'llamacpp-metal-embedded-search'
 // treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 // --- BEGIN inlined arg_guard ---
+
+// --- BEGIN inlined arg_guard (from _meta/scaffolding/arg-guard.js) ---
 function __unwrapArgs(rawArgs) {
   if (rawArgs == null) return {}
   if (typeof rawArgs === 'object' && !Array.isArray(rawArgs)) return rawArgs
@@ -46,7 +48,7 @@ function __unwrapArgs(rawArgs) {
       } catch (e) { throw new Error(`arg_guard: invalid JSON args: ${e.message}`) }
     }
     const out = {}
-    const re = /(\w[\w.-]*)=("(?:\\"|[^"])*"|'(?:\\'|[^'])*'|\S+)/g
+    const re = /(\w[\w.-]*)=("(?:\\\\\"|[^"])*"|\'(?:\\\\\'|[^\'])*\'|\S+)/g
     let m
     while ((m = re.exec(trimmed)) !== null) {
       let v = m[2]
@@ -55,13 +57,16 @@ function __unwrapArgs(rawArgs) {
       }
       out[m[1]] = v
     }
+    if (Object.keys(out).length === 0) {
+      throw new Error(`arg_guard: workflow args is a non-empty string but contains no key=value pairs and is not JSON. First 160 chars: ${trimmed.slice(0, 160)}`)
+    }
     return out
   }
-  return {}
+  throw new Error(`arg_guard: workflow args has unexpected type: ${typeof rawArgs}`)
 }
 // eslint-disable-next-line no-global-assign
 args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
-// --- END inlined arg_guard ---
+// --- END inlined arg_guard ---// --- END inlined arg_guard ---
 
 // --- BEGIN inlined typed-args (from _meta/scaffolding/typed-args.js) ---
 // Cross-session priors travel here as a typed array (see KerSor
