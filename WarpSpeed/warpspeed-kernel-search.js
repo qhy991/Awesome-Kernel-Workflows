@@ -182,6 +182,28 @@ function guard(obj, field, fallback) {
 }
 // --- END inlined agent-retry scaffolding ---
 
+// --- BEGIN inlined turn-timeout scaffolding (from _meta/scaffolding/turn-timeout.js) ---
+const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn wall-clock cap
+
+/**
+ * Wrap a doer-turn promise with a wall-clock cap. On expiry the returned
+ * promise rejects with `turn-timeout: <label> exceeded Ns`. Degrades to a
+ * passthrough when the runtime has no timers or TURN_TIMEOUT_MS <= 0.
+ */
+function withTurnTimeout(promise, label) {
+  if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return promise
+  let timer
+  const guard = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)),
+      TURN_TIMEOUT_MS)
+  })
+  return Promise.race([promise, guard]).finally(() => {
+    if (typeof clearTimeout === 'function') clearTimeout(timer)
+  })
+}
+// --- END inlined turn-timeout scaffolding ---
+
 
 // --- BEGIN inlined grounding contract (mirrors _substrate/grounding.js) ---
 const GROUNDING_INSTRUCTION = [
