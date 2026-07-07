@@ -1056,7 +1056,7 @@ Return benchmark results.`, {
           `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
           { model: MODEL.mechanical, label: `driver-diagnose-${envIdx}`, phase: 'Iterate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
         await agentRetry(() => agent(
-          `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/variants/r${round + 1}_iter${iterCount}/result.json\`.\n` +
+          `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --source ${kPath} --metrics ${EXP_DIR}/variants/r${round + 1}_iter${iterCount}/result.json\`.\n` +
           `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
           { model: MODEL.mechanical, label: `driver-anti-cheat-${envIdx}`, phase: 'Iterate', schema: JSON_PASSTHROUGH }), { retries: 5 })
         benchResult.driver_envelope = {

@@ -595,7 +595,7 @@ if (USE_DRIVER_STANDALONE) {
       { model: MODEL.mechanical, label: 'driver-diagnose-root', phase: 'BuildGraph', schema: JSON_PASSTHROUGH }), { retries: 5 })
   }
   await agentRetry(() => agent(
-    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/regrapht_root.result.json\`.\n` +
+    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --source ${kPath} --metrics ${EXP_DIR}/regrapht_root.result.json\`.\n` +
     `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
     { model: MODEL.mechanical, label: 'driver-anti-cheat-root', phase: 'BuildGraph', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
@@ -778,7 +778,7 @@ Then append, using the values you just measured (status="done" if correctness pa
       `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
       { model: MODEL.mechanical, label: `driver-diagnose-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
     await agentRetry(() => agent(
-      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --kernel ${kPath} --result ${EXP_DIR}/regrapht_attempt_${attempt}.result.json\`.\n` +
+      `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --source ${kPath} --metrics ${EXP_DIR}/regrapht_attempt_${attempt}.result.json\`.\n` +
       `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
       { model: MODEL.mechanical, label: `driver-anti-cheat-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
     evaluation.driver_envelope = {
