@@ -165,6 +165,7 @@ function guard(obj, field, fallback) {
 // treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 
+// --- BEGIN inlined backend-axis (resolve) scaffolding (from _meta/scaffolding/backend-axis.js) ---
 function normalizeSuitabilityValue(value) {
   const raw = String(value || '').trim().toLowerCase().replace(/_/g, '-')
   const aliases = {
@@ -198,6 +199,7 @@ function resolveBackendAxis() {
 }
 const RESOLVED_BACKEND = resolveBackendAxis()
 const USE_DRIVER = !!args.backend_dir
+// --- END inlined backend-axis (resolve) scaffolding ---
 
 
 // =============================================================================
@@ -284,10 +286,12 @@ const LEGACY_LANG_TOKEN = TARGET_LANG
 const LEGACY_FENCE_TOKEN = TARGET_LANG
 const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
 
+// --- BEGIN inlined backend-axis (driver) scaffolding (from _meta/scaffolding/backend-axis.js) ---
 function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
 function driverSh(script, cliArgs) {
   return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
 }
+// --- END inlined backend-axis (driver) scaffolding ---
 function substrateInstruction(script, cliArgs) {
   const p = `${SUBSTRATE}/${script}`
   return PY ? `Run exactly: \`${PY} ${p} ${cliArgs}\`.`
