@@ -93,10 +93,9 @@ test('known-drift snapshot: workflows with the cluster but NOT yet SSOT-adopted'
   // the SSOT canonical would change routing (drop the default fallback, add the
   // backend_dir guard) — a behavior change, not a syntactic fix. Kept as-is until
   // the default-fallback is parameterized into the SSOT or phased out.
-  // AKO4X / AdaExplore / Astra: have `resolveBackendAxis` (same name) but the body
-  // drifted from canonical — surfaced for review (standardize like KernelFoundryDx
-  // was, or confirm intentional). Tracked here so a NEW drift fails CI.
-  const KNOWN_DRIFT = new Set(['AccelOpt', 'AKO4X', 'AdaExplore', 'Astra'])
+  // (AKO4X / AdaExplore / Astra were previously in this snapshot but their blocks
+  // turned out to be byte-identical to the SSOT after the ①/③ merges — wrapped.)
+  const KNOWN_DRIFT = new Set(['AccelOpt'])
   const actualDrift = new Set()
   for (const f of workflowFiles()) {
     const src = fs.readFileSync(f, 'utf8')
