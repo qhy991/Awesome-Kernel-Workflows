@@ -86,7 +86,14 @@ test('known-drift snapshot: workflows with the cluster but NOT yet SSOT-adopted'
   // canonical block drifted, so the codemod skipped them. They need manual review
   // (normalize to SSOT, or confirm intentional divergence). If this set changes,
   // update the snapshot — a new drift is a regression to triage.
-  const KNOWN_DRIFT = new Set(['AccelOpt', 'KernelFoundryDx'])
+  //
+  // AccelOpt: INTENTIONAL divergence — its `resolveBackend` (not `resolveBackendAxis`)
+  // has a default-backend fallback (WORKFLOW_META.method_supported_backends /
+  // default_backend) and omits the `backend_dir`-required guard. Standardizing to
+  // the SSOT canonical would change routing (drop the default fallback, add the
+  // backend_dir guard) — a behavior change, not a syntactic fix. Kept as-is until
+  // the default-fallback is parameterized into the SSOT or phased out.
+  const KNOWN_DRIFT = new Set(['AccelOpt'])
   const actualDrift = new Set()
   for (const f of workflowFiles()) {
     const src = fs.readFileSync(f, 'utf8')

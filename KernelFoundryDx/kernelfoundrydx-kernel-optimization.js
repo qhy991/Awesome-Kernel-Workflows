@@ -124,6 +124,7 @@ function guard(obj, field, fallback) {
 // treats this file as already handled. See _meta/genome-trajectory-schema.md.
 
 
+// --- BEGIN inlined backend-axis (resolve) scaffolding (from _meta/scaffolding/backend-axis.js) ---
 function normalizeSuitabilityValue(value) {
   const raw = String(value || '').trim().toLowerCase().replace(/_/g, '-')
   const aliases = {
@@ -153,15 +154,17 @@ function resolveBackendAxis() {
   if (args.backend && !args.backend_dir) {
     throw new Error(`args.backend="${args.backend}" requires args.backend_dir; driver dispatch has no implicit-resolve path.`)
   }
-  // triton-only: any resolved backend axis must be triton (supported=[triton]).
-  const resolved = b || l || null
-  if (resolved && resolved !== 'triton') {
-    throw new Error(`${WORKFLOW_NAME} supports only backend="triton" (got "${resolved}"). This workflow is the triton-only "Dx" variant.`)
-  }
-  return resolved
+  return b || l || null
 }
 const RESOLVED_BACKEND = resolveBackendAxis()
 const USE_DRIVER = !!args.backend_dir
+// --- END inlined backend-axis (resolve) scaffolding ---
+// triton-only: any resolved backend axis must be triton (supported=[triton]).
+// Workflow-specific guard, kept OUTSIDE the backend-axis SSOT block so the
+// canonical resolveBackendAxis stays byte-identical to _meta/scaffolding/backend-axis.js.
+if (RESOLVED_BACKEND && RESOLVED_BACKEND !== 'triton') {
+  throw new Error(`${WORKFLOW_NAME} supports only backend="triton" (got "${RESOLVED_BACKEND}"). This workflow is the triton-only "Dx" variant.`)
+}
 
 
 // =============================================================================
@@ -296,10 +299,12 @@ const LEGACY_EVAL_LANG_TOKEN = 'Triton'
 const LEGACY_KERNEL_FILENAME = 'kernel.py'
 const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
 
+// --- BEGIN inlined backend-axis (driver) scaffolding (from _meta/scaffolding/backend-axis.js) ---
 function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
 function driverSh(script, cliArgs) {
   return `Run exactly: \`${SH ? SH + ' ' : ''}${BACKEND_DIR}/${script} ${cliArgs}\`.`
 }
+// --- END inlined backend-axis (driver) scaffolding ---
 
 let DRIVER = null
 let DRIVER_LANG_FENCE = 'triton'
