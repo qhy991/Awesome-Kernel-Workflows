@@ -66,12 +66,13 @@ test('every workflow anti_cheat.py call uses --source (no stale --kernel/--resul
   assert.ok(calls >= 17, `expected >=17 anti_cheat --source calls across workflows; got ${calls}`)
 })
 
-test('known-incomplete: StitchCUDA anti_cheat call is missing --metrics (separate bug, not #42 drift)', () => {
-  // anti_cheat.py REQUIRES --metrics (a result.json file). StitchCUDA passes only
-  // --source (no --metrics) — argparse would reject it. This is a pre-existing
-  // incomplete-call bug, NOT the #42 flag drift fixed by the codemod. Snapshot'd
-  // here so it's tracked; resolve by passing the eval result.json as --metrics.
+test('StitchCUDA anti_cheat call passes --metrics (was missing — fixed)', () => {
+  // anti_cheat.py REQUIRES --metrics (a result.json file). StitchCUDA's call was
+  // --source only (argparse would reject it) — a pre-existing incomplete-call bug
+  // surfaced by the ⑦ guard. Fixed: now passes --metrics ${buildOut}.run.json
+  // (the run.sh output, always present).
   const src = fs.readFileSync(path.join(ROOT, 'StitchCUDA/stitchcuda-kernel-optimization.js'), 'utf8')
-  const hasIncomplete = src.split('\n').some((l) => l.includes('anti_cheat.py --source') && !l.includes('--metrics'))
-  assert.ok(hasIncomplete, 'StitchCUDA anti_cheat call should still be missing --metrics (snapshot); if fixed, update this test')
+  const call = src.split('\n').find((l) => l.includes('anti_cheat.py --source'))
+  assert.ok(call, 'StitchCUDA must have an anti_cheat.py --source call')
+  assert.match(call, /--metrics /, 'StitchCUDA anti_cheat call must pass --metrics (the run.sh result.json)')
 })
