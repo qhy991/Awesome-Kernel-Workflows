@@ -32,7 +32,7 @@ import sys, os, json, argparse, shutil
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_REGISTRY = os.path.join(HERE, "integration_registry.json")
-HOST_CAPS = ("compiler", "project_build", "register_script", "runtime_registry", "reversibility_net")
+HOST_CAPS = ("compiler", "project_build", "register_script", "runtime_registry", "reversibility_net", "sol_execbench_cli")
 
 
 def probe_host(override):
@@ -41,7 +41,8 @@ def probe_host(override):
     reversibility_net are project-specific and default to False unless overridden."""
     live = {"compiler": shutil.which("nvcc") is not None or shutil.which("python3") is not None,
             "project_build": False, "register_script": False,
-            "runtime_registry": False, "reversibility_net": False}
+            "runtime_registry": False, "reversibility_net": False,
+            "sol_execbench_cli": (os.environ.get("SOL_EXECBENCH") not in (None, "")) or shutil.which("sol-execbench") is not None}
     if override:
         live.update(override)
     return live

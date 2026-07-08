@@ -57,6 +57,15 @@ chk "S7 cache hit" "$(g "$D2" _cache)" hit
 # S8: preference order — embedded_dispatch preferred over inplace when both available (non-mutating wins)
 chk "S8 dispatch>inplace (preference)" "$(g "$D1" method)" embedded_dispatch
 
+# S9: non-standalone + sol-execbench CLI present (no project build/adapter) -> sol_execbench_solution
+J=$($ST resolve --can-standalone no --host-probe '{"compiler":true,"project_build":false,"register_script":false,"runtime_registry":false,"reversibility_net":false,"sol_execbench_cli":true}')
+chk "S9 sol host->sol_execbench_solution" "$(g "$J" method)" sol_execbench_solution
+chk "S9 fidelity production"              "$(g "$J" build_fidelity)" production
+
+# S9b: SAME host but NO sol CLI -> unchanged derive_adapter (backward compat)
+J=$($ST resolve --can-standalone no --host-probe '{"compiler":true,"project_build":false,"register_script":false,"runtime_registry":false,"reversibility_net":false}')
+chk "S9b no-sol-cli->derive_adapter (compat)" "$(g "$J" method)" derive_adapter
+
 rm -f cache.json traj.jsonl
 echo "================  $pass passed, $fail failed  ================"
 exit $fail
