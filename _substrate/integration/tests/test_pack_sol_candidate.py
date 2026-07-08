@@ -55,11 +55,21 @@ class PackSolTests(unittest.TestCase):
         self.assertNotIn("main.cpp", paths)
         self.assertTrue(any("PYBIND11_MODULE" in s["content"] for s in sol["sources"]))
 
-    def test_bare_kernel_gets_binding_shell(self):
+    def test_bare_kernel_fails_loudly(self):
         bare = "__global__ void k(){}\n"  # no pybind
-        sol = self._run(bare, CONTRACT)
-        paths = [s["path"] for s in sol["sources"]]
-        self.assertIn("main.cpp", paths)  # a binding shell was added
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / "kernel.cu").write_text(bare)
+            (d / "contract.env").write_text(CONTRACT)
+            out = d / "solution.json"
+            r = subprocess.run([sys.executable, str(PACK), "--kernel", str(d / "kernel.cu"),
+                                "--contract", str(d / "contract.env"), "--out", str(out)],
+                               capture_output=True, text=True)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertTrue(
+                "PYBIND11_MODULE" in r.stderr or "binding" in r.stderr,
+                f"Expected PYBIND11_MODULE or binding in stderr; got: {r.stderr!r}"
+            )
 
     def test_contract_comment_stripping(self):
         # contract.env values can carry trailing '#' comments (real 025 contract.env does)
