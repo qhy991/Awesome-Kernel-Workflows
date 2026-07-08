@@ -543,3 +543,4 @@ routing:
   - standalone
   - embedded_dispatch
   - embedded_inplace
+  - sol_execbench_solution
