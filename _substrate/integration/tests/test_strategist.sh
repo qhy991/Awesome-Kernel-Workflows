@@ -66,6 +66,11 @@ chk "S9 fidelity production"              "$(g "$J" build_fidelity)" production
 J=$($ST resolve --can-standalone no --host-probe '{"compiler":true,"project_build":false,"register_script":false,"runtime_registry":false,"reversibility_net":false}')
 chk "S9b no-sol-cli->derive_adapter (compat)" "$(g "$J" method)" derive_adapter
 
+# S9c: LIVE probe — no sol_execbench_cli in override, SOL_EXECBENCH env set -> sol_execbench_solution
+# (forces the resolver through probe_host's live expression; guards against a wrong env-var/CLI name)
+J=$(SOL_EXECBENCH=/tmp $ST resolve --can-standalone no --host-probe '{"compiler":true,"project_build":false,"register_script":false,"runtime_registry":false,"reversibility_net":false}')
+chk "S9c live-probe SOL_EXECBENCH->sol_execbench_solution" "$(g "$J" method)" sol_execbench_solution
+
 rm -f cache.json traj.jsonl
 echo "================  $pass passed, $fail failed  ================"
 exit $fail
