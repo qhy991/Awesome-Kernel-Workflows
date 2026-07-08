@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "_doc": "GENERIC build/integration ladder + stamping — the THIRD axis. Same skeleton as profiler_registry / verification_registry. Routes HOW a candidate kernel is built+tested: as a standalone translation unit, or wired into a project it cannot compile without (the llama.cpp case). The execution mechanism for embedded modes already exists (embedded/embedded_eval.js + ADAPTER_CONTRACT.md); this component only DECIDES the mode and stamps build_fidelity + reversibility. build_fidelity is the analog of profiling confidence: isolated < project_native < production.",
-  "ladder": ["standalone", "embedded_inplace", "embedded_dispatch", "registry_dispatch"],
+  "ladder": ["standalone", "embedded_inplace", "embedded_dispatch", "registry_dispatch", "sol_execbench_solution"],
   "methods": {
     "standalone": {
       "kind": "isolated_compile",
@@ -34,11 +34,19 @@
       "requires": ["runtime_registry"],
       "eval_mechanism": "python register/unregister (import side-effect, namespace-roundtrip)",
       "_doc": "python kernel-class registered into a runtime dispatch table (e.g. vLLM can_implement + register_linear_kernel). no C++ source touched."
+    },
+    "sol_execbench_solution": {
+      "kind": "external_harness_solution",
+      "build_fidelity": "production",
+      "reversible": true,
+      "requires": ["sol_execbench_cli"],
+      "eval_mechanism": "embedded/sol_execbench_eval.js (pack candidate -> solution.json -> sol-execbench CLI -> parse per-workload speedup_factor geomean)",
+      "_doc": "candidate kernel is packaged into a sol-execbench solution.json (sources[] + spec entry_point/binding) and evaluated by the sol-execbench CLI, which compiles internally against the task harness. Non-mutating, no project source touched."
     }
   },
   "preference": {
     "_doc": "For a kernel that CANNOT compile standalone, prefer the highest-fidelity reversible mode the host supports: embedded_dispatch (non-mutating, production) > embedded_inplace (project_native) > registry_dispatch. standalone is intentionally NOT in this ladder — a confirmed-non-standalone kernel silently falling back to a doomed single-TU compile is dishonest; if no embedded mode is host-supported, route to derive_adapter so the agent sets up the project build. For a kernel that CAN compile standalone, standalone is correct (no project coupling).",
-    "non_standalone": ["embedded_dispatch", "embedded_inplace", "registry_dispatch"],
+    "non_standalone": ["embedded_dispatch", "embedded_inplace", "registry_dispatch", "sol_execbench_solution"],
     "standalone_capable": ["standalone"]
   }
 }
