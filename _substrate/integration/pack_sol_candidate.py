@@ -8,7 +8,6 @@ otherwise a minimal torch-binding main.cpp shell is added.
 import argparse
 import json
 import os
-import re
 import sys
 
 
