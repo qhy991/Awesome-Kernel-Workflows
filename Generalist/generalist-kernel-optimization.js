@@ -372,6 +372,15 @@ const BENCH_CMD = args.benchmark_command || EVAL_CMD || ''
 const REGISTER_SCRIPT = args.register_script || ''
 const REGISTER_PARAMS = args.register_params || ''
 
+// --- Sol-execbench integration args (supplied by KerSor Task 8; unused on non-sol tasks) ---
+const SOL_CLI = args.sol_cli || ''
+const SOL_TASK_DIR = args.sol_task_dir || ''
+const SOL_BENCH_CONFIG = args.sol_bench_config || ''
+const SOL_SEED_DIR = args.sol_seed_dir || (args.exp_dir || '.')
+const SOL_CVD = args.sol_cuda_visible_devices || '0'
+const SOL_LD_LIBRARY_PATH = args.sol_ld_library_path || ''
+const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || ''   // KerSor passes <workflow_lib>/_substrate/integration
+
 function integrationHostProbeJson() {
   return JSON.stringify({
     compiler: true,
@@ -931,8 +940,33 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
     const runDir = `${EXP_DIR}/run-${iter}/cand-${i + 1}`
     const variant = `gen_${iter}_${i + 1}`.replace(/[^A-Za-z0-9_]/g, '_')
     const integBlock = integrationEvalBlock(INTEGRATION_DECISION.method, KERNEL_PATH, runDir, variant, ORIGINAL_BACKUP)
+    let solEvalBlock = ''
+    if (IS_SOL) {
+      const solVariantName = `sol_${iter}_${i + 1}`.replace(/[^A-Za-z0-9_]/g, '_')
+      const solCandidatePath = `${EXP_DIR}/kernels/${solVariantName}.cu`
+      const solPlan = __solExecbenchEvalPlan({
+        substrateDir: SOL_SUBSTRATE_DIR,
+        kernelSource: solCandidatePath,
+        contractEnv: `${EXP_DIR}/contract.env`,
+        solutionOut: `${EXP_DIR}/${solVariantName}.solution.json`,
+        benchOut: `${EXP_DIR}/${solVariantName}.bench.jsonl`,
+        solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+        seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD, ldLibraryPath: SOL_LD_LIBRARY_PATH,
+      })
+      solEvalBlock = [
+        '',
+        '# SOL-EXECBENCH EVALUATION (overrides the standalone eval below)',
+        `Write the kernel code above verbatim to ${solCandidatePath}, then run IN THIS EXACT ORDER:`,
+        `1. Pack:  ${solPlan.pack}`,
+        `2. Run:   ${solPlan.run}`,
+        `3. Parse: ${solPlan.parse}`,
+        `The parse step prints one line "SPEEDUP=<geomean> STATUS=<PASS|FAIL> WORKLOADS=<passed>/<total>". Parse correctness and latency STRICTLY from that line. Do NOT fabricate numbers. Map into the schema: compiled = run produced a bench.jsonl, correct = STATUS==PASS, speedup = the SPEEDUP value. ${solPlan.cleanupInvariant}`,
+      ].join('\n')
+    }
     const embeddedProposal = INTEGRATION_DECISION.method === 'embedded_dispatch'
       ? `\n\n${EMBEDDING_CONTRACT}\nMatch dispatch signature of ${KERNEL_PATH} exactly.\n`
+      : IS_SOL
+      ? `\n\n${SOL_SOLUTION_CONTRACT}`
       : ''
     const m = await agentRetry(() => agent(
       `Implement this plan on a COPY of ${best.code_path} into ${runDir}/kernel, respecting the ` +
@@ -940,9 +974,11 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
       embeddedProposal +
       (integBlock
         ? integBlock + `\nThen map measured results into the JSON metrics schema.`
-        : EVAL_CMD
-          ? `Then run the benchmark command \`${EVAL_CMD}\` and return the JSON metrics per schema.`
-          : `No benchmark_command provided; do not invent an evaluator. Return compiled=false, correct=false, speedup=0, and missing evidence fields.`) +
+        : solEvalBlock
+          ? solEvalBlock + `\nThen map measured results into the JSON metrics schema.`
+          : EVAL_CMD
+            ? `Then run the benchmark command \`${EVAL_CMD}\` and return the JSON metrics per schema.`
+            : `No benchmark_command provided; do not invent an evaluator. Return compiled=false, correct=false, speedup=0, and missing evidence fields.`) +
       `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\n` +
       `Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\n` +
       `Then append, using the values you just measured (status="done" if compiled AND correct, else "error"; speedup is the measured speedup number, or null if unavailable):\n` +
@@ -962,8 +998,9 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
   // they MUST evaluate SERIALLY — parallel candidates would clobber KERNEL_PATH / collide
   // on the project build. Standalone candidates are isolated (per-candidate .so) -> parallel.
   const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+  const IS_SOL = INTEGRATION_DECISION.method === 'sol_execbench_solution'
   let evaluated
-  if (IS_EMBEDDED) {
+  if (IS_EMBEDDED || IS_SOL) {
     evaluated = []
     for (let i = 0; i < plans.length; i++) {
       try { const r = await evalOne(plans[i], i); if (r) evaluated.push(r) }

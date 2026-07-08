@@ -400,6 +400,15 @@ const REGISTER_PARAMS = args.register_params || ''
 // In embedded mode the project's own build command drives the build step.
 const BUILD_CMD = args.build_command || COMPILE_CMD
 
+// --- Sol-execbench integration args (supplied by KerSor Task 8; unused on non-sol tasks) ---
+const SOL_CLI = args.sol_cli || ''
+const SOL_TASK_DIR = args.sol_task_dir || ''
+const SOL_BENCH_CONFIG = args.sol_bench_config || ''
+const SOL_SEED_DIR = args.sol_seed_dir || EXP_DIR
+const SOL_CVD = args.sol_cuda_visible_devices || '0'
+const SOL_LD_LIBRARY_PATH = args.sol_ld_library_path || ''
+const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || ''   // KerSor passes <workflow_lib>/_substrate/integration
+
 if (!MODEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
   throw new Error('Provide one of kernel_path, problem_definition, or problem_path')
 }
@@ -560,6 +569,7 @@ if (INTEGRATION_DECISION.method === 'derive_adapter') {
 // COMPILE_CMD/VERIFY_CMD/PROFILE_CMD directly), so there is nothing extra to gate on a
 // USE_DRIVER_STANDALONE flag; the standalone path is simply "not IS_EMBEDDED".
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+const IS_SOL = INTEGRATION_DECISION.method === 'sol_execbench_solution'
 // embedded_inplace mutates the project file in place; back it up ONCE so every
 // candidate restores to a pristine original and the exit net can too.
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
@@ -689,6 +699,8 @@ for (currentAttempt = 0; currentAttempt < MAX_TURNS && !targetMet; currentAttemp
 
   const embeddedProposalBlock = IS_EMBEDDED
     ? `\n\n${EMBEDDING_CONTRACT}\n\nMANDATORY: Read the reference dispatch file at ${REFERENCE_FILE} and match its dispatch signature EXACTLY (same entry-point shape, template params, launch-bounds conventions). Emit a COMPLETE dispatch-compatible \`.cuh\` (NOT a standalone translation unit, NO main()/harness). Put the full \`.cuh\` contents in kernel_code; binding_code and model_new_code are not used in embedded mode (return brief placeholders).`
+    : IS_SOL
+    ? `\n\n${SOL_SOLUTION_CONTRACT}`
     : ''
 
   let implResult
@@ -826,9 +838,34 @@ Parse correctness (pass/fail) and latency STRICTLY from the test/benchmark comma
     }
   }
 
+  let solEvalBlock = ''
+  if (IS_SOL) {
+    const variantName = `sol_t${currentAttempt}`.replace(/[^A-Za-z0-9_]/g, '_')
+    const candidatePath = `${EXP_DIR}/kernels/${variantName}.cu`
+    const plan = __solExecbenchEvalPlan({
+      substrateDir: SOL_SUBSTRATE_DIR,
+      kernelSource: candidatePath,
+      contractEnv: `${EXP_DIR}/contract.env`,
+      solutionOut: `${EXP_DIR}/${variantName}.solution.json`,
+      benchOut: `${EXP_DIR}/${variantName}.bench.jsonl`,
+      solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+      seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD, ldLibraryPath: SOL_LD_LIBRARY_PATH,
+    })
+    solEvalBlock = `
+
+# SOL-EXECBENCH EVALUATION (overrides the standalone steps below)
+This candidate is evaluated by the sol-execbench CLI, which compiles it internally. Write the kernel_code above verbatim to ${candidatePath}, then run these commands IN THIS EXACT ORDER:
+
+1. Pack:  ${plan.pack}
+2. Run:   ${plan.run}
+3. Parse: ${plan.parse}
+
+The parse step prints one line "SPEEDUP=<geomean> STATUS=<PASS|FAIL> WORKLOADS=<passed>/<total>". Parse correctness and latency STRICTLY from that line and the run output. Do NOT fabricate numbers. Map into the schema: compiled = run produced a bench.jsonl, correct = STATUS==PASS, speedup = the SPEEDUP value (kernel_time_ms may be left unavailable — sol-execbench reports speedup_factor, not absolute ms). ${plan.cleanupInvariant}`
+  }
+
   let verifyResult
   try {
-  verifyResult = await withTurnTimeout(agentRetry(() => agent(`You are a CUDA kernel validator. Compile, verify, and benchmark this kernel implementation.${embeddedEvalBlock}
+  verifyResult = await withTurnTimeout(agentRetry(() => agent(`You are a CUDA kernel validator. Compile, verify, and benchmark this kernel implementation.${embeddedEvalBlock}${solEvalBlock}
 
 # Kernel Code (kernel.cu):
 \`\`\`cuda

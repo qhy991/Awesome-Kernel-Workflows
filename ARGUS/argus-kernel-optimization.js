@@ -353,6 +353,15 @@ const HARDWARE_TARGET = args.target_gpu || 'NVIDIA H100'
 const TEST_CMD = args.test_command || ''
 const BENCH_CMD = args.benchmark_command || ''
 const BUILD_CMD = args.build_command || ''  // project-native build (embedded mode)
+
+// --- Sol-execbench integration args (supplied by KerSor Task 8; unused on non-sol tasks) ---
+const SOL_CLI = args.sol_cli || ''
+const SOL_TASK_DIR = args.sol_task_dir || ''
+const SOL_BENCH_CONFIG = args.sol_bench_config || ''
+const SOL_SEED_DIR = args.sol_seed_dir || EXP_DIR
+const SOL_CVD = args.sol_cuda_visible_devices || '0'
+const SOL_LD_LIBRARY_PATH = args.sol_ld_library_path || ''
+const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || ''   // KerSor passes <workflow_lib>/_substrate/integration
 const INVARIANT_CHECK_CMD = args.invariant_check_command || ''
 const INVARIANT_RESULT_PATH = args.invariant_result_path || `${args.exp_dir || '/tmp/argus_exp'}/invariants/latest.json`
 const KNOWLEDGE_BASE_PATH = args.knowledge_base_path || ''
@@ -477,6 +486,7 @@ if (INTEGRATION_DECISION.method === 'derive_adapter') {
   throw new Error('integration-strategist returned derive_adapter — provide project_root + register_script + build/test/benchmark commands')
 }
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+const IS_SOL = INTEGRATION_DECISION.method === 'sol_execbench_solution'
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
   await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
@@ -841,7 +851,9 @@ ${EMBEDDING_CONTRACT}
 Read the reference dispatch file at ${REFERENCE_FILE} and match its dispatch
 signature EXACTLY (entry-point shape, template params, launch-bounds). Emit a
 COMPLETE dispatch-compatible .cuh (NOT a standalone translation unit, NO main(),
-no standalone harness). transformed_code must be the full .cuh file contents.` : ''}
+no standalone harness). transformed_code must be the full .cuh file contents.` : IS_SOL ? `
+
+${SOL_SOLUTION_CONTRACT}` : ''}
 
 Return the transformed kernel code with invariants.
 
@@ -914,6 +926,30 @@ Return after writing the file.`, { label: `write-candidate-${outerIter}`, phase:
         benchmarkCmd: BENCH_CMD,
       })
     }
+  }
+
+  let solEvalBlock = ''
+  if (IS_SOL) {
+    const solVariantName = `sol_i${outerIter}`.replace(/[^A-Za-z0-9_]/g, '_')
+    const solCandidatePath = `${EXP_DIR}/kernels/${solVariantName}.cu`
+    const solPlan = __solExecbenchEvalPlan({
+      substrateDir: SOL_SUBSTRATE_DIR,
+      kernelSource: solCandidatePath,
+      contractEnv: `${EXP_DIR}/contract.env`,
+      solutionOut: `${EXP_DIR}/${solVariantName}.solution.json`,
+      benchOut: `${EXP_DIR}/${solVariantName}.bench.jsonl`,
+      solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+      seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD, ldLibraryPath: SOL_LD_LIBRARY_PATH,
+    })
+    solEvalBlock = `
+# SOL-EXECBENCH EVALUATION (overrides the standalone steps below)
+This candidate is evaluated by the sol-execbench CLI, which compiles it internally. Write the transformed_code above verbatim to ${solCandidatePath}, then run these commands IN THIS EXACT ORDER:
+
+1. Pack:  ${solPlan.pack}
+2. Run:   ${solPlan.run}
+3. Parse: ${solPlan.parse}
+
+The parse step prints one line "SPEEDUP=<geomean> STATUS=<PASS|FAIL> WORKLOADS=<passed>/<total>". Parse correctness and latency STRICTLY from that line and the run output. Do NOT fabricate numbers. Map into the schema: compiled = run produced a bench.jsonl, correct = STATUS==PASS, speedup = the SPEEDUP value (kernel_time_ms may be left unavailable — sol-execbench reports speedup_factor, not absolute ms). ${solPlan.cleanupInvariant}`
   }
 
   const validateResult = await withTurnTimeout(agentRetry(() => agent(`You are the ARGUS Validator Agent (Section 6).
@@ -1046,7 +1082,7 @@ ${PROFILING_DECISION.method === 'perf_heuristic' ? `- Profiling-strategist chose
 Reward = f(correctness, invariant_satisfaction, performance)
 - If invariants violated: negative process reward (dense signal for what went wrong)
 - If tests fail: zero reward
-- If correct + improved: positive reward proportional to speedup`}
+- If correct + improved: positive reward proportional to speedup`}${solEvalBlock}
 
 Return validation results.
 
