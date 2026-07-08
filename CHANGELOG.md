@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 project adheres to [Semantic Versioning](https://semver.org/). See `AGENTS.md`
 for the versioning policy.
 
+## [0.10.0] - 2026-07-08
+
+### Added
+
+- **sol-execbench as a first-class integration method.** Adds
+  `sol_execbench_solution` to the shared `_substrate/integration` registry +
+  strategist, gated on a new `sol_execbench_cli` host capability (hosts without
+  sol-execbench resolve exactly as before — S9b/S9c cover this). A
+  can-standalone=`no` kernel on a sol-equipped host now routes to
+  `sol_execbench_solution` instead of throwing `derive_adapter`. New deterministic
+  substrate scripts `_substrate/integration/pack_sol_candidate.py` (candidate
+  kernel → sol-execbench `solution.json`; fails loudly on a bare kernel with no
+  torch binding) and `parse_sol_bench.py` (bench.jsonl → per-workload
+  `speedup_factor` geomean, `SPEEDUP=/STATUS=/WORKLOADS=` line). New
+  `_substrate/embedded/sol_execbench_eval.js` substrate (pack → run → parse eval
+  plan + proposal contract) inlined into CUDAAgent, ARGUS, and Generalist via
+  `scripts/patch-sol-execbench-eval.js`; each gains an `IS_SOL` proposal + eval
+  branch mutually exclusive with `IS_EMBEDDED`. Manifests advertise
+  `sol_execbench_solution` in `routing.integration_patterns` (+ the 7 `sol_*` args
+  in CUDAAgent's `all_args`). Unblocks KerSor routing of FlashInfer-Bench /
+  sol-execbench tasks. Additive and backward-compatible: all behavior gated on
+  `IS_SOL` / `sol_execbench_cli`; standalone/embedded paths byte-unchanged.
+
 ## [0.9.0] - 2026-07-07
 
 ### Added

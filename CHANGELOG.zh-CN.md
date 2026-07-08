@@ -81,6 +81,25 @@
   topology/inputs/fidelity 字段。
   (`WarpSpeed/warpspeed-kernel-search.js`, `WarpSpeed/manifest.yaml`)
 
+## [0.10.0] - 2026-07-08
+
+### 新增（Added）
+
+- **sol-execbench 成为第一类集成方法。** 在共享的 `_substrate/integration` registry +
+  strategist 注册 `sol_execbench_solution`,用新的 `sol_execbench_cli` 主机能力门控
+  (无 sol-execbench 的主机行为不变——S9b/S9c 覆盖)。在 sol 可用的主机上,
+  can-standalone=`no` 的内核现在路由到 `sol_execbench_solution` 而非抛 `derive_adapter`。
+  新增确定性底座脚本 `_substrate/integration/pack_sol_candidate.py`
+  (候选内核 → sol-execbench `solution.json`;裸内核无 torch binding 时显式报错)
+  与 `parse_sol_bench.py`(bench.jsonl → per-workload `speedup_factor` geomean,
+  输出 `SPEEDUP=/STATUS=/WORKLOADS=` 行)。新增 `_substrate/embedded/sol_execbench_eval.js`
+  底座(pack → run → parse 计划 + proposal 契约),经 `scripts/patch-sol-execbench-eval.js`
+  内联进 CUDAAgent、ARGUS、Generalist;各自新增与 `IS_EMBEDDED` 互斥的 `IS_SOL`
+  proposal + eval 分支。manifest 在 `routing.integration_patterns` 声明
+  `sol_execbench_solution`(CUDAAgent 的 `all_args` 补齐 7 个 `sol_*` 参数)。打通
+  KerSor 对 FlashInfer-Bench / sol-execbench 任务的路由。纯增量、向后兼容:全部经
+  `IS_SOL` / `sol_execbench_cli` 门控;standalone/embedded 路径字节不变。
+
 ## [Unreleased] - feat/proactive-knowledge-fetch
 
 ### 变更（Changed）
