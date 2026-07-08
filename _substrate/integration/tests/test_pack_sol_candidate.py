@@ -61,5 +61,11 @@ class PackSolTests(unittest.TestCase):
         paths = [s["path"] for s in sol["sources"]]
         self.assertIn("main.cpp", paths)  # a binding shell was added
 
+    def test_contract_comment_stripping(self):
+        # contract.env values can carry trailing '#' comments (real 025 contract.env does)
+        contract = "op=reduction\nbackend=cuda\ntask_name=025_rmsnorm_h4096  # trailing comment\nkernel_path=/abs/k.cu\n"
+        sol = self._run(KERNEL_WITH_BINDING, contract)
+        self.assertEqual(sol["definition"], "025_rmsnorm_h4096")  # comment stripped, no trailing spaces
+
 if __name__ == "__main__":
     unittest.main()
