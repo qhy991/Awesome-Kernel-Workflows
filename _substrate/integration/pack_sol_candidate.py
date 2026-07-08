@@ -3,7 +3,8 @@
 
 No LLM, no network. Schema mirrors CutlassGEMM/solution_example.json (verified).
 If the kernel already carries a PYBIND11_MODULE it is packed as a single source;
-otherwise a minimal torch-binding main.cpp shell is added.
+otherwise the packer exits non-zero with a clear error (bare kernels cannot be
+run by sol-execbench — a bound entry point is required).
 """
 import argparse
 import json
@@ -30,19 +31,14 @@ def build_solution(kernel_src_text, kernel_filename, contract):
     if has_binding:
         entry_point = f"{kernel_filename}::run"
     else:
-        # minimal torch binding shell exposing run(); the kernel must define a
-        # symbol the shell can call. Kept intentionally simple + deterministic.
-        main_cpp = (
-            '#include <torch/extension.h>\n'
-            '#include <ATen/cuda/CUDAContext.h>\n'
-            '// Binding shell added by pack_sol_candidate.py for a bare kernel.\n'
-            '// The candidate kernel must expose a callable entry; wire it here.\n'
-            'PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {\n'
-            '  m.doc() = "sol-execbench candidate (auto-bound)";\n'
-            '}\n'
+        # A bare kernel with no PYBIND11_MODULE cannot be packaged into a runnable
+        # sol-execbench solution: there is no bound entry point. Fail loudly rather
+        # than emit a solution.json whose entry_point resolves to nothing.
+        raise SystemExit(
+            "pack_sol_candidate: kernel has no PYBIND11_MODULE binding; "
+            "sol-execbench needs a bound run() entry point. The proposal must emit "
+            "a kernel + torch binding (see SOL_SOLUTION_CONTRACT), not a bare kernel."
         )
-        sources.append({"path": "main.cpp", "content": main_cpp})
-        entry_point = "main.cpp::run"
     return {
         "name": f"{task}_candidate",
         "definition": task,
