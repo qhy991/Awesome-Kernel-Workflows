@@ -221,3 +221,11 @@ routing:
   - standalone
   - embedded_dispatch
   - embedded_inplace
+  # Cross-DSL algorithmic priors — design 2026-07-09-triton-first-cuda-escalation-priors.
+  # When this workflow runs with kernel_language=triton|tilelang, result-analyzer
+  # (per agents/result-analyzer.md §"Cross-DSL algorithmic priors") emits three
+  # coarse prior classes — partition strategy, bound classification, numeric
+  # floor — that survive the DSL boundary if escalate-native.py promotes the
+  # session to a backend-native phase. Informational metadata only.
+  emits:
+  - algorithmic_priors

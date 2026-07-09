@@ -75,7 +75,12 @@
 
 新增或修改 workflow 时，共通入口参数使用统一名称：`kernel_path`、`problem_definition`、`problem_path`、`language`、`target_gpu`、`compile_command`、`test_command`、`benchmark_command`、`iterations`、`seed_candidates`、`exp_dir`。
 
-每个顶层 workflow 必须在 `meta` 后声明 `WORKFLOW_SUITABILITY`，至少包含 `supported_languages`、`supported_problem_types`、`problem_types` 和 `reason`，并在入口调用 `assertWorkflowSuitability()`。当用户显式传入不支持的 `language` 或 `problem_type` 时，workflow 必须 hard failure，并说明支持范围和不适合的原因。不要从自然语言 `problem_definition` 中猜测语言或问题类型，避免误判开放题面。
+每个顶层 workflow 的资格判断(supported languages / problem types / backend)由 `manifest.yaml`
+的 `routing.accepts:` 声明,并由 KerSor selector 强制执行(issue #24)。**不要**在 workflow `.js`
+里写 `WORKFLOW_SUITABILITY` 常量或 `assertWorkflowSuitability()`——它们已废弃(仅剩 2 个待迁移的旧
+workflow 还在用)。如果 workflow 需要从 args 解析 backend,只写一个不抛异常的 `resolveBackend()`
+做归一化;拒绝逻辑归 selector 所有,workflow 不重复判定。不要从自然语言 `problem_definition` 中猜测
+语言或问题类型;把资格声明写进 manifest `routing.accepts`。
 
 如果只提供 `problem_definition` 或 `problem_path`，支持生成的 workflow 必须先生成并验证初始 kernel，再进入优化循环。证据契约参数如 `ncu_command`、`invariant_result_path`、`descriptor_result_path`、`archive_update_result_path` 不为统一命名而改写。
 
