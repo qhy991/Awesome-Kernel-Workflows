@@ -697,6 +697,14 @@ for (currentAttempt = 0; currentAttempt < MAX_TURNS && !targetMet; currentAttemp
     ? '\n# Proactive knowledge fetch (on retries)\nIf a previous attempt FAILED (compile/correctness/speedup) or you are unsure about an API, intrinsic, or how a known bottleneck is typically resolved, FIRST run the search command from the `## Knowledge Tools (on-demand)` block in your input (e.g. `query.py` for kernel patterns, `chub search` for API/Triton docs). Read 1-2 returned pages, extract the actionable technique, then implement. This is best-effort: if no block is present or nothing relevant returns, proceed with your own knowledge. Do not block on it.'
     : ''
 
+  // Cross-DSL algorithmic priors (KerSor design 2026-07-09-triton-first-cuda-escalation-priors).
+  // When escalate-native.py promoted this session from a portable-DSL producer
+  // (Triton / TileLang), the ## Handoff Context block in your semantic inputs
+  // may carry three specific evidence classes worth honoring in your first
+  // candidate. These are algorithmic priors from a DIFFERENT DSL — trust their
+  // classification but NOT their fine schedule.
+  const algorithmicPriorsHint = '\n# Cross-DSL algorithmic priors (channel ④ — HANDOFF-typed, from a portable DSL like Triton)\nIf ## Handoff Context carries any of the following, treat them as your starting point unless a later measurement contradicts them:\n  - `validated_win` with `technique ∈ {split_k, stream_k, persistent_kernel}` — that partition strategy is the algorithmic shape to start from.\n  - `bottleneck` naming `compute_bound` / `memory_bound` / `latency_bound` — that classification directs your instruction-plan priorities (memory_bound → prioritize async pipeline / TMA / smem throughput; compute_bound → prioritize WGMMA / warp specialization).\n  - `metric_contract` with `floor_ms=X` — that is the numeric floor your candidate must beat; anything slower is not a real win.\nDO NOT copy tile shapes, warp counts, num_stages, cluster_shape, or any other fine schedule from the handoff — those are Triton compiler operating points and do NOT transfer to hand-tuned CUDA. Discover CUDA-appropriate values yourself.'
+
   const embeddedProposalBlock = IS_EMBEDDED
     ? `\n\n${EMBEDDING_CONTRACT}\n\nMANDATORY: Read the reference dispatch file at ${REFERENCE_FILE} and match its dispatch signature EXACTLY (same entry-point shape, template params, launch-bounds conventions). Emit a COMPLETE dispatch-compatible \`.cuh\` (NOT a standalone translation unit, NO main()/harness). Put the full \`.cuh\` contents in kernel_code; binding_code and model_new_code are not used in embedded mode (return brief placeholders).`
     : IS_SOL
@@ -721,7 +729,7 @@ ${modelCode.substring(0, 3000)}
 - Eager: ${eagerTime}ms
 - torch.compile: ${compileTime}ms
 - Target: ${TARGET_SPEEDUP !== null ? `>${TARGET_SPEEDUP}x speedup over torch.compile (=${(compileTime / TARGET_SPEEDUP).toFixed(3)}ms)` : 'explore (no numeric target — run to MAX_TURNS / stagnation)'}
-${historyContext}${proactiveKnowledgeHint}${embeddedProposalBlock}
+${historyContext}${proactiveKnowledgeHint}${algorithmicPriorsHint}${embeddedProposalBlock}
 
 # CUDA Agent Workspace Requirements:
 Generate THREE files:

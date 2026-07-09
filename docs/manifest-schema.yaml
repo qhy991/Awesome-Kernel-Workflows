@@ -56,6 +56,18 @@ routing:
   known_broken: null
   requires_embedded_registration: false
   framework_integrator_fallback: false
+  # Cross-DSL algorithmic priors (design docs/superpowers/specs/
+  # 2026-07-09-triton-first-cuda-escalation-priors-design.md, upstream in KerSor).
+  # Informational tags; consumed by KerSor's audit tooling, NOT by AKW dispatch.
+  #   emits[]: what evidence classes this workflow's result-analyzer step will
+  #     surface as transfer items. Currently one allowed tag:
+  #       - algorithmic_priors (partition strategy / bound class / numeric floor;
+  #         only meaningful when routing.languages includes triton or tilelang)
+  #   consumes[]: what evidence classes this workflow's planning phase honors
+  #     from an incoming ## Handoff Context block. Currently one allowed tag:
+  #       - algorithmic_priors
+  emits: []                  # [O] evidence classes this workflow emits
+  consumes: []               # [O] evidence classes this workflow's planning phase honors
 
 # Optional additional entrypoints in the same directory (each needs variants[].routing)
 variants: []

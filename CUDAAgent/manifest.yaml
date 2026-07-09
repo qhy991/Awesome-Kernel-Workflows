@@ -81,3 +81,12 @@ routing:
   - embedded_inplace
   - sol_execbench_solution
   requires_ncu: false
+  # Cross-DSL algorithmic priors — design 2026-07-09-triton-first-cuda-escalation-priors.
+  # When escalate-native.py escalates from a portable-DSL producer (Triton /
+  # TileLang) to this workflow, priors_for_native[] carries a closed enumeration
+  # of algorithmic evidence (partition strategy, bound class, numeric floor).
+  # This workflow's Implement phase honors those priors when a matching handoff
+  # item is present. Fine schedule tokens (tile shapes, warp counts, pipeline
+  # depths) are NOT consumed — they do not transfer. Informational metadata only.
+  consumes:
+  - algorithmic_priors

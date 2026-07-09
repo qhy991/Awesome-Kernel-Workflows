@@ -6,7 +6,44 @@
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-09
+
+### 新增（Added）
+
+- **Manifest 新增 `routing.emits[]` / `routing.consumes[]`(跨 DSL 算法先验元数据)。**
+  可选、信息性字段，声明工作流产出或消费"算法先验"证据类(分区策略 / 瓶颈分类 /
+  数值下限)——该证据在可移植 DSL → backend-native 升级中可跨 DSL 边界传递。
+  `AKO4X/manifest.yaml` 声明 `routing.emits: [algorithmic_priors]`;
+  `CUDAAgent/manifest.yaml` 声明 `routing.consumes: [algorithmic_priors]`;
+  `docs/manifest-schema.yaml` 文档化两个字段。仅供 KerSor 审计工具消费,
+  不影响 AKW 调度本身。涉及文件:`AKO4X/manifest.yaml`、`CUDAAgent/manifest.yaml`、
+  `docs/manifest-schema.yaml`。
+- **`CUDAAgent` Implement 阶段的跨 DSL 先验提示词补丁。** 当 Triton / TileLang
+  工作流的传递对象携带 `validated_win`(分区策略:`split_k` / `stream_k` /
+  `persistent_kernel`)、`bottleneck`(界类型:`compute_bound` / `memory_bound` /
+  `latency_bound`)或 `metric_contract`(数值下限)条目时,CUDAAgent 的 Implement
+  doer 会以它们作为首个候选的算法起点——并被明确要求忽略 handoff 中的 tile 形状、
+  warp 数、`num_stages`、`cluster_shape` 或任何其他精细调度,因为这些是 Triton
+  编译器的运行点,并不会迁移到手写 CUDA。涉及文件:
+  `CUDAAgent/cuda-agent-kernel-optimization.js`。上游设计(在 KerSor 中):
+  `docs/superpowers/specs/2026-07-09-triton-first-cuda-escalation-priors-design.md`。
+
+### 变更（Changed）
+
+- **`AGENTS.md`:新增"不可协商"的 workflow 代码硬规则**,从源头阻止 authoring drift。
+  新 agent 构建/修改 workflow 时会被明确告知(并附上每条规则对应的 CI guard):共享 helper
+  只在 `_meta/scaffolding/` 单一来源——不要手工编辑 `BEGIN/END inlined` 区块,改 SSOT 再跑
+  codemod;资格判断走 manifest `routing.accepts`,而非已废弃的 `WORKFLOW_SUITABILITY` /
+  `assertWorkflowSuitability`;以及运行时 sandbox 约束(禁 `import`、禁 `Date.now`/
+  `Math.random`、`agent()` 用 `agentRetry` 包裹、substrate 用 `--artifact/--problem/--out`、
+  写文件到 `args.exp_dir`)。涉及文件:`AGENTS.md`。
+
 ### 修复（Fixed）
+
+- **`Agent.md`:修正过时的资格判断指引。** 参数命名一节此前要求作者发出
+  `WORKFLOW_SUITABILITY` + `assertWorkflowSuitability()`,该做法已被 manifest
+  `routing.accepts` + KerSor selector(issue #24)取代,且现已被 generator 禁止。已重写对齐。
+  涉及文件:`Agent.md`。
 
 - **收敛 driver-backed workflow 的残留 profiling 耦合。** `Generalist` 现在通过共享的
   driver Layer-A envelope profiling baseline、当前最佳和候选 attempt，因此 Triton/其他

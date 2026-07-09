@@ -6,6 +6,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 project adheres to [Semantic Versioning](https://semver.org/). See `AGENTS.md`
 for the versioning policy.
 
+## [Unreleased]
+
+## [0.11.0] - 2026-07-09
+
+### Added
+
+- **Manifest `routing.emits[]` / `routing.consumes[]` for cross-DSL algorithmic
+  priors.** New optional informational tags declare which workflows produce or
+  honor the algorithmic-priors evidence class (partition strategy / bound
+  classification / numeric floor) that survives a portable-DSL → backend-native
+  escalation. `AKO4X/manifest.yaml` declares `routing.emits:
+  [algorithmic_priors]`; `CUDAAgent/manifest.yaml` declares `routing.consumes:
+  [algorithmic_priors]`. `docs/manifest-schema.yaml` documents both fields.
+  These are informational only — consumed by KerSor's audit tooling, not by AKW
+  dispatch. Files: `AKO4X/manifest.yaml`, `CUDAAgent/manifest.yaml`,
+  `docs/manifest-schema.yaml`.
+- **`CUDAAgent` Implement-phase prompt addendum for cross-DSL priors.** When a
+  Triton / TileLang workflow's transfer object carries `validated_win`
+  (partition strategy: `split_k` / `stream_k` / `persistent_kernel`),
+  `bottleneck` (bound class: `compute_bound` / `memory_bound` / `latency_bound`),
+  or `metric_contract` (numeric floor) items, the CUDAAgent Implement doer now
+  honors them as the starting algorithmic shape of its first candidate — and is
+  explicitly instructed to IGNORE tile shapes, warp counts, `num_stages`,
+  `cluster_shape`, or any other fine schedule from the handoff, because those
+  are Triton-compiler operating points that do not transfer to hand-tuned CUDA.
+  Files: `CUDAAgent/cuda-agent-kernel-optimization.js`. Upstream design (in
+  KerSor):
+  `docs/superpowers/specs/2026-07-09-triton-first-cuda-escalation-priors-design.md`.
+
+### Changed
+
+- **`AGENTS.md`: added the "non-negotiable" workflow-code rules** to stop authoring
+  drift at the source. New agents building/editing a workflow are now told, with
+  the enforcing CI guard named for each: shared helpers are single-sourced in
+  `_meta/scaffolding/` (never hand-edit the `BEGIN/END inlined` blocks — edit the
+  SSOT + run the codemod); eligibility is manifest `routing.accepts`, not the
+  retired `WORKFLOW_SUITABILITY`/`assertWorkflowSuitability`; and the runtime
+  sandbox constraints (no `import`, no `Date.now`/`Math.random`, `agentRetry`-wrap,
+  `--artifact/--problem/--out`, writes to `args.exp_dir`). Files: `AGENTS.md`.
+
+### Fixed
+
+- **`Agent.md`: corrected stale eligibility guidance.** The parameter-naming
+  section instructed authors to emit `WORKFLOW_SUITABILITY` +
+  `assertWorkflowSuitability()`, which was superseded by manifest
+  `routing.accepts` + KerSor selector enforcement (issue #24) and is now forbidden
+  by the generator. Rewritten to match. Files: `Agent.md`.
+
 ## [0.10.0] - 2026-07-08
 
 ### Added
