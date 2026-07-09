@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "backend_id": "generic",
+  "display_name": "Generic CPU fallback (latency-only, no vendor profiler)",
+  "source_ext": ".cpp",
+  "aux_ext": [".h", ".hpp", ".c", ".cc"],
+  "artifact_ext": ".so",
+  "hw_vendor": "generic",
+  "threshold_profile": "generic",
+  "compiler": { "name": "cpu-toolchain", "invoke": "build.sh" },
+  "runner": { "invoke": "run.sh" },
+  "profiler": {
+    "name": "none",
+    "invoke": "profile.sh",
+    "format": "none",
+    "to_evidence": "to_evidence.py"
+  },
+  "capabilities": {
+    "metrics": { "latency_ms": true, "dram_pct": false, "sm_pct": false, "occupancy": false },
+    "bottleneck_classes": ["overhead_bound"],
+    "problem_types": ["kernel-optimization", "kernel-generation"],
+    "precisions": ["fp32", "fp16", "bf16"]
+  },
+  "requires_tools": ["python3"],
+  "optional_tools": ["g++", "gcc", "clang++", "clang"],
+  "idioms": "idioms.json",
+  "status": "stub",
+  "_note": "Substrate-plane fallback for a backend with no complete native driver (workflow-language decoupling). Provides correctness + wall-clock latency ONLY; every vendor counter (dram_pct/sm_pct/occupancy) is honestly null. diagnose.py classifies the bottleneck as 'unknown' via its all-null short-circuit — no vendor thresholds are misapplied to non-vendor hardware. build.sh is heuristic-by-extension, honesty-gated: it maps a known source extension to a CPU toolchain only when that tool is on PATH, else requires an explicit --build-cmd, else exits code-3."
+}

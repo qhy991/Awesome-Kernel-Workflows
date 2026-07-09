@@ -2,7 +2,7 @@ schema_version: '1.1'
 name: gemmptx-gemm-optimization
 entrypoint: gemmptx-gemm-optimization.js
 backend:
-  portability: vendor_locked
+  portability: method_intrinsic
   matrix_eligible: false
   intrinsic_to: NVIDIA CUDA PTX/SASS GEMM instruction path
   method_supported_backends:

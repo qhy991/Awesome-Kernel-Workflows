@@ -18,6 +18,7 @@ Add a row when you start a driver. Move it to `stable` only after it passes L0--
 | ascend | `ascend/` | huawei | experimental | (unassigned) |
 | metax | `metax/` | metax | stub | (unassigned) |
 | metal | `metal/` | apple | experimental | (unassigned) |
+| generic | `generic/` | generic | stub | (unassigned) |
 
 > **Note (P3):** the `cuda` and `triton` `build.sh`/`run.sh`/`profile.sh` are
 > **GPU-untested** -- this repo runs on macOS where `nvcc`/`ncu`/`triton` are absent. What
@@ -355,3 +356,59 @@ Apple Silicon (`arm64` Darwin) is required for real compile/run/profile.
 > **Note (P3):** verified on macOS: `validate_backend.py` (L0) and
 > `build.sh`/`profile.sh` arg-parsing + envelope coverage. Real GPU capture is
 > deferred to an Apple-Silicon device tier.
+
+---
+
+## generic -- CPU fallback (latency-only, no vendor profiler)
+
+| Property | Value |
+|---|---|
+| **Directory** | `_substrate/backends/generic/` |
+| **Source extension** | `.cpp` (aux `.h`, `.hpp`, `.c`, `.cc`) |
+| **Artifact extension** | `.so` |
+| **Hardware vendor** | `generic` |
+| **Threshold profile** | `generic` (declared; **not** wired into `diagnose.PROFILES` — see below) |
+| **Compiler** | CPU toolchain (`build.sh`) — heuristic-by-extension, honesty-gated |
+| **Runner** | `run.sh` (correctness + wall-clock latency; execution deferred to a project harness) |
+| **Profiler** | `none` (`profile.sh` always exits 4 — there is no vendor profiler) |
+| **Profiler format** | `none` |
+
+The **substrate-plane fallback** for a backend with no complete native driver
+(workflow-language decoupling). A `clean`/`vendor_locked` workflow made eligible
+off its native backend resolves here when no complete `_substrate/backends/<backend>/`
+driver exists, instead of dead-ending. It provides correctness + wall-clock
+latency **only** — enough to drive any latency-optimizing search / evolution /
+refinement method.
+
+### Build (heuristic-by-extension, honesty-gated)
+
+`build.sh` maps a known source extension to a CPU toolchain **only when that tool
+is on `PATH`** (`.cpp`/`.cc`/`.cxx` -> `g++`/`clang++`; `.c` -> `gcc`/`clang`).
+If the extension is unknown **or** the mapped tool is absent, it requires an
+explicit `--build-cmd` template; with neither it exits 3 (bad args / missing
+tool) — a clean, recorded failure, never a masked "no toolchain here" state.
+
+### Profiling & metrics
+
+There is **no** vendor profiler, so every hardware counter is honestly null:
+
+| Canonical key | generic source | Unit |
+|---|---|---|
+| `latency_ms` | wall-clock kernel latency (from `run.sh`) | milliseconds |
+| `dram_pct` | **always null** — no memory-bandwidth counter | — |
+| `sm_pct` | **always null** — no compute-utilization counter | — |
+| `occupancy` | **always null** — no occupancy counter | — |
+
+Because all counters are null, `diagnose.py` short-circuits to bottleneck
+`unknown` via its all-null guard **before** any threshold profile is consulted.
+That is why the `generic` `threshold_profile` is declared for manifest
+completeness but deliberately **not** added to `diagnose.PROFILES`: a profile
+entry would be dead code (and `to_evidence.py` never stamps `_vendor`, so no
+threshold branch is selected). Bottleneck class declared: `overhead_bound` only —
+the one class reachable from latency alone.
+
+### Requirements
+
+`requires_tools`: `python3` (`optional_tools`: `g++`, `gcc`, `clang++`, `clang`).
+Status `stub`: L0 + arg-parsing/envelope coverage verified; real correctness+latency
+execution is deferred to a project-supplied harness for the target problem format.
