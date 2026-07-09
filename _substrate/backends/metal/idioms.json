@@ -24,6 +24,10 @@
       "idiom": "threadgroup shared memory tiling with threadgroup_barrier(mem_flags::mem_threadgroup)",
       "prompt_guidance": "Stage reused operands into threadgroup memory via threadgroup T* arrays, sync with threadgroup_barrier(mem_flags::mem_threadgroup), then compute from threadgroup memory to cut redundant device traffic."
     },
+    "l2_cache_reuse": {
+      "idiom": "reuse threadgroup memory across multiple compute stages",
+      "prompt_guidance": "Use the same threadgroup allocation for multiple phases of computation rather than allocating separate buffers per phase — keeps reused operands on-chip instead of re-fetching from device memory."
+    },
     "block_size_tuning": {
       "idiom": "sweep threadgroup size (256/512/1024) for the GPU core count",
       "prompt_guidance": "Try threadgroup sizes that are multiples of the simdgroup size (32) — 256/512/1024 — to balance threadgroup occupancy against per-thread register resources."
@@ -40,17 +44,13 @@
       "idiom": "precise::fast_math / metal::fast::exp / metal::fast::rsqrt",
       "prompt_guidance": "Where precision tolerance allows, use metal::fast or precise::fast_math namespaced intrinsics (fast::exp, fast::rsqrt) instead of the precise variants."
     },
-    "compute_encoder_merge": {
+    "register_tiling": {
+      "idiom": "simd_shuffle / simd_shuffle_down for intra-simdgroup register reductions",
+      "prompt_guidance": "Use simd_shuffle and simd_shuffle_down for warp-level reductions, keeping partial sums in registers instead of threadgroup barriers, avoiding full-group sync overhead."
+    },
+    "kernel_fusion": {
       "idiom": "merge sequential compute encoders into a single kernel with an epilogue",
-      "prompt_guidance": "Avoid multiple MTLComputeCommandEncoder passes by fusing the elementwise epilogue into the producing kernel before the final store."
-    },
-    "threadgroup_memory_reuse": {
-      "idiom": "reuse threadgroup memory across multiple compute stages",
-      "prompt_guidance": "Use the same threadgroup allocation for multiple phases of computation rather than allocating separate buffers per phase."
-    },
-    "simdgroup_shuffle": {
-      "idiom": "simd_shuffle / simd_shuffle_down for intra-simdgroup reductions",
-      "prompt_guidance": "Use simd_shuffle and simd_shuffle_down for warp-level reductions instead of threadgroup barriers, avoiding full-group sync overhead."
+      "prompt_guidance": "Avoid multiple MTLComputeCommandEncoder passes by fusing the elementwise epilogue into the producing kernel before the final store — one dispatch instead of two cuts launch/encoder overhead."
     }
   }
 }

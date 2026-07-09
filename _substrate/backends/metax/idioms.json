@@ -27,13 +27,17 @@
       "idiom": "Manual double-buffered async copy via __shared__ staging with warp-shuffle",
       "prompt_guidance": "Pipeline global-to-shared copies with warp-level shuffles. Overlap the copy for tile N+1 with the compute for tile N using two __shared__ buffers and __syncthreads()."
     },
-    "register_blocking": {
+    "register_tiling": {
       "idiom": "Register-blocked computation with manual unrolling",
       "prompt_guidance": "Decompose the computation into register-sized blocks, keeping intermediate values in registers across iterations to reduce shared memory traffic."
     },
     "launch_config_tuning": {
       "idiom": "Occupancy-tuned block/grid dimensions via mxcc auto-tuning flags",
       "prompt_guidance": "Choose block size to maximise occupancy on MetaX hardware. Prefer 256–512 threads/block; use mxcc -march=<target> to target the specific MetaX GPU ISA for optimal register allocation. Sweep block sizes empirically."
+    },
+    "kernel_fusion": {
+      "idiom": "Fuse elementwise producer/consumer kernels into one launch",
+      "prompt_guidance": "Merge chained elementwise kernels (and epilogues) into a single kernel so intermediate tensors stay in registers/shared memory and one launch replaces several — cuts launch-dominated overhead on MetaX SIMT."
     }
   }
 }

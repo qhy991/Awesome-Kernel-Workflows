@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "backend_id": "generic",
+  "lang_fence": "cpp",
+  "impl_requirements": "Emit a complete, self-contained source file the CPU toolchain can build into a shared object (.so). Default toolchains: g++/clang++ for .cpp/.cc, gcc/clang for .c. If your source needs a non-default command, pass it via build.sh --build-cmd. Do NOT rely on any vendor SDK (CUDA/ROCm/CANN/Metal) — this is the generic fallback for a backend with no native driver.",
+  "unsupported_methods": [
+    "tensor_core_mma",
+    "async_copy_pipeline",
+    "occupancy_increase",
+    "register_tiling",
+    "shared_memory_tiling",
+    "l2_cache_reuse",
+    "register_pressure_reduction",
+    "memory_coalescing"
+  ],
+  "read_metric_guide": "The generic substrate has NO vendor profiler: dram_pct, sm_pct and occupancy are always null and diagnose.py will classify the bottleneck as 'unknown'. Optimize on wall-clock latency alone — rank changes by measured end-to-end speedup, not by counter-derived guidance (there is none). This is enough to drive any latency-optimizing search / evolution / refinement method; it cannot drive a method that fundamentally needs hardware counters.",
+  "methods": {
+    "kernel_fusion": {},
+    "launch_overhead_reduction": {},
+    "library_fallback_hybrid": {},
+    "cpu_gpu_overlap": {}
+  }
+}

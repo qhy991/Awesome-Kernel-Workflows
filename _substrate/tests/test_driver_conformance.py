@@ -18,8 +18,11 @@ REAL_DRIVERS = ['cuda', 'triton']
 
 # Non-NVIDIA experimental drivers. They do NOT share the nvidia hw_vendor / threshold profile,
 # so they are excluded from the nvidia-specific assertions above, but they MUST still satisfy
-# every vendor-agnostic L0/idiom invariant. rocm = AMD/HIP; ascend = Huawei NPU (Ascend C).
-NONVIDIA_DRIVERS = ['rocm', 'ascend']
+# every vendor-agnostic L0/idiom invariant. rocm = AMD/HIP; ascend = Huawei NPU (Ascend C);
+# metal = Apple Silicon (MSL); metax = MetaX GPU (mxcc). metal/metax were added in isolated
+# commits and originally omitted here — that omission let invalid idiom method names drift in
+# undetected (see the L0 method_gate-name check), so they are now covered.
+NONVIDIA_DRIVERS = ['rocm', 'ascend', 'metal', 'metax']
 
 
 def run_validator(driver_dir_abspath):
@@ -213,6 +216,71 @@ class TestNonNvidiaDriversConform(unittest.TestCase):
         self.assertEqual(m.get('threshold_profile'), 'ascend')
         self.assertIn('ascend', diagnose.PROFILES,
                       msg="diagnose.PROFILES missing 'ascend' -> bottleneck thresholds fall back to nvidia")
+
+
+class TestGenericFallbackDriverConforms(unittest.TestCase):
+    """Vendor-agnostic conformance for the generic latency-only fallback driver
+    (workflow-language decoupling). It is the substrate-plane fallback for a
+    backend with no complete native driver: correctness + wall-clock latency only,
+    every vendor counter honestly null. It must satisfy every vendor-agnostic L0 /
+    idiom invariant, but declares a SUBSET of bottleneck classes (only
+    'overhead_bound' — the sole class reachable from latency alone) and is
+    deliberately NOT wired into diagnose.PROFILES (all-null metrics short-circuit
+    to 'unknown' before any threshold profile is consulted, so a 'generic' profile
+    would be dead code)."""
+
+    def test_generic_passes_l0(self):
+        code, payload = run_validator(os.path.join(BACKENDS, 'generic'))
+        self.assertEqual(code, 0, msg=f"generic: exit {code}; payload={payload}")
+        self.assertEqual(payload.get('ok'), True, msg=f"generic: payload={payload}")
+        self.assertEqual(payload.get('errors'), [], msg=f"generic: payload={payload}")
+
+    def test_generic_idiom_methods_are_real(self):
+        idioms = load_driver_json('generic', 'idioms.json')
+        methods = idioms.get('methods', {})
+        self.assertTrue(methods, msg="generic: methods is empty")
+        for name in methods:
+            self.assertIn(name, KNOWN_METHODS, msg=f"generic: idiom '{name}' unknown")
+        for name in idioms.get('unsupported_methods', []):
+            self.assertIn(name, KNOWN_METHODS, msg=f"generic: unsupported '{name}' unknown")
+
+    def test_generic_idioms_cover_each_declared_class(self):
+        manifest = load_driver_json('generic', 'manifest.json')
+        declared = manifest.get('capabilities', {}).get('bottleneck_classes', [])
+        self.assertTrue(declared, msg="generic: no bottleneck_classes declared")
+        named = set(load_driver_json('generic', 'idioms.json').get('methods', {}))
+        for bclass in declared:
+            if bclass == 'unknown':
+                continue
+            gated = set(method_gate.TABLE.get(bclass, []))
+            self.assertTrue(named & gated,
+                            msg=f"generic: no idiom covers declared class '{bclass}'")
+
+    def test_generic_backend_id_and_fixed_invoke_names(self):
+        m = load_driver_json('generic', 'manifest.json')
+        self.assertEqual(m.get('backend_id'), 'generic', msg="generic: backend_id != dir")
+        self.assertEqual(load_driver_json('generic', 'idioms.json').get('backend_id'), 'generic')
+        self.assertEqual(m.get('compiler', {}).get('invoke'), 'build.sh')
+        self.assertEqual(m.get('runner', {}).get('invoke'), 'run.sh')
+        self.assertEqual(m.get('profiler', {}).get('invoke'), 'profile.sh')
+        self.assertEqual(m.get('profiler', {}).get('to_evidence'), 'to_evidence.py')
+        self.assertIn('threshold_profile', m, msg="generic: threshold_profile required")
+
+    def test_generic_reports_no_vendor_counters(self):
+        # The honest floor: latency_ms is the only capability; every hardware
+        # counter is declared false so no method mistakes it for a profiled backend.
+        metrics = load_driver_json('generic', 'manifest.json').get(
+            'capabilities', {}).get('metrics', {})
+        self.assertTrue(metrics.get('latency_ms'), msg="generic: latency_ms must be true")
+        for counter in ('dram_pct', 'sm_pct', 'occupancy'):
+            self.assertFalse(metrics.get(counter),
+                             msg=f"generic: {counter} must be false (no vendor profiler)")
+
+    def test_generic_does_not_shadow_substrate_scripts(self):
+        substrate_scripts = {'evidence_schema.py', 'anti_cheat.py', 'diagnose.py',
+                             'method_gate.py', 'memory_store.py', 'verify_insight.py'}
+        files = set(os.listdir(os.path.join(BACKENDS, 'generic')))
+        self.assertFalse(files & substrate_scripts, msg="generic: shadows substrate")
 
 
 if __name__ == '__main__':
