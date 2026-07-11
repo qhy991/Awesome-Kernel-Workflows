@@ -54,3 +54,5 @@ routing:
   integration_patterns:
   - embedded_inplace
   requires_ncu: false
+  optimization_phases:
+  - backend_native

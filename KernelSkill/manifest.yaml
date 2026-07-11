@@ -55,6 +55,8 @@ routing:
     - problem_definition
   fidelity_boundary: strict_high_fidelity
   requires_ncu: true
+  optimization_phases:
+  - backend_native
   integration_patterns:
   - standalone
   - embedded_dispatch

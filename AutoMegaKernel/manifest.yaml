@@ -73,6 +73,8 @@ routing:
   integration_patterns:
   - external_harness
   requires_ncu: false
+  optimization_phases:
+  - backend_native
 inputs:
   supports_existing_kernel: false
   supports_problem_definition: false

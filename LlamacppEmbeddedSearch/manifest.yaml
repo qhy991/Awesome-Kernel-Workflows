@@ -64,6 +64,9 @@ routing:
   integration_patterns:
   - embedded_dispatch
   requires_ncu: false
+  optimization_phases:
+  - backend_native
+  - framework_integrated
 variants:
 - name: llamacpp-metal-embedded-search
   entrypoint: llamacpp-metal-embedded-search.js
@@ -92,3 +95,6 @@ variants:
     integration_patterns:
     - embedded_dispatch
     requires_ncu: false
+    optimization_phases:
+    - backend_native
+    - framework_integrated

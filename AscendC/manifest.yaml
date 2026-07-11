@@ -238,6 +238,8 @@ routing:
   speedup_field: overall_speedup
   fidelity_boundary: substrate_reference
   requires_ncu: false
+  optimization_phases:
+  - backend_native
   integration_patterns:
   - standalone
   required_one_of:
