@@ -390,6 +390,8 @@ routing:
   speedup_field: best_speedup
   fidelity_boundary: training_free_inference
   requires_ncu: false
+  optimization_phases:
+  - backend_native
 integration_patterns:
 - standalone
 - embedded_dispatch

@@ -50,6 +50,8 @@ routing:
   speedup_field: best_speedup
   fidelity_boundary: algorithm_sketch_execution_risk
   requires_ncu: true
+  optimization_phases:
+  - backend_native
   integration_patterns:
   - standalone
   - embedded_dispatch
