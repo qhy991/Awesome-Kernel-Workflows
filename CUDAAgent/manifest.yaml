@@ -81,6 +81,8 @@ routing:
   - embedded_inplace
   - sol_execbench_solution
   requires_ncu: false
+  optimization_phases:
+  - backend_native
   # Cross-DSL algorithmic priors — design 2026-07-09-triton-first-cuda-escalation-priors.
   # When escalate-native.py escalates from a portable-DSL producer (Triton /
   # TileLang) to this workflow, priors_for_native[] carries a closed enumeration

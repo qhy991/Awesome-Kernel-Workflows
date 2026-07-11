@@ -517,6 +517,8 @@ routing:
   speedup_field: speedup
   fidelity_boundary: faithful_but_simplified
   requires_ncu: false
+  optimization_phases:
+  - backend_native
 integration_patterns:
 - standalone
 - embedded_dispatch

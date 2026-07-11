@@ -282,3 +282,5 @@ routing:
   - embedded_dispatch
   - embedded_inplace
   requires_ncu: true
+  optimization_phases:
+  - backend_native
