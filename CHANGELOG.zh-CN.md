@@ -8,6 +8,20 @@
 
 ### 修复（Fixed）
 
+- **#71 AKO4X 空候选轮次。** 在 hypothesis dispatch 前初始化轮级评估计数，
+  并聚合各 hypothesis 的结果，避免零候选路径引用未定义变量。
+- **#104 worktree 隔离。** 当 KerSor 报告运行时工作区不是 Git 仓库时，AKO4X
+  自动选择 `fresh-process`；依赖 Git 的 manifest 同时声明所需能力。
+
+### 变更（Changed）
+
+- **#72 sol-execbench 池。** 将 KDA 与 KernelBlaster 加入 opt-in 池，补齐
+  solution contract、pack/run/parse 评估和运行时参数声明，池内现有五个 workflow。
+- **#73 integration 词汇。** 将不受支持的 `external_harness`、`project_native`
+  替换为现有词汇，并移除对应的 KerSor lint debt。
+
+### 修复（Fixed）
+
 - **收敛 driver-backed workflow 的残留 profiling 耦合。** `Generalist` 现在通过共享的
   driver Layer-A envelope profiling baseline、当前最佳和候选 attempt，因此 Triton/其他
   driver path 不再渲染旧的 `ncu_command`/benchmark prompt。`AKO4X` 在 perf-heuristic

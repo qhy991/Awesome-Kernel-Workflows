@@ -518,3 +518,4 @@ routing:
   speedup_field: null
   fidelity_boundary: faithful_but_simplified
   requires_ncu: false
+  requires_git: true

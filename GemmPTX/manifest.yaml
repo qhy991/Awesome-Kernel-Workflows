@@ -83,7 +83,6 @@ routing:
   - exp_dir
   integration_patterns:
   - standalone
-  - project_native
   requires_ncu: false
 inputs:
   supports_existing_kernel: true

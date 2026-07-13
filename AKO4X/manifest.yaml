@@ -202,6 +202,7 @@ routing:
   # Check 2c compares that to contract.env::baseline_id (absent -> gate skips).
   all_args:
   - fair_baseline_id
+  - in_git_repo
   topology: iterative
   seed_contract: hybrid
   requires_harness: false
@@ -217,6 +218,7 @@ routing:
   speedup_field: overall_speedup
   fidelity_boundary: strict_high_fidelity
   requires_ncu: false
+  requires_git: true
   integration_patterns:
   - standalone
   - embedded_dispatch
