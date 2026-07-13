@@ -26,6 +26,50 @@ export const meta = {
   skill_binding_mode: 'local_skills_plus_external_resources',
 }
 
+// --- BEGIN sol-execbench-eval substrate (auto-inlined by scripts/patch-sol-execbench-eval.js) ---
+const SOL_SOLUTION_CONTRACT = [
+  'SOL-EXECBENCH SOLUTION CONTRACT (this task is evaluated by the sol-execbench CLI):',
+  '',
+  'You are authoring a kernel that will be packaged into a solution.json and run by',
+  'the sol-execbench harness, which compiles it internally. Therefore:',
+  '',
+  '1. Emit a COMPLETE kernel source plus a torch binding that exposes the task',
+  '   entry point (run(...)). Do NOT write a standalone main()/CLI harness.',
+  '2. Match the task reference signature exactly (same argument order/dtypes).',
+  '3. Do NOT package, compile, or benchmark yourself — the workflow + substrate',
+  '   handle pack -> sol-execbench -> parse. Return only the kernel + binding.',
+].join('\n')
+
+function __solQ(s) { return `"${String(s).replace(/"/g, '\\"')}"` }
+
+function __solExecbenchEvalPlan(ctx) {
+  const substrateDir = ctx.substrateDir            // abs path to _substrate/integration
+  const kernelSource = ctx.kernelSource            // path to candidate kernel on disk
+  const contractEnv = ctx.contractEnv              // path to session contract.env
+  const solutionOut = ctx.solutionOut              // where to write solution.json
+  const benchOut = ctx.benchOut                    // where sol-execbench writes bench.jsonl
+  const solCli = ctx.solCli                        // e.g. /abs/sol-execbench/.venv/bin/sol-execbench
+  const taskDir = ctx.taskDir                      // FlashInfer-Bench/<task> dir
+  const benchConfig = ctx.benchConfig              // --config path
+  const seedDir = ctx.seedDir                      // cd target for the run
+  const cvd = ctx.cudaVisibleDevices || '0'
+  const ld = ctx.ldLibraryPath ? `LD_LIBRARY_PATH=${__solQ(ctx.ldLibraryPath)}:$LD_LIBRARY_PATH ` : ''
+
+  const pack = `python3 ${__solQ(substrateDir + '/pack_sol_candidate.py')} --kernel ${__solQ(kernelSource)} --contract ${__solQ(contractEnv)} --out ${__solQ(solutionOut)}`
+  const run = `cd ${__solQ(seedDir)} && ${ld}CUDA_VISIBLE_DEVICES=${cvd} ${__solQ(solCli)} ${__solQ(taskDir)} --solution ${__solQ(solutionOut)} --config ${__solQ(benchConfig)} -o ${__solQ(benchOut)}`
+  const parse = `python3 ${__solQ(substrateDir + '/parse_sol_bench.py')} ${__solQ(benchOut)}`
+
+  return {
+    pack,
+    run,
+    parse,
+    order: ['pack', 'run', 'parse'],
+    cleanupInvariant: 'solution.json + bench.jsonl are per-candidate scratch files in the run dir; overwrite freely. No project source is mutated (non-mutating method).',
+  }
+}
+// --- END sol-execbench-eval substrate ---
+
+
 // --- BEGIN model-tier (auto-inserted by scripts/patch-model-tier.js) ---
 // Tier-based model routing: mechanical steps (run substrate scripts, parse
 // JSON) use cheaper models; profile steps (run eval/ncu) use mid-tier;
@@ -288,6 +332,12 @@ const TARGET_GPU = args.target_gpu || 'unknown GPU'
 const SEED_CANDIDATES = args.seed_candidates || 3
 const EXP_DIR = args.exp_dir || '/tmp/kda_exp'
 const KDA_INPUT_MODE_OPTIMIZE = 'optimize_existing'
+const SOL_CLI = args.sol_cli || ''
+const SOL_TASK_DIR = args.sol_task_dir || ''
+const SOL_BENCH_CONFIG = args.sol_bench_config || ''
+const SOL_SEED_DIR = args.sol_seed_dir || EXP_DIR
+const SOL_CVD = args.sol_cuda_visible_devices || '0'
+const SOL_LD_LIBRARY_PATH = args.sol_ld_library_path || ''
 
 // --- Backend driver wiring (P5c Stage B; off-by-default; legacy path byte-identical) ---
 const BACKEND_DIR = args.backend_dir || ''
@@ -686,6 +736,8 @@ if (INTEGRATION_DECISION.method === 'derive_adapter') {
 }
 const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'standalone'
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+const IS_SOL = INTEGRATION_DECISION.method === 'sol_execbench_solution'
+const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || `${SUBSTRATE}/integration`
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
   await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
@@ -732,6 +784,7 @@ ${currentBestCode.substring(0, 4000)}
 ${USE_DRIVER
   ? `- ${DRIVER_IMPL_REQUIREMENTS || `Use driver-supplied ${DRIVER_LANG_FENCE} guidance for hardware-aware kernel patterns.`}`
   : `- Use \`cuda-kernel-development\` skill for hardware-aware CUDA patterns (shared memory tiling, warp primitives, occupancy tuning).`}
+${IS_SOL ? `\n\n${SOL_SOLUTION_CONTRACT}` : ''}
 
 # Turn boundary (issue #17)
 This turn must (a) write the candidate file, (b) hand off to the Validate phase —
@@ -768,7 +821,32 @@ Then append:
   // ---- Phase 4: Validate ----
   phase('Validate')
 
-  const validation = await agentRetry(() => agent(`Validate this kernel candidate: run correctness and performance tests.
+  let solEvalBlock = ''
+  if (IS_SOL) {
+    const solVariantName = `sol_i${iteration}`.replace(/[^A-Za-z0-9_]/g, '_')
+    const solCandidatePath = `${EXP_DIR}/kernels/${solVariantName}.cu`
+    const solPlan = __solExecbenchEvalPlan({
+      substrateDir: SOL_SUBSTRATE_DIR,
+      kernelSource: solCandidatePath,
+      contractEnv: `${EXP_DIR}/contract.env`,
+      solutionOut: `${EXP_DIR}/${solVariantName}.solution.json`,
+      benchOut: `${EXP_DIR}/${solVariantName}.bench.jsonl`,
+      solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+      seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD, ldLibraryPath: SOL_LD_LIBRARY_PATH,
+    })
+    solEvalBlock = `
+
+# SOL-EXECBENCH EVALUATION (overrides the standalone steps below)
+This candidate is evaluated by the sol-execbench CLI, which compiles it internally. Write the candidate code above verbatim to ${solCandidatePath}, then run these commands IN THIS EXACT ORDER:
+
+1. Pack:  ${solPlan.pack}
+2. Run:   ${solPlan.run}
+3. Parse: ${solPlan.parse}
+
+The parse step prints one line "SPEEDUP=<geomean> STATUS=<PASS|FAIL> WORKLOADS=<passed>/<total>". Parse correctness and speedup STRICTLY from that line and the run output. Do NOT fabricate numbers. Map the result into the validation schema; sol-execbench reports speedup_factor rather than absolute latency. ${solPlan.cleanupInvariant}`
+  }
+
+  const validation = await agentRetry(() => agent(`Validate this kernel candidate: run correctness and performance tests.${solEvalBlock}
 
 # Candidate: ${candidateId} — ${candidate.title}
 
