@@ -17,6 +17,8 @@ const SOL_WORKFLOWS = [
   ['CUDAAgent', 'cuda-agent-kernel-optimization.js'],
   ['ARGUS', 'argus-kernel-optimization.js'],
   ['Generalist', 'generalist-kernel-optimization.js'],
+  ['KDA', 'kda-kernel-workflow.js'],
+  ['KernelBlaster', 'kernelblaster-kernel-optimization.js'],
 ]
 
 const BEGIN = '// --- BEGIN sol-execbench-eval substrate (auto-inlined by scripts/patch-sol-execbench-eval.js) ---'

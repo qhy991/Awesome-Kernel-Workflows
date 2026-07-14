@@ -14,6 +14,50 @@ export const meta = {
   ],
 }
 
+// --- BEGIN sol-execbench-eval substrate (auto-inlined by scripts/patch-sol-execbench-eval.js) ---
+const SOL_SOLUTION_CONTRACT = [
+  'SOL-EXECBENCH SOLUTION CONTRACT (this task is evaluated by the sol-execbench CLI):',
+  '',
+  'You are authoring a kernel that will be packaged into a solution.json and run by',
+  'the sol-execbench harness, which compiles it internally. Therefore:',
+  '',
+  '1. Emit a COMPLETE kernel source plus a torch binding that exposes the task',
+  '   entry point (run(...)). Do NOT write a standalone main()/CLI harness.',
+  '2. Match the task reference signature exactly (same argument order/dtypes).',
+  '3. Do NOT package, compile, or benchmark yourself — the workflow + substrate',
+  '   handle pack -> sol-execbench -> parse. Return only the kernel + binding.',
+].join('\n')
+
+function __solQ(s) { return `"${String(s).replace(/"/g, '\\"')}"` }
+
+function __solExecbenchEvalPlan(ctx) {
+  const substrateDir = ctx.substrateDir            // abs path to _substrate/integration
+  const kernelSource = ctx.kernelSource            // path to candidate kernel on disk
+  const contractEnv = ctx.contractEnv              // path to session contract.env
+  const solutionOut = ctx.solutionOut              // where to write solution.json
+  const benchOut = ctx.benchOut                    // where sol-execbench writes bench.jsonl
+  const solCli = ctx.solCli                        // e.g. /abs/sol-execbench/.venv/bin/sol-execbench
+  const taskDir = ctx.taskDir                      // FlashInfer-Bench/<task> dir
+  const benchConfig = ctx.benchConfig              // --config path
+  const seedDir = ctx.seedDir                      // cd target for the run
+  const cvd = ctx.cudaVisibleDevices || '0'
+  const ld = ctx.ldLibraryPath ? `LD_LIBRARY_PATH=${__solQ(ctx.ldLibraryPath)}:$LD_LIBRARY_PATH ` : ''
+
+  const pack = `python3 ${__solQ(substrateDir + '/pack_sol_candidate.py')} --kernel ${__solQ(kernelSource)} --contract ${__solQ(contractEnv)} --out ${__solQ(solutionOut)}`
+  const run = `cd ${__solQ(seedDir)} && ${ld}CUDA_VISIBLE_DEVICES=${cvd} ${__solQ(solCli)} ${__solQ(taskDir)} --solution ${__solQ(solutionOut)} --config ${__solQ(benchConfig)} -o ${__solQ(benchOut)}`
+  const parse = `python3 ${__solQ(substrateDir + '/parse_sol_bench.py')} ${__solQ(benchOut)}`
+
+  return {
+    pack,
+    run,
+    parse,
+    order: ['pack', 'run', 'parse'],
+    cleanupInvariant: 'solution.json + bench.jsonl are per-candidate scratch files in the run dir; overwrite freely. No project source is mutated (non-mutating method).',
+  }
+}
+// --- END sol-execbench-eval substrate ---
+
+
 // --- BEGIN model-tier (auto-inserted by scripts/patch-model-tier.js) ---
 // Tier-based model routing: mechanical steps (run substrate scripts, parse
 // JSON) use cheaper models; profile steps (run eval/ncu) use mid-tier;
@@ -259,6 +303,12 @@ const RUN_TS = args.run_timestamp_iso || 'unknown'
 // Fallback (no NCU): custom test + benchmark commands
 const TEST_CMD = args.test_command || ''
 const BENCH_CMD = args.benchmark_command || ''
+const SOL_CLI = args.sol_cli || ''
+const SOL_TASK_DIR = args.sol_task_dir || ''
+const SOL_BENCH_CONFIG = args.sol_bench_config || ''
+const SOL_SEED_DIR = args.sol_seed_dir || EXP_DIR
+const SOL_CVD = args.sol_cuda_visible_devices || '0'
+const SOL_LD_LIBRARY_PATH = args.sol_ld_library_path || ''
 
 // --- Project-native integration (embedded operators via integration-strategist) ---
 // For inference-engine embedded operators (e.g. llama.cpp .cuh) the candidate cannot
@@ -272,6 +322,7 @@ const BENCH_CMD = args.benchmark_command || ''
 const PROJECT_ROOT = args.project_root || args.ggml_root || ''
 const PROJECT_BENCH_CMD = args.project_benchmark_command || BENCH_CMD || ''
 const REGISTER_SCRIPT = args.register_script || ''
+const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || `${args.substrate_dir || '_substrate'}/integration`
 const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
 
 if (!KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
@@ -587,6 +638,7 @@ if (INTEGRATION_DECISION.method === 'derive_adapter') {
   throw new Error('integration-strategist returned derive_adapter — provide project_root + build/test commands')
 }
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+const IS_SOL = INTEGRATION_DECISION.method === 'sol_execbench_solution'
 // The embedded operator file we swap in place is the project-referenced KERNEL_PATH.
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
@@ -811,6 +863,7 @@ Requirements:
 3. Apply ONLY the "${plan.technique}" strategy faithfully.
 4. Keep the kernel signature compatible with the driver harness.
 5. Compile-able with -lineinfo on ${GPU_TYPE}.
+${INTEGRATION_DECISION.method === 'sol_execbench_solution' ? `\n${SOL_SOLUTION_CONTRACT}` : ''}
 
 Return the complete CUDA code.
 
@@ -847,7 +900,43 @@ Then append (rollout ${iter}, step ${step}):
     phase('Evaluate')
 
     let evals
-    if (IS_EMBEDDED) {
+    if (IS_SOL) {
+      // sol-execbench candidates are independent scratch artifacts, but the
+      // workflow still evaluates them serially so each parse result is tied to
+      // exactly one solution.json/bench.jsonl pair.
+      evals = []
+      for (let i = 0; i < variants.length; i++) {
+        const v = variants[i]
+        const suffix = `r${iter}-s${step}-${i}`.replace(/[^A-Za-z0-9_]/g, '_')
+        const kPath = `${EXP_DIR}/variants/${suffix}/candidate.cu`
+        await agentRetry(() => agent(`Write the candidate kernel source to ${kPath} (mkdir -p its dir first).\n\n` +
+          `\`\`\`cuda\n${(v.code || '').substring(0, 6000)}\n\`\`\`\n` +
+          `Return {ok:true, path:"${kPath}"}.`,
+          { model: MODEL.mechanical, label: `sol-materialize-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
+        const variantName = `sol_${suffix}`
+        const plan = __solExecbenchEvalPlan({
+          substrateDir: SOL_SUBSTRATE_DIR,
+          kernelSource: kPath,
+          contractEnv: `${EXP_DIR}/contract.env`,
+          solutionOut: `${EXP_DIR}/${variantName}.solution.json`,
+          benchOut: `${EXP_DIR}/${variantName}.bench.jsonl`,
+          solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+          seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD, ldLibraryPath: SOL_LD_LIBRARY_PATH,
+        })
+        const solResult = await agentRetry(() => agent(
+          `Evaluate this candidate with sol-execbench. Run IN THIS EXACT ORDER:\n1. Pack: ${plan.pack}\n2. Run: ${plan.run}\n3. Parse: ${plan.parse}\n` +
+          `Parse the line SPEEDUP=<geomean> STATUS=<PASS|FAIL> WORKLOADS=<passed>/<total>; do not fabricate values. Return {is_correct, is_compilable, elapsed_cycles, speedup, improvement_pct}. ${plan.cleanupInvariant}`,
+          { model: MODEL.profile, label: `sol-evaluate-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
+        evals.push(solResult ? {
+          is_correct: !!solResult.is_correct,
+          is_compilable: !!solResult.is_compilable,
+          elapsed_cycles: Number(solResult.elapsed_cycles || 0),
+          speedup: Number(solResult.speedup || 0),
+          improvement_pct: Number(solResult.improvement_pct || 0),
+          heuristic_bclass: solResult.heuristic_bclass || 'unknown',
+        } : null)
+      }
+    } else if (IS_EMBEDDED) {
       // --- Embedded eval (integration-strategist → embedded_inplace / embedded_dispatch) ---
       // SEPARATE SERIAL for-loop (NOT parallel): for inference-engine embedded operators
       // (e.g. llama.cpp .cuh) embedded_inplace mutates the shared project file KERNEL_PATH
