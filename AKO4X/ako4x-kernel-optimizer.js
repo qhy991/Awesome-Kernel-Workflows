@@ -25,6 +25,10 @@ export const meta = {
 // __modelTierApplied (declaration pre-existing)
 
 const WORKFLOW_NAME = 'ako4x-kernel-optimizer'
+// KerSor supplies in_git_repo from its runtime capability probe. Direct
+// Workflow() callers may omit it; fresh-process isolation is the safe fallback
+// because the Claude/Codex worktree provider requires a repository with HEAD.
+const WORKTREE_ISOLATION = args.in_git_repo === true || args.in_git_repo === 'true'
 
 
 // --- BEGIN inlined arg_guard (Workflow runtime parses scripts as bare scripts,
@@ -898,6 +902,7 @@ Optimization levers (pick ONE):
   let roundBest = null
   let roundIterations = []  // ITERATIONS.md entries
   let iterCount = 0
+  let evaluatedThisRound = 0
 
   for (const plan of validPlans) {
     if (iterCount >= ITERS_PER_ROUND) break
@@ -943,7 +948,7 @@ Then append (this variant is round ${round + 1}, hypothesis "${plan.title}", sam
           label: `impl-${round}-${plan.title.substring(0, 10)}-v${si}`,
           phase: 'Iterate',
           model: MODEL.judgment,
-          isolation: 'worktree',
+          isolation: WORKTREE_ISOLATION ? 'worktree' : 'fresh-process',
           schema: {
             type: 'object',
             properties: {
@@ -963,9 +968,10 @@ Then append (this variant is round ${round + 1}, hypothesis "${plan.title}", sam
     // failed to spawn — e.g. worktree creation in a non-git dir) must NOT tick
     // the convergence accountant; it is a workflow-internal failure, not a
     // measured no-improve.
-    const evaluatedThisRound = impls.filter(Boolean).length
-    evaluatedCandidateCount += evaluatedThisRound
-    if (evaluatedThisRound === 0) {
+    const evaluatedThisHypothesis = impls.filter(Boolean).length
+    evaluatedThisRound += evaluatedThisHypothesis
+    evaluatedCandidateCount += evaluatedThisHypothesis
+    if (evaluatedThisHypothesis === 0) {
       sessionRoundEmpty = true
       log(`Round ${round + 1}: ZERO candidates evaluated (impl agents failed to spawn) — not ticking consecutiveNoImprove (AWK #57).`)
     }

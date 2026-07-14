@@ -773,7 +773,7 @@ async function runDriverMetricsEnvelope({ suffix, phaseName, kernelPath, artifac
         `Return {ok, native_path}.`
       : `Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'); do NOT run the native profiler. ` +
         `Use driver-run-${suffix} throughput as the profiling source and return {ok:true, native_path:null, method:'${PROFILING_DECISION.method}', latency_ms:${(runOut && runOut.latency_ms) || 'null'}}.`,
-    { model: MODEL.profile, label: `driver-profile-${suffix}`, phase: phaseName, schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
+    { model: MODEL.profile, label: `driver-profile-${suffix}`, phase: phaseName, schema: JSON_PASSTHROUGH }), { retries: 5 })
   let evidenceOut = null
   if (PROFILING_DECISION.method === 'native_profiler') {
     const nativePath = (profileOut && (profileOut.native_path || profileOut.native_profile)) || profilePath

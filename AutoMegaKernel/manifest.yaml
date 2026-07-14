@@ -52,7 +52,7 @@ routing:
   method_category: search_based
   role: optimizer
   speedup_field: speedup
-  fidelity_boundary: strict_adapter_to_external_harness
+  fidelity_boundary: strict_high_fidelity
   required_args:
   - amk_root
   - model
@@ -71,7 +71,7 @@ routing:
   - min_speedup
   - exp_dir
   integration_patterns:
-  - external_harness
+  - standalone
   requires_ncu: false
   optimization_phases:
   - backend_native
@@ -102,7 +102,7 @@ topology:
   search:
     search_space_description: 'AutoMegaKernel ScheduleConfig typed knobs plus optional
       kernel_knobs returned by amk propose.'
-    sampler: external_harness
+    sampler: evolutionary
     pruning_strategy: 'AMK keep/revert rule: keep only valid+correct candidates with
       a measured latency win over the incumbent.'
     budget_arg: iterations

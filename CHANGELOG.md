@@ -8,6 +8,24 @@ for the versioning policy.
 
 ## [Unreleased]
 
+### Fixed
+
+- **#71 AKO4X zero-candidate rounds.** Round-level evaluation accounting is
+  initialized before hypothesis dispatch and aggregates per-hypothesis results,
+  so the zero-candidate path no longer references an undefined variable.
+- **#104 worktree isolation.** AKO4X now selects `fresh-process` when KerSor
+  reports that the runtime workspace is not a Git repository; Git-backed
+  manifests declare the capability they require.
+
+### Changed
+
+- **#72 sol-execbench pool.** Added KDA and KernelBlaster to the opt-in pool,
+  including solution-contract prompts, pack/run/parse evaluation, and declared
+  runtime arguments; the pool now contains five workflows.
+- **#73 integration vocabulary.** Replaced dead catalog values
+  `external_harness` and `project_native` with supported vocabulary and removed
+  the corresponding KerSor lint debt.
+
 ## [0.11.0] - 2026-07-09
 
 ### Added
