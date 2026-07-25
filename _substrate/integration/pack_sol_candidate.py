@@ -44,7 +44,9 @@ def build_solution(kernel_src_text, kernel_filename, contract):
         "definition": task,
         "author": "kersor-workflow",
         "spec": {
-            "languages": ["cuda"],
+            # sol-execbench validates this against its public SolutionSpec enum.
+            # "cuda" is a backend name, not a supported source-language value.
+            "languages": ["cuda_cpp"],
             "target_hardware": ["LOCAL"],
             "entry_point": entry_point,
             "dependencies": [],

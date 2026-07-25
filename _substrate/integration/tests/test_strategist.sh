@@ -36,7 +36,7 @@ J=$($ST resolve --can-standalone no --host-probe '{"compiler":true,"project_buil
 chk "S4 runtime-only->registry_dispatch" "$(g "$J" method)" registry_dispatch
 
 # S5: non-standalone, bare host (no project build/adapter/registry) -> derive_adapter (autonomy)
-J=$($ST resolve --can-standalone no --host-probe '{"compiler":true,"project_build":false,"register_script":false,"runtime_registry":false,"reversibility_net":false}')
+J=$($ST resolve --can-standalone no --host-probe '{"compiler":true,"project_build":false,"register_script":false,"runtime_registry":false,"reversibility_net":false,"sol_execbench_cli":false}')
 chk "S5 bare host->derive_adapter"     "$(g "$J" method)" derive_adapter
 chk "S5 autonomy directive"            "$(g "$J" autonomy_directive)" "{'action': 'derive_integration_adapter', 'must_emit': ['kind', 'register_script', 'build_command', 'reversibility_net'], 'stamp_rule': 'build_fidelity + reversible are assigned by method kind, not by you'}"
 
@@ -45,7 +45,7 @@ J=$($ST resolve --can-standalone uncertain --host-probe '{"compiler":true,"proje
 chk "S6 uncertain+compiler->standalone(opt)" "$(g "$J" method)" standalone
 
 # S6b: uncertain + NO compiler -> can't try standalone, no embedded -> derive_adapter
-J=$($ST resolve --can-standalone uncertain --host-probe '{"compiler":false,"project_build":false,"register_script":false,"runtime_registry":false,"reversibility_net":false}')
+J=$($ST resolve --can-standalone uncertain --host-probe '{"compiler":false,"project_build":false,"register_script":false,"runtime_registry":false,"reversibility_net":false,"sol_execbench_cli":false}')
 chk "S6b uncertain+nocompiler->derive" "$(g "$J" method)" derive_adapter
 
 # S7: reproducibility + cache hit
@@ -63,13 +63,22 @@ chk "S9 sol host->sol_execbench_solution" "$(g "$J" method)" sol_execbench_solut
 chk "S9 fidelity production"              "$(g "$J" build_fidelity)" production
 
 # S9b: SAME host but NO sol CLI -> unchanged derive_adapter (backward compat)
-J=$($ST resolve --can-standalone no --host-probe '{"compiler":true,"project_build":false,"register_script":false,"runtime_registry":false,"reversibility_net":false}')
+J=$($ST resolve --can-standalone no --host-probe '{"compiler":true,"project_build":false,"register_script":false,"runtime_registry":false,"reversibility_net":false,"sol_execbench_cli":false}')
 chk "S9b no-sol-cli->derive_adapter (compat)" "$(g "$J" method)" derive_adapter
 
 # S9c: LIVE probe — no sol_execbench_cli in override, SOL_EXECBENCH env set -> sol_execbench_solution
 # (forces the resolver through probe_host's live expression; guards against a wrong env-var/CLI name)
 J=$(SOL_EXECBENCH=/tmp $ST resolve --can-standalone no --host-probe '{"compiler":true,"project_build":false,"register_script":false,"runtime_registry":false,"reversibility_net":false}')
 chk "S9c live-probe SOL_EXECBENCH->sol_execbench_solution" "$(g "$J" method)" sol_execbench_solution
+
+# S9d: an explicit harness contract overrides standalone classification. A sol
+# candidate can be a valid single TU but must still be compiled by sol-execbench.
+J=$($ST resolve --can-standalone yes --preferred-method sol_execbench_solution --host-probe '{"compiler":true,"sol_execbench_cli":true}')
+chk "S9d preferred sol overrides standalone" "$(g "$J" method)" sol_execbench_solution
+
+# S9e: the resolver must fail closed when the required harness is absent.
+J=$($ST resolve --can-standalone yes --preferred-method sol_execbench_solution --host-probe '{"compiler":true,"sol_execbench_cli":false}')
+chk "S9e preferred sol without CLI derives" "$(g "$J" method)" derive_adapter
 
 rm -f cache.json traj.jsonl
 echo "================  $pass passed, $fail failed  ================"
