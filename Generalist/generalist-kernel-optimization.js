@@ -41,9 +41,11 @@ function __solExecbenchEvalPlan(ctx) {
   const seedDir = ctx.seedDir                      // cd target for the run
   const cvd = ctx.cudaVisibleDevices || '0'
   const ld = ctx.ldLibraryPath ? `LD_LIBRARY_PATH=${__solQ(ctx.ldLibraryPath)}:$LD_LIBRARY_PATH ` : ''
+  const env = ctx.envPrefix ? `${String(ctx.envPrefix).trim()} ` : ''
+  const definition = ctx.definitionPath ? ` --definition ${__solQ(ctx.definitionPath)}` : ''
 
   const pack = `python3 ${__solQ(substrateDir + '/pack_sol_candidate.py')} --kernel ${__solQ(kernelSource)} --contract ${__solQ(contractEnv)} --out ${__solQ(solutionOut)}`
-  const run = `cd ${__solQ(seedDir)} && ${ld}CUDA_VISIBLE_DEVICES=${cvd} ${__solQ(solCli)} ${__solQ(taskDir)} --solution ${__solQ(solutionOut)} --config ${__solQ(benchConfig)} -o ${__solQ(benchOut)}`
+  const run = `cd ${__solQ(seedDir)} && ${env}${ld}CUDA_VISIBLE_DEVICES=${cvd} ${__solQ(solCli)} ${__solQ(taskDir)}${definition} --solution ${__solQ(solutionOut)} --config ${__solQ(benchConfig)} -o ${__solQ(benchOut)}`
   const parse = `python3 ${__solQ(substrateDir + '/parse_sol_bench.py')} ${__solQ(benchOut)}`
 
   return {
@@ -379,7 +381,10 @@ const SOL_BENCH_CONFIG = args.sol_bench_config || ''
 const SOL_SEED_DIR = args.sol_seed_dir || (args.exp_dir || '.')
 const SOL_CVD = args.sol_cuda_visible_devices || '0'
 const SOL_LD_LIBRARY_PATH = args.sol_ld_library_path || ''
+const SOL_ENV_PREFIX = args.sol_env_prefix || ''
+const SOL_DEFINITION_PATH = args.sol_definition_path || ''
 const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || ''   // KerSor passes <workflow_lib>/_substrate/integration
+const INTEGRATION_PATTERN = args.integration_pattern || 'standalone'
 
 function integrationHostProbeJson() {
   return JSON.stringify({
@@ -388,6 +393,7 @@ function integrationHostProbeJson() {
     register_script: !!REGISTER_SCRIPT,
     runtime_registry: false,
     reversibility_net: true,
+    sol_execbench_cli: !!SOL_CLI,
   })
 }
 
@@ -629,10 +635,15 @@ const verifiedInsights = []       // P1.4 — verified typed insights for the La
 //   (1) heuristic OR classify-only agent  -> a fixed can_standalone value
 //   (2) mechanical agent runs the python with that fixed CLI; stdout is parroted
 //       AND the resulting integ_cache.json is read as authoritative.
-let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
+let INTEGRATION_DECISION = {
+  method: INTEGRATION_PATTERN === 'sol_execbench_solution' ? 'sol_execbench_solution' : 'standalone',
+  build_fidelity: INTEGRATION_PATTERN === 'sol_execbench_solution' ? 'production' : 'isolated',
+  reversible: true,
+}
 {
   const probe = integrationHostProbeJson()
   const rootCli = PROJECT_ROOT ? ` --project-root "${PROJECT_ROOT}"` : ''
+  const preferredCli = INTEGRATION_PATTERN === 'sol_execbench_solution' ? ' --preferred-method sol_execbench_solution' : ''
   const decisionPath = `${EXP_DIR}/integration_decision.json`
   const cachePath = `${EXP_DIR}/integ_cache.json`
 
@@ -668,7 +679,7 @@ let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', r
   if (PY) {
     const _integ = await agentRetry(() => agent(
       `Run exactly: \`${PY} ${SUBSTRATE}/integration/integration_strategist.py resolve ` +
-      `--kernel "${KERNEL_PATH}"${rootCli} --can-standalone ${canStandalone} ` +
+      `--kernel "${KERNEL_PATH}"${rootCli} --can-standalone ${canStandalone}${preferredCli} ` +
       `--host-probe '${probe}' --cache ${cachePath} --trajectory ${EXP_DIR}/genome.jsonl ` +
       `> ${decisionPath}\`. ` +
       `Then run exactly: \`cat ${decisionPath}\` and return its stdout JSON verbatim. ` +
@@ -685,6 +696,14 @@ if (INTEGRATION_DECISION.method === 'derive_adapter') {
     'integration-strategist returned derive_adapter — provide project_root + build/test commands, ' +
     'or run /kersor:integrate to derive an adapter first'
   )
+}
+if (INTEGRATION_DECISION.method === 'sol_execbench_solution') {
+  const missing = [
+    ['sol_cli', SOL_CLI], ['sol_task_dir', SOL_TASK_DIR],
+    ['sol_bench_config', SOL_BENCH_CONFIG], ['sol_seed_dir', SOL_SEED_DIR],
+    ['sol_substrate_dir', SOL_SUBSTRATE_DIR],
+  ].filter(([, value]) => !value).map(([name]) => name)
+  if (missing.length) throw new Error(`sol_execbench_solution requires non-empty: ${missing.join(', ')}`)
 }
 const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'standalone'
 
@@ -952,6 +971,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
         benchOut: `${EXP_DIR}/${solVariantName}.bench.jsonl`,
         solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
         seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD, ldLibraryPath: SOL_LD_LIBRARY_PATH,
+        envPrefix: SOL_ENV_PREFIX, definitionPath: SOL_DEFINITION_PATH,
       })
       solEvalBlock = [
         '',

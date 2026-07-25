@@ -10,6 +10,12 @@ for the versioning policy.
 
 ### Fixed
 
+- **Faithful sol-execbench evaluation.** The solution packer now emits the
+  supported `cuda_cpp` language enum. All five opted-in workflows preserve the
+  benchmark environment and optional `--definition`, advertise the CLI in their
+  host probe, and explicitly select `sol_execbench_solution` before standalone
+  classification. The strategist fails closed when that preferred harness is
+  unavailable.
 - **#71 AKO4X zero-candidate rounds.** Round-level evaluation accounting is
   initialized before hypothesis dispatch and aggregates per-hypothesis results,
   so the zero-candidate path no longer references an undefined variable.

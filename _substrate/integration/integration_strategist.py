@@ -55,10 +55,41 @@ def _gate_ok(md, host):
     return True, "host supports " + ",".join(md.get("requires", []))
 
 
-def resolve(can_standalone, host, registry):
-    """DETERMINISTIC. (can_standalone, host) -> routing decision."""
+def resolve(can_standalone, host, registry, preferred_method=None):
+    """DETERMINISTIC. (can_standalone, host, preferred_method) -> routing decision.
+
+    preferred_method is an explicit harness contract, not an agent heuristic.  It
+    therefore has authority over the single-TU classifier when its host gates pass.
+    This matters for externally compiled sources such as sol-execbench solutions:
+    they may look standalone while still requiring the benchmark harness.
+    """
     methods = registry["methods"]
     host_sig = "+".join(sorted(c for c in HOST_CAPS if host.get(c))) or "none"
+
+    if preferred_method:
+        md = methods.get(preferred_method)
+        if md is None:
+            raise ValueError(f"unknown preferred integration method: {preferred_method}")
+        ok, why = _gate_ok(md, host)
+        cache_key = f"preferred={preferred_method}|{can_standalone}|{host_sig}"
+        if ok:
+            decision = _decision(
+                preferred_method, md, host_sig, [],
+                f"explicit harness contract selected this method; {why}")
+            decision["cache_key"] = cache_key
+            return decision
+        return {
+            "cache_key": cache_key, "method": "derive_adapter",
+            "method_kind": "derive", "build_fidelity": None, "reversible": None,
+            "requires": [], "eval_mechanism": None,
+            "abstained_from": [preferred_method],
+            "rationale": f"explicit preferred method '{preferred_method}' is unavailable: {why}",
+            "autonomy_directive": {
+                "action": "satisfy_preferred_integration_method",
+                "method": preferred_method,
+                "missing_requirement": why,
+            },
+        }
 
     # A kernel that can compile standalone needs no project coupling.
     if can_standalone == "yes" and host.get("compiler"):
@@ -123,7 +154,7 @@ def _load(p):
 def get_decision(a):
     registry = _load(a.registry or DEFAULT_REGISTRY)
     host = probe_host(json.loads(a.host_probe) if a.host_probe else None)
-    fresh = resolve(a.can_standalone, host, registry)
+    fresh = resolve(a.can_standalone, host, registry, a.preferred_method)
     if a.cache:
         cache = _load(a.cache)
         if fresh["cache_key"] in cache:
@@ -144,6 +175,7 @@ def main():
     r.add_argument("--kernel")
     r.add_argument("--project-root")
     r.add_argument("--can-standalone", default="uncertain", choices=["yes", "no", "uncertain"])
+    r.add_argument("--preferred-method")
     r.add_argument("--registry")
     r.add_argument("--host-probe")
     r.add_argument("--cache")

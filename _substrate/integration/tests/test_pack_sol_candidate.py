@@ -43,7 +43,7 @@ class PackSolTests(unittest.TestCase):
     def test_spec_contract_fields(self):
         sol = self._run(KERNEL_WITH_BINDING, CONTRACT)
         self.assertEqual(sol["spec"]["binding"], "torch")
-        self.assertEqual(sol["spec"]["languages"], ["cuda"])  # cuda backend
+        self.assertEqual(sol["spec"]["languages"], ["cuda_cpp"])  # sol-execbench enum
         self.assertTrue(sol["spec"]["entry_point"])  # non-empty
         self.assertIn("compile_options", sol["spec"])
 

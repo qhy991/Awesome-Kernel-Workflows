@@ -39,9 +39,11 @@ function __solExecbenchEvalPlan(ctx) {
   const seedDir = ctx.seedDir                      // cd target for the run
   const cvd = ctx.cudaVisibleDevices || '0'
   const ld = ctx.ldLibraryPath ? `LD_LIBRARY_PATH=${__solQ(ctx.ldLibraryPath)}:$LD_LIBRARY_PATH ` : ''
+  const env = ctx.envPrefix ? `${String(ctx.envPrefix).trim()} ` : ''
+  const definition = ctx.definitionPath ? ` --definition ${__solQ(ctx.definitionPath)}` : ''
 
   const pack = `python3 ${__solQ(substrateDir + '/pack_sol_candidate.py')} --kernel ${__solQ(kernelSource)} --contract ${__solQ(contractEnv)} --out ${__solQ(solutionOut)}`
-  const run = `cd ${__solQ(seedDir)} && ${ld}CUDA_VISIBLE_DEVICES=${cvd} ${__solQ(solCli)} ${__solQ(taskDir)} --solution ${__solQ(solutionOut)} --config ${__solQ(benchConfig)} -o ${__solQ(benchOut)}`
+  const run = `cd ${__solQ(seedDir)} && ${env}${ld}CUDA_VISIBLE_DEVICES=${cvd} ${__solQ(solCli)} ${__solQ(taskDir)}${definition} --solution ${__solQ(solutionOut)} --config ${__solQ(benchConfig)} -o ${__solQ(benchOut)}`
   const parse = `python3 ${__solQ(substrateDir + '/parse_sol_bench.py')} ${__solQ(benchOut)}`
 
   return {
@@ -407,6 +409,8 @@ const SOL_BENCH_CONFIG = args.sol_bench_config || ''
 const SOL_SEED_DIR = args.sol_seed_dir || EXP_DIR
 const SOL_CVD = args.sol_cuda_visible_devices || '0'
 const SOL_LD_LIBRARY_PATH = args.sol_ld_library_path || ''
+const SOL_ENV_PREFIX = args.sol_env_prefix || ''
+const SOL_DEFINITION_PATH = args.sol_definition_path || ''
 const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || ''   // KerSor passes <workflow_lib>/_substrate/integration
 
 if (!MODEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
@@ -543,18 +547,25 @@ log(`Profiling method: ${PROFILING_DECISION.method} (confidence=${PROFILING_DECI
 // Defaults to standalone so the legacy path stays byte-identical when the decision
 // is absent. The explicit integration_pattern arg (EMBEDDED above) is honored as a
 // strong host hint into can_standalone. See _substrate/integration/README.md. ---
-let INTEGRATION_DECISION = { method: EMBEDDED ? INTEGRATION_PATTERN : 'standalone', build_fidelity: 'isolated', reversible: true }
+let INTEGRATION_DECISION = {
+  method: INTEGRATION_PATTERN === 'sol_execbench_solution'
+    ? 'sol_execbench_solution'
+    : EMBEDDED ? INTEGRATION_PATTERN : 'standalone',
+  build_fidelity: INTEGRATION_PATTERN === 'sol_execbench_solution' ? 'production' : 'isolated',
+  reversible: true,
+}
 {
   const _kernelForProbe = MODEL_PATH || REFERENCE_FILE || ''
   const _canStandaloneHint = EMBEDDED ? 'no' : 'uncertain'
-  const _probe = JSON.stringify({ compiler: !!COMPILE_CMD, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
+  const _probe = JSON.stringify({ compiler: !!COMPILE_CMD, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true, sol_execbench_cli: !!SOL_CLI })
+  const _preferred = INTEGRATION_PATTERN === 'sol_execbench_solution' ? ' --preferred-method sol_execbench_solution' : ''
   if (_kernelForProbe) {
     const _integ = await agentRetry(() => agent(
       `Read ${_kernelForProbe}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
       `(use no when the file cannot compile as a single TU — e.g. a project .cuh with project-only deps; ` +
       `the caller hinted can_standalone="${_canStandaloneHint}"). Then ` +
       substrateInstruction('integration/integration_strategist.py',
-        `resolve --kernel "${_kernelForProbe}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
+        `resolve --kernel "${_kernelForProbe}" --can-standalone <yes|no|uncertain>${_preferred} --host-probe '${_probe}' ` +
         `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
       ` Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
       { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
@@ -570,6 +581,14 @@ if (INTEGRATION_DECISION.method === 'derive_adapter') {
 // USE_DRIVER_STANDALONE flag; the standalone path is simply "not IS_EMBEDDED".
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
 const IS_SOL = INTEGRATION_DECISION.method === 'sol_execbench_solution'
+if (IS_SOL) {
+  const missing = [
+    ['sol_cli', SOL_CLI], ['sol_task_dir', SOL_TASK_DIR],
+    ['sol_bench_config', SOL_BENCH_CONFIG], ['sol_seed_dir', SOL_SEED_DIR],
+    ['sol_substrate_dir', SOL_SUBSTRATE_DIR],
+  ].filter(([, value]) => !value).map(([name]) => name)
+  if (missing.length) throw new Error(`sol_execbench_solution requires non-empty: ${missing.join(', ')}`)
+}
 // embedded_inplace mutates the project file in place; back it up ONCE so every
 // candidate restores to a pristine original and the exit net can too.
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
@@ -858,6 +877,7 @@ Parse correctness (pass/fail) and latency STRICTLY from the test/benchmark comma
       benchOut: `${EXP_DIR}/${variantName}.bench.jsonl`,
       solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
       seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD, ldLibraryPath: SOL_LD_LIBRARY_PATH,
+      envPrefix: SOL_ENV_PREFIX, definitionPath: SOL_DEFINITION_PATH,
     })
     solEvalBlock = `
 
@@ -894,13 +914,13 @@ ${implResult.model_new_code.substring(0, 2000)}
 
 ## Step 0: Isolated verify workspace (#37 — no strays in the project tree)
 Create ALL verification artifacts you author (test harnesses, kernel copies,
-reference arrays, result files, `.verify_*` dirs, `verify_*` / `test_*`
-sentinels) under `${EXP_DIR}/verify/attempt-${currentAttempt}/` — `mkdir -p` it
+reference arrays, result files, \`.verify_*\` dirs, \`verify_*\` / \`test_*\`
+sentinels) under \`${EXP_DIR}/verify/attempt-${currentAttempt}/\` — \`mkdir -p\` it
 first. Do NOT write any verify artifact to the project root or the current
 working directory; those leak into the user's tree as strays. Run the
-user-provided `${COMPILE_CMD}` / `${VERIFY_CMD}` / `${PROFILE_CMD}` where they
+user-provided \`${COMPILE_CMD}\` / \`${VERIFY_CMD}\` / \`${PROFILE_CMD}\` where they
 expect to run (they may require the project root as CWD), but any file YOU
-create goes under `${EXP_DIR}/verify/`.
+create goes under \`${EXP_DIR}/verify/\`.
 
 ## Step 1: Compile
 ${COMPILE_CMD ? `Run: ${COMPILE_CMD}` : 'No compile_command provided; perform static compileability review only.'}

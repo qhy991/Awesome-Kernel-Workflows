@@ -8,6 +8,10 @@
 
 ### 修复（Fixed）
 
+- **忠实的 sol-execbench 评估。** solution packer 现在输出受支持的
+  `cuda_cpp` 语言枚举。五个 opt-in workflow 都会保留 benchmark 环境与可选的
+  `--definition`，在 host probe 中声明 CLI，并在 standalone 分类之前显式选择
+  `sol_execbench_solution`。当首选 harness 不可用时，strategist 会按失败关闭。
 - **#71 AKO4X 空候选轮次。** 在 hypothesis dispatch 前初始化轮级评估计数，
   并聚合各 hypothesis 的结果，避免零候选路径引用未定义变量。
 - **#104 worktree 隔离。** 当 KerSor 报告运行时工作区不是 Git 仓库时，AKO4X

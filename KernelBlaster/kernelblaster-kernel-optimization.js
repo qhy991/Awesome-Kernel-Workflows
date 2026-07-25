@@ -13,7 +13,6 @@ export const meta = {
     { title: 'Iterate', detail: 'Periodic policy-update cycle over the replay buffer, then continue rollout / persist database' },
   ],
 }
-
 // --- BEGIN sol-execbench-eval substrate (auto-inlined by scripts/patch-sol-execbench-eval.js) ---
 const SOL_SOLUTION_CONTRACT = [
   'SOL-EXECBENCH SOLUTION CONTRACT (this task is evaluated by the sol-execbench CLI):',
@@ -42,9 +41,11 @@ function __solExecbenchEvalPlan(ctx) {
   const seedDir = ctx.seedDir                      // cd target for the run
   const cvd = ctx.cudaVisibleDevices || '0'
   const ld = ctx.ldLibraryPath ? `LD_LIBRARY_PATH=${__solQ(ctx.ldLibraryPath)}:$LD_LIBRARY_PATH ` : ''
+  const env = ctx.envPrefix ? `${String(ctx.envPrefix).trim()} ` : ''
+  const definition = ctx.definitionPath ? ` --definition ${__solQ(ctx.definitionPath)}` : ''
 
   const pack = `python3 ${__solQ(substrateDir + '/pack_sol_candidate.py')} --kernel ${__solQ(kernelSource)} --contract ${__solQ(contractEnv)} --out ${__solQ(solutionOut)}`
-  const run = `cd ${__solQ(seedDir)} && ${ld}CUDA_VISIBLE_DEVICES=${cvd} ${__solQ(solCli)} ${__solQ(taskDir)} --solution ${__solQ(solutionOut)} --config ${__solQ(benchConfig)} -o ${__solQ(benchOut)}`
+  const run = `cd ${__solQ(seedDir)} && ${env}${ld}CUDA_VISIBLE_DEVICES=${cvd} ${__solQ(solCli)} ${__solQ(taskDir)}${definition} --solution ${__solQ(solutionOut)} --config ${__solQ(benchConfig)} -o ${__solQ(benchOut)}`
   const parse = `python3 ${__solQ(substrateDir + '/parse_sol_bench.py')} ${__solQ(benchOut)}`
 
   return {
@@ -309,6 +310,9 @@ const SOL_BENCH_CONFIG = args.sol_bench_config || ''
 const SOL_SEED_DIR = args.sol_seed_dir || EXP_DIR
 const SOL_CVD = args.sol_cuda_visible_devices || '0'
 const SOL_LD_LIBRARY_PATH = args.sol_ld_library_path || ''
+const SOL_ENV_PREFIX = args.sol_env_prefix || ''
+const SOL_DEFINITION_PATH = args.sol_definition_path || ''
+const INTEGRATION_PATTERN = args.integration_pattern || 'standalone'
 
 // --- Project-native integration (embedded operators via integration-strategist) ---
 // For inference-engine embedded operators (e.g. llama.cpp .cuh) the candidate cannot
@@ -620,14 +624,19 @@ log(`Profiling-strategist: method=${PROFILING_DECISION.method}, confidence=${PRO
 // INSIDE the host project rather than as an isolated TU. KernelBlaster has NO backend
 // driver (it inlines ncu + benchmark), so the only thing this gates is the new embedded
 // eval branch; the legacy benchmark path stays byte-identical when standalone. ---
-let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
+let INTEGRATION_DECISION = {
+  method: INTEGRATION_PATTERN === 'sol_execbench_solution' ? 'sol_execbench_solution' : 'standalone',
+  build_fidelity: INTEGRATION_PATTERN === 'sol_execbench_solution' ? 'production' : 'isolated',
+  reversible: true,
+}
 {
-  const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
+  const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true, sol_execbench_cli: !!SOL_CLI })
+  const _preferred = INTEGRATION_PATTERN === 'sol_execbench_solution' ? ' --preferred-method sol_execbench_solution' : ''
   const _integ = await agentRetry(() => agent(
     `Read ${KERNEL_PATH || '(not provided)'}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
     `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
-    `--kernel "${KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
+    `--kernel "${KERNEL_PATH}" --can-standalone <yes|no|uncertain>${_preferred} --host-probe '${_probe}' ` +
     `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
     `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
     { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
@@ -639,6 +648,14 @@ if (INTEGRATION_DECISION.method === 'derive_adapter') {
 }
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
 const IS_SOL = INTEGRATION_DECISION.method === 'sol_execbench_solution'
+if (IS_SOL) {
+  const missing = [
+    ['sol_cli', SOL_CLI], ['sol_task_dir', SOL_TASK_DIR],
+    ['sol_bench_config', SOL_BENCH_CONFIG], ['sol_seed_dir', SOL_SEED_DIR],
+    ['sol_substrate_dir', SOL_SUBSTRATE_DIR],
+  ].filter(([, value]) => !value).map(([name]) => name)
+  if (missing.length) throw new Error(`sol_execbench_solution requires non-empty: ${missing.join(', ')}`)
+}
 // The embedded operator file we swap in place is the project-referenced KERNEL_PATH.
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
@@ -922,6 +939,7 @@ Then append (rollout ${iter}, step ${step}):
           benchOut: `${EXP_DIR}/${variantName}.bench.jsonl`,
           solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
           seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD, ldLibraryPath: SOL_LD_LIBRARY_PATH,
+          envPrefix: SOL_ENV_PREFIX, definitionPath: SOL_DEFINITION_PATH,
         })
         const solResult = await agentRetry(() => agent(
           `Evaluate this candidate with sol-execbench. Run IN THIS EXACT ORDER:\n1. Pack: ${plan.pack}\n2. Run: ${plan.run}\n3. Parse: ${plan.parse}\n` +

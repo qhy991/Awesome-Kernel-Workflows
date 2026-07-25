@@ -49,6 +49,8 @@ routing:
   - sol_seed_dir
   - sol_cuda_visible_devices
   - sol_ld_library_path
+  - sol_env_prefix
+  - sol_definition_path
   - sol_substrate_dir
   topology: iterative
   seed_contract: hybrid

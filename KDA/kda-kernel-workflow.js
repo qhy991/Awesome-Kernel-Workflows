@@ -25,7 +25,6 @@ export const meta = {
   ],
   skill_binding_mode: 'local_skills_plus_external_resources',
 }
-
 // --- BEGIN sol-execbench-eval substrate (auto-inlined by scripts/patch-sol-execbench-eval.js) ---
 const SOL_SOLUTION_CONTRACT = [
   'SOL-EXECBENCH SOLUTION CONTRACT (this task is evaluated by the sol-execbench CLI):',
@@ -54,9 +53,11 @@ function __solExecbenchEvalPlan(ctx) {
   const seedDir = ctx.seedDir                      // cd target for the run
   const cvd = ctx.cudaVisibleDevices || '0'
   const ld = ctx.ldLibraryPath ? `LD_LIBRARY_PATH=${__solQ(ctx.ldLibraryPath)}:$LD_LIBRARY_PATH ` : ''
+  const env = ctx.envPrefix ? `${String(ctx.envPrefix).trim()} ` : ''
+  const definition = ctx.definitionPath ? ` --definition ${__solQ(ctx.definitionPath)}` : ''
 
   const pack = `python3 ${__solQ(substrateDir + '/pack_sol_candidate.py')} --kernel ${__solQ(kernelSource)} --contract ${__solQ(contractEnv)} --out ${__solQ(solutionOut)}`
-  const run = `cd ${__solQ(seedDir)} && ${ld}CUDA_VISIBLE_DEVICES=${cvd} ${__solQ(solCli)} ${__solQ(taskDir)} --solution ${__solQ(solutionOut)} --config ${__solQ(benchConfig)} -o ${__solQ(benchOut)}`
+  const run = `cd ${__solQ(seedDir)} && ${env}${ld}CUDA_VISIBLE_DEVICES=${cvd} ${__solQ(solCli)} ${__solQ(taskDir)}${definition} --solution ${__solQ(solutionOut)} --config ${__solQ(benchConfig)} -o ${__solQ(benchOut)}`
   const parse = `python3 ${__solQ(substrateDir + '/parse_sol_bench.py')} ${__solQ(benchOut)}`
 
   return {
@@ -338,6 +339,9 @@ const SOL_BENCH_CONFIG = args.sol_bench_config || ''
 const SOL_SEED_DIR = args.sol_seed_dir || EXP_DIR
 const SOL_CVD = args.sol_cuda_visible_devices || '0'
 const SOL_LD_LIBRARY_PATH = args.sol_ld_library_path || ''
+const SOL_ENV_PREFIX = args.sol_env_prefix || ''
+const SOL_DEFINITION_PATH = args.sol_definition_path || ''
+const INTEGRATION_PATTERN = args.integration_pattern || 'standalone'
 
 // --- Backend driver wiring (P5c Stage B; off-by-default; legacy path byte-identical) ---
 const BACKEND_DIR = args.backend_dir || ''
@@ -717,14 +721,19 @@ const PROJECT_ROOT = args.project_root || args.ggml_root || ''
 const BUILD_CMD = args.build_command || ''
 const BENCH_CMD = args.benchmark_command || ''
 const REGISTER_SCRIPT = args.register_script || ''
-let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
+let INTEGRATION_DECISION = {
+  method: INTEGRATION_PATTERN === 'sol_execbench_solution' ? 'sol_execbench_solution' : 'standalone',
+  build_fidelity: INTEGRATION_PATTERN === 'sol_execbench_solution' ? 'production' : 'isolated',
+  reversible: true,
+}
 {
   const _profManifest = (USE_DRIVER && BACKEND_DIR) ? `${BACKEND_DIR}/manifest.json` : `${SUBSTRATE}/backends/cuda/manifest.json`
-  const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
+  const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true, sol_execbench_cli: !!SOL_CLI })
+  const _preferred = INTEGRATION_PATTERN === 'sol_execbench_solution' ? ' --preferred-method sol_execbench_solution' : ''
   const _integ = await agentRetry(() => agent(
     `Read ${KERNEL_PATH}; classify can_compile_standalone (yes|no|uncertain). Then ` +
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
-    `--kernel "${KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
+    `--kernel "${KERNEL_PATH}" --can-standalone <yes|no|uncertain>${_preferred} --host-probe '${_probe}' ` +
     `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
     `Return stdout JSON verbatim {method, build_fidelity, reversible, rationale}.`,
     { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: { type: 'object', additionalProperties: true } }), { retries: 5, allowNull: true })
@@ -738,6 +747,14 @@ const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'sta
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
 const IS_SOL = INTEGRATION_DECISION.method === 'sol_execbench_solution'
 const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || `${SUBSTRATE}/integration`
+if (IS_SOL) {
+  const missing = [
+    ['sol_cli', SOL_CLI], ['sol_task_dir', SOL_TASK_DIR],
+    ['sol_bench_config', SOL_BENCH_CONFIG], ['sol_seed_dir', SOL_SEED_DIR],
+    ['sol_substrate_dir', SOL_SUBSTRATE_DIR],
+  ].filter(([, value]) => !value).map(([name]) => name)
+  if (missing.length) throw new Error(`sol_execbench_solution requires non-empty: ${missing.join(', ')}`)
+}
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
   await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
@@ -833,6 +850,7 @@ Then append:
       benchOut: `${EXP_DIR}/${solVariantName}.bench.jsonl`,
       solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
       seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD, ldLibraryPath: SOL_LD_LIBRARY_PATH,
+      envPrefix: SOL_ENV_PREFIX, definitionPath: SOL_DEFINITION_PATH,
     })
     solEvalBlock = `
 
