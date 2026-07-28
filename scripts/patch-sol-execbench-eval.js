@@ -15,6 +15,10 @@ const REPO_ROOT = path.dirname(SELF_DIR)
 // Opt-in list. Keep in sync with each workflow manifest's routing.integration_patterns.
 const SOL_WORKFLOWS = [
   ['CUDAAgent', 'cuda-agent-kernel-optimization.js'],
+  ['KSearch', 'ksearch-kernel-optimization.js'],
+  ['AdaExplore', 'adaexplore-kernel-optimization.js'],
+  ['KernelAgent', 'kernelagent-triton-synthesis.js'],
+  ['KernelFoundry', 'kernelfoundry-kernel-optimization.js'],
   ['ARGUS', 'argus-kernel-optimization.js'],
   ['Generalist', 'generalist-kernel-optimization.js'],
   ['KDA', 'kda-kernel-workflow.js'],

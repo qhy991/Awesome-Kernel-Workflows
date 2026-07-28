@@ -30,7 +30,10 @@ const minimalReturns = {
   'load-driver': { present: true, backend_id: 'cuda', source_ext: '.cu', aux_ext: '.h', lang_fence: 'cuda', impl_requirements: 'Provide a CUDA __global__ kernel.', methods: {}, hw_vendor: 'nvidia' },
   'setup': { operator_code: 'op', operator_type: 'softmax', input_shapes: '[B,N]', baseline_time_ms: 0.5, hardware_info: 'H100', feasible_cells: [] },
   'vary-0': { kernel_code: '__global__ void k(){}', strategy_description: 's', memory_pattern: 'm', algorithm_type: 'a', parallelism_level: 'p', is_templated: false, template_params: [] },
-  'eval-0': { compiled: true, correct: true, speedup: 1.2, kernel_time_ms: 0.4, d_mem: 1, d_algo: 1, d_sync: 1, error_message: '', performance_notes: 'p' },
+  'materialize-0': { written: true, path: '/tmp/kf-guard/gen_0.cu' },
+  'eval-0': { compiled: true, correct: true, speedup: 1.2, metric_name: 'geomean_speedup', result_path: '/tmp/kf-guard/gen_0_result.json', kernel_time_ms: 0.4, d_mem: 1, d_algo: 1, d_sync: 1, error_message: '', performance_notes: 'p' },
+  'canonical-bind-0': { verified: true, compiled: true, correct: true, speedup: 1.2, n_pass: 7, n_total: 7, metric_name: 'geomean_speedup', result_path: '/tmp/kf-guard/gen_0_result.json', binding_path: '/tmp/kf-guard/bindings/gen_0.json', binding_sha256: 'a'.repeat(64), candidate_sha256: 'b'.repeat(64), measurement_sha256: 'c'.repeat(64), task_path: '/tmp/reference.py', task_sha256: 'd'.repeat(64), task_fingerprint_kind: 'file_sha256' },
+  'checkpoint-0': { termination_requested: false, checkpoint_path: '/tmp/kf-guard/checkpoint.json' },
   ...ds('0'),
   'final-report': 'r',
 }
@@ -65,6 +68,76 @@ test('legacy path: language=sycl is accepted (multi-language, no driver required
   const caps = await run({ language: 'sycl' }, legacyReturns)
   assert.ok(caps.some(c => /```sycl\b/.test(c.prompt)),
     'legacy path with language=sycl must keep SYCL fence — KernelFoundry is multi-language')
+})
+
+test('measured target stops at safe-point patience and uses canonical harness metric', async () => {
+  const returns = {
+    ...minimalReturns,
+    'vary-0': { ...minimalReturns['vary-0'] },
+    'vary-1': { ...minimalReturns['vary-0'], kernel_code: '__global__ void k1(){}' },
+    'vary-2': { ...minimalReturns['vary-0'], kernel_code: '__global__ void k2(){}' },
+    'materialize-1': { written: true, path: '/tmp/kf-guard/gen_1.cu' },
+    'materialize-2': { written: true, path: '/tmp/kf-guard/gen_2.cu' },
+    'eval-0': { ...minimalReturns['eval-0'], speedup: 3.0 },
+    'eval-1': { ...minimalReturns['eval-0'], speedup: 3.0 },
+    'eval-2': { ...minimalReturns['eval-0'], speedup: 3.0 },
+    'canonical-bind-0': { ...minimalReturns['canonical-bind-0'], speedup: 3.0 },
+    'canonical-bind-1': { ...minimalReturns['canonical-bind-0'], speedup: 4.0, binding_path: '/tmp/kf-guard/bindings/gen_1.json' },
+    'canonical-bind-2': { ...minimalReturns['canonical-bind-0'], speedup: 3.0, binding_path: '/tmp/kf-guard/bindings/gen_2.json' },
+    'checkpoint-1': { termination_requested: false, checkpoint_path: '/tmp/kf-guard/checkpoint.json' },
+    'checkpoint-2': { termination_requested: false, checkpoint_path: '/tmp/kf-guard/checkpoint.json' },
+  }
+  const caps = await run({
+    language: 'cuda',
+    generations: 5,
+    speedup_target: 2,
+    test_command: 'python test.py {kernel_path} --out {result_path}',
+    benchmark_command: 'python bench.py {kernel_path} --out {result_path}',
+  }, returns)
+  const labels = caps.map(c => c.label)
+
+  assert.ok(labels.includes('checkpoint-0'))
+  assert.ok(labels.includes('checkpoint-1'))
+  assert.ok(labels.includes('canonical-bind-0'))
+  assert.ok(!labels.includes('vary-2'), `target patience should stop before gen2: ${labels}`)
+  assert.ok(!labels.includes('final-report'), 'safe-point stop must not spend another report agent')
+  const evalPrompt = caps.find(c => c.label === 'eval-0').prompt
+  assert.match(evalPrompt, /ONLY authoritative[\s\S]*geomean_speedup/)
+  assert.match(evalPrompt, /\/tmp\/kf-guard\/gen_0\.cu/)
+  assert.doesNotMatch(evalPrompt, /\{kernel_path\}/)
+  const bindingPrompt = caps.find(c => c.label === 'canonical-bind-0').prompt
+  assert.match(bindingPrompt, /source-measurement binding/)
+  assert.match(bindingPrompt, /candidate_sha256/)
+  assert.match(bindingPrompt, /measurement_sha256/)
+  assert.match(bindingPrompt, /archive\/updates\.jsonl/)
+  const checkpointPrompt = caps.find(c => c.label === 'checkpoint-1').prompt
+  assert.match(checkpointPrompt, /"value":4/)
+  assert.match(checkpointPrompt, /immutable candidate \/tmp\/kf-guard\/gen_1\.cu/)
+  assert.match(checkpointPrompt, /b{64}/)
+  assert.match(checkpointPrompt, /"archive_entries"/)
+})
+
+test('measured candidate without complete binding hashes cannot enter best state', async () => {
+  const returns = {
+    ...minimalReturns,
+    'eval-0': { ...minimalReturns['eval-0'], speedup: 9.0 },
+    'canonical-bind-0': {
+      ...minimalReturns['canonical-bind-0'],
+      speedup: 9.0,
+      candidate_sha256: '',
+      measurement_sha256: '',
+      binding_sha256: '',
+    },
+  }
+  const caps = await run({
+    language: 'cuda',
+    speedup_target: 2,
+    test_command: 'python test.py {kernel_path} --out {result_path}',
+    benchmark_command: 'python bench.py {kernel_path} --out {result_path}',
+  }, returns)
+  const checkpointPrompt = caps.find(c => c.label === 'checkpoint-0').prompt
+  assert.match(checkpointPrompt, /"value":0/)
+  assert.doesNotMatch(checkpointPrompt, /Atomically copy the exact bytes/)
 })
 
 test('§6.4: args.backend + args.language conflict (post-normalize) -> throws naming both', async () => {

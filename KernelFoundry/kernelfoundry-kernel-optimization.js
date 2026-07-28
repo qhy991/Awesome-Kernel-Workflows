@@ -11,6 +11,52 @@ export const meta = {
     { title: 'Evolve-Prompts', detail: 'Meta-prompter analyzes outcomes, evolves prompt sections co-operatively' },
   ],
 }
+// --- BEGIN sol-execbench-eval substrate (auto-inlined by scripts/patch-sol-execbench-eval.js) ---
+const SOL_SOLUTION_CONTRACT = [
+  'SOL-EXECBENCH SOLUTION CONTRACT (this task is evaluated by the sol-execbench CLI):',
+  '',
+  'You are authoring a kernel that will be packaged into a solution.json and run by',
+  'the sol-execbench harness, which compiles it internally. Therefore:',
+  '',
+  '1. Emit a COMPLETE kernel source plus a torch binding that exposes the task',
+  '   entry point (run(...)). Do NOT write a standalone main()/CLI harness.',
+  '2. Match the task reference signature exactly (same argument order/dtypes).',
+  '3. Do NOT package, compile, or benchmark yourself — the workflow + substrate',
+  '   handle pack -> sol-execbench -> parse. Return only the kernel + binding.',
+].join('\n')
+
+function __solQ(s) { return `"${String(s).replace(/"/g, '\\"')}"` }
+
+function __solExecbenchEvalPlan(ctx) {
+  const substrateDir = ctx.substrateDir            // abs path to _substrate/integration
+  const kernelSource = ctx.kernelSource            // path to candidate kernel on disk
+  const contractEnv = ctx.contractEnv              // path to session contract.env
+  const solutionOut = ctx.solutionOut              // where to write solution.json
+  const benchOut = ctx.benchOut                    // where sol-execbench writes bench.jsonl
+  const normalizedOut = ctx.normalizedOut || ''    // optional canonical measurement JSON
+  const solCli = ctx.solCli                        // e.g. /abs/sol-execbench/.venv/bin/sol-execbench
+  const taskDir = ctx.taskDir                      // FlashInfer-Bench/<task> dir
+  const benchConfig = ctx.benchConfig              // --config path
+  const seedDir = ctx.seedDir                      // cd target for the run
+  const cvd = ctx.cudaVisibleDevices || '0'
+  const ld = ctx.ldLibraryPath ? `LD_LIBRARY_PATH=${__solQ(ctx.ldLibraryPath)}:$LD_LIBRARY_PATH ` : ''
+  const env = ctx.envPrefix ? `${String(ctx.envPrefix).trim()} ` : ''
+  const definition = ctx.definitionPath ? ` --definition ${__solQ(ctx.definitionPath)}` : ''
+
+  const pack = `python3 ${__solQ(substrateDir + '/pack_sol_candidate.py')} --kernel ${__solQ(kernelSource)} --contract ${__solQ(contractEnv)} --out ${__solQ(solutionOut)}`
+  const run = `cd ${__solQ(seedDir)} && ${env}${ld}CUDA_VISIBLE_DEVICES=${cvd} ${__solQ(solCli)} ${__solQ(taskDir)}${definition} --solution ${__solQ(solutionOut)} --config ${__solQ(benchConfig)} -o ${__solQ(benchOut)}`
+  const parse = `python3 ${__solQ(substrateDir + '/parse_sol_bench.py')} ${__solQ(benchOut)}${normalizedOut ? ` --out ${__solQ(normalizedOut)}` : ''}`
+
+  return {
+    pack,
+    run,
+    parse,
+    order: ['pack', 'run', 'parse'],
+    cleanupInvariant: 'solution.json + bench.jsonl are per-candidate scratch files in the run dir; overwrite freely. No project source is mutated (non-mutating method).',
+  }
+}
+// --- END sol-execbench-eval substrate ---
+
 
 // --- BEGIN model-tier (auto-inserted by scripts/patch-model-tier.js) ---
 // Tier-based model routing: mechanical steps (run substrate scripts, parse
@@ -160,6 +206,56 @@ function guard(obj, field, fallback) {
 }
 // --- END inlined agent-retry scaffolding ---
 
+// --- BEGIN inlined runtime-safe-point scaffolding (from _meta/scaffolding/runtime-safe-point.js) ---
+async function __workflowRuntimeSafePoint(ctx) {
+  const checkpointPath = ctx.checkpointPath || `${ctx.expDir}/checkpoint.json`
+  const materialize = ctx.materializeBest && ctx.bestKernelPath && ctx.bestKernelSourcePath
+    ? `Atomically copy the exact bytes from immutable candidate ${ctx.bestKernelSourcePath} to ${ctx.bestKernelPath}. ` +
+      `Use a small Python program: read the source as bytes, require its SHA-256 to equal ` +
+      `${ctx.bestKernelExpectedSha256 || '<missing-required-sha256>'}, write a temporary file in the destination directory, ` +
+      `fsync it, then os.replace it. Recompute the destination SHA-256 and fail if it differs. ` +
+      `Never regenerate, reformat, or reconstruct the source from a prompt.`
+    : ctx.materializeBest && ctx.bestKernelPath && ctx.bestKernelCode
+    ? `Atomically write this exact best source to ${ctx.bestKernelPath} using a temporary file in the same directory followed by rename:\n` +
+      `\`\`\`${ctx.bestLanguage || ''}\n${ctx.bestKernelCode}\n\`\`\``
+    : (ctx.bestKernelPath
+      ? `Preserve the existing best source at ${ctx.bestKernelPath}; do not rewrite it.`
+      : 'There is no verified best source yet; do not create a best-kernel file.')
+
+  return agentRetry(() => agent(`Workflow runtime safe point.
+
+1. ${materialize}
+2. Check cooperative termination:
+   - termination file: ${ctx.terminationFile || '<none>'}
+   - deadline epoch: ${ctx.deadlineEpoch || 0}
+   A non-empty termination file requests stop. If it contains JSON, use its
+   "reason"; otherwise use "supervisor_request". A positive deadline requests
+   stop when the current epoch from \`date +%s\` is at or beyond it.
+3. Start from this exact checkpoint object:
+${JSON.stringify(ctx.checkpoint)}
+   If step 2 requests stop, set termination_requested=true and set
+   termination_reason to the observed reason. Otherwise preserve the planned
+   termination fields. Atomically write the resulting JSON to ${checkpointPath}
+   using a temporary file in the same directory followed by os.replace/rename.
+   Do not change metric.name or metric.value.
+4. Return only the termination decision and checkpoint path.
+`, {
+    model: MODEL.mechanical,
+    label: ctx.label,
+    phase: ctx.phase,
+    schema: {
+      type: 'object',
+      properties: {
+        termination_requested: { type: 'boolean' },
+        termination_reason: { type: 'string' },
+        checkpoint_path: { type: 'string' },
+      },
+      required: ['termination_requested', 'checkpoint_path'],
+    },
+  }), { retries: 5 })
+}
+// --- END inlined runtime-safe-point scaffolding ---
+
 // --- BEGIN inlined turn-timeout scaffolding (from _meta/scaffolding/turn-timeout.js) ---
 const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn wall-clock cap
 
@@ -265,6 +361,9 @@ const USE_DRIVER = !!args.backend_dir
 //     generations: 40,
 //     meta_prompt_interval: 10,
 //     speedup_target: 2.0,
+//     stop_on_target: true,                 // false keeps fixed-budget research mode
+//     target_patience: 2,                   // consecutive safe points at/above target
+//     min_generations: 2,
 //     selection_strategy: 'mixed',
 //   }})
 //
@@ -285,9 +384,16 @@ const ARCHIVE_UPDATE_RESULT_PATH = args.archive_update_result_path || `${args.ex
 const GENERATIONS = args.generations || 30
 const META_PROMPT_INTERVAL = args.meta_prompt_interval || 10
 const SPEEDUP_TARGET = args.speedup_target || 2.0
+const STOP_ON_TARGET = args.stop_on_target !== false
+const TARGET_PATIENCE = Math.max(1, Number(args.target_patience || 2))
+const MIN_GENERATIONS = Math.max(1, Number(args.min_generations || 2))
 const SELECTION_STRATEGY = args.selection_strategy || 'mixed'
 const EXP_DIR = args.exp_dir || '/tmp/kernelfoundry_exp'
+const TERMINATION_FILE = args.termination_file || ''
+const DEADLINE_EPOCH = Number(args.deadline_epoch || 0)
+const CHECKPOINT_PATH = `${EXP_DIR}/checkpoint.json`
 const KERNEL_PATH = args.kernel_path || ''
+const TASK_IDENTITY_PATH = PROBLEM_PATH || KERNEL_PATH
 const INPUT_MODE = KERNEL_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const EVIDENCE_MODE = (TEST_CMD && BENCH_CMD) ? 'measured' : 'conservative_missing_evidence'
 
@@ -303,6 +409,16 @@ const PY = args.substrate_command_prefix || ''
 const PROJECT_ROOT = args.project_root || args.ggml_root || ''
 const PROJECT_BUILD_CMD = args.build_command || ''
 const REGISTER_SCRIPT = args.register_script || ''
+const INTEGRATION_PATTERN = args.integration_pattern || 'standalone'
+const SOL_CLI = args.sol_cli || ''
+const SOL_TASK_DIR = args.sol_task_dir || ''
+const SOL_BENCH_CONFIG = args.sol_bench_config || ''
+const SOL_SEED_DIR = args.sol_seed_dir || EXP_DIR
+const SOL_CVD = args.sol_cuda_visible_devices || '0'
+const SOL_LD_LIBRARY_PATH = args.sol_ld_library_path || ''
+const SOL_ENV_PREFIX = args.sol_env_prefix || ''
+const SOL_DEFINITION_PATH = args.sol_definition_path || ''
+const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || `${SUBSTRATE}/integration`
 
 const LEGACY_LANG_TOKEN = TARGET_LANG
 const LEGACY_FENCE_TOKEN = TARGET_LANG
@@ -339,8 +455,26 @@ function fenceToken() {
   return USE_DRIVER ? DRIVER_LANG_FENCE : LEGACY_FENCE_TOKEN
 }
 function kernelPathForGeneration(gen) {
-  const ext = USE_DRIVER ? (DRIVER_SOURCE_EXT || '.cu') : '.cu'
+  const legacyExt = TARGET_LANG === 'cuda' ? '.cu'
+    : (TARGET_LANG === 'triton' || TARGET_LANG === 'python') ? '.py'
+    : `.${TARGET_LANG}`
+  const ext = USE_DRIVER ? (DRIVER_SOURCE_EXT || legacyExt) : legacyExt
   return `${EXP_DIR}/gen_${gen}${ext}`
+}
+
+function bestKernelPath() {
+  const ext = TARGET_LANG === 'cuda' ? 'cu'
+    : (TARGET_LANG === 'triton' || TARGET_LANG === 'python') ? 'py'
+    : TARGET_LANG
+  return `${EXP_DIR}/best_kernel.${ext}`
+}
+
+function harnessCommand(template, kernelPath, resultPath) {
+  if (!template) return ''
+  const hasResultPlaceholder = template.includes('{result_path}')
+  let command = template.split('{kernel_path}').join(kernelPath)
+  command = command.split('{result_path}').join(resultPath)
+  return hasResultPlaceholder ? command : `${command} > "${resultPath}"`
 }
 
 // --- State: MAP-Elites Archive ---
@@ -348,7 +482,17 @@ function kernelPathForGeneration(gen) {
 let archive = {}           // key="d_mem,d_algo,d_sync" → {code, fitness, speedup, id}
 let transitions = []       // [{parent_cell, child_cell, delta_f, outcome, gen}]
 let generation = 0
-let globalBest = { code: '', fitness: 0, speedup: 0, cell: '' }
+let globalBest = {
+  code: '', fitness: 0, speedup: 0, cell: '', id: '',
+  compiled: false, correct: false, result_path: '', strategy: '',
+  candidate_path: '', candidate_sha256: '', measurement_sha256: '',
+  binding_path: '', binding_sha256: '', task_path: '', task_sha256: '',
+  task_fingerprint_kind: '',
+}
+let generationsCompleted = 0
+let targetStreak = 0
+let terminationReason = 'generation_limit'
+let checkpointedBestId = ''
 
 // Meta-prompt evolvable sections
 let metaPrompt = {
@@ -426,15 +570,20 @@ if (USE_DRIVER) {
 // --- integration-strategist: route build/test mode (standalone vs embedded_*). ---
 // Lets KernelFoundry handle inference-engine embedded operators (e.g. llama.cpp .cuh)
 // not just standalone kernels. Default standalone => legacy path byte-identical.
-let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
+let INTEGRATION_DECISION = {
+  method: INTEGRATION_PATTERN === 'sol_execbench_solution' ? 'sol_execbench_solution' : 'standalone',
+  build_fidelity: INTEGRATION_PATTERN === 'sol_execbench_solution' ? 'production' : 'isolated',
+  reversible: true,
+}
 {
-  const _probe = JSON.stringify({ compiler: true, project_build: !!PROJECT_BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
+  const _probe = JSON.stringify({ compiler: true, project_build: !!PROJECT_BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true, sol_execbench_cli: !!SOL_CLI })
+  const _preferred = INTEGRATION_PATTERN === 'sol_execbench_solution' ? ' --preferred-method sol_execbench_solution' : ''
   const _integ = await agentRetry(() => agent(
     `${KERNEL_PATH ? `Read ${KERNEL_PATH}; ` : 'Read the operator spec; '}` +
     `classify can_compile_standalone as exactly one of yes|no|uncertain ` +
     `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
     substrateInstruction('integration/integration_strategist.py',
-      `resolve --kernel "${KERNEL_PATH || EXP_DIR + '/operator.spec'}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' --cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
+      `resolve --kernel "${KERNEL_PATH || EXP_DIR + '/operator.spec'}" --can-standalone <yes|no|uncertain>${_preferred} --host-probe '${_probe}' --cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
     ` Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
     { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   if (_integ && _integ.method) INTEGRATION_DECISION = _integ
@@ -445,6 +594,15 @@ if (INTEGRATION_DECISION.method === 'derive_adapter') {
 }
 const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'standalone'
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+const IS_SOL = INTEGRATION_DECISION.method === 'sol_execbench_solution'
+if (IS_SOL) {
+  const missing = [
+    ['sol_cli', SOL_CLI], ['sol_task_dir', SOL_TASK_DIR],
+    ['sol_bench_config', SOL_BENCH_CONFIG], ['sol_seed_dir', SOL_SEED_DIR],
+    ['sol_substrate_dir', SOL_SUBSTRATE_DIR],
+  ].filter(([, value]) => !value).map(([name]) => name)
+  if (missing.length) throw new Error(`sol_execbench_solution requires non-empty: ${missing.join(', ')}`)
+}
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
   await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
@@ -607,6 +765,8 @@ ${gradientHints ? `# Gradient Hints (from evolutionary history):\n${gradientHint
 4. Try to explore a DIFFERENT optimization strategy than the parent (different memory pattern, algorithm, or parallelism level)
 5. You may optionally produce a TEMPLATED kernel with configurable parameters (tile_size, work_group_size, unroll_factor) alongside a dispatch function
 
+${IS_SOL ? SOL_SOLUTION_CONTRACT : ''}
+
 Return the kernel code and its optimization strategy description.
 ${__attemptBlock()}${__experienceBlock()}
 # Recent genome trajectory (read BEFORE varying)
@@ -640,12 +800,98 @@ Then append (this is generation ${generation}):
   // ===========================================================================
   phase('Evaluate')
 
-  const evalResult = await agentRetry(() => agent(`You are a kernel evaluator for KernelFoundry. Evaluate this ${langToken(LEGACY_LANG_TOKEN)} kernel.
+  const candidatePath = kernelPathForGeneration(generation)
+  const generationResultPath = `${EXP_DIR}/gen_${generation}_result.json`
+  const testCommand = harnessCommand(TEST_CMD, candidatePath, generationResultPath)
+  const benchmarkCommand = harnessCommand(BENCH_CMD, candidatePath, generationResultPath)
 
-# Kernel Code:
+  await agentRetry(() => agent(`Materialize the exact KernelFoundry candidate below at ${candidatePath}.
+Create the parent directory first. Write the complete source byte-for-byte without
+summarizing, repairing, or reformatting it. Use an atomic temporary file + rename.
+
 \`\`\`${fenceToken()}
-${offspringCode.substring(0, 5000)}
+${offspringCode}
 \`\`\`
+
+Return {"written":true,"path":"${candidatePath}"}.`, {
+    model: MODEL.mechanical,
+    label: `materialize-${generation}`,
+    phase: 'Evaluate',
+    schema: {
+      type: 'object',
+      properties: {
+        written: { type: 'boolean' },
+        path: { type: 'string' },
+      },
+      required: ['written', 'path'],
+    },
+  }), { retries: 5 })
+
+  const evalResult = IS_SOL
+    ? await (async () => {
+      const variant = `kf_gen_${generation}`.replace(/[^A-Za-z0-9_]/g, '_')
+      const plan = __solExecbenchEvalPlan({
+        substrateDir: SOL_SUBSTRATE_DIR,
+        kernelSource: candidatePath,
+        contractEnv: `${EXP_DIR}/contract.env`,
+        solutionOut: `${EXP_DIR}/${variant}.solution.json`,
+        benchOut: `${EXP_DIR}/${variant}.bench.jsonl`,
+        normalizedOut: generationResultPath,
+        solCli: SOL_CLI,
+        taskDir: SOL_TASK_DIR,
+        benchConfig: SOL_BENCH_CONFIG,
+        seedDir: SOL_SEED_DIR,
+        cudaVisibleDevices: SOL_CVD,
+        ldLibraryPath: SOL_LD_LIBRARY_PATH,
+        envPrefix: SOL_ENV_PREFIX,
+        definitionPath: SOL_DEFINITION_PATH,
+      })
+      return agentRetry(() => agent(`Evaluate this already-materialized KernelFoundry candidate through the authoritative sol-execbench contract.
+
+Candidate: ${candidatePath}
+Run exactly in order:
+1. PACK: ${plan.pack}
+2. RUN: ${plan.run}
+3. PARSE: ${plan.parse}
+
+The parser writes the canonical measurement JSON at ${generationResultPath}.
+Read only that JSON. Require compiled=true, correct=true, and n_pass==n_total>0
+before accepting the candidate. Use its exact geomean_speedup as speedup. Do not
+recompute a mean-latency ratio or reuse another generation's output.
+Classify d_mem/d_algo/d_sync from ${candidatePath} only. ${plan.cleanupInvariant}
+
+Return the parsed result.`, {
+        label: `sol-eval-${generation}`,
+        phase: 'Evaluate',
+        model: MODEL.mechanical,
+        schema: {
+          type: 'object',
+          properties: {
+            compiled: { type: 'boolean' },
+            correct: { type: 'boolean' },
+            speedup: { type: 'number' },
+            metric_name: { type: 'string' },
+            result_path: { type: 'string' },
+            n_pass: { type: 'number' },
+            n_total: { type: 'number' },
+            kernel_time_ms: { type: 'number' },
+            d_mem: { type: 'number' },
+            d_algo: { type: 'number' },
+            d_sync: { type: 'number' },
+            error_message: { type: 'string' },
+            performance_notes: { type: 'string' },
+          },
+          required: [
+            'compiled', 'correct', 'speedup', 'metric_name', 'result_path',
+            'n_pass', 'n_total', 'd_mem', 'd_algo', 'd_sync',
+          ],
+        },
+      }), { retries: 5 })
+    })()
+    : await agentRetry(() => agent(`You are a kernel evaluator for KernelFoundry. Evaluate the already-materialized ${langToken(LEGACY_LANG_TOKEN)} kernel.
+
+# Candidate Path:
+${candidatePath}
 
 # Reference Operator:
 \`\`\`python
@@ -653,13 +899,22 @@ ${operatorCode.substring(0, 1500)}
 \`\`\`
 
 # Evaluation Steps:
-1. **Compile**: Can this ${langToken(LEGACY_LANG_TOKEN)} kernel compile? Check syntax, headers, type correctness.
-${TEST_CMD ? `   Run: ${TEST_CMD}` : ''}
+1. **Compile + Correctness**:
+${testCommand ? `   Run exactly: ${testCommand}` : `   Inspect and test the candidate conservatively; no measured harness was supplied.`}
 2. **Correctness**: Does it produce numerically equivalent output?
    Tolerance: relative precision ν < 0.01 in 99% of outputs.
-3. **Performance**: Measure execution time.
-${BENCH_CMD ? `   Run: ${BENCH_CMD}` : `   Estimate speedup over baseline (${baselineTime}ms).`}
-   speedup = ${baselineTime}ms / kernel_time_ms
+3. **Canonical Performance**:
+${benchmarkCommand
+  ? (benchmarkCommand === testCommand
+      ? `   The command above is the combined correctness+benchmark harness; run it only once.`
+      : `   Run exactly: ${benchmarkCommand}`)
+  : `   No benchmark harness was supplied. You may describe an estimate, but return speedup=0.`}
+   Read the harness JSON at ${generationResultPath}. The ONLY authoritative
+   performance value is its top-level geomean_speedup. Return speedup equal to
+   that exact number. NEVER recompute a ratio from mean/reference latency and
+   never substitute a self-reported estimate. compiled/correct and n_pass/n_total
+   must also come from this same JSON. If measured JSON is absent or invalid,
+   return compiled=false, correct=false, speedup=0.
 
 4. **Behavioral Classification** (assign coordinates 0-3 for each dimension):
    - d_mem (Memory Access Pattern):
@@ -694,6 +949,10 @@ Then append (this is generation ${generation}; status="done" if it compiled AND 
         compiled: { type: 'boolean' },
         correct: { type: 'boolean' },
         speedup: { type: 'number' },
+        metric_name: { type: 'string' },
+        result_path: { type: 'string' },
+        n_pass: { type: 'number' },
+        n_total: { type: 'number' },
         kernel_time_ms: { type: 'number' },
         d_mem: { type: 'number' },
         d_algo: { type: 'number' },
@@ -701,9 +960,109 @@ Then append (this is generation ${generation}; status="done" if it compiled AND 
         error_message: { type: 'string' },
         performance_notes: { type: 'string' },
       },
-      required: ['compiled', 'correct', 'speedup', 'd_mem', 'd_algo', 'd_sync'],
+      required: [
+        'compiled', 'correct', 'speedup', 'metric_name', 'result_path',
+        'd_mem', 'd_algo', 'd_sync',
+      ],
     },
   }), { retries: 5 })
+
+  // Bind the immutable candidate bytes to the exact harness JSON before either
+  // can enter the archive.  KerSor independently recomputes these hashes again
+  // at acceptance/finalization; this agent produces the evidence, not trust.
+  let candidateBinding = {
+    verified: false, binding_path: '', binding_sha256: '',
+    candidate_sha256: '', measurement_sha256: '',
+    task_path: '', task_sha256: '', task_fingerprint_kind: '',
+  }
+  if (EVIDENCE_MODE === 'measured') {
+    const generationBindingPath = `${EXP_DIR}/bindings/gen_${generation}.json`
+    const canonicalEval = await agentRetry(() => agent(`Create the immutable
+KernelFoundry source-measurement binding for candidate gen${generation}.
+
+Run one small deterministic Python program; do not infer or repair anything:
+1. Read ${candidatePath} as bytes and compute SHA-256.
+2. Read ${generationResultPath} as bytes, compute SHA-256, then json.load it.
+3. Require top-level compiled=true, correct=true, numeric geomean_speedup, and
+   numeric n_pass == n_total > 0. Do not calculate a ratio or read a mean.
+4. If ${TASK_IDENTITY_PATH || '<none>'} names an existing file, hash its exact
+   bytes as task_sha256, record its absolute task_path, and set
+   task_fingerprint_kind="file_sha256". Otherwise hash the UTF-8 bytes of the
+   exact problem-definition string obtained by json.loads of
+   ${JSON.stringify(TASK_SPEC)}; record task_path=null and
+   task_fingerprint_kind="inline_problem_definition".
+5. Atomically write this exact schema to ${generationBindingPath}:
+   schema_version=1, workflow="${WORKFLOW_NAME}", candidate_id="gen${generation}",
+   candidate_path (absolute), candidate_sha256, measurement_path (absolute),
+   measurement_sha256, task_path/task_sha256, task_fingerprint_kind,
+   metric_name="geomean_speedup",
+   measurement_metric_field="geomean_speedup", metric_value (the exact JSON
+   value), compiled=true, correct=true, n_pass, n_total.
+6. Compute the binding file SHA-256. Append one compact JSON line containing
+   event="candidate_bound", candidate_id, candidate_sha256, measurement_sha256,
+   binding_path, binding_sha256, metric_value, n_pass, n_total to
+   ${ARCHIVE_UPDATE_RESULT_PATH}. Create parent directories first.
+7. Return the recorded fields. If any requirement fails, do not write a binding
+   or archive event and return verified=false, compiled=false, correct=false,
+   speedup=0.
+`, {
+      model: MODEL.mechanical,
+      label: `canonical-bind-${generation}`,
+      phase: 'Evaluate',
+      schema: {
+        type: 'object',
+        properties: {
+          verified: { type: 'boolean' },
+          compiled: { type: 'boolean' },
+          correct: { type: 'boolean' },
+          speedup: { type: 'number' },
+          n_pass: { type: 'number' },
+          n_total: { type: 'number' },
+          metric_name: { type: 'string' },
+          result_path: { type: 'string' },
+          binding_path: { type: 'string' },
+          binding_sha256: { type: 'string' },
+          candidate_sha256: { type: 'string' },
+          measurement_sha256: { type: 'string' },
+          task_path: { type: 'string' },
+          task_sha256: { type: 'string' },
+          task_fingerprint_kind: { type: 'string' },
+        },
+        required: [
+          'verified', 'compiled', 'correct', 'speedup', 'metric_name',
+          'result_path', 'binding_path', 'binding_sha256',
+          'candidate_sha256', 'measurement_sha256', 'task_sha256',
+          'task_fingerprint_kind',
+        ],
+      },
+    }), { retries: 5 })
+    const bindingVerified = (
+      canonicalEval.verified === true &&
+      /^[0-9a-f]{64}$/i.test(canonicalEval.candidate_sha256 || '') &&
+      /^[0-9a-f]{64}$/i.test(canonicalEval.measurement_sha256 || '') &&
+      /^[0-9a-f]{64}$/i.test(canonicalEval.binding_sha256 || '') &&
+      /^[0-9a-f]{64}$/i.test(canonicalEval.task_sha256 || '') &&
+      ['file_sha256', 'inline_problem_definition'].includes(canonicalEval.task_fingerprint_kind) &&
+      Boolean(canonicalEval.binding_path)
+    )
+    evalResult.compiled = bindingVerified && canonicalEval.compiled === true
+    evalResult.correct = bindingVerified && canonicalEval.correct === true
+    evalResult.speedup = bindingVerified ? Number(canonicalEval.speedup || 0) : 0
+    evalResult.n_pass = canonicalEval.n_pass
+    evalResult.n_total = canonicalEval.n_total
+    evalResult.metric_name = 'geomean_speedup'
+    evalResult.result_path = generationResultPath
+    candidateBinding = {
+      verified: bindingVerified,
+      binding_path: canonicalEval.binding_path || generationBindingPath,
+      binding_sha256: canonicalEval.binding_sha256 || '',
+      candidate_sha256: canonicalEval.candidate_sha256 || '',
+      measurement_sha256: canonicalEval.measurement_sha256 || '',
+      task_path: canonicalEval.task_path || '',
+      task_sha256: canonicalEval.task_sha256 || '',
+      task_fingerprint_kind: canonicalEval.task_fingerprint_kind || '',
+    }
+  }
 
   if (USE_DRIVER_STANDALONE) {
     const suffix = `${generation}`
@@ -807,20 +1166,58 @@ Then append (this is generation ${generation}; status="done" if it compiled AND 
 
   const existingElite = archive[cellKey]
   let outcome = 'neutral'
+  const candidateSpeedup = evalResult.speedup || 0
+  const improvesCell = (
+    !existingElite ||
+    fitness > existingElite.fitness ||
+    (fitness === existingElite.fitness && candidateSpeedup > existingElite.speedup)
+  )
 
-  if (!existingElite || fitness > existingElite.fitness) {
+  if (improvesCell) {
     archive[cellKey] = {
       code: offspringCode,
       fitness: fitness,
-      speedup: evalResult.speedup || 0,
+      speedup: candidateSpeedup,
       cell: cellKey,
       id: `gen${generation}`,
-      strategy: varyResult.strategy_description,
+      strategy: varyResult?.strategy_description || '',
+      compiled: evalResult.compiled,
+      correct: evalResult.correct,
+      result_path: generationResultPath,
+      candidate_path: candidatePath,
+      candidate_sha256: candidateBinding.candidate_sha256,
+      measurement_sha256: candidateBinding.measurement_sha256,
+      binding_path: candidateBinding.binding_path,
+      binding_sha256: candidateBinding.binding_sha256,
+      task_path: candidateBinding.task_path,
+      task_sha256: candidateBinding.task_sha256,
+      task_fingerprint_kind: candidateBinding.task_fingerprint_kind,
     }
     outcome = existingElite ? 'improvement' : 'discovery'
 
-    if (fitness > globalBest.fitness) {
-      globalBest = { code: offspringCode, fitness, speedup: evalResult.speedup || 0, cell: cellKey }
+    if (
+      fitness > globalBest.fitness ||
+      (fitness === globalBest.fitness && candidateSpeedup > globalBest.speedup)
+    ) {
+      globalBest = {
+        code: offspringCode,
+        fitness,
+        speedup: candidateSpeedup,
+        cell: cellKey,
+        id: `gen${generation}`,
+        compiled: evalResult.compiled,
+        correct: evalResult.correct,
+        result_path: generationResultPath,
+        candidate_path: candidatePath,
+        candidate_sha256: candidateBinding.candidate_sha256,
+        measurement_sha256: candidateBinding.measurement_sha256,
+        binding_path: candidateBinding.binding_path,
+        binding_sha256: candidateBinding.binding_sha256,
+        task_path: candidateBinding.task_path,
+        task_sha256: candidateBinding.task_sha256,
+        task_fingerprint_kind: candidateBinding.task_fingerprint_kind,
+        strategy: varyResult?.strategy_description || '',
+      }
     }
   } else {
     outcome = fitness < existingElite.fitness ? 'regression' : 'neutral'
@@ -838,6 +1235,110 @@ Then append (this is generation ${generation}; status="done" if it compiled AND 
 
   const statusIcon = outcome === 'improvement' ? '↑' : outcome === 'discovery' ? '★' : outcome === 'regression' ? '↓' : '='
   log(`  ${statusIcon} Cell [${cellKey}] fitness=${fitness.toFixed(2)} speedup=${(evalResult.speedup || 0).toFixed(2)}x | Archive: ${Object.keys(archive).length}/64 | Best: ${globalBest.speedup.toFixed(2)}x`)
+
+  // ===========================================================================
+  // Phase 5.5: Atomic checkpoint + cooperative termination safe point
+  // ===========================================================================
+  generationsCompleted = generation + 1
+  const targetSatisfied = (
+    EVIDENCE_MODE === 'measured' &&
+    globalBest.compiled === true &&
+    globalBest.correct === true &&
+    globalBest.speedup >= SPEEDUP_TARGET
+  )
+  targetStreak = targetSatisfied ? targetStreak + 1 : 0
+  const shouldStopOnTarget = (
+    STOP_ON_TARGET &&
+    generationsCompleted >= MIN_GENERATIONS &&
+    targetStreak >= TARGET_PATIENCE
+  )
+  const plannedTerminationReason = shouldStopOnTarget ? 'speedup_target_reached' : null
+  const finalKernelPath = bestKernelPath()
+  const bestChanged = Boolean(globalBest.code && globalBest.id !== checkpointedBestId)
+  const checkpointPayload = {
+    schema_version: 1,
+    workflow: WORKFLOW_NAME,
+    progress: {
+      unit: 'generation',
+      completed: generationsCompleted,
+      requested: GENERATIONS,
+    },
+    generation,
+    generations_completed: generationsCompleted,
+    generations_requested: GENERATIONS,
+    compiled: globalBest.compiled === true,
+    correct: globalBest.correct === true,
+    metric: {
+      name: 'geomean_speedup',
+      value: globalBest.speedup || 0,
+    },
+    target: SPEEDUP_TARGET,
+    target_met: targetSatisfied,
+    target_streak: targetStreak,
+    best_candidate_id: globalBest.id || null,
+    best_kernel_path: globalBest.code ? finalKernelPath : null,
+    measured_candidate_path: globalBest.candidate_path || null,
+    measured_candidate_sha256: globalBest.candidate_sha256 || null,
+    result_path: globalBest.result_path || null,
+    measurement_sha256: globalBest.measurement_sha256 || null,
+    artifact_binding_path: globalBest.binding_path || null,
+    artifact_binding_sha256: globalBest.binding_sha256 || null,
+    task_path: globalBest.task_path || null,
+    task_sha256: globalBest.task_sha256 || null,
+    task_fingerprint_kind: globalBest.task_fingerprint_kind || null,
+    archive_entries: Object.entries(archive).map(([cell, elite]) => ({
+      cell,
+      candidate_id: elite.id,
+      fitness: elite.fitness,
+      speedup: elite.speedup,
+      compiled: elite.compiled === true,
+      correct: elite.correct === true,
+      candidate_path: elite.candidate_path || null,
+      candidate_sha256: elite.candidate_sha256 || null,
+      measurement_path: elite.result_path || null,
+      measurement_sha256: elite.measurement_sha256 || null,
+      binding_path: elite.binding_path || null,
+      binding_sha256: elite.binding_sha256 || null,
+      task_fingerprint_kind: elite.task_fingerprint_kind || null,
+    })),
+    evidence: globalBest.result_path ? {
+      kind: 'raw_json',
+      compiled_field: 'compiled',
+      correct_field: 'correct',
+      metric_field: 'geomean_speedup',
+    } : {
+      kind: 'workflow_verified',
+    },
+    termination_requested: Boolean(plannedTerminationReason),
+    termination_reason: plannedTerminationReason,
+  }
+  const safePoint = await __workflowRuntimeSafePoint({
+    expDir: EXP_DIR,
+    checkpointPath: CHECKPOINT_PATH,
+    terminationFile: TERMINATION_FILE,
+    deadlineEpoch: DEADLINE_EPOCH,
+    checkpoint: checkpointPayload,
+    bestKernelPath: globalBest.code ? finalKernelPath : null,
+    bestKernelSourcePath: globalBest.candidate_path || null,
+    bestKernelExpectedSha256: globalBest.candidate_sha256 || null,
+    bestKernelCode: globalBest.candidate_path ? null : globalBest.code,
+    bestLanguage: fenceToken(),
+    materializeBest: bestChanged,
+    label: `checkpoint-${generation}`,
+    phase: 'Insert',
+  })
+  if (bestChanged) checkpointedBestId = globalBest.id
+
+  if (safePoint.termination_requested) {
+    terminationReason = safePoint.termination_reason || 'supervisor_request'
+    log(`  Cooperative stop at generation ${generationsCompleted}: ${terminationReason}`)
+    break
+  }
+  if (shouldStopOnTarget) {
+    terminationReason = 'speedup_target_reached'
+    log(`  Target ${SPEEDUP_TARGET}x held for ${targetStreak} safe points; stopping after ${generationsCompleted} generations`)
+    break
+  }
 
   // ===========================================================================
   // Phase 6: Evolve-Prompts — Meta-prompter updates evolvable sections
@@ -918,14 +1419,21 @@ Then append (this meta-evolution ran at generation ${generation}):
 // =============================================================================
 phase('Evaluate')
 
-const finalReport = await agentRetry(() => agent(`Write a concise technical report on KernelFoundry MAP-Elites optimization.
+let finalReport = ''
+if (terminationReason !== 'generation_limit') {
+  finalReport = `KernelFoundry stopped at a generation safe point: ${terminationReason}. ` +
+    `Completed ${generationsCompleted}/${GENERATIONS} generations; best verified ` +
+    `harness geomean speedup ${globalBest.speedup.toFixed(6)}x; ` +
+    `archive coverage ${Object.keys(archive).length}/64.`
+} else {
+  finalReport = await agentRetry(() => agent(`Write a concise technical report on KernelFoundry MAP-Elites optimization.
 
 # Results
 - Operation: ${OP_DESC}
 - Target: ${langToken(LEGACY_LANG_TOKEN)} on ${TARGET_HW}
 - Baseline: ${baselineTime}ms
 - Best speedup: ${globalBest.speedup.toFixed(2)}x (cell [${globalBest.cell}])
-- Generations: ${GENERATIONS}
+- Generations completed: ${generationsCompleted}/${GENERATIONS}
 - Archive coverage: ${Object.keys(archive).length}/64 cells
 - Total improvements: ${transitions.filter(t => t.outcome === 'improvement').length}
 - Total discoveries: ${transitions.filter(t => t.outcome === 'discovery').length}
@@ -957,6 +1465,7 @@ Then append (final report; speedup is the best speedup found, or null if none):
   label: 'final-report',
   phase: 'Evaluate',
 }), { retries: 5 })
+}
 
 // embedded_inplace exit safety net: unconditionally restore pristine original.
 if (ORIGINAL_BACKUP) {
@@ -969,7 +1478,10 @@ return {
   input_mode: INPUT_MODE,
   problem_definition: TASK_SPEC,
   problem_path: PROBLEM_PATH,
-  generated_kernel_path: globalBest.code ? `${EXP_DIR}/best_kernel.${TARGET_LANG === 'cuda' ? 'cu' : TARGET_LANG}` : '',
+  generated_kernel_path: globalBest.code ? bestKernelPath() : '',
+  best_candidate_id: globalBest.id || '',
+  artifact_binding_required: EVIDENCE_MODE === 'measured',
+  artifact_binding_path: globalBest.binding_path || '',
   initial_candidates: [],
   initial_generation_result: {
     verified: globalBest.speedup > 0,
@@ -980,9 +1492,22 @@ return {
   target_gpu: TARGET_HW,
   baseline_time_ms: baselineTime,
   best_speedup: globalBest.speedup,
+  canonical_metric: {
+    name: 'geomean_speedup',
+    value: globalBest.speedup,
+  },
   best_cell: globalBest.cell,
   best_kernel_code: globalBest.code,
   generations: GENERATIONS,
+  generations_completed: generationsCompleted,
+  termination_reason: terminationReason,
+  target_met: (
+    EVIDENCE_MODE === 'measured' &&
+    globalBest.compiled === true &&
+    globalBest.correct === true &&
+    globalBest.speedup >= SPEEDUP_TARGET
+  ),
+  checkpoint_path: CHECKPOINT_PATH,
   archive_coverage: Object.keys(archive).length,
   archive_summary: Object.entries(archive).sort((a, b) => b[1].fitness - a[1].fitness).slice(0, 10).map(([k, v]) => ({ cell: k, speedup: v.speedup, strategy: v.strategy })),
   improvements: transitions.filter(t => t.outcome === 'improvement').length,

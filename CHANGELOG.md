@@ -10,6 +10,89 @@ for the versioning policy.
 
 ### Fixed
 
+- **Catalog-wide provenance/fidelity release gate.** AdaExplore and KDA now
+  expose their paper/repository sources in the machine-readable manifests, and
+  the fidelity checker fails unless every top-level workflow manifest carries
+  both a non-empty provenance record and an explicit fidelity boundary. This
+  turns the catalog's 32/32 declaration coverage into a reproducible structural
+  check without treating it as independent source-fidelity review.
+  (`{AdaExplore,KDA}/manifest.yaml`, `scripts/check-fidelity-contracts.js`)
+- **KernelAgent cooperative verification safe points.** KernelAgent now
+  materializes and checkpoints its best measured candidate after initial
+  verification and every refinement batch, checks supervisor/deadline controls
+  at those natural boundaries, and returns without launching more work when a
+  stop is requested. Its manifest exposes the runtime controls and the common
+  checkpoint recovery path now accepts its all-workload geomean evidence.
+  (`KernelAgent/`, `_meta/scaffolding/runtime-safe-point.js`)
+- **Core-five sol-execbench admission closure.** K-Search, AdaExplore,
+  KernelAgent, and KernelFoundry now declare the same production
+  `sol_execbench_solution` contract already used by CUDA-Agent, including the
+  frozen CLI/task/config/environment arguments and the shared pack → run →
+  all-workload parse substrate. The E4 controller can therefore fail closed on
+  a real 5/5 executable portfolio instead of mistaking catalog presence for
+  runtime feasibility.
+  (`KSearch/`, `AdaExplore/`, `KernelAgent/`, `KernelFoundry/`,
+  `scripts/patch-sol-execbench-eval.js`)
+- **Strict all-workload sol correctness.** The shared sol-execbench parser now
+  emits `PASS` only when every discovered workload passes, preserves higher
+  precision for the geomean, and can atomically write a canonical measurement
+  JSON for source–measurement binding. A partial pass can no longer enter a
+  workflow archive as correct.
+  (`_substrate/integration/parse_sol_bench.py`,
+  `_substrate/embedded/sol_execbench_eval.js`)
+
+- **KernelFoundry immutable elite binding.** Every measured generation now
+  binds the exact candidate bytes, raw harness JSON, canonical geomean, full
+  workload count, and task identity with SHA-256 before it can enter the
+  archive. Checkpoints persist the complete bound archive, the update JSONL is
+  no longer empty, and the workflow returns the winning binding for KerSor's
+  independent promotion gate.
+  (`KernelFoundry/kernelfoundry-kernel-optimization.js`)
+- **Byte-preserving safe-point promotion.** The shared runtime safe point can
+  atomically copy an immutable measured candidate after checking its expected
+  SHA-256 instead of reconstructing source from an LLM response. KernelFoundry
+  uses this path, preventing stale or cross-task source from being paired with
+  another candidate's measurement.
+  (`_meta/scaffolding/runtime-safe-point.js`)
+
+## [0.12.1] - 2026-07-25
+
+### Added
+
+- **Shared runtime safe-point scaffold.** KSearch, CUDAAgent, AdaExplore, and
+  KernelFoundry now use the same sandbox-safe helper to atomically materialize
+  the strongest candidate/checkpoint and observe an injected termination file
+  or deadline at their natural cycle/turn/step/generation boundary.
+  (`_meta/scaffolding/runtime-safe-point.js`)
+
+### Fixed
+
+- **Cooperative termination for the FI26 workflow set.** KSearch checkpoints
+  its resumable tree state at each cycle, CUDAAgent checkpoints after verified
+  turns, and AdaExplore checkpoints after MCTS steps. A supervisor request now
+  produces a normal return with `termination_reason`, progress counters, and
+  `checkpoint_path`; expensive final-report/memory work is skipped after an
+  early stop.
+
+## [0.12.0] - 2026-07-25
+
+### Added
+
+- **KernelFoundry generation safe points.** Each completed generation now
+  atomically checkpoints its best source, raw harness-result pointer, canonical
+  metric, target state, and termination state. Supervised runs can consume an
+  injected termination file/deadline and return normally at that boundary.
+
+### Fixed
+
+- **KernelFoundry target convergence and metric fidelity.** Production runs
+  stop after a configurable target patience/minimum-generation policy (fixed
+  budget remains available with `stop_on_target=false`). Candidate paths and
+  result paths are deterministic, and a mechanical normalization step takes
+  performance only from the harness JSON `geomean_speedup`; mean-latency ratios
+  can no longer replace the task's canonical metric. When target-capped fitness
+  ties, the faster canonical speedup now wins instead of preserving the first
+  above-target candidate.
 - **Faithful sol-execbench evaluation.** The solution packer now emits the
   supported `cuda_cpp` language enum. All five opted-in workflows preserve the
   benchmark environment and optional `--definition`, advertise the CLI in their

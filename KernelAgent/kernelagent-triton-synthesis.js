@@ -12,6 +12,52 @@ export const meta = {
     { title: 'Report', detail: 'Final summary with best kernel, verification status, artifacts' },
   ],
 }
+// --- BEGIN sol-execbench-eval substrate (auto-inlined by scripts/patch-sol-execbench-eval.js) ---
+const SOL_SOLUTION_CONTRACT = [
+  'SOL-EXECBENCH SOLUTION CONTRACT (this task is evaluated by the sol-execbench CLI):',
+  '',
+  'You are authoring a kernel that will be packaged into a solution.json and run by',
+  'the sol-execbench harness, which compiles it internally. Therefore:',
+  '',
+  '1. Emit a COMPLETE kernel source plus a torch binding that exposes the task',
+  '   entry point (run(...)). Do NOT write a standalone main()/CLI harness.',
+  '2. Match the task reference signature exactly (same argument order/dtypes).',
+  '3. Do NOT package, compile, or benchmark yourself — the workflow + substrate',
+  '   handle pack -> sol-execbench -> parse. Return only the kernel + binding.',
+].join('\n')
+
+function __solQ(s) { return `"${String(s).replace(/"/g, '\\"')}"` }
+
+function __solExecbenchEvalPlan(ctx) {
+  const substrateDir = ctx.substrateDir            // abs path to _substrate/integration
+  const kernelSource = ctx.kernelSource            // path to candidate kernel on disk
+  const contractEnv = ctx.contractEnv              // path to session contract.env
+  const solutionOut = ctx.solutionOut              // where to write solution.json
+  const benchOut = ctx.benchOut                    // where sol-execbench writes bench.jsonl
+  const normalizedOut = ctx.normalizedOut || ''    // optional canonical measurement JSON
+  const solCli = ctx.solCli                        // e.g. /abs/sol-execbench/.venv/bin/sol-execbench
+  const taskDir = ctx.taskDir                      // FlashInfer-Bench/<task> dir
+  const benchConfig = ctx.benchConfig              // --config path
+  const seedDir = ctx.seedDir                      // cd target for the run
+  const cvd = ctx.cudaVisibleDevices || '0'
+  const ld = ctx.ldLibraryPath ? `LD_LIBRARY_PATH=${__solQ(ctx.ldLibraryPath)}:$LD_LIBRARY_PATH ` : ''
+  const env = ctx.envPrefix ? `${String(ctx.envPrefix).trim()} ` : ''
+  const definition = ctx.definitionPath ? ` --definition ${__solQ(ctx.definitionPath)}` : ''
+
+  const pack = `python3 ${__solQ(substrateDir + '/pack_sol_candidate.py')} --kernel ${__solQ(kernelSource)} --contract ${__solQ(contractEnv)} --out ${__solQ(solutionOut)}`
+  const run = `cd ${__solQ(seedDir)} && ${env}${ld}CUDA_VISIBLE_DEVICES=${cvd} ${__solQ(solCli)} ${__solQ(taskDir)}${definition} --solution ${__solQ(solutionOut)} --config ${__solQ(benchConfig)} -o ${__solQ(benchOut)}`
+  const parse = `python3 ${__solQ(substrateDir + '/parse_sol_bench.py')} ${__solQ(benchOut)}${normalizedOut ? ` --out ${__solQ(normalizedOut)}` : ''}`
+
+  return {
+    pack,
+    run,
+    parse,
+    order: ['pack', 'run', 'parse'],
+    cleanupInvariant: 'solution.json + bench.jsonl are per-candidate scratch files in the run dir; overwrite freely. No project source is mutated (non-mutating method).',
+  }
+}
+// --- END sol-execbench-eval substrate ---
+
 
 // __modelTierApplied (declaration pre-existing)
 
@@ -150,6 +196,56 @@ function guard(obj, field, fallback) {
 }
 // --- END inlined agent-retry scaffolding ---
 
+// --- BEGIN inlined runtime-safe-point scaffolding (from _meta/scaffolding/runtime-safe-point.js) ---
+async function __workflowRuntimeSafePoint(ctx) {
+  const checkpointPath = ctx.checkpointPath || `${ctx.expDir}/checkpoint.json`
+  const materialize = ctx.materializeBest && ctx.bestKernelPath && ctx.bestKernelSourcePath
+    ? `Atomically copy the exact bytes from immutable candidate ${ctx.bestKernelSourcePath} to ${ctx.bestKernelPath}. ` +
+      `Use a small Python program: read the source as bytes, require its SHA-256 to equal ` +
+      `${ctx.bestKernelExpectedSha256 || '<missing-required-sha256>'}, write a temporary file in the destination directory, ` +
+      `fsync it, then os.replace it. Recompute the destination SHA-256 and fail if it differs. ` +
+      `Never regenerate, reformat, or reconstruct the source from a prompt.`
+    : ctx.materializeBest && ctx.bestKernelPath && ctx.bestKernelCode
+    ? `Atomically write this exact best source to ${ctx.bestKernelPath} using a temporary file in the same directory followed by rename:\n` +
+      `\`\`\`${ctx.bestLanguage || ''}\n${ctx.bestKernelCode}\n\`\`\``
+    : (ctx.bestKernelPath
+      ? `Preserve the existing best source at ${ctx.bestKernelPath}; do not rewrite it.`
+      : 'There is no verified best source yet; do not create a best-kernel file.')
+
+  return agentRetry(() => agent(`Workflow runtime safe point.
+
+1. ${materialize}
+2. Check cooperative termination:
+   - termination file: ${ctx.terminationFile || '<none>'}
+   - deadline epoch: ${ctx.deadlineEpoch || 0}
+   A non-empty termination file requests stop. If it contains JSON, use its
+   "reason"; otherwise use "supervisor_request". A positive deadline requests
+   stop when the current epoch from \`date +%s\` is at or beyond it.
+3. Start from this exact checkpoint object:
+${JSON.stringify(ctx.checkpoint)}
+   If step 2 requests stop, set termination_requested=true and set
+   termination_reason to the observed reason. Otherwise preserve the planned
+   termination fields. Atomically write the resulting JSON to ${checkpointPath}
+   using a temporary file in the same directory followed by os.replace/rename.
+   Do not change metric.name or metric.value.
+4. Return only the termination decision and checkpoint path.
+`, {
+    model: MODEL.mechanical,
+    label: ctx.label,
+    phase: ctx.phase,
+    schema: {
+      type: 'object',
+      properties: {
+        termination_requested: { type: 'boolean' },
+        termination_reason: { type: 'string' },
+        checkpoint_path: { type: 'string' },
+      },
+      required: ['termination_requested', 'checkpoint_path'],
+    },
+  }), { retries: 5 })
+}
+// --- END inlined runtime-safe-point scaffolding ---
+
 // --- BEGIN inlined turn-timeout scaffolding (from _meta/scaffolding/turn-timeout.js) ---
 const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn wall-clock cap
 
@@ -261,6 +357,10 @@ const MAX_SEEDS = args.seed_candidates || NUM_WORKERS
 const FUSER_EXTRACT_MODEL = args.fuser_extract_model || MODEL_NAME
 const FUSER_DISPATCH_MODEL = args.fuser_dispatch_model || MODEL_NAME
 const FUSER_COMPOSE_MODEL = args.fuser_compose_model || MODEL_NAME
+const TERMINATION_FILE = args.termination_file || ''
+const DEADLINE_EPOCH = Number(args.deadline_epoch || 0)
+const CHECKPOINT_PATH = args.checkpoint_path || `${EXP_DIR}/checkpoint.json`
+const BEST_KERNEL_PATH = args.best_kernel_path || `${EXP_DIR}/best-kernel.py`
 
 // --- Model routing (additive harness wiring) ---
 const MODEL = {
@@ -275,6 +375,16 @@ const BACKEND_DIR = args.backend_dir || ''
 const SUBSTRATE = args.substrate_dir || '_substrate'
 const SH = args.driver_shell_prefix || ''
 const PY = args.substrate_command_prefix || ''
+const INTEGRATION_PATTERN = args.integration_pattern || 'standalone'
+const SOL_CLI = args.sol_cli || ''
+const SOL_TASK_DIR = args.sol_task_dir || ''
+const SOL_BENCH_CONFIG = args.sol_bench_config || ''
+const SOL_SEED_DIR = args.sol_seed_dir || EXP_DIR
+const SOL_CVD = args.sol_cuda_visible_devices || '0'
+const SOL_LD_LIBRARY_PATH = args.sol_ld_library_path || ''
+const SOL_ENV_PREFIX = args.sol_env_prefix || ''
+const SOL_DEFINITION_PATH = args.sol_definition_path || ''
+const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || `${SUBSTRATE}/integration`
 const LEGACY_ROUTE_LANG_TOKEN = 'Triton'
 const LEGACY_HARNESS_LANG_TOKEN = 'Triton'
 const LEGACY_SYNTH_LANG_TOKEN = 'Triton'
@@ -321,6 +431,8 @@ let subgraphResults = []          // Per-subgraph verified kernels
 let composedKernel = null         // Final composed Triton program
 let refinementHistory = []        // [{candidate_id, round, prev_error, new_code, fixed}]
 let sessionDir = ''               // Artifact directory
+let terminationReason = ''
+let checkpointedBestId = ''
 
 // --- verification-strategist decisions (additive; defaults keep happy path) ---
 // VERIFICATION_PRUNE gates the parallel Generate screening depth; VERIFICATION_CONFIRM
@@ -436,6 +548,167 @@ if (USE_DRIVER) {
   DRIVER_AUX_EXT = DRIVER.aux_ext || DRIVER.source_ext || DRIVER_AUX_EXT
   DRIVER_BACKEND_ID = DRIVER.backend_id || DRIVER_BACKEND_ID
   log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
+}
+
+let INTEGRATION_DECISION = {
+  method: INTEGRATION_PATTERN === 'sol_execbench_solution' ? 'sol_execbench_solution' : 'standalone',
+  build_fidelity: INTEGRATION_PATTERN === 'sol_execbench_solution' ? 'production' : 'isolated',
+  reversible: true,
+}
+{
+  const _probe = JSON.stringify({
+    compiler: true,
+    project_build: false,
+    register_script: false,
+    runtime_registry: false,
+    reversibility_net: true,
+    sol_execbench_cli: !!SOL_CLI,
+  })
+  const _preferred = INTEGRATION_PATTERN === 'sol_execbench_solution' ? ' --preferred-method sol_execbench_solution' : ''
+  const _kernelForIntegration = PROBLEM_PATH || `${EXP_DIR}/problem.py`
+  const _integ = await agentRetry(() => agent(
+    `Classify can_compile_standalone for ${_kernelForIntegration} as yes|no|uncertain. Then run exactly: ` +
+    `\`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
+    `--kernel "${_kernelForIntegration}" --can-standalone <yes|no|uncertain>${_preferred} ` +
+    `--host-probe '${_probe}' --cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
+    `Return stdout JSON verbatim.`,
+    { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }),
+  { retries: 5, allowNull: true })
+  if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+}
+const IS_SOL = INTEGRATION_DECISION.method === 'sol_execbench_solution'
+if (IS_SOL) {
+  const missing = [
+    ['sol_cli', SOL_CLI], ['sol_task_dir', SOL_TASK_DIR],
+    ['sol_bench_config', SOL_BENCH_CONFIG], ['sol_seed_dir', SOL_SEED_DIR],
+    ['sol_substrate_dir', SOL_SUBSTRATE_DIR],
+  ].filter(([, value]) => !value).map(([name]) => name)
+  if (missing.length) throw new Error(`sol_execbench_solution requires non-empty: ${missing.join(', ')}`)
+}
+log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
+
+async function verifySolCandidate(candidate, label, phaseName) {
+  const variant = `ka_${candidate.id}`.replace(/[^A-Za-z0-9_]/g, '_')
+  const candidateDir = `${EXP_DIR}/candidates/${variant}`
+  const candidatePath = `${candidateDir}/kernel.py`
+  const normalizedPath = `${candidateDir}/result.json`
+  const plan = __solExecbenchEvalPlan({
+    substrateDir: SOL_SUBSTRATE_DIR,
+    kernelSource: candidatePath,
+    contractEnv: `${EXP_DIR}/contract.env`,
+    solutionOut: `${candidateDir}/solution.json`,
+    benchOut: `${candidateDir}/bench.jsonl`,
+    normalizedOut: normalizedPath,
+    solCli: SOL_CLI,
+    taskDir: SOL_TASK_DIR,
+    benchConfig: SOL_BENCH_CONFIG,
+    seedDir: SOL_SEED_DIR,
+    cudaVisibleDevices: SOL_CVD,
+    ldLibraryPath: SOL_LD_LIBRARY_PATH,
+    envPrefix: SOL_ENV_PREFIX,
+    definitionPath: SOL_DEFINITION_PATH,
+  })
+  return agentRetry(() => agent(`Verify this KernelAgent candidate through the authoritative sol-execbench contract.
+
+1. Create ${candidateDir} and atomically write the exact source below to ${candidatePath}.
+\`\`\`python
+${candidate.code}
+\`\`\`
+2. Run exactly in order:
+   PACK: ${plan.pack}
+   RUN: ${plan.run}
+   PARSE: ${plan.parse}
+   Continue to step 3 even when PARSE exits 1; that means the candidate failed.
+3. Read only ${normalizedPath}. Set passed=true only when correct=true and
+   n_pass==n_total>0. Set speedup to the exact geomean_speedup. Do not infer
+   missing values or reuse another candidate's files. ${plan.cleanupInvariant}
+
+Return the measured verification.`, {
+    label,
+    phase: phaseName,
+    model: MODEL.mechanical,
+    schema: {
+      type: 'object',
+      properties: {
+        passed: { type: 'boolean' },
+        exit_code: { type: 'number' },
+        stdout: { type: 'string' },
+        stderr: { type: 'string' },
+        error_summary: { type: 'string' },
+        verification_result: { type: 'string', enum: ['pass', 'fail', 'timeout', 'error'] },
+        latency_ms: { type: 'number' },
+        speedup: { type: 'number' },
+        n_pass: { type: 'number' },
+        n_total: { type: 'number' },
+        result_path: { type: 'string' },
+      },
+      required: ['passed', 'verification_result', 'speedup', 'n_pass', 'n_total', 'result_path'],
+    },
+  }), { retries: 5 })
+}
+
+async function kernelAgentSafePoint(completed) {
+  const best = verifiedKernels.length > 0
+    ? (IS_SOL
+        ? verifiedKernels.reduce((incumbent, item) =>
+            Number(item.speedup || 0) > Number(incumbent.speedup || 0)
+              ? item
+              : incumbent)
+        : verifiedKernels[0])
+    : null
+  const checkpoint = {
+    schema_version: 1,
+    workflow: WORKFLOW_NAME,
+    progress: {
+      unit: 'verification_batch',
+      completed,
+      requested: MAX_ROUNDS + 1,
+    },
+    verification_batches_completed: completed,
+    verification_batches_requested: MAX_ROUNDS + 1,
+    compiled: !!best,
+    correct: !!best,
+    metric: {
+      name: IS_SOL ? 'geomean_speedup' : 'speedup',
+      value: Number(best?.speedup || 0),
+    },
+    best_candidate_id: best?.id || null,
+    best_kernel_path: BEST_KERNEL_PATH,
+    result_path: best?.result_path || null,
+    evidence: IS_SOL
+      ? {
+          kind: 'raw_json',
+          compiled_field: 'compiled',
+          correct_field: 'correct',
+          metric_field: 'geomean_speedup',
+        }
+      : { kind: 'workflow_verified' },
+    termination_requested: false,
+    termination_reason: null,
+    runtime_metadata: {
+      checkpoint_written_at: `verification-batch-${completed}-end`,
+      workflow: WORKFLOW_NAME,
+    },
+  }
+  const safePoint = await __workflowRuntimeSafePoint({
+    expDir: EXP_DIR,
+    checkpointPath: CHECKPOINT_PATH,
+    terminationFile: TERMINATION_FILE,
+    deadlineEpoch: DEADLINE_EPOCH,
+    checkpoint,
+    bestKernelPath: BEST_KERNEL_PATH,
+    bestKernelCode: best?.code || '',
+    bestLanguage: USE_DRIVER ? DRIVER_LANG_FENCE : 'python',
+    materializeBest: !!best && checkpointedBestId !== best.id,
+    label: `checkpoint-verification-${completed}`,
+    phase: completed === 1 ? 'Verify' : 'Refine',
+  })
+  if (best) checkpointedBestId = best.id
+  if (safePoint.termination_requested) {
+    terminationReason = safePoint.termination_reason || 'supervisor_request'
+    log(`Cooperative stop after verification batch ${completed}: ${terminationReason}`)
+  }
+  return safePoint
 }
 
 // Read problem from file or use description directly
@@ -615,7 +888,13 @@ Then append:
   },
 }), { retries: 5 })
 
-routingDecision = routeResult
+routingDecision = IS_SOL && routeResult.path === 'pipeline'
+  ? {
+      ...routeResult,
+      path: 'direct',
+      reason: `${routeResult.reason}; forced direct because sol-execbench evaluates complete task solutions, not isolated subgraphs`,
+    }
+  : routeResult
 log(`Routing: ${routeResult.path} — ${routeResult.reason}`)
 
 // If pipeline path, extract subgraphs
@@ -718,6 +997,8 @@ ${seedIdx >= 3 ? 'Explore an alternative algorithmic approach.' : ''}
 # Verification Depth (verification-strategist, prune screening)
 Verification-strategist selected method='${VERIFICATION_PRUNE.method}' (confidence='${VERIFICATION_PRUNE.confidence}', evidence='${VERIFICATION_PRUNE.evidence_source}'). Honor it: if method==='reference_test', run the full PyTorch reference numerical comparison and tag the verdict evidence='correctness'. If 'smoke_test', compile+run for shape/finiteness only, tag evidence='runtime'. If 'compile_lint', compile+lint only (no execution), tag evidence='compile'. If 'static', reason from source only (evidence='llm_inferred'). Never fabricate a pass verdict you did not actually run.
 
+${IS_SOL ? SOL_SOLUTION_CONTRACT : ''}
+
 # Output
 Return a JSON object with:
 - kernel_code: ${USE_DRIVER ? `complete source file with ${DRIVER_LANG_FENCE} kernel(s) and a callable wrapper` : 'complete Python file with @triton.jit kernel and kernel_function wrapper'}
@@ -780,7 +1061,9 @@ phase('Verify')
 
 if (VERIFY && validCandidates.length > 0) {
   const verifyPromises = validCandidates.map(candidate => () =>
-    agentRetry(() => agent(`You are a kernel verification engineer. Execute the test harness against this ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel.
+    IS_SOL
+      ? verifySolCandidate(candidate, `sol-verify-${candidate.id}`, 'Verify')
+      : agentRetry(() => agent(`You are a kernel verification engineer. Execute the test harness against this ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel.
 
 # Kernel Code
 \`\`\`python
@@ -843,7 +1126,20 @@ Then append, using the result you just measured (status="done" if the kernel pas
     }), { retries: 5 })
   )
 
-  const verifyResults = await parallel(verifyPromises)
+  let verifyResults
+  if (IS_SOL) {
+    verifyResults = []
+    for (const verifyOne of verifyPromises) {
+      try {
+        verifyResults.push(await verifyOne())
+      } catch (error) {
+        log(`sol verification failed: ${(error && error.message) || error}`)
+        verifyResults.push(null)
+      }
+    }
+  } else {
+    verifyResults = await parallel(verifyPromises)
+  }
 
   // Update candidate statuses
   for (let i = 0; i < validCandidates.length; i++) {
@@ -865,6 +1161,10 @@ Then append, using the result you just measured (status="done" if the kernel pas
         test_output: result.stdout,
         verification_result: result.verification_result,
         latency_ms: result.latency_ms != null ? result.latency_ms : null,
+        speedup: result.speedup != null ? result.speedup : 0,
+        n_pass: result.n_pass != null ? result.n_pass : null,
+        n_total: result.n_total != null ? result.n_total : null,
+        result_path: result.result_path || null,
         approach: candidate.approach,
       })
     } else {
@@ -935,6 +1235,8 @@ Then append, using the result you just measured (status="done" if the kernel pas
   log('Verification skipped (verify=false)')
 }
 
+await kernelAgentSafePoint(1)
+
 // =============================================================================
 // Phase 5: Refine — Iterative refinement for failed candidates
 // =============================================================================
@@ -943,7 +1245,7 @@ phase('Refine')
 const failedCandidates = candidates.filter(c => c.status === 'failed')
 let currentRound = 0
 
-while (failedCandidates.length > 0 && currentRound < MAX_ROUNDS && verifiedKernels.length === 0) {
+while (!terminationReason && failedCandidates.length > 0 && currentRound < MAX_ROUNDS && verifiedKernels.length === 0) {
   if (typeof budget !== 'undefined' && budget.total && budget.remaining() < EST_PER_ROUND) { log(`token budget ~exhausted — stop`); break }
   currentRound++
   log(`Refinement round ${currentRound}/${MAX_ROUNDS} — ${failedCandidates.length} candidates to fix`)
@@ -993,6 +1295,8 @@ ${USE_DRIVER
    - torch.nn fallback: remove any PyTorch nn/functional usage, rewrite in pure Triton`}
 3. Make MINIMAL changes — don't rewrite from scratch unless necessary
 4. Preserve the overall approach, fix only the bug
+
+${IS_SOL ? SOL_SOLUTION_CONTRACT : ''}
 
 Return a JSON object with:
 - kernel_code: the fixed complete kernel code
@@ -1052,10 +1356,12 @@ Then append (this is refinement round ${currentRound} for ${candidate.id}):
   }
 
   // Re-verify refined candidates
-  const toReVerify = failedCandidates.filter(c => c.status === 'pending')
-  if (toReVerify.length > 0 && VERIFY) {
-    const reVerifyPromises = toReVerify.map(candidate => () =>
-      agentRetry(() => agent(`Verify this refined ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel against the test harness.
+    const toReVerify = failedCandidates.filter(c => c.status === 'pending')
+    if (toReVerify.length > 0 && VERIFY) {
+      const reVerifyPromises = toReVerify.map(candidate => () =>
+        IS_SOL
+          ? verifySolCandidate(candidate, `sol-reverify-${candidate.id}-r${currentRound}`, 'Refine')
+          : agentRetry(() => agent(`Verify this refined ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel against the test harness.
 
 # Kernel Code
 \`\`\`python
@@ -1094,7 +1400,20 @@ ${USE_DRIVER ? driverSh('run.sh', `--kernel ${kernelFilename()} --test ${testFil
       }), { retries: 5 })
     )
 
-    const reVerifyResults = await parallel(reVerifyPromises)
+    let reVerifyResults
+    if (IS_SOL) {
+      reVerifyResults = []
+      for (const verifyOne of reVerifyPromises) {
+        try {
+          reVerifyResults.push(await verifyOne())
+        } catch (error) {
+          log(`sol re-verification failed: ${(error && error.message) || error}`)
+          reVerifyResults.push(null)
+        }
+      }
+    } else {
+      reVerifyResults = await parallel(reVerifyPromises)
+    }
 
     for (let i = 0; i < toReVerify.length; i++) {
       const result = reVerifyResults[i]
@@ -1114,6 +1433,10 @@ ${USE_DRIVER ? driverSh('run.sh', `--kernel ${kernelFilename()} --test ${testFil
           test_output: result.stdout,
           verification_result: result.verification_result,
           latency_ms: result.latency_ms != null ? result.latency_ms : null,
+          speedup: result.speedup != null ? result.speedup : 0,
+          n_pass: result.n_pass != null ? result.n_pass : null,
+          n_total: result.n_total != null ? result.n_total : null,
+          result_path: result.result_path || null,
           approach: candidate.approach,
         })
       } else {
@@ -1129,6 +1452,7 @@ ${USE_DRIVER ? driverSh('run.sh', `--kernel ${kernelFilename()} --test ${testFil
 
   const newPassed = verifiedKernels.length
   log(`Round ${currentRound} complete: ${newPassed} verified total`)
+  await kernelAgentSafePoint(currentRound + 1)
 }
 
 if (currentRound > 0) {
@@ -1140,7 +1464,7 @@ if (currentRound > 0) {
 // =============================================================================
 phase('Compose')
 
-if (routingDecision.path === 'pipeline' && subgraphs.length > 1 && COMPOSE && verifiedKernels.length > 0) {
+if (!terminationReason && routingDecision.path === 'pipeline' && subgraphs.length > 1 && COMPOSE && verifiedKernels.length > 0) {
   const composeResult = await agentRetry(() => agent(`You are a ${langToken(LEGACY_COMPOSE_LANG_TOKEN)} kernel composition expert. Stitch these verified subgraph kernels into a single, cohesive ${langToken(LEGACY_COMPOSE_LANG_TOKEN)} program.
 
 # Problem Description
@@ -1246,10 +1570,24 @@ ${USE_DRIVER ? driverSh('run.sh', `--kernel ${kernelFilename()} --test ${testFil
 // =============================================================================
 phase('Report')
 
-const bestKernel = verifiedKernels.length > 0 ? verifiedKernels[0] : null
+const bestKernel = verifiedKernels.length > 0
+  ? (IS_SOL
+      ? verifiedKernels.reduce((best, item) =>
+          Number(item.speedup || 0) > Number(best.speedup || 0) ? item : best)
+      : verifiedKernels[0])
+  : null
 const finalCode = composedKernel || (bestKernel ? bestKernel.code : null)
 
-const reportResult = await agentRetry(() => agent(`Generate a comprehensive synthesis report for this KernelAgent session.
+const reportResult = terminationReason
+  ? {
+      outcome: verifiedKernels.length > 0 ? 'partial' : 'failed',
+      summary: `KernelAgent stopped cooperatively at a verification safe point: ${terminationReason}.`,
+      best_kernel_approach: bestKernel?.approach || '',
+      verification_status: verifiedKernels.length > 0 ? 'verified incumbent checkpointed' : 'no verified incumbent',
+      recommendations: ['Resume from the canonical checkpoint only if more search is authorized.'],
+      artifacts_path: EXP_DIR,
+    }
+  : await agentRetry(() => agent(`Generate a comprehensive synthesis report for this KernelAgent session.
 
 # Problem
 ${problemDescription}
@@ -1334,10 +1672,13 @@ return {
   refinement_rounds: currentRound,
   refinement_attempts: refinementHistory.length,
   best_kernel_code: finalCode || '',
+  best_speedup: bestKernel ? Number(bestKernel.speedup || 0) : 0,
   best_kernel_approach: bestKernel?.approach || '',
   composed_kernel: composedKernel || '',
   verification_status: reportResult?.verification_status || 'unknown',
   recommendations: reportResult?.recommendations || [],
+  checkpoint_path: CHECKPOINT_PATH,
+  termination_reason: terminationReason || 'workflow_complete',
   session_directory: sessionDir,
   test_code: testCode,
   subgraph_count: subgraphs.length,

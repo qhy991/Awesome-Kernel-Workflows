@@ -33,6 +33,7 @@ function __solExecbenchEvalPlan(ctx) {
   const contractEnv = ctx.contractEnv              // path to session contract.env
   const solutionOut = ctx.solutionOut              // where to write solution.json
   const benchOut = ctx.benchOut                    // where sol-execbench writes bench.jsonl
+  const normalizedOut = ctx.normalizedOut || ''    // optional canonical measurement JSON
   const solCli = ctx.solCli                        // e.g. /abs/sol-execbench/.venv/bin/sol-execbench
   const taskDir = ctx.taskDir                      // FlashInfer-Bench/<task> dir
   const benchConfig = ctx.benchConfig              // --config path
@@ -44,7 +45,7 @@ function __solExecbenchEvalPlan(ctx) {
 
   const pack = `python3 ${__solQ(substrateDir + '/pack_sol_candidate.py')} --kernel ${__solQ(kernelSource)} --contract ${__solQ(contractEnv)} --out ${__solQ(solutionOut)}`
   const run = `cd ${__solQ(seedDir)} && ${env}${ld}CUDA_VISIBLE_DEVICES=${cvd} ${__solQ(solCli)} ${__solQ(taskDir)}${definition} --solution ${__solQ(solutionOut)} --config ${__solQ(benchConfig)} -o ${__solQ(benchOut)}`
-  const parse = `python3 ${__solQ(substrateDir + '/parse_sol_bench.py')} ${__solQ(benchOut)}`
+  const parse = `python3 ${__solQ(substrateDir + '/parse_sol_bench.py')} ${__solQ(benchOut)}${normalizedOut ? ` --out ${__solQ(normalizedOut)}` : ''}`
 
   return {
     pack,
@@ -222,6 +223,56 @@ function guard(obj, field, fallback) {
   return obj[field]
 }
 // --- END inlined agent-retry scaffolding ---
+
+// --- BEGIN inlined runtime-safe-point scaffolding (from _meta/scaffolding/runtime-safe-point.js) ---
+async function __workflowRuntimeSafePoint(ctx) {
+  const checkpointPath = ctx.checkpointPath || `${ctx.expDir}/checkpoint.json`
+  const materialize = ctx.materializeBest && ctx.bestKernelPath && ctx.bestKernelSourcePath
+    ? `Atomically copy the exact bytes from immutable candidate ${ctx.bestKernelSourcePath} to ${ctx.bestKernelPath}. ` +
+      `Use a small Python program: read the source as bytes, require its SHA-256 to equal ` +
+      `${ctx.bestKernelExpectedSha256 || '<missing-required-sha256>'}, write a temporary file in the destination directory, ` +
+      `fsync it, then os.replace it. Recompute the destination SHA-256 and fail if it differs. ` +
+      `Never regenerate, reformat, or reconstruct the source from a prompt.`
+    : ctx.materializeBest && ctx.bestKernelPath && ctx.bestKernelCode
+    ? `Atomically write this exact best source to ${ctx.bestKernelPath} using a temporary file in the same directory followed by rename:\n` +
+      `\`\`\`${ctx.bestLanguage || ''}\n${ctx.bestKernelCode}\n\`\`\``
+    : (ctx.bestKernelPath
+      ? `Preserve the existing best source at ${ctx.bestKernelPath}; do not rewrite it.`
+      : 'There is no verified best source yet; do not create a best-kernel file.')
+
+  return agentRetry(() => agent(`Workflow runtime safe point.
+
+1. ${materialize}
+2. Check cooperative termination:
+   - termination file: ${ctx.terminationFile || '<none>'}
+   - deadline epoch: ${ctx.deadlineEpoch || 0}
+   A non-empty termination file requests stop. If it contains JSON, use its
+   "reason"; otherwise use "supervisor_request". A positive deadline requests
+   stop when the current epoch from \`date +%s\` is at or beyond it.
+3. Start from this exact checkpoint object:
+${JSON.stringify(ctx.checkpoint)}
+   If step 2 requests stop, set termination_requested=true and set
+   termination_reason to the observed reason. Otherwise preserve the planned
+   termination fields. Atomically write the resulting JSON to ${checkpointPath}
+   using a temporary file in the same directory followed by os.replace/rename.
+   Do not change metric.name or metric.value.
+4. Return only the termination decision and checkpoint path.
+`, {
+    model: MODEL.mechanical,
+    label: ctx.label,
+    phase: ctx.phase,
+    schema: {
+      type: 'object',
+      properties: {
+        termination_requested: { type: 'boolean' },
+        termination_reason: { type: 'string' },
+        checkpoint_path: { type: 'string' },
+      },
+      required: ['termination_requested', 'checkpoint_path'],
+    },
+  }), { retries: 5 })
+}
+// --- END inlined runtime-safe-point scaffolding ---
 // --- genome self-report: INLINE (rich, doer-written) ---
 // This workflow does NOT use the generic entry scribe from
 // scripts/patch-genome-report.js (__genomeReport). Instead each phase's doer
@@ -383,6 +434,9 @@ const STAGNATION_EPS = 0.02                       // < 2% best-speedup gain coun
 const STAGNATION_LIMIT = args.stagnation_limit || 3  // consecutive stagnant turns -> stop (stalled)
 const DRY_LIMIT = args.dry_limit || 4             // consecutive turns with no correct measured result -> stop
 const EXP_DIR = args.exp_dir || '/tmp/cuda_agent_exp'
+const TERMINATION_FILE = args.termination_file || ''
+const DEADLINE_EPOCH = Number(args.deadline_epoch || 0)
+const CHECKPOINT_PATH = `${EXP_DIR}/checkpoint.json`
 const ADAPTATION_SCOPE = 'inference_time_adaptation'
 const LANGUAGE = args.language || 'cuda'
 const TARGET_GPU = args.target_gpu || 'unknown GPU'
@@ -437,11 +491,21 @@ let bestKernelCode = ''
 let bestBindingCode = ''
 let bestModelNew = ''
 let bestSpeedup = 0
+let bestCompiled = false
+let bestCorrect = false
+let bestCandidateId = ''
+let checkpointedBestId = ''
 let currentAttempt = 0
+let turnsCompleted = 0
+let terminationReason = 'turn_limit'
 let generatedKernelPath = ''
 let initialCandidates = []
 let initialGenerationResult = null
 let history = []  // [{turn, action, outcome, speedup, error}]
+
+function bestKernelPath() {
+  return `${EXP_DIR}/best_kernel.cu`
+}
 
 // =============================================================================
 // Phase 1: Setup — Read model, establish workspace
@@ -797,6 +861,7 @@ Then append (this is optimization attempt ${currentAttempt}):
   } catch (e) {
     log(`  Turn ${currentAttempt + 1}: Implement watchdog tripped — stopping (${e.message})`)
     convergenceStatus = 'timeout'
+    terminationReason = 'turn_timeout'
     break
   }
 
@@ -970,6 +1035,7 @@ Then append, using the values you just measured (status="done" if correctness pa
   } catch (e) {
     log(`  Turn ${currentAttempt + 1}: Verify watchdog tripped — stopping (${e.message})`)
     convergenceStatus = 'timeout'
+    terminationReason = 'turn_timeout'
     break
   }
 
@@ -1002,6 +1068,9 @@ Then append, using the values you just measured (status="done" if correctness pa
     bestBindingCode = implResult.binding_code
     bestModelNew = implResult.model_new_code
     bestSpeedup = verifyResult.speedup_vs_compile || 0
+    bestCompiled = verifyResult.compiled === true
+    bestCorrect = verifyResult.correct === true
+    bestCandidateId = `attempt-${currentAttempt}`
     log(`  NEW BEST: ${bestSpeedup.toFixed(2)}x vs compile (reward=${verifyResult.reward})`)
   }
 
@@ -1032,13 +1101,75 @@ Then append, using the values you just measured (status="done" if correctness pa
     if (stagnantRounds >= STAGNATION_LIMIT) {
       log(`  stagnation limit (${STAGNATION_LIMIT}) reached — stopping (stalled)`)
       convergenceStatus = 'stalled'
-      break
-    }
-    if (dryRounds >= DRY_LIMIT) {
+    } else if (dryRounds >= DRY_LIMIT) {
       log(`  dry limit (${DRY_LIMIT}) reached: no correct measured result — stopping (stalled)`)
       convergenceStatus = 'stalled'
-      break
     }
+  }
+
+  // A turn boundary is the only safe place to stop: evaluation and any
+  // embedded-project cleanup have completed, and the strongest verified source
+  // has already replaced the in-memory best.
+  turnsCompleted = currentAttempt + 1
+  const plannedReason = targetMet
+    ? 'speedup_target_reached'
+    : (convergenceStatus === 'stalled' ? 'stalled' : null)
+  const materializedBestPath = bestKernelCode ? bestKernelPath() : null
+  const bestChanged = Boolean(bestKernelCode && bestCandidateId !== checkpointedBestId)
+  const checkpointPayload = {
+    schema_version: 1,
+    workflow: WORKFLOW_NAME,
+    progress: {
+      unit: 'turn',
+      completed: turnsCompleted,
+      requested: MAX_TURNS,
+    },
+    turns_completed: turnsCompleted,
+    turns_requested: MAX_TURNS,
+    compiled: bestCompiled,
+    correct: bestCorrect,
+    metric: {
+      name: 'speedup_vs_compile',
+      value: bestSpeedup,
+    },
+    baseline_metric: compileTime,
+    best_candidate_id: bestCandidateId || null,
+    best_kernel_path: materializedBestPath,
+    result_path: null,
+    evidence: { kind: 'workflow_verified' },
+    target: TARGET_SPEEDUP,
+    target_met: targetMet,
+    termination_requested: Boolean(plannedReason),
+    termination_reason: plannedReason,
+  }
+  const safePoint = await __workflowRuntimeSafePoint({
+    expDir: EXP_DIR,
+    checkpointPath: CHECKPOINT_PATH,
+    terminationFile: TERMINATION_FILE,
+    deadlineEpoch: DEADLINE_EPOCH,
+    checkpoint: checkpointPayload,
+    bestKernelPath: materializedBestPath,
+    bestKernelCode,
+    bestLanguage: 'cuda',
+    materializeBest: bestChanged,
+    label: `checkpoint-${currentAttempt}`,
+    phase: 'Refine',
+  })
+  if (bestChanged) checkpointedBestId = bestCandidateId
+
+  if (
+    safePoint.termination_requested &&
+    safePoint.termination_reason !== 'speedup_target_reached' &&
+    safePoint.termination_reason !== 'stalled'
+  ) {
+    terminationReason = safePoint.termination_reason || 'supervisor_request'
+    convergenceStatus = 'terminated'
+    log(`  Cooperative stop after turn ${turnsCompleted}: ${terminationReason}`)
+    break
+  }
+  if (plannedReason) {
+    terminationReason = plannedReason
+    break
   }
 }
 
@@ -1051,7 +1182,13 @@ phase('Report')
 // guard) | budget_exhausted (ran out of MAX_TURNS without any of the above).
 const convergence_status = targetMet ? 'converged' : (convergenceStatus || 'budget_exhausted')
 
-const finalReport = await agentRetry(() => agent(`Write a concise optimization report.
+let finalReport = ''
+if (terminationReason !== 'turn_limit') {
+  finalReport = `CUDAAgent stopped at a turn safe point: ${terminationReason}. ` +
+    `Completed ${turnsCompleted}/${MAX_TURNS} turns; best verified speedup ` +
+    `${bestSpeedup.toFixed(6)}x versus the compile baseline.`
+} else {
+  finalReport = await agentRetry(() => agent(`Write a concise optimization report.
 
 # CUDA Agent Optimization Results
 - Adaptation scope: ${ADAPTATION_SCOPE}
@@ -1080,6 +1217,7 @@ Write:
   label: 'final-report',
   phase: 'Report',
 }), { retries: 5 })
+}
 
 // Exit restore (embedded_inplace safety net): the candidate eval restores after each
 // attempt, but force one final restore so the project file is byte-exact pristine on
@@ -1094,7 +1232,7 @@ return {
   input_mode: INPUT_MODE,
   problem_definition: PROBLEM_DEFINITION,
   problem_path: PROBLEM_PATH,
-  generated_kernel_path: generatedKernelPath,
+  generated_kernel_path: bestKernelCode ? bestKernelPath() : generatedKernelPath,
   initial_candidates: initialCandidates,
   initial_generation_result: initialGenerationResult,
   operation: OP_DESC,
@@ -1104,11 +1242,16 @@ return {
   best_speedup_vs_eager: eagerTime / (compileTime / (bestSpeedup || 1)),
   target_met: targetMet,
   convergence_status,
-  turns_used: currentAttempt,
+  termination_reason: terminationReason,
+  checkpoint_path: CHECKPOINT_PATH,
+  compiled: bestCompiled,
+  correct: bestCorrect,
+  turns_used: turnsCompleted,
   max_turns: MAX_TURNS,
   reward_history: history.map(h => h.reward),
   adaptation_scope: ADAPTATION_SCOPE,
   best_kernel_code: bestKernelCode,
+  best_kernel_path: bestKernelCode ? bestKernelPath() : null,
   best_binding_code: bestBindingCode,
   best_model_new: bestModelNew,
   report: finalReport,

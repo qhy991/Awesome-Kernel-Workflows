@@ -3,10 +3,9 @@
 //
 // State (decisionTree, solutionDb, bestSolution, bestMetric, cycleCount) was
 // in-memory only — a crashed search lost cycles 1..N. Fix: a mechanical agent
-// writes ${EXP_DIR}/checkpoint.json at each cycle end (5 state vars + static
-// runtime_metadata), and a mechanical agent reads it at startup to resume at
-// the recorded cycle. Uses the existing mechanical-agent file-IO pattern (same
-// as load-driver); zero new sandbox dependencies.
+// atomically writes ${EXP_DIR}/checkpoint.json at each cycle safe point (the
+// resumable state plus the cross-workflow recovery contract), and a mechanical
+// agent reads it at startup to resume at the recorded cycle.
 //
 // #43(a) exponential backoff was SKIPPED — the runtime exposes no sleep() and
 // setTimeout-as-blocking-sleep would hang under a non-real-time source; that
@@ -42,15 +41,17 @@ test('ksearch: cycle loop starts at _startCycle (resumes, not from 0)', () => {
 test('ksearch: each cycle end writes checkpoint.json with the 5 state vars', () => {
   assert.match(SOURCE, /label: `checkpoint-\$\{cycle\}`/,
     'a checkpoint-${cycle} mechanical agent call must write at each cycle end')
-  assert.match(SOURCE, /Write exactly this JSON to \$\{EXP_DIR\}\/checkpoint\.json/,
-    'checkpoint write must target ${EXP_DIR}/checkpoint.json (overwrite)')
+  assert.match(SOURCE, /checkpointPath: CHECKPOINT_PATH/,
+    'checkpoint write must target the canonical checkpoint path')
   // The 5 state vars must be in the checkpoint payload.
-  assert.match(SOURCE, /cycle: cycle \+ 1,\s*\n\s*decisionTree, bestMetric, bestSolution, solutionDb/,
+  assert.match(SOURCE, /cycle: cycleCount,[\s\S]*?decisionTree,[\s\S]*?bestMetric,[\s\S]*?bestSolution,[\s\S]*?solutionDb/,
     'checkpoint payload must carry cycle + decisionTree + bestMetric + bestSolution + solutionDb')
+  assert.match(SOURCE, /await __workflowRuntimeSafePoint\(\{/,
+    'checkpoint must be committed through the shared atomic safe point')
 })
 
 test('ksearch: checkpoint runtime_metadata is a static marker (NO Date.now())', () => {
-  assert.match(SOURCE, /runtime_metadata: \{ checkpoint_written_at: 'cycle-' \+ \(cycle \+ 1\) \+ '-end'/,
+  assert.match(SOURCE, /checkpoint_written_at: 'cycle-' \+ cycleCount \+ '-end'/,
     'runtime_metadata.checkpoint_written_at must be a static loop-counter-derived string (cycle-N-end) for postmortem')
   // The whole checkpoint/resume block must not use forbidden runtime APIs.
   // Strip line comments so a comment that *mentions* a forbidden API (e.g.
@@ -60,7 +61,7 @@ test('ksearch: checkpoint runtime_metadata is a static marker (NO Date.now())', 
   assert.ok(block, 'resume block must be locatable')
   assert.doesNotMatch(block, /Date\.now\(\)|Math\.random\(\)|new Date\(\)/,
     'resume block must not use forbidden runtime APIs')
-  const writeBlock = stripComments((SOURCE.match(/#43: checkpoint write at cycle end[\s\S]*?allowNull: true \}\)/) || [''])[0])
+  const writeBlock = stripComments((SOURCE.match(/const checkpointPayload = \{[\s\S]*?await __workflowRuntimeSafePoint\(\{[\s\S]*?\n\s*\}\)/) || [''])[0])
   assert.ok(writeBlock, 'checkpoint-write block must be locatable')
   assert.doesNotMatch(writeBlock, /Date\.now\(\)|Math\.random\(\)|new Date\(\)/,
     'checkpoint-write block must not use forbidden runtime APIs')
