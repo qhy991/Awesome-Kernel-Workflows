@@ -8,6 +8,72 @@
 
 ### 修复（Fixed）
 
+- **全目录 provenance/fidelity 发布门禁。** AdaExplore 与 KDA 现已在机器可读
+  manifest 中声明论文/仓库来源；fidelity 检查还会在任一顶层 workflow manifest
+  缺少非空来源记录或显式 fidelity boundary 时失败。由此把目录 32/32 的声明
+  覆盖变成可复现的结构检查，但不把它冒充独立来源忠实度复核。
+  (`{AdaExplore,KDA}/manifest.yaml`、`scripts/check-fidelity-contracts.js`)
+- **KernelAgent 协作式 verification 安全点。** KernelAgent 现在在首次验证和
+  每轮 refinement batch 之后物化并 checkpoint 当前最优实测 candidate，在这些
+  自然边界检查 supervisor/deadline 控制；收到停止请求后不再派生新工作并正常
+  返回。其 manifest 已声明运行时控制参数，通用 checkpoint 恢复路径也接受其
+  全 workload geomean 证据。(`KernelAgent/`、
+  `_meta/scaffolding/runtime-safe-point.js`)
+- **核心五路 sol-execbench 准入闭环。** K-Search、AdaExplore、
+  KernelAgent 与 KernelFoundry 现在声明并执行 CUDA-Agent 已使用的生产级
+  `sol_execbench_solution` 契约，包括冻结的 CLI/任务/配置/环境参数，以及共享的
+  打包 → 执行 → 全 workload 解析 substrate。E4 控制器因此只会在真实 5/5
+  可执行组合上放行，不再把“目录存在”误判为运行时可行。
+  (`KSearch/`、`AdaExplore/`、`KernelAgent/`、`KernelFoundry/`、
+  `scripts/patch-sol-execbench-eval.js`)
+- **严格的全 workload sol 正确性门控。** 共享 sol-execbench 解析器现在只有在
+  所有发现的 workload 均通过时才输出 `PASS`，保留更高精度的 geomean，并可
+  原子写出用于源码—测量绑定的规范 JSON。部分通过的候选不再可能作为正确实现
+  进入 workflow archive。
+  (`_substrate/integration/parse_sol_bench.py`、
+  `_substrate/embedded/sol_execbench_eval.js`)
+
+- **KernelFoundry 不可变 elite 绑定。** 每个实测 generation 只有在以 SHA-256
+  绑定精确候选字节、原始 harness JSON、规范 geomean、完整 workload 计数和任务
+  身份之后才能进入 archive。Checkpoint 会持久化完整的已绑定 archive，
+  update JSONL 不再为空，并将胜出 binding 返回给 KerSor 的独立晋级 gate。
+  (`KernelFoundry/kernelfoundry-kernel-optimization.js`)
+- **保持字节不变的安全点晋级。** 共享 runtime safe point 现在可在校验预期
+  SHA-256 后原子复制不可变的被测候选，而不是从 LLM 返回文本重建源码。
+  KernelFoundry 已使用该路径，避免过期或跨任务源码与其他候选的测量错配。
+  (`_meta/scaffolding/runtime-safe-point.js`)
+
+## [0.12.1] - 2026-07-25
+
+### 新增（Added）
+
+- **共享运行时安全点脚手架。** KSearch、CUDAAgent、AdaExplore 与
+  KernelFoundry 现在共用同一份 sandbox-safe helper，在各自自然的
+  cycle/turn/step/generation 边界原子固化最强候选与 checkpoint，并读取注入的
+  termination file/deadline。(`_meta/scaffolding/runtime-safe-point.js`)
+
+### 修复（Fixed）
+
+- **FI26 workflow 组支持协作终止。** KSearch 每 cycle 保存可续跑树状态，
+  CUDAAgent 在完成验证的 turn 后保存，AdaExplore 在 MCTS step 后保存。
+  supervisor 请求现在会正常返回 `termination_reason`、进度计数与
+  `checkpoint_path`；提前停止后会跳过昂贵的最终报告/记忆阶段。
+
+## [0.12.0] - 2026-07-25
+
+### 新增（Added）
+
+- **KernelFoundry 代际安全点。** 每个完整代际现在会原子保存最佳源码、原始
+  harness result 指针、规范指标、目标状态和终止状态。受监督运行可以消费注入的
+  termination file/deadline，并在该边界正常返回。
+
+### 修复（Fixed）
+
+- **KernelFoundry 目标收敛与指标忠实性。** 生产运行在满足可配置的目标耐心值/
+  最小代数后停止（`stop_on_target=false` 仍保留固定预算研究模式）。候选和结果
+  路径已确定化，机械归一化步骤只从 harness JSON 的 `geomean_speedup` 读取性能，
+  不再允许用均值延迟比替换任务规范指标。目标截断后的 fitness 相同时，现由更高的
+  规范 speedup 破平局，而不是保留第一个过线候选。
 - **忠实的 sol-execbench 评估。** solution packer 现在输出受支持的
   `cuda_cpp` 语言枚举。五个 opt-in workflow 都会保留 benchmark 环境与可选的
   `--definition`，在 host probe 中声明 CLI，并在 standalone 分类之前显式选择

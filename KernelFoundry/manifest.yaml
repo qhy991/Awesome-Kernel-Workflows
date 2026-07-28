@@ -49,6 +49,17 @@ routing:
   # Check 2c compares that to contract.env::baseline_id (absent -> gate skips).
   all_args:
   - fair_baseline_id
+  - termination_file
+  - deadline_epoch
+  - sol_cli
+  - sol_task_dir
+  - sol_bench_config
+  - sol_seed_dir
+  - sol_cuda_visible_devices
+  - sol_ld_library_path
+  - sol_env_prefix
+  - sol_definition_path
+  - sol_substrate_dir
   topology: evolutionary
   seed_contract: hybrid
   requires_harness: false
@@ -68,3 +79,4 @@ routing:
   - standalone
   - embedded_dispatch
   - embedded_inplace
+  - sol_execbench_solution

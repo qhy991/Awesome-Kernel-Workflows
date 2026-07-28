@@ -544,6 +544,16 @@ routing:
     - 'kernel-search'
     constraints: []
   best_kernel_field: best_kernel_code
+  all_args:
+  - sol_cli
+  - sol_task_dir
+  - sol_bench_config
+  - sol_seed_dir
+  - sol_cuda_visible_devices
+  - sol_ld_library_path
+  - sol_env_prefix
+  - sol_definition_path
+  - sol_substrate_dir
   topology: tree
   seed_contract: hybrid
   requires_harness: true
@@ -562,3 +572,4 @@ routing:
   - standalone
   - embedded_dispatch
   - embedded_inplace
+  - sol_execbench_solution

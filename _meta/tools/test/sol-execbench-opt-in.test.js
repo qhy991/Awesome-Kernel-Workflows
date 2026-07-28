@@ -11,12 +11,20 @@ function read(rel) {
   return fs.readFileSync(path.join(ROOT, rel), 'utf8')
 }
 
-test('sol-execbench opt-in pool includes KDA and KernelBlaster', () => {
+test('sol-execbench opt-in pool includes the KerSor core five, KDA, and KernelBlaster', () => {
+  assert.match(PATCHER, /\['KSearch', 'ksearch-kernel-optimization\.js'\]/)
+  assert.match(PATCHER, /\['AdaExplore', 'adaexplore-kernel-optimization\.js'\]/)
+  assert.match(PATCHER, /\['KernelAgent', 'kernelagent-triton-synthesis\.js'\]/)
+  assert.match(PATCHER, /\['KernelFoundry', 'kernelfoundry-kernel-optimization\.js'\]/)
   assert.match(PATCHER, /\['KDA', 'kda-kernel-workflow\.js'\]/)
   assert.match(PATCHER, /\['KernelBlaster', 'kernelblaster-kernel-optimization\.js'\]/)
 
   for (const [dir, file] of [
     ['CUDAAgent', 'cuda-agent-kernel-optimization.js'],
+    ['KSearch', 'ksearch-kernel-optimization.js'],
+    ['AdaExplore', 'adaexplore-kernel-optimization.js'],
+    ['KernelAgent', 'kernelagent-triton-synthesis.js'],
+    ['KernelFoundry', 'kernelfoundry-kernel-optimization.js'],
     ['ARGUS', 'argus-kernel-optimization.js'],
     ['Generalist', 'generalist-kernel-optimization.js'],
     ['KDA', 'kda-kernel-workflow.js'],

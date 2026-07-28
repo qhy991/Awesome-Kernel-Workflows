@@ -47,6 +47,7 @@ function __solExecbenchEvalPlan(ctx) {
   const contractEnv = ctx.contractEnv              // path to session contract.env
   const solutionOut = ctx.solutionOut              // where to write solution.json
   const benchOut = ctx.benchOut                    // where sol-execbench writes bench.jsonl
+  const normalizedOut = ctx.normalizedOut || ''    // optional canonical measurement JSON
   const solCli = ctx.solCli                        // e.g. /abs/sol-execbench/.venv/bin/sol-execbench
   const taskDir = ctx.taskDir                      // FlashInfer-Bench/<task> dir
   const benchConfig = ctx.benchConfig              // --config path
@@ -58,7 +59,7 @@ function __solExecbenchEvalPlan(ctx) {
 
   const pack = `python3 ${__solQ(substrateDir + '/pack_sol_candidate.py')} --kernel ${__solQ(kernelSource)} --contract ${__solQ(contractEnv)} --out ${__solQ(solutionOut)}`
   const run = `cd ${__solQ(seedDir)} && ${env}${ld}CUDA_VISIBLE_DEVICES=${cvd} ${__solQ(solCli)} ${__solQ(taskDir)}${definition} --solution ${__solQ(solutionOut)} --config ${__solQ(benchConfig)} -o ${__solQ(benchOut)}`
-  const parse = `python3 ${__solQ(substrateDir + '/parse_sol_bench.py')} ${__solQ(benchOut)}`
+  const parse = `python3 ${__solQ(substrateDir + '/parse_sol_bench.py')} ${__solQ(benchOut)}${normalizedOut ? ` --out ${__solQ(normalizedOut)}` : ''}`
 
   return {
     pack,

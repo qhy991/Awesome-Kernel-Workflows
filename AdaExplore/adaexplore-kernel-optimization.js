@@ -20,6 +20,52 @@ export const meta = {
     rule_format: 'You cannot ... || score',
   },
 }
+// --- BEGIN sol-execbench-eval substrate (auto-inlined by scripts/patch-sol-execbench-eval.js) ---
+const SOL_SOLUTION_CONTRACT = [
+  'SOL-EXECBENCH SOLUTION CONTRACT (this task is evaluated by the sol-execbench CLI):',
+  '',
+  'You are authoring a kernel that will be packaged into a solution.json and run by',
+  'the sol-execbench harness, which compiles it internally. Therefore:',
+  '',
+  '1. Emit a COMPLETE kernel source plus a torch binding that exposes the task',
+  '   entry point (run(...)). Do NOT write a standalone main()/CLI harness.',
+  '2. Match the task reference signature exactly (same argument order/dtypes).',
+  '3. Do NOT package, compile, or benchmark yourself — the workflow + substrate',
+  '   handle pack -> sol-execbench -> parse. Return only the kernel + binding.',
+].join('\n')
+
+function __solQ(s) { return `"${String(s).replace(/"/g, '\\"')}"` }
+
+function __solExecbenchEvalPlan(ctx) {
+  const substrateDir = ctx.substrateDir            // abs path to _substrate/integration
+  const kernelSource = ctx.kernelSource            // path to candidate kernel on disk
+  const contractEnv = ctx.contractEnv              // path to session contract.env
+  const solutionOut = ctx.solutionOut              // where to write solution.json
+  const benchOut = ctx.benchOut                    // where sol-execbench writes bench.jsonl
+  const normalizedOut = ctx.normalizedOut || ''    // optional canonical measurement JSON
+  const solCli = ctx.solCli                        // e.g. /abs/sol-execbench/.venv/bin/sol-execbench
+  const taskDir = ctx.taskDir                      // FlashInfer-Bench/<task> dir
+  const benchConfig = ctx.benchConfig              // --config path
+  const seedDir = ctx.seedDir                      // cd target for the run
+  const cvd = ctx.cudaVisibleDevices || '0'
+  const ld = ctx.ldLibraryPath ? `LD_LIBRARY_PATH=${__solQ(ctx.ldLibraryPath)}:$LD_LIBRARY_PATH ` : ''
+  const env = ctx.envPrefix ? `${String(ctx.envPrefix).trim()} ` : ''
+  const definition = ctx.definitionPath ? ` --definition ${__solQ(ctx.definitionPath)}` : ''
+
+  const pack = `python3 ${__solQ(substrateDir + '/pack_sol_candidate.py')} --kernel ${__solQ(kernelSource)} --contract ${__solQ(contractEnv)} --out ${__solQ(solutionOut)}`
+  const run = `cd ${__solQ(seedDir)} && ${env}${ld}CUDA_VISIBLE_DEVICES=${cvd} ${__solQ(solCli)} ${__solQ(taskDir)}${definition} --solution ${__solQ(solutionOut)} --config ${__solQ(benchConfig)} -o ${__solQ(benchOut)}`
+  const parse = `python3 ${__solQ(substrateDir + '/parse_sol_bench.py')} ${__solQ(benchOut)}${normalizedOut ? ` --out ${__solQ(normalizedOut)}` : ''}`
+
+  return {
+    pack,
+    run,
+    parse,
+    order: ['pack', 'run', 'parse'],
+    cleanupInvariant: 'solution.json + bench.jsonl are per-candidate scratch files in the run dir; overwrite freely. No project source is mutated (non-mutating method).',
+  }
+}
+// --- END sol-execbench-eval substrate ---
+
 
 // __modelTierApplied (declaration pre-existing)
 
@@ -157,6 +203,56 @@ function guard(obj, field, fallback) {
   return obj[field]
 }
 // --- END inlined agent-retry scaffolding ---
+
+// --- BEGIN inlined runtime-safe-point scaffolding (from _meta/scaffolding/runtime-safe-point.js) ---
+async function __workflowRuntimeSafePoint(ctx) {
+  const checkpointPath = ctx.checkpointPath || `${ctx.expDir}/checkpoint.json`
+  const materialize = ctx.materializeBest && ctx.bestKernelPath && ctx.bestKernelSourcePath
+    ? `Atomically copy the exact bytes from immutable candidate ${ctx.bestKernelSourcePath} to ${ctx.bestKernelPath}. ` +
+      `Use a small Python program: read the source as bytes, require its SHA-256 to equal ` +
+      `${ctx.bestKernelExpectedSha256 || '<missing-required-sha256>'}, write a temporary file in the destination directory, ` +
+      `fsync it, then os.replace it. Recompute the destination SHA-256 and fail if it differs. ` +
+      `Never regenerate, reformat, or reconstruct the source from a prompt.`
+    : ctx.materializeBest && ctx.bestKernelPath && ctx.bestKernelCode
+    ? `Atomically write this exact best source to ${ctx.bestKernelPath} using a temporary file in the same directory followed by rename:\n` +
+      `\`\`\`${ctx.bestLanguage || ''}\n${ctx.bestKernelCode}\n\`\`\``
+    : (ctx.bestKernelPath
+      ? `Preserve the existing best source at ${ctx.bestKernelPath}; do not rewrite it.`
+      : 'There is no verified best source yet; do not create a best-kernel file.')
+
+  return agentRetry(() => agent(`Workflow runtime safe point.
+
+1. ${materialize}
+2. Check cooperative termination:
+   - termination file: ${ctx.terminationFile || '<none>'}
+   - deadline epoch: ${ctx.deadlineEpoch || 0}
+   A non-empty termination file requests stop. If it contains JSON, use its
+   "reason"; otherwise use "supervisor_request". A positive deadline requests
+   stop when the current epoch from \`date +%s\` is at or beyond it.
+3. Start from this exact checkpoint object:
+${JSON.stringify(ctx.checkpoint)}
+   If step 2 requests stop, set termination_requested=true and set
+   termination_reason to the observed reason. Otherwise preserve the planned
+   termination fields. Atomically write the resulting JSON to ${checkpointPath}
+   using a temporary file in the same directory followed by os.replace/rename.
+   Do not change metric.name or metric.value.
+4. Return only the termination decision and checkpoint path.
+`, {
+    model: MODEL.mechanical,
+    label: ctx.label,
+    phase: ctx.phase,
+    schema: {
+      type: 'object',
+      properties: {
+        termination_requested: { type: 'boolean' },
+        termination_reason: { type: 'string' },
+        checkpoint_path: { type: 'string' },
+      },
+      required: ['termination_requested', 'checkpoint_path'],
+    },
+  }), { retries: 5 })
+}
+// --- END inlined runtime-safe-point scaffolding ---
 
 // --- BEGIN inlined turn-timeout scaffolding (from _meta/scaffolding/turn-timeout.js) ---
 const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn wall-clock cap
@@ -301,6 +397,9 @@ const POOL_SIZE_EXTRA_MAX = args.pool_size_extra_max ?? 0
 const CORRECTNESS_ATOL = args.correctness_atol ?? 0.05
 const CORRECTNESS_RTOL = args.correctness_rtol ?? 0.05
 const EXP_DIR = args.exp_dir || '/tmp/adaexplore_workflow_exp'
+const TERMINATION_FILE = args.termination_file || ''
+const DEADLINE_EPOCH = Number(args.deadline_epoch || 0)
+const CHECKPOINT_PATH = `${EXP_DIR}/checkpoint.json`
 const KERNEL_PATH = args.kernel_path || ''
 const INPUT_MODE = KERNEL_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const MAX_MEMORY_RULES = args.max_memory_rules || 40
@@ -322,6 +421,16 @@ const PROJECT_ROOT = args.project_root || args.ggml_root || ''
 const BUILD_CMD = args.build_command || ''
 const BENCH_CMD = args.benchmark_command || EVAL_CMD || ''
 const REGISTER_SCRIPT = args.register_script || ''
+const INTEGRATION_PATTERN = args.integration_pattern || 'standalone'
+const SOL_CLI = args.sol_cli || ''
+const SOL_TASK_DIR = args.sol_task_dir || ''
+const SOL_BENCH_CONFIG = args.sol_bench_config || ''
+const SOL_SEED_DIR = args.sol_seed_dir || EXP_DIR
+const SOL_CVD = args.sol_cuda_visible_devices || '0'
+const SOL_LD_LIBRARY_PATH = args.sol_ld_library_path || ''
+const SOL_ENV_PREFIX = args.sol_env_prefix || ''
+const SOL_DEFINITION_PATH = args.sol_definition_path || ''
+const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || `${SUBSTRATE}/integration`
 
 // --- BEGIN inlined backend-axis (driver) scaffolding (from _meta/scaffolding/backend-axis.js) ---
 function driverPath(rel) { return `${BACKEND_DIR}/${rel}` }
@@ -373,9 +482,28 @@ const MODEL = {
 
 // --- State: MCTS Tree ---
 let mctsNodes = []
-let globalBest = { code: '', speedup: 0, score: [0, 0, 0], id: 'none' }
+let globalBest = {
+  code: '',
+  speedup: 0,
+  score: [0, 0, 0],
+  id: 'none',
+  compiled: false,
+  correct: false,
+  kernelPath: '',
+  resultPath: '',
+}
 let skillMemory = [] // [{rule: 'You cannot ...', score: 1}]
 let failureLogs = []
+let stepsCompleted = 0
+let terminationReason = 'step_limit'
+let checkpointedBestId = ''
+
+function bestKernelPath() {
+  const ext = USE_DRIVER
+    ? (DRIVER_SOURCE_EXT || '.py')
+    : ((args.language || 'triton') === 'cuda' ? '.cu' : '.py')
+  return `${EXP_DIR}/best_kernel${ext}`
+}
 
 function scoreTuple(compiled, correct, speedup) {
   return [compiled ? 1 : 0, correct ? 1 : 0, correct ? (speedup || 0) : 0]
@@ -584,15 +712,20 @@ if (USE_DRIVER) {
 // Lets AdaExplore optimize inference-engine embedded operators (e.g. llama.cpp .cuh)
 // that cannot compile as a single TU, not just standalone kernels. ADDITIVE:
 // default stays standalone, so the legacy path is byte-identical.
-let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
+let INTEGRATION_DECISION = {
+  method: INTEGRATION_PATTERN === 'sol_execbench_solution' ? 'sol_execbench_solution' : 'standalone',
+  build_fidelity: INTEGRATION_PATTERN === 'sol_execbench_solution' ? 'production' : 'isolated',
+  reversible: true,
+}
 {
   const _kForIntg = KERNEL_PATH || PROBLEM_PATH || `${EXP_DIR}/reference.py`
-  const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
+  const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true, sol_execbench_cli: !!SOL_CLI })
+  const _preferred = INTEGRATION_PATTERN === 'sol_execbench_solution' ? ' --preferred-method sol_execbench_solution' : ''
   const _integ = await agentRetry(() => agent(
     `Classify can_compile_standalone for the operator under optimization (${_kForIntg}) as exactly one of yes|no|uncertain ` +
     `(use no when the file cannot compile as a single TU — e.g. a llama.cpp .cuh with project-only deps). Then ` +
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
-    `--kernel "${_kForIntg}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
+    `--kernel "${_kForIntg}" --can-standalone <yes|no|uncertain>${_preferred} --host-probe '${_probe}' ` +
     `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
     `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
     { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
@@ -604,6 +737,15 @@ if (INTEGRATION_DECISION.method === 'derive_adapter') {
 }
 const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'standalone'
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+const IS_SOL = INTEGRATION_DECISION.method === 'sol_execbench_solution'
+if (IS_SOL) {
+  const missing = [
+    ['sol_cli', SOL_CLI], ['sol_task_dir', SOL_TASK_DIR],
+    ['sol_bench_config', SOL_BENCH_CONFIG], ['sol_seed_dir', SOL_SEED_DIR],
+    ['sol_substrate_dir', SOL_SUBSTRATE_DIR],
+  ].filter(([, value]) => !value).map(([name]) => name)
+  if (missing.length) throw new Error(`sol_execbench_solution requires non-empty: ${missing.join(', ')}`)
+}
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
   await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
@@ -705,7 +847,11 @@ log(`Setup: mode=${MODE} | steps=${STEPS} | memory_update=${MEMORY_UPDATE} | ski
 // =============================================================================
 
 for (let searchStep = 0; searchStep < STEPS; searchStep++) {
-  if (typeof budget !== 'undefined' && budget.total && budget.remaining() < EST_PER_ROUND) { log(`token budget ~exhausted — stop`); break }
+  if (typeof budget !== 'undefined' && budget.total && budget.remaining() < EST_PER_ROUND) {
+    terminationReason = 'token_budget'
+    log(`token budget ~exhausted — stop`)
+    break
+  }
 
   phase('Select')
 
@@ -762,6 +908,8 @@ ${poolContext}
 3. Respect atol=${CORRECTNESS_ATOL}, rtol=${CORRECTNESS_RTOL}.
 4. Prefer structural diversity: different tiling, decomposition, fusion, mapping, or memory strategy from the pool.
 5. Do not call any AdaExplore repository code.
+
+${IS_SOL ? SOL_SOLUTION_CONTRACT : ''}
 
 Return the complete candidate kernel code.
 
@@ -849,6 +997,8 @@ ${memoryLines(20).join('\n') || 'No constraints yet.'}
 3. Preserve the evaluator-facing interface.
 4. Do not call any AdaExplore repository code.
 
+${IS_SOL ? SOL_SOLUTION_CONTRACT : ''}
+
 Return the edited candidate kernel code.
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
@@ -888,7 +1038,62 @@ Then append (this is small-step surgical edit for candidate node-${searchStep + 
     exp_dir: EXP_DIR,
   })
 
-  const evalResult = await agentRetry(() => agent(`Evaluate this candidate with real execution evidence.
+  const evalResult = IS_SOL
+    ? await (async () => {
+      const variant = `ada_s${searchStep + 1}_${isLargeStep ? 'L' : 'S'}`.replace(/[^A-Za-z0-9_]/g, '_')
+      const solCandidatePath = `${EXP_DIR}/kernels/${variant}.py`
+      const plan = __solExecbenchEvalPlan({
+        substrateDir: SOL_SUBSTRATE_DIR,
+        kernelSource: solCandidatePath,
+        contractEnv: `${EXP_DIR}/contract.env`,
+        solutionOut: `${EXP_DIR}/${variant}.solution.json`,
+        benchOut: `${EXP_DIR}/${variant}.bench.jsonl`,
+        solCli: SOL_CLI,
+        taskDir: SOL_TASK_DIR,
+        benchConfig: SOL_BENCH_CONFIG,
+        seedDir: SOL_SEED_DIR,
+        cudaVisibleDevices: SOL_CVD,
+        ldLibraryPath: SOL_LD_LIBRARY_PATH,
+        envPrefix: SOL_ENV_PREFIX,
+        definitionPath: SOL_DEFINITION_PATH,
+      })
+      return agentRetry(() => agent(`Evaluate this AdaExplore candidate through the authoritative sol-execbench contract.
+
+1. Atomically write the exact candidate below to ${solCandidatePath}.
+\`\`\`python
+${newKernelCode}
+\`\`\`
+2. Run exactly in order:
+   PACK: ${plan.pack}
+   RUN: ${plan.run}
+   PARSE: ${plan.parse}
+3. Parse only the final authoritative line:
+   SPEEDUP=<geomean> STATUS=<PASS|FAIL> WORKLOADS=<passed>/<total>
+Set compiled=true only when the run produced bench JSONL. Set correct=true only
+when STATUS=PASS and passed==total>0. Set speedup to SPEEDUP. Do not infer
+missing values or reuse another candidate's output. ${plan.cleanupInvariant}
+
+Return the parsed result.`, {
+        label: `sol-eval-${searchStep + 1}`,
+        phase: 'Evaluate',
+        model: MODEL.mechanical,
+        schema: {
+          type: 'object',
+          properties: {
+            compiled: { type: 'boolean' },
+            correct: { type: 'boolean' },
+            speedup: { type: 'number' },
+            kernel_time_ms: { type: 'number' },
+            baseline_time_ms: { type: 'number' },
+            error_message: { type: 'string' },
+            error_type: { type: 'string' },
+            result_path: { type: 'string' },
+          },
+          required: ['compiled', 'correct', 'speedup'],
+        },
+      }), { retries: 5 })
+    })()
+    : await agentRetry(() => agent(`Evaluate this candidate with real execution evidence.
 
 # Hard rules
 1. Write the candidate code exactly to: ${kernelPath}
@@ -1072,7 +1277,16 @@ Then append, using the values you just measured (status="done" if the candidate 
   selectedNode.children.push(newNodeId)
 
   if (compareScore(newScore, globalBest.score) > 0) {
-    globalBest = { code: newKernelCode, speedup, score: newScore, id: newNodeId }
+    globalBest = {
+      code: newKernelCode,
+      speedup,
+      score: newScore,
+      id: newNodeId,
+      compiled,
+      correct,
+      kernelPath,
+      resultPath: evalResult.result_path || resultPath,
+    }
     log(`  NEW BEST: node=${newNodeId} score=${JSON.stringify(newScore)} speedup=${speedup.toFixed(3)}x`)
   }
 
@@ -1097,6 +1311,55 @@ Then append, using the values you just measured (status="done" if the candidate 
   }
 
   log(`  Step ${searchStep + 1}: compiled=${compiled} correct=${correct} speedup=${speedup.toFixed(3)} reward=${reward.toFixed(3)} nodes=${mctsNodes.length} best=${globalBest.id}`)
+
+  stepsCompleted = searchStep + 1
+  const materializedBestPath = globalBest.code ? bestKernelPath() : null
+  const bestChanged = Boolean(globalBest.code && globalBest.id !== checkpointedBestId)
+  const checkpointPayload = {
+    schema_version: 1,
+    workflow: WORKFLOW_NAME,
+    progress: {
+      unit: 'step',
+      completed: stepsCompleted,
+      requested: STEPS,
+    },
+    steps_completed: stepsCompleted,
+    steps_requested: STEPS,
+    compiled: globalBest.compiled === true,
+    correct: globalBest.correct === true,
+    metric: {
+      name: 'speedup',
+      value: globalBest.speedup || 0,
+    },
+    baseline_metric: baselineTime,
+    best_candidate_id: globalBest.id !== 'none' ? globalBest.id : null,
+    best_kernel_path: materializedBestPath,
+    result_path: globalBest.resultPath || null,
+    evidence: { kind: 'workflow_verified' },
+    target: null,
+    target_met: false,
+    termination_requested: false,
+    termination_reason: null,
+  }
+  const safePoint = await __workflowRuntimeSafePoint({
+    expDir: EXP_DIR,
+    checkpointPath: CHECKPOINT_PATH,
+    terminationFile: TERMINATION_FILE,
+    deadlineEpoch: DEADLINE_EPOCH,
+    checkpoint: checkpointPayload,
+    bestKernelPath: materializedBestPath,
+    bestKernelCode: globalBest.code,
+    bestLanguage: USE_DRIVER ? DRIVER_LANG_FENCE : 'python',
+    materializeBest: bestChanged,
+    label: `checkpoint-${searchStep}`,
+    phase: 'Backpropagate',
+  })
+  if (bestChanged) checkpointedBestId = globalBest.id
+  if (safePoint.termination_requested) {
+    terminationReason = safePoint.termination_reason || 'supervisor_request'
+    log(`  Cooperative stop after step ${stepsCompleted}: ${terminationReason}`)
+    break
+  }
 }
 
 // =============================================================================
@@ -1106,7 +1369,7 @@ phase('AdaptMemory')
 
 let memoryUpdateReport = { updated: false, new_rules: 0, total_rules: skillMemory.length }
 
-if (MEMORY_UPDATE && failureLogs.length) {
+if (MEMORY_UPDATE && failureLogs.length && terminationReason === 'step_limit') {
   const memoryResult = await agentRetry(() => agent(`Update standalone AdaExplore skill memory from evaluated failure logs.
 
 # Hard rules
@@ -1176,7 +1439,13 @@ const treeStats = {
   best_speedup: globalBest.speedup,
 }
 
-const finalReport = await agentRetry(() => agent(`Write a concise technical report for this standalone AdaExplore-style optimization run.
+let finalReport = ''
+if (terminationReason !== 'step_limit') {
+  finalReport = `AdaExplore stopped at a step safe point: ${terminationReason}. ` +
+    `Completed ${stepsCompleted}/${STEPS} steps; best verified speedup ` +
+    `${globalBest.correct ? globalBest.speedup.toFixed(6) : '0'}x.`
+} else {
+  finalReport = await agentRetry(() => agent(`Write a concise technical report for this standalone AdaExplore-style optimization run.
 
 # Operation
 ${OP_DESC}
@@ -1216,6 +1485,7 @@ Then append, using the best measured result (speedup is the best measured speedu
   phase: 'Report',
   model: MODEL.judgment,
 }), { retries: 5 })
+}
 
 // --- exit restore (embedded_inplace safety net) ---
 // The per-step inplace eval ALWAYS restores after each candidate, but on any abnormal
@@ -1230,10 +1500,10 @@ return {
   input_mode: INPUT_MODE,
   problem_definition: OPERATOR_SPEC,
   problem_path: PROBLEM_PATH,
-  generated_kernel_path: globalBest.id !== 'none' ? `${EXP_DIR}/${globalBest.id}.py` : '',
+  generated_kernel_path: globalBest.code ? bestKernelPath() : '',
   initial_candidates: mctsNodes.filter(n => n.parent_id == null),
   initial_generation_result: {
-    verified: globalBest.speedup > 0,
+    verified: globalBest.correct === true && globalBest.speedup > 0,
     selected_candidate_id: globalBest.id || '',
   },
   operation: OP_DESC,
@@ -1243,8 +1513,14 @@ return {
   best_speedup: globalBest.speedup,
   best_score: globalBest.score,
   best_kernel_code: globalBest.code,
+  best_kernel_path: globalBest.code ? bestKernelPath() : null,
   best_node_id: globalBest.id,
   mcts_steps: STEPS,
+  mcts_steps_completed: stepsCompleted,
+  termination_reason: terminationReason,
+  checkpoint_path: CHECKPOINT_PATH,
+  compiled: globalBest.compiled === true,
+  correct: globalBest.correct === true,
   tree_stats: treeStats,
   failure_count: failureLogs.length,
   skill_memory: memoryLines(MAX_MEMORY_RULES),

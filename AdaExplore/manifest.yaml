@@ -16,6 +16,17 @@ backend:
     contract-tests the driver path.
 
     '
+source:
+  paper_title: 'AdaExplore: Failure-Driven Adaptation and Diversity-Preserving Search
+    for Efficient Kernel Generation'
+  paper_url: https://arxiv.org/abs/2604.16625
+  paper_venue: arXiv 2026
+  repo_url: https://github.com/StigLidu/AdaExplore
+  commit_or_tag: ''
+  license: MIT
+  notes: 'Standalone inference/search translation of the paper method. The workflow
+    preserves failure-grounded skill memory and MCTS exploration but does not claim
+    to reproduce any unpublished training or service runtime.'
 routing:
   accepts:
     problem_type:
@@ -23,6 +34,16 @@ routing:
     - 'triton-kernel-generation'
     constraints: []
   best_kernel_field: best_kernel_code
+  all_args:
+  - sol_cli
+  - sol_task_dir
+  - sol_bench_config
+  - sol_seed_dir
+  - sol_cuda_visible_devices
+  - sol_ld_library_path
+  - sol_env_prefix
+  - sol_definition_path
+  - sol_substrate_dir
   topology: mcts
   seed_contract: hybrid
   requires_harness: true
@@ -40,3 +61,4 @@ routing:
   - standalone
   - embedded_dispatch
   - embedded_inplace
+  - sol_execbench_solution

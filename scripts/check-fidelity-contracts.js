@@ -4,6 +4,20 @@ const path = require('path')
 
 const root = process.cwd()
 
+function topLevelBlock(text, key) {
+  const lines = text.split(/\r?\n/)
+  const start = lines.findIndex((line) => line === `${key}:`)
+  if (start < 0) return ''
+  let end = lines.length
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (lines[i] && !/^\s/.test(lines[i]) && !/^#/.test(lines[i])) {
+      end = i
+      break
+    }
+  }
+  return lines.slice(start + 1, end).join('\n')
+}
+
 const checks = [
   ['ARGUS/argus-kernel-optimization.js', ['invariant_check_command', 'invariant_result_path', 'invariant_evidence', 'missing_invariant_evidence']],
   ['KernelBand/kernelband-kernel-optimization.js', ['feature_vector_result_path', 'hardware_signature_result_path', 'evidence_mode']],
@@ -39,6 +53,26 @@ const externalResourceChecks = [
 ]
 
 let failures = []
+
+const manifestDirs = fs.readdirSync(root, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory() && fs.existsSync(path.join(root, entry.name, 'manifest.yaml')))
+  .map((entry) => entry.name)
+  .sort()
+
+for (const directory of manifestDirs) {
+  const file = `${directory}/manifest.yaml`
+  const text = fs.readFileSync(path.join(root, file), 'utf8')
+  const source = topLevelBlock(text, 'source')
+  const routing = topLevelBlock(text, 'routing')
+  if (!source) {
+    failures.push(`${file}: missing top-level source provenance block`)
+  } else if (!/^  (?:paper_url|repo_url|notes):\s*\S.*$/m.test(source)) {
+    failures.push(`${file}: source block has no non-empty paper_url, repo_url, or notes`)
+  }
+  if (!/^  fidelity_boundary:\s*\S.*$/m.test(routing)) {
+    failures.push(`${file}: routing block has no fidelity_boundary`)
+  }
+}
 
 for (const [file, tokens] of [...checks, ...skillChecks]) {
   const filePath = path.join(root, file)
@@ -91,4 +125,4 @@ if (failures.length > 0) {
   process.exit(1)
 }
 
-console.log(`fidelity contracts ok (${checks.length} workflows, ${skillChecks.length} skill contracts, ${skillFolders.length} local skill folders, ${externalResourceChecks.length} external resource links)`)
+console.log(`fidelity contracts ok (${manifestDirs.length} manifest provenance/fidelity records, ${checks.length} risk/adaptation workflows, ${skillChecks.length} skill contracts, ${skillFolders.length} local skill folders, ${externalResourceChecks.length} external resource links)`)

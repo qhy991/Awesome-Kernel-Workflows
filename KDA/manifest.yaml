@@ -15,6 +15,16 @@ backend:
     triton-dryrun.test.js contract-tests the driver path.
 
     '
+source:
+  paper_title: ''
+  paper_url: ''
+  paper_venue: ''
+  repo_url: https://github.com/mit-han-lab/kernel-design-agents
+  commit_or_tag: ''
+  license: ''
+  notes: 'Workflow translation of the public Kernel Design Agents agent-flow contract:
+    inspect, draft, plan, implement one candidate, validate, and promote or reject
+    from recorded evidence.'
 routing:
   accepts:
     problem_type:
