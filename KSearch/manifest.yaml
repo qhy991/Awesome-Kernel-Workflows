@@ -44,7 +44,9 @@ method:
     evaluation outcome. The tree co-evolves with the solution database: successful
     actions spawn continuation children targeting the remaining bottleneck; failed
     actions are downgraded and trigger recovery siblings. Action selection is deterministic
-    (sort by score, difficulty, rating, id) under a hard difficulty cap.
+    (sort by score, difficulty, rating, id) under a hard difficulty cap. The AKW
+    runtime adaptation fans out independent seed implementations for the selected
+    action, then serially measures and reduces them before dependent refinement.
 
     '
   feedback_signal:
@@ -56,7 +58,7 @@ method:
 topology:
   type: tree
   tree:
-    branching_factor_arg: ''
+    branching_factor_arg: seed_candidates
     max_depth_arg: ''
     scoring_function: node score_0_to_1 desc, difficulty_1_to_5 asc, overall_rating_0_to_10
       desc, node_id asc
@@ -224,12 +226,12 @@ phases:
       - selected_node_id
       - action_title
 - name: Generate
-  detail: 'Multi-attempt code generation: first-attempt | debug | improve'
+  detail: 'Bounded parallel seed generation, followed by dependent debug | improve turns'
   position: loop_body
   agents:
   - label: gen-{cycle}-{attempt}
-    description: First-attempt generation from the selected action
-    parallelism: single
+    description: Independent seed generation from the selected action; bounded by seed_candidates and attempts_per_cycle
+    parallelism: parallel_fan_out
     input_variables:
     - selection
     - parentCode
@@ -441,8 +443,13 @@ args:
   - name: attempts_per_cycle
     type: number
     default: '5'
-    description: Maximum generate/improve rounds per cycle
+    description: Total candidate generation/evaluation budget per cycle
     example: '5'
+  - name: seed_candidates
+    type: number
+    default: '4'
+    description: Concurrent independent seed-generation width, capped to attempts_per_cycle. Evaluation remains serial for deterministic GPU measurements and safe embedded project mutation.
+    example: '4'
   - name: stagnation_window
     type: number
     default: '3'

@@ -18,8 +18,8 @@ It keeps a co-evolving **decision tree (world model)** and runs repeated cycles:
 1. Setup
 2. Initialize world model tree
 3. Select best frontier action
-4. Generate / debug / improve kernel code
-5. Evaluate correctness and performance
+4. Generate several independent seed kernels concurrently, then debug / improve
+5. Evaluate correctness and performance serially and reduce the measured results
 6. Refine tree on success or backtrack on failure
 7. Report final trajectory and best solution
 
@@ -42,7 +42,9 @@ Primary arguments accepted by this workflow:
 - `language`: `triton | cuda | python`
 - `target_gpu`: GPU target, e.g., `H100`
 - `iterations`: max search cycles (default `10`)
-- `attempts_per_cycle`: generate/improve iterations per cycle (default `5`)
+- `attempts_per_cycle`: total candidate budget per cycle (default `5`)
+- `seed_candidates`: independent seed-generation width, capped by
+  `attempts_per_cycle` (default `4`)
 - `stagnation_window`: non-improving window to stop a cycle (default `3`)
 - `max_difficulty`: max action difficulty to select first (default `4`)
 - `benchmark_command`: benchmark command
@@ -66,6 +68,7 @@ Workflow({
     target_gpu: 'H100',
     iterations: 10,
     attempts_per_cycle: 5,
+    seed_candidates: 4,
     stagnation_window: 3,
     max_difficulty: 4,
     benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
@@ -76,6 +79,12 @@ Workflow({
   },
 })
 ```
+
+The AKW adaptation uses concurrency only where state is independent: seed agents
+receive the same immutable world-model/action snapshot and write distinct
+candidate paths. Compilation, correctness checks, GPU benchmarks, dependent
+debug/improve turns, and tree mutation remain serial. Setting
+`seed_candidates: 1` restores the previous fully serial search path.
 
 ---
 

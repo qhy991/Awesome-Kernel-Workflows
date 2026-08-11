@@ -8,6 +8,12 @@
 
 ### 修复（Fixed）
 
+- **K-Search 声明了并发容量但没有使用。** Workflow 现在通过 runtime
+  `parallel()` 对互相独立的 seed 实现做有界 fan-out，保持稳定候选身份；已生成
+  batch 仍串行评测，以保护 GPU timing 与 embedded project mutation，之后才从
+  实测最强 seed 继续有依赖的 debug/improve 链。规范参数 `seed_candidates` 默认值为
+  4，且受现有 `attempts_per_cycle` 总预算约束。(`KSearch/`、
+  `_meta/tools/test/ksearch-parallel-candidates.test.js`)
 - **Codex/SOL 候选源码传输与有界执行。** AdaExplore、CUDA-Agent 和
   KernelFoundry 现在会在生成与验证间传递完整 SOL 源码，把物化结果绑定到精确的
   producer call，严格串行执行打包/基准/解析，并取消可能在 workflow turn 超时后

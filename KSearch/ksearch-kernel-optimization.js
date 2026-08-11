@@ -341,6 +341,7 @@ const USE_DRIVER = !!args.backend_dir
 //     target_gpu: 'H100',
 //     iterations: 10,                     // search cycles
 //     attempts_per_cycle: 5,              // generate/improve rounds per cycle
+//     seed_candidates: 4,                 // independent seed candidates generated concurrently
 //     stagnation_window: 3,              // non-improving attempts before cycle ends
 //     max_difficulty: 4,                  // max action difficulty (1-5)
 //     benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
@@ -360,6 +361,11 @@ const LANGUAGE = args.language || 'triton'
 const TARGET_GPU = args.target_gpu || 'H100'
 const MAX_CYCLES = args.iterations || 10
 const ATTEMPTS_PER_CYCLE = args.attempts_per_cycle || 5
+const _requestedSeedCandidates = Number(args.seed_candidates)
+const SEED_CANDIDATES = Math.max(1, Math.min(
+  ATTEMPTS_PER_CYCLE,
+  Number.isFinite(_requestedSeedCandidates) ? Math.floor(_requestedSeedCandidates) : 4,
+))
 const STAGNATION_WINDOW = args.stagnation_window || 3
 const RUN_STAGNATION_LIMIT = args.run_stagnation_limit || 3  // #31a: consecutive cycles with no global-best improvement -> stop early (parity with CUDAAgent STAGNATION_LIMIT). A cycle where the doer kept failing lands here too, since a failed cycle produces no new global best.
 const MAX_DIFFICULTY = args.max_difficulty || 4
@@ -968,26 +974,19 @@ Then append:
   let noImproveOverBaseStreak = 0
   let hasPassedInCycle = false
 
-  for (let attempt = 0; attempt < ATTEMPTS_PER_CYCLE; attempt++) {
-    globalRound++
-    const isFirstAttempt = attempt === 0
-
-    // Compact WM section injected into every codegen prompt (K-Search does this)
-    const wmSection =
-      `\n\n# World Model (persistent decision tree — use it to guide design):\n${JSON.stringify(decisionTree, null, 2).substring(0, 3000)}` +
-      (IS_SOL ? `\n\n${SOL_SOLUTION_CONTRACT}` : '')
-
-    // Determine base_for_debug: whichever of parentCode and cycleBestCode has higher score
-    const baseForDebug = (cycleBestCode && cycleBestScore > baseScore) ? cycleBestCode : parentCode
-    const baseForDebugLabel = (cycleBestCode && cycleBestScore > baseScore) ? 'cycle_best' : 'parent'
-
-    let genResult
-
-    try {
-    if (isFirstAttempt) {
-      // Attempt 1: generate from action (with or without base code)
+  // The world model and parent are immutable during this fan-out. Only kernel
+  // generation is concurrent; evaluation below stays serial so GPU timing and
+  // embedded project mutation retain one owner.
+  const wmSection =
+    `\n\n# World Model (persistent decision tree — use it to guide design):\n${JSON.stringify(decisionTree, null, 2).substring(0, 3000)}` +
+    (IS_SOL ? `\n\n${SOL_SOLUTION_CONTRACT}` : '')
+  const seedIndexes = Array.from({ length: SEED_CANDIDATES }, (_, seedAttempt) => seedAttempt)
+  const generateSeedCandidate = (attempt) => {
       const variantPath = ksearchNodeKernelPath(`cycle_${cycle}_a${attempt}`)  // AWK #58/#59: absolute path the gen agent writes to (survives teardown; driver envelope already reads from this kPath)
-      genResult = await withTurnTimeout(agentRetry(() => agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. Generate a high-performance kernel implementing a SPECIFIC optimization action.
+      const diversityDirective = SEED_CANDIDATES > 1
+        ? `\n\n# Parallel seed branch: ${attempt + 1}/${SEED_CANDIDATES}\nChoose a materially distinct implementation strategy from the other branches while preserving the selected world-model action.`
+        : ''
+      return withTurnTimeout(agentRetry(() => agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. Generate a high-performance kernel implementing a SPECIFIC optimization action.
 
 # Operation: ${OP_DESC} (${opType})
 # Target: ${TARGET_GPU}
@@ -997,7 +996,7 @@ Then append:
 ${specText.substring(0, 2000)}
 
 # Action to implement: "${selection.action_title}"
-${selection.action_description || ''}
+${selection.action_description || ''}${diversityDirective}
 
 ${parentCode ? `# Base code (from parent node — start from this and apply the action):
 \`\`\`${langToken(LANGUAGE)}
@@ -1037,6 +1036,29 @@ Then append:
           required: ['variant_path', 'code'],
         },
       }), { retries: 5, allowNull: true }), `gen-${cycle}-${attempt}`)
+  }
+  const seedCandidates = await parallel(seedIndexes.map((seedAttempt) => () => generateSeedCandidate(seedAttempt)))
+  log(`Generated ${seedCandidates.filter(Boolean).length}/${SEED_CANDIDATES} seed candidates with bounded parallel fan-out; evaluation remains serial.`)
+
+  for (let attempt = 0; attempt < ATTEMPTS_PER_CYCLE; attempt++) {
+    globalRound++
+
+    // Once every independent seed has been measured, continue the dependent
+    // chain from the strongest passing seed rather than whichever branch was
+    // evaluated last.
+    if (attempt === SEED_CANDIDATES && cycleBestCode) {
+      currentRawCode = cycleBestCode
+    }
+
+    // Determine base_for_debug: whichever of parentCode and cycleBestCode has higher score
+    const baseForDebug = (cycleBestCode && cycleBestScore > baseScore) ? cycleBestCode : parentCode
+    const baseForDebugLabel = (cycleBestCode && cycleBestScore > baseScore) ? 'cycle_best' : 'parent'
+
+    let genResult
+
+    try {
+    if (attempt < SEED_CANDIDATES) {
+      genResult = seedCandidates[attempt]
     } else if (!hasPassedInCycle) {
       // Attempts 2+, NO passing solution yet: DEBUG prompt
       // Uses currentRawCode (last attempt's code) as the buggy code to fix
@@ -1403,8 +1425,12 @@ Then append, using the values you just measured (status="done" if it compiled AN
       }
     }
 
-    // Dual stagnation detection (K-Search terminates cycle on EITHER)
-    if (noImproveStreak >= STAGNATION_WINDOW || noImproveOverBaseStreak >= STAGNATION_WINDOW) {
+    // Do not abandon already-generated seeds halfway through their serial
+    // measurement reduction. After the seed batch, preserve the original dual
+    // stagnation rule for dependent debug/improve turns.
+    const seedBatchMeasured = attempt + 1 >= SEED_CANDIDATES
+    if (seedBatchMeasured &&
+        (noImproveStreak >= STAGNATION_WINDOW || noImproveOverBaseStreak >= STAGNATION_WINDOW)) {
       log(`Stagnation after ${attempt + 1} attempts (streak=${noImproveStreak}, over_base=${noImproveOverBaseStreak}) — ending cycle`)
       break
     }
