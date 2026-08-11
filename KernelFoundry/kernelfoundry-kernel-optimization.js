@@ -18,11 +18,12 @@ const SOL_SOLUTION_CONTRACT = [
   'You are authoring a kernel that will be packaged into a solution.json and run by',
   'the sol-execbench harness, which compiles it internally. Therefore:',
   '',
-  '1. Emit a COMPLETE kernel source plus a torch binding that exposes the task',
-  '   entry point (run(...)). Do NOT write a standalone main()/CLI harness.',
+  '1. Emit a COMPLETE candidate with the task entry point run(...). CUDA C++',
+  '   requires a torch PYBIND11_MODULE binding; Python/Triton requires a',
+  '   module-level def run(...). Do NOT write a standalone main()/CLI harness.',
   '2. Match the task reference signature exactly (same argument order/dtypes).',
   '3. Do NOT package, compile, or benchmark yourself — the workflow + substrate',
-  '   handle pack -> sol-execbench -> parse. Return only the kernel + binding.',
+  '   handle pack -> sol-execbench -> parse. Return only the runnable source.',
 ].join('\n')
 
 function __solQ(s) { return `"${String(s).replace(/"/g, '\\"')}"` }
@@ -43,16 +44,17 @@ function __solExecbenchEvalPlan(ctx) {
   const env = ctx.envPrefix ? `${String(ctx.envPrefix).trim()} ` : ''
   const definition = ctx.definitionPath ? ` --definition ${__solQ(ctx.definitionPath)}` : ''
 
-  const pack = `python3 ${__solQ(substrateDir + '/pack_sol_candidate.py')} --kernel ${__solQ(kernelSource)} --contract ${__solQ(contractEnv)} --out ${__solQ(solutionOut)}`
-  const run = `cd ${__solQ(seedDir)} && ${env}${ld}CUDA_VISIBLE_DEVICES=${cvd} ${__solQ(solCli)} ${__solQ(taskDir)}${definition} --solution ${__solQ(solutionOut)} --config ${__solQ(benchConfig)} -o ${__solQ(benchOut)}`
-  const parse = `python3 ${__solQ(substrateDir + '/parse_sol_bench.py')} ${__solQ(benchOut)}${normalizedOut ? ` --out ${__solQ(normalizedOut)}` : ''}`
+  const pack = `rm -f -- ${__solQ(solutionOut)} && python3 ${__solQ(substrateDir + '/pack_sol_candidate.py')} --kernel ${__solQ(kernelSource)} --contract ${__solQ(contractEnv)} --out ${__solQ(solutionOut)}`
+  const clearRunOutputs = [benchOut, normalizedOut].filter(Boolean).map(__solQ).join(' ')
+  const run = `rm -f -- ${clearRunOutputs} && test -s ${__solQ(solutionOut)} && cd ${__solQ(seedDir)} && ${env}${ld}CUDA_VISIBLE_DEVICES=${cvd} ${__solQ(solCli)} ${__solQ(taskDir)}${definition} --solution ${__solQ(solutionOut)} --config ${__solQ(benchConfig)} -o ${__solQ(benchOut)}`
+  const parse = `test -s ${__solQ(benchOut)} && python3 ${__solQ(substrateDir + '/parse_sol_bench.py')} ${__solQ(benchOut)} --contract ${__solQ(contractEnv)}${normalizedOut ? ` --out ${__solQ(normalizedOut)}` : ''}`
 
   return {
     pack,
     run,
     parse,
     order: ['pack', 'run', 'parse'],
-    cleanupInvariant: 'solution.json + bench.jsonl are per-candidate scratch files in the run dir; overwrite freely. No project source is mutated (non-mutating method).',
+    cleanupInvariant: 'solution.json + bench.jsonl are per-candidate scratch files in the run dir; each stage clears its own stale outputs and requires the preceding artifact. No project source is mutated (non-mutating method).',
   }
 }
 // --- END sol-execbench-eval substrate ---
@@ -360,7 +362,7 @@ const USE_DRIVER = !!args.backend_dir
 //     archive_update_result_path: '/tmp/kernelfoundry_exp/archive/updates.jsonl',
 //     generations: 40,
 //     meta_prompt_interval: 10,
-//     speedup_target: 2.0,
+//     target_speedup: 2.0,
 //     stop_on_target: true,                 // false keeps fixed-budget research mode
 //     target_patience: 2,                   // consecutive safe points at/above target
 //     min_generations: 2,
@@ -381,12 +383,14 @@ const TEST_CMD = args.test_command || ''
 const BENCH_CMD = args.benchmark_command || ''
 const DESCRIPTOR_RESULT_PATH = args.descriptor_result_path || `${args.exp_dir || '/tmp/kernelfoundry_exp'}/descriptors/latest.json`
 const ARCHIVE_UPDATE_RESULT_PATH = args.archive_update_result_path || `${args.exp_dir || '/tmp/kernelfoundry_exp'}/archive/updates.jsonl`
-const GENERATIONS = args.generations || 30
+const GENERATIONS = Number(args.generations ?? 30)
 const META_PROMPT_INTERVAL = args.meta_prompt_interval || 10
-const SPEEDUP_TARGET = args.speedup_target || 2.0
+// target_speedup is the canonical KerSor/session term. speedup_target remains a
+// bounded edge adapter for historical direct Workflow() callers.
+const SPEEDUP_TARGET = Number(args.target_speedup ?? args.speedup_target ?? 2.0)
 const STOP_ON_TARGET = args.stop_on_target !== false
 const TARGET_PATIENCE = Math.max(1, Number(args.target_patience || 2))
-const MIN_GENERATIONS = Math.max(1, Number(args.min_generations || 2))
+const MIN_GENERATIONS = Math.max(1, Number(args.min_generations ?? 2))
 const SELECTION_STRATEGY = args.selection_strategy || 'mixed'
 const EXP_DIR = args.exp_dir || '/tmp/kernelfoundry_exp'
 const TERMINATION_FILE = args.termination_file || ''
@@ -892,7 +896,7 @@ perform more than this single bounded measurement retry.
 
 The parser writes the canonical measurement JSON at ${generationResultPath}.
 Read only that JSON. Require compiled=true, correct=true, and n_pass==n_total>0
-before accepting the candidate. Use its exact geomean_speedup as speedup. Do not
+before accepting the candidate. Use its exact speedup field. Do not
 recompute a mean-latency ratio or reuse another generation's output.
 Classify d_mem/d_algo/d_sync from ${candidatePath} only. ${plan.cleanupInvariant}
 
@@ -946,7 +950,7 @@ ${benchmarkCommand
       : `   Run exactly: ${benchmarkCommand}`)
   : `   No benchmark harness was supplied. You may describe an estimate, but return speedup=0.`}
    Read the harness JSON at ${generationResultPath}. The ONLY authoritative
-   performance value is its top-level geomean_speedup. Return speedup equal to
+   performance value is its top-level speedup. Return speedup equal to
    that exact number. NEVER recompute a ratio from mean/reference latency and
    never substitute a self-reported estimate. compiled/correct and n_pass/n_total
    must also come from this same JSON. If measured JSON is absent or invalid,
@@ -1019,7 +1023,7 @@ KernelFoundry source-measurement binding for candidate gen${generation}.
 Run one small deterministic Python program; do not infer or repair anything:
 1. Read ${candidatePath} as bytes and compute SHA-256.
 2. Read ${generationResultPath} as bytes, compute SHA-256, then json.load it.
-3. Require top-level compiled=true, correct=true, numeric geomean_speedup, and
+3. Require top-level compiled=true, correct=true, numeric speedup, and
    numeric n_pass == n_total > 0. Do not calculate a ratio or read a mean.
 4. If ${TASK_IDENTITY_PATH || '<none>'} names an existing file, hash its exact
    bytes as task_sha256, record its absolute task_path, and set
@@ -1031,8 +1035,8 @@ Run one small deterministic Python program; do not infer or repair anything:
    schema_version=1, workflow="${WORKFLOW_NAME}", candidate_id="gen${generation}",
    candidate_path (absolute), candidate_sha256, measurement_path (absolute),
    measurement_sha256, task_path/task_sha256, task_fingerprint_kind,
-   metric_name="geomean_speedup",
-   measurement_metric_field="geomean_speedup", metric_value (the exact JSON
+   metric_name="speedup",
+   measurement_metric_field="speedup", metric_value (the exact JSON
    value), compiled=true, correct=true, n_pass, n_total.
 6. Compute the binding file SHA-256. Append one compact JSON line containing
    event="candidate_bound", candidate_id, candidate_sha256, measurement_sha256,
@@ -1086,7 +1090,7 @@ Run one small deterministic Python program; do not infer or repair anything:
     evalResult.speedup = bindingVerified ? Number(canonicalEval.speedup || 0) : 0
     evalResult.n_pass = canonicalEval.n_pass
     evalResult.n_total = canonicalEval.n_total
-    evalResult.metric_name = 'geomean_speedup'
+    evalResult.metric_name = 'speedup'
     evalResult.result_path = generationResultPath
     candidateBinding = {
       verified: bindingVerified,
@@ -1305,7 +1309,7 @@ Run one small deterministic Python program; do not infer or repair anything:
     compiled: globalBest.compiled === true,
     correct: globalBest.correct === true,
     metric: {
-      name: 'geomean_speedup',
+      name: 'speedup',
       value: globalBest.speedup || 0,
     },
     target: SPEEDUP_TARGET,
@@ -1341,7 +1345,7 @@ Run one small deterministic Python program; do not infer or repair anything:
       kind: 'raw_json',
       compiled_field: 'compiled',
       correct_field: 'correct',
-      metric_field: 'geomean_speedup',
+      metric_field: 'speedup',
     } : {
       kind: 'workflow_verified',
     },
@@ -1459,7 +1463,7 @@ let finalReport = ''
 if (terminationReason !== 'generation_limit') {
   finalReport = `KernelFoundry stopped at a generation safe point: ${terminationReason}. ` +
     `Completed ${generationsCompleted}/${GENERATIONS} generations; best verified ` +
-    `harness geomean speedup ${globalBest.speedup.toFixed(6)}x; ` +
+    `contract aggregate speedup ${globalBest.speedup.toFixed(6)}x; ` +
     `archive coverage ${Object.keys(archive).length}/64.`
 } else {
   finalReport = await agentRetry(() => agent(`Write a concise technical report on KernelFoundry MAP-Elites optimization.
@@ -1529,7 +1533,7 @@ return {
   baseline_time_ms: baselineTime,
   best_speedup: globalBest.speedup,
   canonical_metric: {
-    name: 'geomean_speedup',
+    name: 'speedup',
     value: globalBest.speedup,
   },
   best_cell: globalBest.cell,

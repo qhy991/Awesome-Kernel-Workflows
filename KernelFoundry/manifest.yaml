@@ -49,6 +49,10 @@ routing:
   # Check 2c compares that to contract.env::baseline_id (absent -> gate skips).
   all_args:
   - fair_baseline_id
+  - target_speedup
+  - language
+  - generations
+  - min_generations
   - termination_file
   - deadline_epoch
   - sol_cli

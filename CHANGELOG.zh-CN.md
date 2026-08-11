@@ -8,6 +8,18 @@
 
 ### 修复（Fixed）
 
+- **SOL 打包遵循候选源码类型。** 共享 packer 对含顶层 `run` 的 Python 候选原生
+  输出 Triton 或 PyTorch module，只有 CUDA extension 要求 `PYBIND11_MODULE`。
+  Embedded SOL evaluation 在 PACK/RUN/PARSE 前清除陈旧 transport/result 文件，
+  失败阶段不会复用前一个候选的证据。KernelFoundry 也声明并消费规范化的
+  `target_speedup`、language 与 generation 参数，同时保留有界 legacy speedup
+  alias。(`_substrate/`、`KernelFoundry/`、九个 SOL workflow 投影)
+- **由合同唯一控制 SOL 聚合。** 共享 sol-execbench 解析器现在直接从既有 session
+  `contract.env` 读取 `aggregate_reduction`，在不新增重复 workflow 参数的前提下
+  计算 `sum`、`mean` 或 `geomean`，并输出带归约来源的通用 `speedup` 字段。九个
+  SOL workflow 投影均把合同传给解析器；KernelAgent 与 KernelFoundry 改为读取
+  通用指标，不再假定几何均值。(`_substrate/`、九个 SOL workflow 投影、
+  `_meta/tools/test/`)
 - **K-Search 声明了并发容量但没有使用。** Workflow 现在通过 runtime
   `parallel()` 对互相独立的 seed 实现做有界 fan-out，保持稳定候选身份；已生成
   batch 仍串行评测，以保护 GPU timing 与 embedded project mutation，之后才从

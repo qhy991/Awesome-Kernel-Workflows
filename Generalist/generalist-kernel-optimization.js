@@ -20,11 +20,12 @@ const SOL_SOLUTION_CONTRACT = [
   'You are authoring a kernel that will be packaged into a solution.json and run by',
   'the sol-execbench harness, which compiles it internally. Therefore:',
   '',
-  '1. Emit a COMPLETE kernel source plus a torch binding that exposes the task',
-  '   entry point (run(...)). Do NOT write a standalone main()/CLI harness.',
+  '1. Emit a COMPLETE candidate with the task entry point run(...). CUDA C++',
+  '   requires a torch PYBIND11_MODULE binding; Python/Triton requires a',
+  '   module-level def run(...). Do NOT write a standalone main()/CLI harness.',
   '2. Match the task reference signature exactly (same argument order/dtypes).',
   '3. Do NOT package, compile, or benchmark yourself — the workflow + substrate',
-  '   handle pack -> sol-execbench -> parse. Return only the kernel + binding.',
+  '   handle pack -> sol-execbench -> parse. Return only the runnable source.',
 ].join('\n')
 
 function __solQ(s) { return `"${String(s).replace(/"/g, '\\"')}"` }
@@ -45,16 +46,17 @@ function __solExecbenchEvalPlan(ctx) {
   const env = ctx.envPrefix ? `${String(ctx.envPrefix).trim()} ` : ''
   const definition = ctx.definitionPath ? ` --definition ${__solQ(ctx.definitionPath)}` : ''
 
-  const pack = `python3 ${__solQ(substrateDir + '/pack_sol_candidate.py')} --kernel ${__solQ(kernelSource)} --contract ${__solQ(contractEnv)} --out ${__solQ(solutionOut)}`
-  const run = `cd ${__solQ(seedDir)} && ${env}${ld}CUDA_VISIBLE_DEVICES=${cvd} ${__solQ(solCli)} ${__solQ(taskDir)}${definition} --solution ${__solQ(solutionOut)} --config ${__solQ(benchConfig)} -o ${__solQ(benchOut)}`
-  const parse = `python3 ${__solQ(substrateDir + '/parse_sol_bench.py')} ${__solQ(benchOut)}${normalizedOut ? ` --out ${__solQ(normalizedOut)}` : ''}`
+  const pack = `rm -f -- ${__solQ(solutionOut)} && python3 ${__solQ(substrateDir + '/pack_sol_candidate.py')} --kernel ${__solQ(kernelSource)} --contract ${__solQ(contractEnv)} --out ${__solQ(solutionOut)}`
+  const clearRunOutputs = [benchOut, normalizedOut].filter(Boolean).map(__solQ).join(' ')
+  const run = `rm -f -- ${clearRunOutputs} && test -s ${__solQ(solutionOut)} && cd ${__solQ(seedDir)} && ${env}${ld}CUDA_VISIBLE_DEVICES=${cvd} ${__solQ(solCli)} ${__solQ(taskDir)}${definition} --solution ${__solQ(solutionOut)} --config ${__solQ(benchConfig)} -o ${__solQ(benchOut)}`
+  const parse = `test -s ${__solQ(benchOut)} && python3 ${__solQ(substrateDir + '/parse_sol_bench.py')} ${__solQ(benchOut)} --contract ${__solQ(contractEnv)}${normalizedOut ? ` --out ${__solQ(normalizedOut)}` : ''}`
 
   return {
     pack,
     run,
     parse,
     order: ['pack', 'run', 'parse'],
-    cleanupInvariant: 'solution.json + bench.jsonl are per-candidate scratch files in the run dir; overwrite freely. No project source is mutated (non-mutating method).',
+    cleanupInvariant: 'solution.json + bench.jsonl are per-candidate scratch files in the run dir; each stage clears its own stale outputs and requires the preceding artifact. No project source is mutated (non-mutating method).',
   }
 }
 // --- END sol-execbench-eval substrate ---
@@ -981,7 +983,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
         `1. Pack:  ${solPlan.pack}`,
         `2. Run:   ${solPlan.run}`,
         `3. Parse: ${solPlan.parse}`,
-        `The parse step prints one line "SPEEDUP=<geomean> STATUS=<PASS|FAIL> WORKLOADS=<passed>/<total>". Parse correctness and latency STRICTLY from that line. Do NOT fabricate numbers. Map into the schema: compiled = run produced a bench.jsonl, correct = STATUS==PASS, speedup = the SPEEDUP value. ${solPlan.cleanupInvariant}`,
+        `The parse step prints one line "SPEEDUP=<aggregate> REDUCTION=<contract reduction> STATUS=<PASS|FAIL> WORKLOADS=<passed>/<total>". Parse correctness and latency STRICTLY from that line. Do NOT fabricate numbers. Map into the schema: compiled = run produced a bench.jsonl, correct = STATUS==PASS, speedup = the SPEEDUP value. ${solPlan.cleanupInvariant}`,
       ].join('\n')
     }
     const embeddedProposal = INTEGRATION_DECISION.method === 'embedded_dispatch'

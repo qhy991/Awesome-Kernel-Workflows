@@ -19,13 +19,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) { m.def("run", &run); }
 '''
 
 class PackSolTests(unittest.TestCase):
-    def _run(self, kernel_text, contract_text):
+    def _run(self, kernel_text, contract_text, filename="kernel.cu"):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
-            (d / "kernel.cu").write_text(kernel_text)
+            kernel = d / filename
+            kernel.write_text(kernel_text)
             (d / "contract.env").write_text(contract_text)
             out = d / "solution.json"
-            r = subprocess.run([sys.executable, str(PACK), "--kernel", str(d / "kernel.cu"),
+            r = subprocess.run([sys.executable, str(PACK), "--kernel", str(kernel),
                                 "--contract", str(d / "contract.env"), "--out", str(out)],
                                capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
@@ -105,6 +106,39 @@ class PackSolTests(unittest.TestCase):
                 "PYBIND11_MODULE" in r.stderr or "binding" in r.stderr,
                 f"Expected PYBIND11_MODULE or binding in stderr; got: {r.stderr!r}"
             )
+
+    def test_triton_python_candidate_uses_native_python_transport(self):
+        source = "import torch\nimport triton\nimport triton.language as tl\n\ndef run(a, b):\n    return torch.matmul(a, b.T)\n"
+        sol = self._run(source, CONTRACT, "candidate.py")
+        self.assertEqual(sol["spec"]["languages"], ["triton"])
+        self.assertEqual(sol["spec"]["entry_point"], "candidate.py::run")
+        self.assertNotIn("binding", sol["spec"])
+        self.assertNotIn("compile_options", sol["spec"])
+
+    def test_pytorch_candidate_uses_pytorch_transport(self):
+        source = "import torch\n\ndef run(a, b):\n    return torch.matmul(a, b.T)\n"
+        sol = self._run(source, CONTRACT, "candidate.py")
+        self.assertEqual(sol["spec"]["languages"], ["pytorch"])
+        self.assertEqual(sol["spec"]["destination_passing_style"], False)
+
+    def test_python_candidate_without_module_run_fails_and_removes_stale_output(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            kernel = d / "candidate.py"
+            contract = d / "contract.env"
+            out = d / "solution.json"
+            kernel.write_text("import torch\n\ndef helper():\n    pass\n")
+            contract.write_text(CONTRACT)
+            out.write_text('{"stale": true}\n')
+            r = subprocess.run(
+                [sys.executable, str(PACK), "--kernel", str(kernel),
+                 "--contract", str(contract), "--out", str(out)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("module-level run", r.stderr)
+            self.assertFalse(out.exists())
 
     def test_contract_comment_stripping(self):
         # contract.env values can carry trailing '#' comments (real 025 contract.env does)

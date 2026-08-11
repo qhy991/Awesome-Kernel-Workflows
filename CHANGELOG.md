@@ -10,6 +10,21 @@ for the versioning policy.
 
 ### Fixed
 
+- **SOL packaging follows candidate source type.** The shared packer now emits
+  native Triton or PyTorch modules for Python candidates with a top-level
+  `run`, while CUDA extensions alone require `PYBIND11_MODULE`. Embedded SOL
+  evaluation removes stale transport/result files before PACK/RUN/PARSE, so a
+  failed stage cannot reuse evidence from an earlier candidate. KernelFoundry
+  also declares and consumes canonical `target_speedup`, language, and
+  generation arguments while retaining a bounded legacy speedup alias.
+  (`_substrate/`, `KernelFoundry/`, nine SOL workflow projections)
+- **Contract-owned SOL aggregation.** The shared sol-execbench parser now reads
+  `aggregate_reduction` directly from the existing session `contract.env`,
+  computes `sum`, `mean`, or `geomean` without a duplicate workflow argument,
+  and emits one generic `speedup` field with reduction provenance. All nine SOL
+  workflow projections pass the contract to the parser; KernelAgent and
+  KernelFoundry consume the generic metric instead of assuming a geomean.
+  (`_substrate/`, nine SOL workflow projections, `_meta/tools/test/`)
 - **K-Search candidate concurrency was declared but unused.** The workflow now
   fans out independent seed implementations with bounded runtime `parallel()`
   concurrency, preserves stable candidate identities, evaluates the generated

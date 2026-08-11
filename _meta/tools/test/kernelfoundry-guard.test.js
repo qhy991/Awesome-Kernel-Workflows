@@ -31,8 +31,8 @@ const minimalReturns = {
   'setup': { operator_code: 'op', operator_type: 'softmax', input_shapes: '[B,N]', baseline_time_ms: 0.5, hardware_info: 'H100', feasible_cells: [] },
   'vary-0': { kernel_code: '__global__ void k(){}', strategy_description: 's', memory_pattern: 'm', algorithm_type: 'a', parallelism_level: 'p', is_templated: false, template_params: [] },
   'materialize-0': { written: true, path: '/tmp/kf-guard/gen_0.cu' },
-  'eval-0': { compiled: true, correct: true, speedup: 1.2, metric_name: 'geomean_speedup', result_path: '/tmp/kf-guard/gen_0_result.json', kernel_time_ms: 0.4, d_mem: 1, d_algo: 1, d_sync: 1, error_message: '', performance_notes: 'p' },
-  'canonical-bind-0': { verified: true, compiled: true, correct: true, speedup: 1.2, n_pass: 7, n_total: 7, metric_name: 'geomean_speedup', result_path: '/tmp/kf-guard/gen_0_result.json', binding_path: '/tmp/kf-guard/bindings/gen_0.json', binding_sha256: 'a'.repeat(64), candidate_sha256: 'b'.repeat(64), measurement_sha256: 'c'.repeat(64), task_path: '/tmp/reference.py', task_sha256: 'd'.repeat(64), task_fingerprint_kind: 'file_sha256' },
+  'eval-0': { compiled: true, correct: true, speedup: 1.2, metric_name: 'speedup', result_path: '/tmp/kf-guard/gen_0_result.json', kernel_time_ms: 0.4, d_mem: 1, d_algo: 1, d_sync: 1, error_message: '', performance_notes: 'p' },
+  'canonical-bind-0': { verified: true, compiled: true, correct: true, speedup: 1.2, n_pass: 7, n_total: 7, metric_name: 'speedup', result_path: '/tmp/kf-guard/gen_0_result.json', binding_path: '/tmp/kf-guard/bindings/gen_0.json', binding_sha256: 'a'.repeat(64), candidate_sha256: 'b'.repeat(64), measurement_sha256: 'c'.repeat(64), task_path: '/tmp/reference.py', task_sha256: 'd'.repeat(64), task_fingerprint_kind: 'file_sha256' },
   'checkpoint-0': { termination_requested: false, checkpoint_path: '/tmp/kf-guard/checkpoint.json' },
   ...ds('0'),
   'final-report': 'r',
@@ -90,7 +90,7 @@ test('measured target stops at safe-point patience and uses canonical harness me
   const caps = await run({
     language: 'cuda',
     generations: 5,
-    speedup_target: 2,
+    target_speedup: 2,
     test_command: 'python test.py {kernel_path} --out {result_path}',
     benchmark_command: 'python bench.py {kernel_path} --out {result_path}',
   }, returns)
@@ -102,7 +102,7 @@ test('measured target stops at safe-point patience and uses canonical harness me
   assert.ok(!labels.includes('vary-2'), `target patience should stop before gen2: ${labels}`)
   assert.ok(!labels.includes('final-report'), 'safe-point stop must not spend another report agent')
   const evalPrompt = caps.find(c => c.label === 'eval-0').prompt
-  assert.match(evalPrompt, /ONLY authoritative[\s\S]*geomean_speedup/)
+  assert.match(evalPrompt, /ONLY authoritative[\s\S]*top-level speedup/)
   assert.match(evalPrompt, /\/tmp\/kf-guard\/gen_0\.cu/)
   assert.doesNotMatch(evalPrompt, /\{kernel_path\}/)
   const bindingPrompt = caps.find(c => c.label === 'canonical-bind-0').prompt
@@ -131,7 +131,7 @@ test('measured candidate without complete binding hashes cannot enter best state
   }
   const caps = await run({
     language: 'cuda',
-    speedup_target: 2,
+    target_speedup: 2,
     test_command: 'python test.py {kernel_path} --out {result_path}',
     benchmark_command: 'python bench.py {kernel_path} --out {result_path}',
   }, returns)

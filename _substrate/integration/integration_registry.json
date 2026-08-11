@@ -40,7 +40,7 @@
       "build_fidelity": "production",
       "reversible": true,
       "requires": ["sol_execbench_cli"],
-      "eval_mechanism": "embedded/sol_execbench_eval.js (pack candidate -> solution.json -> sol-execbench CLI -> parse per-workload speedup_factor geomean)",
+      "eval_mechanism": "embedded/sol_execbench_eval.js (pack candidate -> solution.json -> sol-execbench CLI -> parse the contract-defined aggregate reduction)",
       "_doc": "candidate kernel is packaged into a sol-execbench solution.json (sources[] + spec entry_point/binding) and evaluated by the sol-execbench CLI, which compiles internally against the task harness. Non-mutating, no project source touched."
     }
   },

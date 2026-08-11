@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Deterministically wrap a candidate kernel into a sol-execbench solution.json.
+"""Deterministically wrap a candidate into a sol-execbench solution.json.
 
-No LLM, no network. Schema mirrors CutlassGEMM/solution_example.json (verified).
-If the kernel already carries a PYBIND11_MODULE it is packed as a single source;
-otherwise the packer exits non-zero with a clear error (bare kernels cannot be
-run by sol-execbench — a bound entry point is required).
+No LLM, no network.  The source representation owns the transport contract:
+Python/Triton candidates expose a module-level ``run`` function, while CUDA C++
+candidates expose ``run`` through ``PYBIND11_MODULE``.  A failed pack removes a
+stale output so a later stage cannot accidentally evaluate an older candidate.
 """
 import argparse
+import ast
 import json
 import os
 import sys
@@ -43,27 +44,38 @@ def normalize_cuda_filename(kernel_filename):
     return f"{stem or 'kernel'}.cu"
 
 
+def python_language(kernel_src_text):
+    """Return the sol-execbench Python language, or fail on no public run()."""
+    try:
+        tree = ast.parse(kernel_src_text)
+    except SyntaxError as exc:
+        raise SystemExit(
+            f"pack_sol_candidate: Python candidate is not valid syntax: {exc}"
+        ) from exc
+    if not any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "run"
+        for node in tree.body
+    ):
+        raise SystemExit(
+            "pack_sol_candidate: Python candidate has no module-level run() entry point"
+        )
+    uses_triton = any(
+        (isinstance(node, ast.Import) and any(alias.name == "triton" or alias.name.startswith("triton.") for alias in node.names))
+        or (isinstance(node, ast.ImportFrom) and node.module and (node.module == "triton" or node.module.startswith("triton.")))
+        for node in tree.body
+    )
+    return "triton" if uses_triton else "pytorch"
+
+
 def build_solution(kernel_src_text, kernel_filename, contract):
     task = contract.get("task_name") or contract.get("op") or "candidate"
     has_binding = "PYBIND11_MODULE" in kernel_src_text
-    kernel_filename = normalize_cuda_filename(kernel_filename)
-    sources = [{"path": kernel_filename, "content": kernel_src_text}]
     if has_binding:
+        kernel_filename = normalize_cuda_filename(kernel_filename)
+        sources = [{"path": kernel_filename, "content": kernel_src_text}]
         entry_point = f"{kernel_filename}::run"
-    else:
-        # A bare kernel with no PYBIND11_MODULE cannot be packaged into a runnable
-        # sol-execbench solution: there is no bound entry point. Fail loudly rather
-        # than emit a solution.json whose entry_point resolves to nothing.
-        raise SystemExit(
-            "pack_sol_candidate: kernel has no PYBIND11_MODULE binding; "
-            "sol-execbench needs a bound run() entry point. The proposal must emit "
-            "a kernel + torch binding (see SOL_SOLUTION_CONTRACT), not a bare kernel."
-        )
-    return {
-        "name": f"{task}_candidate",
-        "definition": task,
-        "author": "kersor-workflow",
-        "spec": {
+        spec = {
             # sol-execbench validates this against its public SolutionSpec enum.
             # "cuda" is a backend name, not a supported source-language value.
             "languages": ["cuda_cpp"],
@@ -77,7 +89,27 @@ def build_solution(kernel_src_text, kernel_filename, contract):
                 "cuda_cflags": ["-std=c++17", "-O3", "--use_fast_math"],
                 "ld_flags": [],
             },
-        },
+        }
+    elif os.path.splitext(kernel_filename)[1].lower() == ".py":
+        language = python_language(kernel_src_text)
+        sources = [{"path": kernel_filename, "content": kernel_src_text}]
+        spec = {
+            "languages": [language],
+            "target_hardware": ["LOCAL"],
+            "entry_point": f"{kernel_filename}::run",
+            "dependencies": [],
+            "destination_passing_style": False,
+        }
+    else:
+        raise SystemExit(
+            "pack_sol_candidate: CUDA/C++ candidate has no PYBIND11_MODULE binding; "
+            "Python/Triton candidates must use a .py source with module-level run()."
+        )
+    return {
+        "name": f"{task}_candidate",
+        "definition": task,
+        "author": "kersor-workflow",
+        "spec": spec,
         "sources": sources,
         "description": f"sol-execbench candidate for {task} (backend={contract.get('backend', 'cuda')})",
     }
@@ -89,12 +121,28 @@ def main():
     ap.add_argument("--contract", required=True)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
-    with open(args.kernel) as fh:
-        kernel_text = fh.read()
-    contract = parse_contract(args.contract)
-    sol = build_solution(kernel_text, os.path.basename(args.kernel), contract)
-    with open(args.out, "w") as fh:
-        json.dump(sol, fh, indent=2)
+    try:
+        with open(args.kernel) as fh:
+            kernel_text = fh.read()
+        contract = parse_contract(args.contract)
+        sol = build_solution(kernel_text, os.path.basename(args.kernel), contract)
+    except BaseException:
+        try:
+            os.unlink(args.out)
+        except FileNotFoundError:
+            pass
+        raise
+    tmp = f"{args.out}.tmp.{os.getpid()}"
+    try:
+        with open(tmp, "w") as fh:
+            json.dump(sol, fh, indent=2)
+            fh.write("\n")
+        os.replace(tmp, args.out)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
     print(f"WROTE {args.out}")
     return 0
 

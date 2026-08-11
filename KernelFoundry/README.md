@@ -61,7 +61,7 @@ Workflow({name: 'kernelfoundry-kernel-optimization', args: {
   benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
   generations: 40,
   meta_prompt_interval: 10,
-  speedup_target: 2.0,
+  target_speedup: 2.0,
 }})
 ```
 
@@ -77,7 +77,7 @@ Workflow({name: 'kernelfoundry-kernel-optimization', args: {
 | `benchmark_command` | `''` | Performance benchmark command |
 | `generations` | `30` | Number of evolutionary generations |
 | `meta_prompt_interval` | `10` | Generations between prompt evolution |
-| `speedup_target` | `2.0` | Target speedup for fitness normalization |
+| `target_speedup` | `2.0` | Target speedup for fitness normalization (`speedup_target` remains a legacy direct-call alias) |
 | `selection_strategy` | `'mixed'` | Parent selection: mixed/uniform/fitness/curiosity |
 
 ## Output
