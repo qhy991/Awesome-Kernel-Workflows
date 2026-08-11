@@ -1173,7 +1173,11 @@ Then append, using the result you just measured (status="done" if the kernel pas
     }
   }
 
-  if (USE_DRIVER) {
+  // sol-execbench already owns production compilation and execution for its
+  // packaged candidate. The standalone driver envelope uses a different
+  // on-disk candidate layout, so running it as well both duplicates
+  // verification and targets paths that do not exist.
+  if (USE_DRIVER && !IS_SOL) {
     for (let i = 0; i < validCandidates.length; i++) {
       const candidate = validCandidates[i]
       const kPath = `${EXP_DIR}/candidates/${candidate.id}/${kernelFilename()}`

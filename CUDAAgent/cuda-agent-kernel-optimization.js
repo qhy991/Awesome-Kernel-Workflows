@@ -838,6 +838,13 @@ Generate THREE files:
 - Do NOT use torch.nn.functional fallbacks
 - Ensure numerical correctness (match reference within tolerance)
 - This is attempt ${currentAttempt + 1}/${MAX_TURNS}
+- STRICT BOUNDED GENERATION: read only the task/model paths named in this
+  prompt and files already under ${EXP_DIR}. Do NOT recursively search /home,
+  inspect external CUTLASS/ThunderKittens/framework repositories, browse prior
+  experiments, compile, or benchmark during Implement; Verify owns all of that.
+  Use at most two short file-inspection shell commands, then immediately return
+  one complete self-contained candidate in the required JSON schema. Prefer a
+  simple correct CUDA kernel over an unfinished architecture-specific survey.
 
 Return all three files.
 
@@ -845,6 +852,7 @@ Return all three files.
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (this is optimization attempt ${currentAttempt}):
 {"workflow":"${WORKFLOW_NAME}","phase":"Implement","ts":"<ts>","status":"done","candidate_id":"attempt-${currentAttempt}","technique":"<the main optimization you applied this attempt>","note":"<what changed vs the previous attempt>"}`, {
+    model: MODEL.judgment,
     label: `impl-${currentAttempt}`,
     phase: 'Implement',
     schema: {
@@ -857,7 +865,12 @@ Then append (this is optimization attempt ${currentAttempt}):
       },
       required: ['kernel_code', 'binding_code', 'model_new_code'],
     },
-  }), { retries: 5 }), `Implement turn ${currentAttempt + 1}`)
+  // The host broker timeout is intentionally TURN_TIMEOUT_MS-5s. Retrying here
+  // would launch a second Codex process in that five-second window; the outer
+  // watchdog would then return while the retry kept running in the background.
+  // A timed doer turn is one bounded attempt. The next workflow turn is the
+  // recovery boundary after a completed validation, not an overlapping retry.
+  }), { retries: 0 }), `Implement turn ${currentAttempt + 1}`)
   } catch (e) {
     log(`  Turn ${currentAttempt + 1}: Implement watchdog tripped — stopping (${e.message})`)
     convergenceStatus = 'timeout'
@@ -947,7 +960,7 @@ Parse correctness (pass/fail) and latency STRICTLY from the test/benchmark comma
     solEvalBlock = `
 
 # SOL-EXECBENCH EVALUATION (overrides the standalone steps below)
-This candidate is evaluated by the sol-execbench CLI, which compiles it internally. Write the kernel_code above verbatim to ${candidatePath}, then run these commands IN THIS EXACT ORDER:
+This candidate is evaluated by the sol-execbench CLI, which compiles it internally. Write the FULL kernel_code and FULL binding_code shown below, concatenated in that order with one newline between them, verbatim to ${candidatePath}. Do not truncate, summarize, or omit either source. Then run these commands IN THIS EXACT ORDER:
 
 1. Pack:  ${plan.pack}
 2. Run:   ${plan.run}
@@ -962,12 +975,12 @@ The parse step prints one line "SPEEDUP=<geomean> STATUS=<PASS|FAIL> WORKLOADS=<
 
 # Kernel Code (kernel.cu):
 \`\`\`cuda
-${implResult.kernel_code.substring(0, 4000)}
+${IS_SOL ? implResult.kernel_code : implResult.kernel_code.substring(0, 4000)}
 \`\`\`
 
 # Binding Code (kernel_binding.cpp):
 \`\`\`cpp
-${implResult.binding_code.substring(0, 2000)}
+${IS_SOL ? implResult.binding_code : implResult.binding_code.substring(0, 2000)}
 \`\`\`
 
 # Model New (model_new.py):
@@ -1014,6 +1027,7 @@ Return results.
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append, using the values you just measured (status="done" if correctness passed, else "error"; speedup is the measured speedup_vs_compile number, or null if unavailable):
 {"workflow":"${WORKFLOW_NAME}","phase":"Verify","ts":"<ts>","status":"<done|error>","candidate_id":"attempt-${currentAttempt}","speedup":<number or null>,"technique":"<technique under test>","note":"<compiled? correct? reward; or the failure reason>"}`, {
+    model: MODEL.profile,
     label: `verify-${currentAttempt}`,
     phase: 'Verify',
     schema: {
@@ -1031,7 +1045,9 @@ Then append, using the values you just measured (status="done" if correctness pa
       },
       required: ['compiled', 'correct', 'reward'],
     },
-  }), { retries: 5 }), `Verify turn ${currentAttempt + 1}`)
+  // Keep the broker timeout and workflow watchdog as one cancellation domain;
+  // otherwise a retry can outlive the completed workflow and leak a process/GPU.
+  }), { retries: 0 }), `Verify turn ${currentAttempt + 1}`)
   } catch (e) {
     log(`  Turn ${currentAttempt + 1}: Verify watchdog tripped — stopping (${e.message})`)
     convergenceStatus = 'timeout'

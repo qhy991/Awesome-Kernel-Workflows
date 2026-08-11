@@ -929,7 +929,7 @@ Then append (this is large-step proposal for candidate node-${searchStep + 1}-L)
         },
         required: ['kernel_code'],
       },
-    }), { retries: 5, allowNull: true })
+    }), { retries: 0, allowNull: true })
 
     newKernelCode = proposerResult?.kernel_code || ''
     expandNotes = proposerResult?.strategy || proposerResult?.novelty_vs_pool || ''
@@ -947,7 +947,7 @@ Inspect the selected kernel and its recent path. Produce 1-3 concrete local impr
 
 # Selected kernel: node ${selectedNode.id}
 \`\`\`python
-${selectedNode.code.substring(0, 5000)}
+${IS_SOL ? selectedNode.code : selectedNode.code.substring(0, 5000)}
 \`\`\`
 
 # Recent path context
@@ -971,7 +971,7 @@ Return specific, surgical suggestions only.`, {
         },
         required: ['suggestions'],
       },
-    }), { retries: 5, allowNull: true })
+    }), { retries: 0, allowNull: true })
 
     const suggestions = reviserResult?.suggestions || [reviserDefaultHint()]
 
@@ -982,7 +982,7 @@ Apply the reviser suggestions as surgical edits. Preserve the overall structure 
 
 # Current kernel
 \`\`\`python
-${selectedNode.code.substring(0, 6000)}
+${IS_SOL ? selectedNode.code : selectedNode.code.substring(0, 6000)}
 \`\`\`
 
 # Suggestions
@@ -992,7 +992,7 @@ ${suggestions.map((s, i) => `${i + 1}. ${s}`).join('\n')}
 ${memoryLines(20).join('\n') || 'No constraints yet.'}
 
 # Requirements
-1. Return complete Python code.
+1. Return complete ${USE_DRIVER ? `${DRIVER_LANG_FENCE} code` : 'Python code'}; never omit an unchanged suffix from the selected kernel.
 2. Make targeted edits only.
 3. Preserve the evaluator-facing interface.
 4. Do not call any AdaExplore repository code.
@@ -1016,7 +1016,7 @@ Then append (this is small-step surgical edit for candidate node-${searchStep + 
         },
         required: ['kernel_code'],
       },
-    }), { retries: 5, allowNull: true })
+    }), { retries: 0, allowNull: true })
 
     newKernelCode = tunerResult?.kernel_code || selectedNode.code || ''
     expandNotes = (tunerResult?.changes_applied || []).join('; ')
@@ -1028,6 +1028,9 @@ Then append (this is small-step surgical edit for candidate node-${searchStep + 
     ? workspaceKernelPath(searchStep, isLargeStep, DRIVER_SOURCE_EXT)
     : `${EXP_DIR}/kernels/step_${searchStep + 1}_${isLargeStep ? 'large' : 'small'}.py`
   const resultPath = `${EXP_DIR}/eval/step_${searchStep + 1}_result.json`
+  const authoritativeKernelPath = IS_SOL
+    ? `${EXP_DIR}/kernels/${`ada_s${searchStep + 1}_${isLargeStep ? 'L' : 'S'}`.replace(/[^A-Za-z0-9_]/g, '_')}.py`
+    : kernelPath
   const evaluatorCommand = USE_DRIVER
     ? `${SH ? SH + ' ' : ''}${BACKEND_DIR}/run.sh --artifact ${kernelPath} --problem ${PROBLEM_PATH} --out ${resultPath}`
     : renderCommand(evaluatorCommandTemplate, {
@@ -1041,6 +1044,7 @@ Then append (this is small-step surgical edit for candidate node-${searchStep + 
   const evalResult = IS_SOL
     ? await (async () => {
       const variant = `ada_s${searchStep + 1}_${isLargeStep ? 'L' : 'S'}`.replace(/[^A-Za-z0-9_]/g, '_')
+      const producerCallPrefix = `Expand/${isLargeStep ? `propose-${searchStep + 1}` : `tune-${searchStep + 1}`}/`
       const solCandidatePath = `${EXP_DIR}/kernels/${variant}.py`
       const plan = __solExecbenchEvalPlan({
         substrateDir: SOL_SUBSTRATE_DIR,
@@ -1060,6 +1064,12 @@ Then append (this is small-step surgical edit for candidate node-${searchStep + 
       return agentRetry(() => agent(`Evaluate this AdaExplore candidate through the authoritative sol-execbench contract.
 
 1. Atomically write the exact candidate below to ${solCandidatePath}.
+   The authoritative producer call_id prefix is ${producerCallPrefix}. If you
+   recover the source from ${EXP_DIR}/journal.jsonl instead of the prompt, use
+   only result.output.kernel_code from that exact call_id prefix. Never reuse a
+   proposal or candidate from another MCTS step. Write that JSON string as exact
+   bytes with no repair, reformatting, or omitted suffix, then verify the file
+   bytes equal the selected journal string before PACK.
 \`\`\`python
 ${newKernelCode}
 \`\`\`
@@ -1067,11 +1077,17 @@ ${newKernelCode}
    PACK: ${plan.pack}
    RUN: ${plan.run}
    PARSE: ${plan.parse}
+   These are three strictly sequential blocking operations. If RUN yields a
+   process/session identifier, keep polling that same process until it exits.
+   Do not start PARSE until RUN has reached a terminal exit and the bench JSONL
+   exists. Never launch RUN and PARSE concurrently.
 3. Parse only the final authoritative line:
    SPEEDUP=<geomean> STATUS=<PASS|FAIL> WORKLOADS=<passed>/<total>
 Set compiled=true only when the run produced bench JSONL. Set correct=true only
 when STATUS=PASS and passed==total>0. Set speedup to SPEEDUP. Do not infer
-missing values or reuse another candidate's output. ${plan.cleanupInvariant}
+missing values or reuse another candidate's output. Compute candidate_sha256
+from the exact bytes at ${solCandidatePath} after PACK and return it with the
+parsed result. ${plan.cleanupInvariant}
 
 Return the parsed result.`, {
         label: `sol-eval-${searchStep + 1}`,
@@ -1088,10 +1104,11 @@ Return the parsed result.`, {
             error_message: { type: 'string' },
             error_type: { type: 'string' },
             result_path: { type: 'string' },
+            candidate_sha256: { type: 'string' },
           },
-          required: ['compiled', 'correct', 'speedup'],
+          required: ['compiled', 'correct', 'speedup', 'candidate_sha256'],
         },
-      }), { retries: 5 })
+      }), { retries: 0 })
     })()
     : await agentRetry(() => agent(`Evaluate this candidate with real execution evidence.
 
@@ -1284,7 +1301,8 @@ Then append, using the values you just measured (status="done" if the candidate 
       id: newNodeId,
       compiled,
       correct,
-      kernelPath,
+      kernelPath: authoritativeKernelPath,
+      candidateSha256: IS_SOL ? evalResult.candidate_sha256 : null,
       resultPath: evalResult.result_path || resultPath,
     }
     log(`  NEW BEST: node=${newNodeId} score=${JSON.stringify(newScore)} speedup=${speedup.toFixed(3)}x`)
@@ -1348,7 +1366,9 @@ Then append, using the values you just measured (status="done" if the candidate 
     deadlineEpoch: DEADLINE_EPOCH,
     checkpoint: checkpointPayload,
     bestKernelPath: materializedBestPath,
-    bestKernelCode: globalBest.code,
+    bestKernelSourcePath: IS_SOL ? globalBest.kernelPath : null,
+    bestKernelExpectedSha256: IS_SOL ? globalBest.candidateSha256 : null,
+    bestKernelCode: IS_SOL ? null : globalBest.code,
     bestLanguage: USE_DRIVER ? DRIVER_LANG_FENCE : 'python',
     materializeBest: bestChanged,
     label: `checkpoint-${searchStep}`,

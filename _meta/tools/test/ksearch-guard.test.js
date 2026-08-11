@@ -137,3 +137,43 @@ test('manifest backend_id mismatch with args.backend -> throws', async () => {
     },
   )
 })
+
+test('empty propose result preserves initialized decision tree', async () => {
+  const returns = {
+    ...minimalReturns,
+    'propose-0': { updated_tree: {}, open_frontier_count: 0, nodes_added: 0 },
+  }
+  const caps = await run({}, returns)
+  const select = caps.find(c => c.label === 'select-0')
+  assert.ok(select, 'selection should still run after an empty propose response')
+  assert.match(select.prompt, /"n1"/, 'initialized frontier must survive an empty updated_tree')
+})
+
+test('empty init-tree result seeds an executable deterministic frontier', async () => {
+  const returns = {
+    ...minimalReturns,
+    'init-tree': { decision_tree: {}, node_count: 29, open_actions: 20 },
+    'propose-0': { updated_tree: {}, open_frontier_count: 0, nodes_added: 0 },
+  }
+  const caps = await run({}, returns)
+  const select = caps.find(c => c.label === 'select-0')
+  assert.ok(select, 'selection should run against the fallback frontier')
+  assert.match(select.prompt, /fallback-regime-dispatch/)
+  assert.match(select.prompt, /fallback-small-m/)
+  assert.match(select.prompt, /"status": "open"/)
+})
+
+test('null or sentinel selection stops before candidate generation', async () => {
+  for (const selectedNodeId of [null, 'null', 'search_exhausted']) {
+    const returns = {
+      ...minimalReturns,
+      'select-0': {
+        selected_node_id: selectedNodeId,
+        action_title: 'search_exhausted',
+      },
+    }
+    const caps = await run({}, returns)
+    assert.ok(!caps.some(c => c.label === 'gen-0-0'),
+      `selection ${String(selectedNodeId)} must not generate a candidate`)
+  }
+})

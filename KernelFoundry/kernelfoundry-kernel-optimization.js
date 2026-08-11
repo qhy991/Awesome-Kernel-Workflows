@@ -724,7 +724,7 @@ for (generation = 0; generation < GENERATIONS; generation++) {
   phase('Vary')
 
   const parentContext = selectedParent
-    ? `\n# Parent Kernel (from cell [${selectedParent.cell}], fitness=${selectedParent.fitness.toFixed(2)}, speedup=${selectedParent.speedup.toFixed(2)}x):\n\`\`\`${fenceToken()}\n${selectedParent.code.substring(0, 4000)}\n\`\`\``
+    ? `\n# Parent Kernel (from cell [${selectedParent.cell}], fitness=${selectedParent.fitness.toFixed(2)}, speedup=${selectedParent.speedup.toFixed(2)}x):\n\`\`\`${fenceToken()}\n${IS_SOL ? selectedParent.code : selectedParent.code.substring(0, 4000)}\n\`\`\``
     : ''
 
   const varyResult = await agentRetry(() => agent(`You are a GPU kernel generator for the KernelFoundry evolutionary framework.
@@ -791,7 +791,7 @@ Then append (this is generation ${generation}):
       },
       required: ['kernel_code', 'strategy_description'],
     },
-  }), { retries: 5, allowNull: true })
+  }), { retries: 0, allowNull: true })
 
   const offspringCode = varyResult?.kernel_code || ''
 
@@ -808,6 +808,10 @@ Then append (this is generation ${generation}):
   await agentRetry(() => agent(`Materialize the exact KernelFoundry candidate below at ${candidatePath}.
 Create the parent directory first. Write the complete source byte-for-byte without
 summarizing, repairing, or reformatting it. Use an atomic temporary file + rename.
+The authoritative producer call_id prefix is Vary/vary-${generation}/. If you
+recover source from ${EXP_DIR}/journal.jsonl, select only
+result.output.kernel_code from that exact prefix; never reuse another generation.
+Verify the written bytes equal that selected JSON string before returning.
 
 \`\`\`${fenceToken()}
 ${offspringCode}
@@ -825,7 +829,7 @@ Return {"written":true,"path":"${candidatePath}"}.`, {
       },
       required: ['written', 'path'],
     },
-  }), { retries: 5 })
+  }), { retries: 0 })
 
   const evalResult = IS_SOL
     ? await (async () => {
@@ -846,6 +850,22 @@ Return {"written":true,"path":"${candidatePath}"}.`, {
         envPrefix: SOL_ENV_PREFIX,
         definitionPath: SOL_DEFINITION_PATH,
       })
+      const retryPlan = __solExecbenchEvalPlan({
+        substrateDir: SOL_SUBSTRATE_DIR,
+        kernelSource: candidatePath,
+        contractEnv: `${EXP_DIR}/contract.env`,
+        solutionOut: `${EXP_DIR}/${variant}.solution.json`,
+        benchOut: `${EXP_DIR}/${variant}.retry.bench.jsonl`,
+        normalizedOut: generationResultPath,
+        solCli: SOL_CLI,
+        taskDir: SOL_TASK_DIR,
+        benchConfig: SOL_BENCH_CONFIG,
+        seedDir: SOL_SEED_DIR,
+        cudaVisibleDevices: SOL_CVD,
+        ldLibraryPath: SOL_LD_LIBRARY_PATH,
+        envPrefix: SOL_ENV_PREFIX,
+        definitionPath: SOL_DEFINITION_PATH,
+      })
       return agentRetry(() => agent(`Evaluate this already-materialized KernelFoundry candidate through the authoritative sol-execbench contract.
 
 Candidate: ${candidatePath}
@@ -853,6 +873,22 @@ Run exactly in order:
 1. PACK: ${plan.pack}
 2. RUN: ${plan.run}
 3. PARSE: ${plan.parse}
+
+These are three strictly sequential blocking operations. If RUN yields a
+process/session identifier, keep polling that same process until it exits.
+Do not start PARSE until RUN has reached a terminal exit and the bench JSONL
+exists. Never launch RUN and PARSE concurrently.
+
+If and only if PARSE rejects an otherwise complete bench because one or more
+rows have evaluation.status="PASSED" but a non-positive
+performance.reference_latency_ms, treat that as transient invalid reference
+timing. Preserve the first bench JSONL, then perform exactly one measurement-
+only retry of the same packed solution, again as blocking sequential commands:
+4. RETRY_RUN_ONCE: ${retryPlan.run}
+5. RETRY_PARSE: ${retryPlan.parse}
+Do not repack, edit, or regenerate the candidate, and never retry for compile,
+correctness, timeout, missing-row, or ordinary performance failures. Do not
+perform more than this single bounded measurement retry.
 
 The parser writes the canonical measurement JSON at ${generationResultPath}.
 Read only that JSON. Require compiled=true, correct=true, and n_pass==n_total>0
@@ -886,7 +922,7 @@ Return the parsed result.`, {
             'n_pass', 'n_total', 'd_mem', 'd_algo', 'd_sync',
           ],
         },
-      }), { retries: 5 })
+      }), { retries: 0 })
     })()
     : await agentRetry(() => agent(`You are a kernel evaluator for KernelFoundry. Evaluate the already-materialized ${langToken(LEGACY_LANG_TOKEN)} kernel.
 

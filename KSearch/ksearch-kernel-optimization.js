@@ -759,8 +759,43 @@ Then append:
   },
 }), { retries: 5 })
 
-decisionTree = initResult.decision_tree
-log(`World model initialized: ${initResult.node_count} nodes, ${initResult.open_actions} open actions`)
+if (initResult.decision_tree && typeof initResult.decision_tree === 'object' &&
+    Object.keys(initResult.decision_tree).length > 0) {
+  decisionTree = initResult.decision_tree
+} else {
+  // Structured output can satisfy the numeric count fields while returning an
+  // empty tree object. Seed a small executable frontier so Select cannot report
+  // exhaustion before K-Search has evaluated a single action.
+  const fallbackActions = [
+    ['fallback-regime-dispatch', 'runtime dispatch and candidate portfolio', 'Implement workload-aware dispatch across small, mid, and large M regimes.'],
+    ['fallback-small-m', 'algorithm by M regime', 'Optimize the small-M latency and B-streaming regime without regressing other shapes.'],
+    ['fallback-mid-m', 'tensor-core path and tile geometry', 'Tune tensor-core tiling for the enumerated mid-M regime.'],
+    ['fallback-large-m', 'memory staging and operand layout', 'Improve large-M tensor-core staging and operand reuse.'],
+    ['fallback-tail', 'tail strategy and epilogue', 'Handle irregular M tails with efficient predication and vectorized stores.'],
+  ]
+  decisionTree = {
+    root: {
+      node_id: 'root', parent_id: null, node_type: 'decision',
+      decision: 'root', choice: 'measured baseline', status: 'solved',
+      solution_id: 'baseline', children: fallbackActions.map(([nodeId]) => nodeId),
+    },
+  }
+  fallbackActions.forEach(([nodeId, decision, description], index) => {
+    decisionTree[nodeId] = {
+      node_id: nodeId, parent_id: 'root', node_type: 'action', decision,
+      choice: description, status: 'open', children: [],
+      action: {
+        title: nodeId.replace(/^fallback-/, '').replace(/-/g, '_'),
+        description,
+        difficulty_1_to_5: index === 0 ? 2 : 3,
+        score_0_to_1: 0.75 - index * 0.05,
+        expected_vs_baseline_factor: 1.05,
+      },
+    }
+  })
+  log(`Init-tree returned an empty tree; seeded deterministic fallback frontier (${fallbackActions.length} open actions).`)
+}
+log(`World model initialized: ${Object.keys(decisionTree).length} nodes, ${Object.values(decisionTree).filter(node => node?.status === 'open').length} open actions`)
 log(`Dimensions: ${(initResult.design_dimensions || []).join(', ')}`)
 
 // #43: resume from checkpoint if present (mechanical agent reads it verbatim).
@@ -832,8 +867,12 @@ Return the (possibly updated) tree and a count of open frontier nodes.`, {
     },
   }), { retries: 5, allowNull: true })
 
-  if (proposeResult && proposeResult.updated_tree) {
+  if (proposeResult && proposeResult.updated_tree &&
+      typeof proposeResult.updated_tree === 'object' &&
+      Object.keys(proposeResult.updated_tree).length > 0) {
     decisionTree = proposeResult.updated_tree
+  } else if (proposeResult && proposeResult.updated_tree) {
+    log('Propose returned an empty tree; preserving the existing decision tree.')
   }
 
   // ===========================================================================
@@ -877,7 +916,7 @@ Then append:
     schema: {
       type: 'object',
       properties: {
-        selected_node_id: { type: 'string' },
+        selected_node_id: { type: ['string', 'null'] },
         action_title: { type: 'string' },
         action_description: { type: 'string' },
         action_score: { type: 'number' },
@@ -892,7 +931,8 @@ Then append:
     },
   }), { retries: 5, allowNull: true })
 
-  if (!selection || !selection.selected_node_id) {
+  if (!selection || !selection.selected_node_id ||
+      ['null', 'search_exhausted'].includes(String(selection.selected_node_id).toLowerCase())) {
     log('No viable action nodes remain — search exhausted.')
     break
   }
@@ -1436,7 +1476,9 @@ Then append:
       },
     }), { retries: 5, allowNull: true })
 
-    if (refineResult && refineResult.updated_tree) {
+    if (refineResult && refineResult.updated_tree &&
+        typeof refineResult.updated_tree === 'object' &&
+        Object.keys(refineResult.updated_tree).length > 0) {
       decisionTree = refineResult.updated_tree
       // Hard fallback: if refine didn't add children, we note it (in real K-Search this inserts a deterministic node)
       if ((refineResult.new_actions_added || 0) < 1) {
@@ -1484,7 +1526,9 @@ Then append:
       },
     }), { retries: 5, allowNull: true })
 
-    if (backtrackResult && backtrackResult.updated_tree) {
+    if (backtrackResult && backtrackResult.updated_tree &&
+        typeof backtrackResult.updated_tree === 'object' &&
+        Object.keys(backtrackResult.updated_tree).length > 0) {
       decisionTree = backtrackResult.updated_tree
       log(`Backtracked: ${backtrackResult.failure_analysis || 'action too hard'}`)
       log(`Recovery: ${(backtrackResult.recovery_actions || []).join(', ')}`)

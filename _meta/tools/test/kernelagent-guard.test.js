@@ -113,6 +113,47 @@ test('USE_DRIVER on with backend_dir: load-driver agent fires before setup-probl
   assert.ok(labels.includes('driver-anti-cheat-candidate_0'))
 })
 
+test('sol-execbench CUDA path does not run the standalone driver envelope twice', async () => {
+  const driverReturn = {
+    present: true,
+    backend_id: 'cuda',
+    source_ext: '.cu',
+    aux_ext: '.cpp',
+    lang_fence: 'cuda',
+    impl_requirements: 'Provide a __global__ kernel plus a host launcher.',
+    methods: {},
+    hw_vendor: 'nvidia',
+  }
+  const caps = await run(
+    {
+      backend_dir: '_substrate/backends/cuda',
+      backend: 'cuda',
+      verify: true,
+      seed_candidates: 1,
+      integration_pattern: 'sol_execbench_solution',
+      sol_cli: '/venv/bin/sol-execbench',
+      sol_task_dir: '/task',
+      sol_bench_config: '/session/bench-config.json',
+      sol_seed_dir: '/venv/bin',
+      sol_substrate_dir: '/substrate/integration',
+    },
+    {
+      'load-driver': driverReturn,
+      'integration-strategist': { method: 'sol_execbench_solution', build_fidelity: 'production' },
+      'setup-problem': { problem_definition: 'p', input_tensors: [], operations: ['x'], output_spec: {shape:'',dtype:''}, complexity_signals: [] },
+      'setup-test': { test_code: 'pass' },
+      'route-analysis': { path: 'direct', reason: 'r', subgraph_count: 1, estimated_difficulty: 'easy' },
+      'gen-main-seed0': { kernel_code: '__global__ void k() {}', approach: 'a', potential_issues: '' },
+      'sol-verify-candidate_0': { passed: true, speedup: 1, n_pass: 1, n_total: 1, verification_result: 'pass' },
+      'report-summary': { outcome: 'success', summary: 's' },
+    },
+  )
+  const labels = caps.map(c => c.label)
+  assert.ok(labels.includes('sol-verify-candidate_0'))
+  assert.ok(!labels.some(label => /^driver-(build|run|profile|to-evidence|diagnose|anti-cheat)-/.test(label)),
+    `SOL verification must not be followed by a second standalone driver envelope: ${labels.join(', ')}`)
+})
+
 test('driver-injected substrings: cuda driver lang_fence reaches setup-problem prompt', async () => {
   const driverReturn = {
     present: true,
