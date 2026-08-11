@@ -40,6 +40,41 @@ class PackSolTests(unittest.TestCase):
         sol = self._run(KERNEL_WITH_BINDING, CONTRACT)
         self.assertEqual(sol["definition"], "025_rmsnorm_h4096")
 
+    def test_missing_contract_uses_safe_metadata_defaults(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            kernel = d / "candidate.cu"
+            out = d / "solution.json"
+            kernel.write_text(KERNEL_WITH_BINDING)
+            r = subprocess.run(
+                [sys.executable, str(PACK), "--kernel", str(kernel),
+                 "--contract", str(d / "missing-contract.env"), "--out", str(out)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(r.returncode, 0, r.stderr)
+            sol = json.loads(out.read_text())
+            self.assertEqual(sol["definition"], "candidate")
+            self.assertEqual(sol["spec"]["languages"], ["cuda_cpp"])
+            self.assertEqual(sol["spec"]["entry_point"], "candidate.cu::run")
+
+    def test_generic_python_staging_name_is_normalized_for_cuda_cpp(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            kernel = d / "kernel.py"
+            out = d / "solution.json"
+            kernel.write_text(KERNEL_WITH_BINDING)
+            r = subprocess.run(
+                [sys.executable, str(PACK), "--kernel", str(kernel),
+                 "--contract", str(d / "missing-contract.env"), "--out", str(out)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(r.returncode, 0, r.stderr)
+            sol = json.loads(out.read_text())
+            self.assertEqual(sol["spec"]["entry_point"], "kernel.cu::run")
+            self.assertEqual(sol["sources"][0]["path"], "kernel.cu")
+
     def test_spec_contract_fields(self):
         sol = self._run(KERNEL_WITH_BINDING, CONTRACT)
         self.assertEqual(sol["spec"]["binding"], "torch")

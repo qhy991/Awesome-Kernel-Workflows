@@ -14,6 +14,11 @@ import sys
 
 def parse_contract(path):
     d = {}
+    # Task-directory dispatches have an authoritative definition.json but no
+    # synthesized contract.env. The contract only contributes descriptive
+    # solution metadata, so its absence must not block candidate packaging.
+    if not path or not os.path.isfile(path):
+        return d
     with open(path) as fh:
         for line in fh:
             line = line.split("#", 1)[0].strip()  # strip trailing comments (contract.env has them)
@@ -24,9 +29,24 @@ def parse_contract(path):
     return d
 
 
+def normalize_cuda_filename(kernel_filename):
+    """Return a source filename accepted by the cuda_cpp solution schema.
+
+    Some generator workflows stage structured-output code in a generic
+    ``kernel.py`` path even when the content is CUDA C++.  The solution language
+    is authoritative here, so carrying that staging suffix into solution.json
+    makes sol-execbench reject the package before compilation.
+    """
+    stem, suffix = os.path.splitext(kernel_filename)
+    if suffix.lower() in {".cu", ".cc", ".cpp", ".cxx"}:
+        return kernel_filename
+    return f"{stem or 'kernel'}.cu"
+
+
 def build_solution(kernel_src_text, kernel_filename, contract):
     task = contract.get("task_name") or contract.get("op") or "candidate"
     has_binding = "PYBIND11_MODULE" in kernel_src_text
+    kernel_filename = normalize_cuda_filename(kernel_filename)
     sources = [{"path": kernel_filename, "content": kernel_src_text}]
     if has_binding:
         entry_point = f"{kernel_filename}::run"

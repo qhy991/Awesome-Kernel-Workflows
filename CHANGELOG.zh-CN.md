@@ -8,6 +8,21 @@
 
 ### 修复（Fixed）
 
+- **Codex/SOL 候选源码传输与有界执行。** AdaExplore、CUDA-Agent 和
+  KernelFoundry 现在会在生成与验证间传递完整 SOL 源码，把物化结果绑定到精确的
+  producer call，严格串行执行打包/基准/解析，并取消可能在 workflow turn 超时后
+  继续存活的 agent 重试。若一个已通过正确性的基准仅出现非正 reference latency，
+  KernelFoundry 还允许对同一已打包候选进行一次纯测量重试。
+  (`AdaExplore/`、`CUDAAgent/`、`KernelFoundry/`、`_meta/tools/test/`)
+- **K-Search 可执行 frontier 保留。** 模型生成空树时会注入确定性的开放 frontier，
+  后续空树更新会保留当前搜索状态，并显式处理 nullable exhaustion。Codex 运行因此
+  能实际评估候选，而不会在 cycle zero 直接结束。
+  (`KSearch/ksearch-kernel-optimization.js`、
+  `_meta/tools/test/ksearch-guard.test.js`)
+- **SOL CUDA 打包与单一验证所有者。** Candidate packer 现在接受没有
+  `contract.env` 的 task-directory 运行，把通用 staging 文件名规范化为 `.cu`；
+  KernelAgent 在权威 sol-execbench 验证后不再启动不兼容的 standalone driver。
+  (`_substrate/integration/pack_sol_candidate.py`、`KernelAgent/`)
 - **全目录 provenance/fidelity 发布门禁。** AdaExplore 与 KDA 现已在机器可读
   manifest 中声明论文/仓库来源；fidelity 检查还会在任一顶层 workflow manifest
   缺少非空来源记录或显式 fidelity boundary 时失败。由此把目录 32/32 的声明

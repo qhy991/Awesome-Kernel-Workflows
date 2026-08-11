@@ -10,6 +10,24 @@ for the versioning policy.
 
 ### Fixed
 
+- **Codex/SOL candidate transport and bounded execution.** AdaExplore,
+  CUDA-Agent, and KernelFoundry now carry complete SOL source through generation
+  and verification, bind materialization to the exact producing call, run
+  pack/benchmark/parse sequentially, and avoid agent retries that can outlive a
+  timed workflow turn. KernelFoundry also permits one measurement-only retry
+  when an otherwise-passing benchmark reports an invalid non-positive reference
+  latency. (`AdaExplore/`, `CUDAAgent/`, `KernelFoundry/`, `_meta/tools/test/`)
+- **K-Search executable frontier preservation.** An empty model-authored tree
+  now receives a deterministic open frontier, later empty tree updates preserve
+  the current search state, and nullable exhaustion is handled explicitly. A
+  Codex run can therefore evaluate a real candidate instead of terminating at
+  cycle zero. (`KSearch/ksearch-kernel-optimization.js`,
+  `_meta/tools/test/ksearch-guard.test.js`)
+- **SOL CUDA packaging and single-owner verification.** The candidate packer
+  accepts task-directory runs without `contract.env`, normalizes generic staging
+  filenames to `.cu`, and KernelAgent no longer launches its incompatible
+  standalone driver after authoritative sol-execbench verification.
+  (`_substrate/integration/pack_sol_candidate.py`, `KernelAgent/`)
 - **Catalog-wide provenance/fidelity release gate.** AdaExplore and KDA now
   expose their paper/repository sources in the machine-readable manifests, and
   the fidelity checker fails unless every top-level workflow manifest carries
