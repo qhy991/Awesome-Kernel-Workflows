@@ -18,8 +18,8 @@
 1. Setup（读取问题与基线）
 2. Initialize（初始化世界模型决策树）
 3. Select（选择最高价值前沿 action）
-4. Generate / Debug / Improve（生成或迭代代码）
-5. Evaluate（正确性与性能评测）
+4. 并发生成多个独立 seed，再执行依赖测量反馈的 Debug / Improve
+5. 串行执行正确性与性能评测，并确定性归并实测结果
 6. Refine / Backtrack（成功则扩展、失败则回退）
 7. Report（输出搜索轨迹与最优解）
 
@@ -42,7 +42,9 @@
 - `language`：`triton | cuda | python`
 - `target_gpu`：目标 GPU（如 `H100`）
 - `iterations`：最大搜索轮数（默认 `10`）
-- `attempts_per_cycle`：每轮生成/改进次数（默认 `5`）
+- `attempts_per_cycle`：每轮候选总预算（默认 `5`）
+- `seed_candidates`：独立 seed 生成并发宽度，上限为
+  `attempts_per_cycle`（默认 `4`）
 - `stagnation_window`：连续无改进提前结束窗口（默认 `3`）
 - `max_difficulty`：优先探索的最大 action 难度（默认 `4`）
 - `benchmark_command`：性能评测命令
@@ -66,6 +68,7 @@ Workflow({
     target_gpu: 'H100',
     iterations: 10,
     attempts_per_cycle: 5,
+    seed_candidates: 4,
     stagnation_window: 3,
     max_difficulty: 4,
     benchmark_command: '<user-provided benchmark command with {kernel_path}/{result_path}>',
@@ -76,6 +79,11 @@ Workflow({
   },
 })
 ```
+
+AKW 适配只在状态互相独立的位置使用并发：seed agent 读取同一个不可变的
+world-model/action 快照，并写入各自唯一的候选路径。编译、正确性检查、GPU
+benchmark、依赖反馈的 debug/improve 以及决策树更新仍保持串行。设置
+`seed_candidates: 1` 可恢复此前的全串行搜索路径。
 
 ---
 

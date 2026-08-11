@@ -10,6 +10,14 @@ for the versioning policy.
 
 ### Fixed
 
+- **K-Search candidate concurrency was declared but unused.** The workflow now
+  fans out independent seed implementations with bounded runtime `parallel()`
+  concurrency, preserves stable candidate identities, evaluates the generated
+  batch serially to protect GPU timing and embedded project mutation, and only
+  then continues the dependent debug/improve chain from the strongest measured
+  seed. The canonical `seed_candidates` argument defaults to four and is capped by the existing
+  `attempts_per_cycle` budget. (`KSearch/`,
+  `_meta/tools/test/ksearch-parallel-candidates.test.js`)
 - **Codex/SOL candidate transport and bounded execution.** AdaExplore,
   CUDA-Agent, and KernelFoundry now carry complete SOL source through generation
   and verification, bind materialization to the exact producing call, run
