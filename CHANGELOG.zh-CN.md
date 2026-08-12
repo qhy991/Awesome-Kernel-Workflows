@@ -8,6 +8,15 @@
 
 ### 修复（Fixed）
 
+- **SOL benchmark 机械步骤改由 workflow Host 执行。** 共享 substrate 会探测 Host
+  的 `evaluate(sol-execbench-v1)` 原语；K-Search、CUDA-Agent、AdaExplore、
+  KernelAgent 与 KernelFoundry 把候选精确源码交给同一个确定性打包/运行/解析
+  transaction，仅把 prompt 操作路径保留为 legacy host 边缘适配。显式 SOL 模式
+  也会跳过冗余的 integration-strategist 回合。该变更只修复开发态 workflow；
+  是否发布仍由 KerSor fail-closed registry 的重新验收决定。
+  (`_substrate/embedded/sol_execbench_eval.js`、核心五路 workflow、
+  `_meta/tools/test/`)
+
 - **SOL 打包遵循候选源码类型。** 共享 packer 对含顶层 `run` 的 Python 候选原生
   输出 Triton 或 PyTorch module，只有 CUDA extension 要求 `PYBIND11_MODULE`。
   Embedded SOL evaluation 在 PACK/RUN/PARSE 前清除陈旧 transport/result 文件，

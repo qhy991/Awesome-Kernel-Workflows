@@ -57,6 +57,34 @@ function __solExecbenchEvalPlan(ctx) {
     cleanupInvariant: 'solution.json + bench.jsonl are per-candidate scratch files in the run dir; each stage clears its own stale outputs and requires the preceding artifact. No project source is mutated (non-mutating method).',
   }
 }
+
+async function __solExecbenchEvaluate(ctx) {
+  // Claude's legacy Workflow host does not yet expose this optional primitive.
+  // Keep the prompt-driven path as a compatibility edge, while KerSor's Host
+  // owns exact source materialization and PACK/RUN/PARSE without an LLM turn.
+  if (typeof evaluate !== 'function') return null
+  return evaluate({
+    protocol: 'sol-execbench-v1',
+    label: ctx.label || 'sol-eval',
+    phase: ctx.phase || 'Evaluate',
+    candidatePath: ctx.kernelSource,
+    candidateSource: ctx.candidateSource,
+    substrateDir: ctx.substrateDir,
+    contractEnv: ctx.contractEnv,
+    solutionOut: ctx.solutionOut,
+    benchOut: ctx.benchOut,
+    normalizedOut: ctx.normalizedOut || `${ctx.benchOut}.result.json`,
+    solCli: ctx.solCli,
+    taskDir: ctx.taskDir,
+    benchConfig: ctx.benchConfig,
+    seedDir: ctx.seedDir,
+    cudaVisibleDevices: ctx.cudaVisibleDevices || '0',
+    ldLibraryPath: ctx.ldLibraryPath || '',
+    envPrefix: ctx.envPrefix || '',
+    definitionPath: ctx.definitionPath || '',
+    timeoutSeconds: ctx.timeoutSeconds || 0,
+  })
+}
 // --- END sol-execbench-eval substrate ---
 
 
@@ -594,7 +622,7 @@ modelCode = setupResult.model_code
 // CLASSIFIES; the substrate DETERMINISTICALLY picks the method and STAMPS
 // confidence. Honored in the profile/refine prompt below; defaults keep the
 // happy-path ncu behavior unchanged if the decision is ignored. ---
-{
+if (INTEGRATION_PATTERN !== 'sol_execbench_solution') {
   const _pd = await agentRetry(() => agent(
     `Classify the kernel under optimization. Source: ` +
     (MODEL_PATH ? `read ${MODEL_PATH}` : `operation "${OP_DESC}"`) + `.\n` +
@@ -620,7 +648,7 @@ let INTEGRATION_DECISION = {
   build_fidelity: INTEGRATION_PATTERN === 'sol_execbench_solution' ? 'production' : 'isolated',
   reversible: true,
 }
-{
+if (INTEGRATION_PATTERN !== 'sol_execbench_solution') {
   const _kernelForProbe = MODEL_PATH || REFERENCE_FILE || ''
   const _canStandaloneHint = EMBEDDED ? 'no' : 'uncertain'
   const _probe = JSON.stringify({ compiler: !!COMPILE_CMD, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true, sol_execbench_cli: !!SOL_CLI })
@@ -946,9 +974,29 @@ Parse correctness (pass/fail) and latency STRICTLY from the test/benchmark comma
   }
 
   let solEvalBlock = ''
+  let directSolResult = null
   if (IS_SOL) {
     const variantName = `sol_t${currentAttempt}`.replace(/[^A-Za-z0-9_]/g, '_')
     const candidatePath = `${EXP_DIR}/kernels/${variantName}.cu`
+    directSolResult = await __solExecbenchEvaluate({
+      label: `sol-eval-${currentAttempt}`,
+      phase: 'Verify',
+      substrateDir: SOL_SUBSTRATE_DIR,
+      kernelSource: candidatePath,
+      candidateSource: [implResult.kernel_code, implResult.binding_code].filter(Boolean).join('\n'),
+      contractEnv: `${EXP_DIR}/contract.env`,
+      solutionOut: `${EXP_DIR}/${variantName}.solution.json`,
+      benchOut: `${EXP_DIR}/${variantName}.bench.jsonl`,
+      normalizedOut: `${EXP_DIR}/${variantName}.result.json`,
+      solCli: SOL_CLI,
+      taskDir: SOL_TASK_DIR,
+      benchConfig: SOL_BENCH_CONFIG,
+      seedDir: SOL_SEED_DIR,
+      cudaVisibleDevices: SOL_CVD,
+      ldLibraryPath: SOL_LD_LIBRARY_PATH,
+      envPrefix: SOL_ENV_PREFIX,
+      definitionPath: SOL_DEFINITION_PATH,
+    })
     const plan = __solExecbenchEvalPlan({
       substrateDir: SOL_SUBSTRATE_DIR,
       kernelSource: candidatePath,
@@ -973,7 +1021,18 @@ The parse step prints one line "SPEEDUP=<aggregate> REDUCTION=<contract reductio
 
   let verifyResult
   try {
-  verifyResult = await withTurnTimeout(agentRetry(() => agent(`You are a CUDA kernel validator. Compile, verify, and benchmark this kernel implementation.${embeddedEvalBlock}${solEvalBlock}
+  verifyResult = directSolResult
+    ? {
+        ...directSolResult,
+        speedup_vs_eager: directSolResult.speedup,
+        speedup_vs_compile: directSolResult.speedup,
+        reward: !directSolResult.compiled || !directSolResult.correct
+          ? -1
+          : directSolResult.speedup > 1.05 ? 3 : 1,
+        compile_error: directSolResult.compiled ? '' : (directSolResult.stderr || directSolResult.failure_code || ''),
+        correctness_error: directSolResult.correct ? '' : (directSolResult.stderr || directSolResult.failure_code || ''),
+      }
+    : await withTurnTimeout(agentRetry(() => agent(`You are a CUDA kernel validator. Compile, verify, and benchmark this kernel implementation.${embeddedEvalBlock}${solEvalBlock}
 
 # Kernel Code (kernel.cu):
 \`\`\`cuda

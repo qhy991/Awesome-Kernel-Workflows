@@ -58,6 +58,34 @@ function __solExecbenchEvalPlan(ctx) {
     cleanupInvariant: 'solution.json + bench.jsonl are per-candidate scratch files in the run dir; each stage clears its own stale outputs and requires the preceding artifact. No project source is mutated (non-mutating method).',
   }
 }
+
+async function __solExecbenchEvaluate(ctx) {
+  // Claude's legacy Workflow host does not yet expose this optional primitive.
+  // Keep the prompt-driven path as a compatibility edge, while KerSor's Host
+  // owns exact source materialization and PACK/RUN/PARSE without an LLM turn.
+  if (typeof evaluate !== 'function') return null
+  return evaluate({
+    protocol: 'sol-execbench-v1',
+    label: ctx.label || 'sol-eval',
+    phase: ctx.phase || 'Evaluate',
+    candidatePath: ctx.kernelSource,
+    candidateSource: ctx.candidateSource,
+    substrateDir: ctx.substrateDir,
+    contractEnv: ctx.contractEnv,
+    solutionOut: ctx.solutionOut,
+    benchOut: ctx.benchOut,
+    normalizedOut: ctx.normalizedOut || `${ctx.benchOut}.result.json`,
+    solCli: ctx.solCli,
+    taskDir: ctx.taskDir,
+    benchConfig: ctx.benchConfig,
+    seedDir: ctx.seedDir,
+    cudaVisibleDevices: ctx.cudaVisibleDevices || '0',
+    ldLibraryPath: ctx.ldLibraryPath || '',
+    envPrefix: ctx.envPrefix || '',
+    definitionPath: ctx.definitionPath || '',
+    timeoutSeconds: ctx.timeoutSeconds || 0,
+  })
+}
 // --- END sol-execbench-eval substrate ---
 
 
@@ -547,8 +575,18 @@ Then append:
 specText = setupResult.spec_text
 const opType = setupResult.op_type
 
-// Evaluate baseline
-const baselineEval = await agentRetry(() => agent(`You are a kernel evaluation expert. Evaluate the baseline kernel to establish reference performance.
+// SOL carries its honest reference latency in every official workload row, so a
+// separate LLM baseline turn cannot add evidence. Other integrations retain the
+// legacy baseline characterization path.
+const baselineEval = INTEGRATION_PATTERN === 'sol_execbench_solution'
+  ? {
+      baseline_metric: 1.0,
+      baseline_latency_ms: 0,
+      eval_passed: true,
+      performance_profile: 'owned by sol-execbench per-workload reference rows',
+      bottleneck_analysis: 'deferred to measured candidate feedback',
+    }
+  : await agentRetry(() => agent(`You are a kernel evaluation expert. Evaluate the baseline kernel to establish reference performance.
 
 # Kernel Spec:
 ${specText.substring(0, 2000)}
@@ -604,7 +642,7 @@ let INTEGRATION_DECISION = {
   build_fidelity: INTEGRATION_PATTERN === 'sol_execbench_solution' ? 'production' : 'isolated',
   reversible: true,
 }
-{
+if (INTEGRATION_PATTERN !== 'sol_execbench_solution') {
   const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true, sol_execbench_cli: !!SOL_CLI })
   const _preferred = INTEGRATION_PATTERN === 'sol_execbench_solution' ? ' --preferred-method sol_execbench_solution' : ''
   const _integ = await agentRetry(() => agent(
@@ -1181,12 +1219,15 @@ Then append:
       ? await (async () => {
         const variant = `ksearch_c${cycle}_a${attempt}`.replace(/[^A-Za-z0-9_]/g, '_')
         const candidatePath = `${EXP_DIR}/${variant}${LANGUAGE === 'cuda' ? '.cu' : '.py'}`
-        const plan = __solExecbenchEvalPlan({
+        const normalizedPath = `${EXP_DIR}/${variant}.result.json`
+        const evalContext = {
           substrateDir: SOL_SUBSTRATE_DIR,
           kernelSource: candidatePath,
+          candidateSource: genResult.code,
           contractEnv: `${EXP_DIR}/contract.env`,
           solutionOut: `${EXP_DIR}/${variant}.solution.json`,
           benchOut: `${EXP_DIR}/${variant}.bench.jsonl`,
+          normalizedOut: normalizedPath,
           solCli: SOL_CLI,
           taskDir: SOL_TASK_DIR,
           benchConfig: SOL_BENCH_CONFIG,
@@ -1195,7 +1236,26 @@ Then append:
           ldLibraryPath: SOL_LD_LIBRARY_PATH,
           envPrefix: SOL_ENV_PREFIX,
           definitionPath: SOL_DEFINITION_PATH,
-        })
+          label: `sol-eval-${cycle}-${attempt}`,
+          phase: 'Evaluate',
+        }
+        const direct = await __solExecbenchEvaluate(evalContext)
+        if (direct) {
+          const nPass = Number(direct.n_pass || 0)
+          const nTotal = Number(direct.n_total || 0)
+          const valid = direct.compiled === true && direct.correct === true && nTotal > 0 && nPass === nTotal
+          return {
+            is_valid: valid,
+            metric_value: Number(direct.speedup || 0),
+            latency_ms: Number(direct.candidate_latency_aggregate_ms || 0),
+            speedup_vs_baseline: Number(direct.speedup || 0),
+            pass_rate: `${nPass}/${nTotal}`,
+            error_log: direct.stderr || '',
+            performance_analysis: `host-owned ${direct.protocol} stage=${direct.stage}`,
+            remaining_bottleneck: direct.failure_code || '',
+          }
+        }
+        const plan = __solExecbenchEvalPlan(evalContext)
         return agentRetry(() => agent(`Evaluate this K-Search candidate through the authoritative sol-execbench contract.
 
 1. Atomically write the exact candidate below to ${candidatePath}.

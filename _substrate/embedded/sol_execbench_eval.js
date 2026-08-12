@@ -16,6 +16,8 @@
 //   SOL_SOLUTION_CONTRACT      -- prompt fragment for proposal subagents in sol
 //                                 mode (emit a runnable source; NOT a main()).
 //   __solExecbenchEvalPlan(ctx) -- ordered Bash strings: pack -> run -> parse.
+//   __solExecbenchEvaluate(ctx) -- Host-owned deterministic transaction when the
+//                                 runtime injects evaluate(); null otherwise.
 //
 // The standalone/embedded paths are unchanged: a workflow only calls this when
 // INTEGRATION_DECISION.method === 'sol_execbench_solution'.
@@ -66,6 +68,34 @@ function __solExecbenchEvalPlan(ctx) {
     cleanupInvariant: 'solution.json + bench.jsonl are per-candidate scratch files in the run dir; each stage clears its own stale outputs and requires the preceding artifact. No project source is mutated (non-mutating method).',
   }
 }
+
+async function __solExecbenchEvaluate(ctx) {
+  // Claude's legacy Workflow host does not yet expose this optional primitive.
+  // Keep the prompt-driven path as a compatibility edge, while KerSor's Host
+  // owns exact source materialization and PACK/RUN/PARSE without an LLM turn.
+  if (typeof evaluate !== 'function') return null
+  return evaluate({
+    protocol: 'sol-execbench-v1',
+    label: ctx.label || 'sol-eval',
+    phase: ctx.phase || 'Evaluate',
+    candidatePath: ctx.kernelSource,
+    candidateSource: ctx.candidateSource,
+    substrateDir: ctx.substrateDir,
+    contractEnv: ctx.contractEnv,
+    solutionOut: ctx.solutionOut,
+    benchOut: ctx.benchOut,
+    normalizedOut: ctx.normalizedOut || `${ctx.benchOut}.result.json`,
+    solCli: ctx.solCli,
+    taskDir: ctx.taskDir,
+    benchConfig: ctx.benchConfig,
+    seedDir: ctx.seedDir,
+    cudaVisibleDevices: ctx.cudaVisibleDevices || '0',
+    ldLibraryPath: ctx.ldLibraryPath || '',
+    envPrefix: ctx.envPrefix || '',
+    definitionPath: ctx.definitionPath || '',
+    timeoutSeconds: ctx.timeoutSeconds || 0,
+  })
+}
 // <<< SOL_INLINE_END >>>
 
-export { SOL_SOLUTION_CONTRACT, __solExecbenchEvalPlan }
+export { SOL_SOLUTION_CONTRACT, __solExecbenchEvalPlan, __solExecbenchEvaluate }

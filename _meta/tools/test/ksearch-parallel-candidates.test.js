@@ -48,3 +48,11 @@ test('ksearch manifest exposes bounded candidate fan-out but keeps evaluation se
   assert.match(manifest, /label: gen-\{cycle\}-\{attempt\}[\s\S]*?parallelism: parallel_fan_out/)
   assert.match(manifest, /description: Evaluate the generated candidate[\s\S]*?parallelism: single/)
 })
+
+test('ksearch: SOL evaluation is Host-owned with an explicit legacy fallback', () => {
+  assert.match(source, /const direct = await __solExecbenchEvaluate\(evalContext\)/)
+  assert.match(source, /if \(direct\) \{[\s\S]*?host-owned \$\{direct\.protocol\}/)
+  assert.match(source, /const plan = __solExecbenchEvalPlan\(evalContext\)[\s\S]*?agentRetry\(\(\) => agent\(`/)
+  assert.match(source, /INTEGRATION_PATTERN === 'sol_execbench_solution'[\s\S]*?baseline_metric: 1\.0/)
+  assert.match(source, /if \(INTEGRATION_PATTERN !== 'sol_execbench_solution'\)/)
+})

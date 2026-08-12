@@ -66,6 +66,34 @@ function __solExecbenchEvalPlan(ctx) {
     cleanupInvariant: 'solution.json + bench.jsonl are per-candidate scratch files in the run dir; each stage clears its own stale outputs and requires the preceding artifact. No project source is mutated (non-mutating method).',
   }
 }
+
+async function __solExecbenchEvaluate(ctx) {
+  // Claude's legacy Workflow host does not yet expose this optional primitive.
+  // Keep the prompt-driven path as a compatibility edge, while KerSor's Host
+  // owns exact source materialization and PACK/RUN/PARSE without an LLM turn.
+  if (typeof evaluate !== 'function') return null
+  return evaluate({
+    protocol: 'sol-execbench-v1',
+    label: ctx.label || 'sol-eval',
+    phase: ctx.phase || 'Evaluate',
+    candidatePath: ctx.kernelSource,
+    candidateSource: ctx.candidateSource,
+    substrateDir: ctx.substrateDir,
+    contractEnv: ctx.contractEnv,
+    solutionOut: ctx.solutionOut,
+    benchOut: ctx.benchOut,
+    normalizedOut: ctx.normalizedOut || `${ctx.benchOut}.result.json`,
+    solCli: ctx.solCli,
+    taskDir: ctx.taskDir,
+    benchConfig: ctx.benchConfig,
+    seedDir: ctx.seedDir,
+    cudaVisibleDevices: ctx.cudaVisibleDevices || '0',
+    ldLibraryPath: ctx.ldLibraryPath || '',
+    envPrefix: ctx.envPrefix || '',
+    definitionPath: ctx.definitionPath || '',
+    timeoutSeconds: ctx.timeoutSeconds || 0,
+  })
+}
 // --- END sol-execbench-eval substrate ---
 
 
@@ -719,7 +747,7 @@ let INTEGRATION_DECISION = {
   build_fidelity: INTEGRATION_PATTERN === 'sol_execbench_solution' ? 'production' : 'isolated',
   reversible: true,
 }
-{
+if (INTEGRATION_PATTERN !== 'sol_execbench_solution') {
   const _kForIntg = KERNEL_PATH || PROBLEM_PATH || `${EXP_DIR}/reference.py`
   const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true, sol_execbench_cli: !!SOL_CLI })
   const _preferred = INTEGRATION_PATTERN === 'sol_execbench_solution' ? ' --preferred-method sol_execbench_solution' : ''
@@ -1048,6 +1076,26 @@ Then append (this is small-step surgical edit for candidate node-${searchStep + 
       const variant = `ada_s${searchStep + 1}_${isLargeStep ? 'L' : 'S'}`.replace(/[^A-Za-z0-9_]/g, '_')
       const producerCallPrefix = `Expand/${isLargeStep ? `propose-${searchStep + 1}` : `tune-${searchStep + 1}`}/`
       const solCandidatePath = `${EXP_DIR}/kernels/${variant}.py`
+      const direct = await __solExecbenchEvaluate({
+        label: `sol-eval-${searchStep + 1}`,
+        phase: 'Evaluate',
+        substrateDir: SOL_SUBSTRATE_DIR,
+        kernelSource: solCandidatePath,
+        candidateSource: newKernelCode,
+        contractEnv: `${EXP_DIR}/contract.env`,
+        solutionOut: `${EXP_DIR}/${variant}.solution.json`,
+        benchOut: `${EXP_DIR}/${variant}.bench.jsonl`,
+        normalizedOut: resultPath,
+        solCli: SOL_CLI,
+        taskDir: SOL_TASK_DIR,
+        benchConfig: SOL_BENCH_CONFIG,
+        seedDir: SOL_SEED_DIR,
+        cudaVisibleDevices: SOL_CVD,
+        ldLibraryPath: SOL_LD_LIBRARY_PATH,
+        envPrefix: SOL_ENV_PREFIX,
+        definitionPath: SOL_DEFINITION_PATH,
+      })
+      if (direct) return direct
       const plan = __solExecbenchEvalPlan({
         substrateDir: SOL_SUBSTRATE_DIR,
         kernelSource: solCandidatePath,

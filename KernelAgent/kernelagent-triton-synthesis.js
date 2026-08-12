@@ -58,6 +58,34 @@ function __solExecbenchEvalPlan(ctx) {
     cleanupInvariant: 'solution.json + bench.jsonl are per-candidate scratch files in the run dir; each stage clears its own stale outputs and requires the preceding artifact. No project source is mutated (non-mutating method).',
   }
 }
+
+async function __solExecbenchEvaluate(ctx) {
+  // Claude's legacy Workflow host does not yet expose this optional primitive.
+  // Keep the prompt-driven path as a compatibility edge, while KerSor's Host
+  // owns exact source materialization and PACK/RUN/PARSE without an LLM turn.
+  if (typeof evaluate !== 'function') return null
+  return evaluate({
+    protocol: 'sol-execbench-v1',
+    label: ctx.label || 'sol-eval',
+    phase: ctx.phase || 'Evaluate',
+    candidatePath: ctx.kernelSource,
+    candidateSource: ctx.candidateSource,
+    substrateDir: ctx.substrateDir,
+    contractEnv: ctx.contractEnv,
+    solutionOut: ctx.solutionOut,
+    benchOut: ctx.benchOut,
+    normalizedOut: ctx.normalizedOut || `${ctx.benchOut}.result.json`,
+    solCli: ctx.solCli,
+    taskDir: ctx.taskDir,
+    benchConfig: ctx.benchConfig,
+    seedDir: ctx.seedDir,
+    cudaVisibleDevices: ctx.cudaVisibleDevices || '0',
+    ldLibraryPath: ctx.ldLibraryPath || '',
+    envPrefix: ctx.envPrefix || '',
+    definitionPath: ctx.definitionPath || '',
+    timeoutSeconds: ctx.timeoutSeconds || 0,
+  })
+}
 // --- END sol-execbench-eval substrate ---
 
 
@@ -557,7 +585,7 @@ let INTEGRATION_DECISION = {
   build_fidelity: INTEGRATION_PATTERN === 'sol_execbench_solution' ? 'production' : 'isolated',
   reversible: true,
 }
-{
+if (INTEGRATION_PATTERN !== 'sol_execbench_solution') {
   const _probe = JSON.stringify({
     compiler: true,
     project_build: false,
@@ -594,6 +622,33 @@ async function verifySolCandidate(candidate, label, phaseName) {
   const candidateDir = `${EXP_DIR}/candidates/${variant}`
   const candidatePath = `${candidateDir}/kernel.py`
   const normalizedPath = `${candidateDir}/result.json`
+  const direct = await __solExecbenchEvaluate({
+    label,
+    phase: phaseName,
+    substrateDir: SOL_SUBSTRATE_DIR,
+    kernelSource: candidatePath,
+    candidateSource: candidate.code,
+    contractEnv: `${EXP_DIR}/contract.env`,
+    solutionOut: `${candidateDir}/solution.json`,
+    benchOut: `${candidateDir}/bench.jsonl`,
+    normalizedOut: normalizedPath,
+    solCli: SOL_CLI,
+    taskDir: SOL_TASK_DIR,
+    benchConfig: SOL_BENCH_CONFIG,
+    seedDir: SOL_SEED_DIR,
+    cudaVisibleDevices: SOL_CVD,
+    ldLibraryPath: SOL_LD_LIBRARY_PATH,
+    envPrefix: SOL_ENV_PREFIX,
+    definitionPath: SOL_DEFINITION_PATH,
+  })
+  if (direct) {
+    return {
+      ...direct,
+      passed: direct.correct === true && direct.n_pass === direct.n_total && direct.n_total > 0,
+      verification_result: direct.correct === true ? 'pass' : (direct.timed_out ? 'timeout' : 'fail'),
+      error_summary: direct.stderr || direct.failure_code || '',
+    }
+  }
   const plan = __solExecbenchEvalPlan({
     substrateDir: SOL_SUBSTRATE_DIR,
     kernelSource: candidatePath,

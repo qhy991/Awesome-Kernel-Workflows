@@ -57,6 +57,34 @@ function __solExecbenchEvalPlan(ctx) {
     cleanupInvariant: 'solution.json + bench.jsonl are per-candidate scratch files in the run dir; each stage clears its own stale outputs and requires the preceding artifact. No project source is mutated (non-mutating method).',
   }
 }
+
+async function __solExecbenchEvaluate(ctx) {
+  // Claude's legacy Workflow host does not yet expose this optional primitive.
+  // Keep the prompt-driven path as a compatibility edge, while KerSor's Host
+  // owns exact source materialization and PACK/RUN/PARSE without an LLM turn.
+  if (typeof evaluate !== 'function') return null
+  return evaluate({
+    protocol: 'sol-execbench-v1',
+    label: ctx.label || 'sol-eval',
+    phase: ctx.phase || 'Evaluate',
+    candidatePath: ctx.kernelSource,
+    candidateSource: ctx.candidateSource,
+    substrateDir: ctx.substrateDir,
+    contractEnv: ctx.contractEnv,
+    solutionOut: ctx.solutionOut,
+    benchOut: ctx.benchOut,
+    normalizedOut: ctx.normalizedOut || `${ctx.benchOut}.result.json`,
+    solCli: ctx.solCli,
+    taskDir: ctx.taskDir,
+    benchConfig: ctx.benchConfig,
+    seedDir: ctx.seedDir,
+    cudaVisibleDevices: ctx.cudaVisibleDevices || '0',
+    ldLibraryPath: ctx.ldLibraryPath || '',
+    envPrefix: ctx.envPrefix || '',
+    definitionPath: ctx.definitionPath || '',
+    timeoutSeconds: ctx.timeoutSeconds || 0,
+  })
+}
 // --- END sol-execbench-eval substrate ---
 
 
@@ -579,7 +607,7 @@ let INTEGRATION_DECISION = {
   build_fidelity: INTEGRATION_PATTERN === 'sol_execbench_solution' ? 'production' : 'isolated',
   reversible: true,
 }
-{
+if (INTEGRATION_PATTERN !== 'sol_execbench_solution') {
   const _probe = JSON.stringify({ compiler: true, project_build: !!PROJECT_BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true, sol_execbench_cli: !!SOL_CLI })
   const _preferred = INTEGRATION_PATTERN === 'sol_execbench_solution' ? ' --preferred-method sol_execbench_solution' : ''
   const _integ = await agentRetry(() => agent(
@@ -768,6 +796,7 @@ ${gradientHints ? `# Gradient Hints (from evolutionary history):\n${gradientHint
 3. If mutating a parent: make MEANINGFUL structural changes, not just parameter tweaks
 4. Try to explore a DIFFERENT optimization strategy than the parent (different memory pattern, algorithm, or parallelism level)
 5. You may optionally produce a TEMPLATED kernel with configurable parameters (tile_size, work_group_size, unroll_factor) alongside a dispatch function
+6. Classify the produced candidate itself with integer d_mem, d_algo, d_sync coordinates in [0, 3]
 
 ${IS_SOL ? SOL_SOLUTION_CONTRACT : ''}
 
@@ -790,10 +819,13 @@ Then append (this is generation ${generation}):
         memory_pattern: { type: 'string' },
         algorithm_type: { type: 'string' },
         parallelism_level: { type: 'string' },
+        d_mem: { type: 'number', minimum: 0, maximum: 3 },
+        d_algo: { type: 'number', minimum: 0, maximum: 3 },
+        d_sync: { type: 'number', minimum: 0, maximum: 3 },
         is_templated: { type: 'boolean' },
         template_params: { type: 'array', items: { type: 'string' } },
       },
-      required: ['kernel_code', 'strategy_description'],
+      required: ['kernel_code', 'strategy_description', 'd_mem', 'd_algo', 'd_sync'],
     },
   }), { retries: 0, allowNull: true })
 
@@ -809,7 +841,7 @@ Then append (this is generation ${generation}):
   const testCommand = harnessCommand(TEST_CMD, candidatePath, generationResultPath)
   const benchmarkCommand = harnessCommand(BENCH_CMD, candidatePath, generationResultPath)
 
-  await agentRetry(() => agent(`Materialize the exact KernelFoundry candidate below at ${candidatePath}.
+  if (!IS_SOL) await agentRetry(() => agent(`Materialize the exact KernelFoundry candidate below at ${candidatePath}.
 Create the parent directory first. Write the complete source byte-for-byte without
 summarizing, repairing, or reformatting it. Use an atomic temporary file + rename.
 The authoritative producer call_id prefix is Vary/vary-${generation}/. If you
@@ -838,6 +870,33 @@ Return {"written":true,"path":"${candidatePath}"}.`, {
   const evalResult = IS_SOL
     ? await (async () => {
       const variant = `kf_gen_${generation}`.replace(/[^A-Za-z0-9_]/g, '_')
+      const direct = await __solExecbenchEvaluate({
+        label: `sol-eval-${generation}`,
+        phase: 'Evaluate',
+        substrateDir: SOL_SUBSTRATE_DIR,
+        kernelSource: candidatePath,
+        candidateSource: offspringCode,
+        contractEnv: `${EXP_DIR}/contract.env`,
+        solutionOut: `${EXP_DIR}/${variant}.solution.json`,
+        benchOut: `${EXP_DIR}/${variant}.bench.jsonl`,
+        normalizedOut: generationResultPath,
+        solCli: SOL_CLI,
+        taskDir: SOL_TASK_DIR,
+        benchConfig: SOL_BENCH_CONFIG,
+        seedDir: SOL_SEED_DIR,
+        cudaVisibleDevices: SOL_CVD,
+        ldLibraryPath: SOL_LD_LIBRARY_PATH,
+        envPrefix: SOL_ENV_PREFIX,
+        definitionPath: SOL_DEFINITION_PATH,
+      })
+      if (direct) {
+        return {
+          ...direct,
+          d_mem: Number(varyResult?.d_mem || 0),
+          d_algo: Number(varyResult?.d_algo || 0),
+          d_sync: Number(varyResult?.d_sync || 0),
+        }
+      }
       const plan = __solExecbenchEvalPlan({
         substrateDir: SOL_SUBSTRATE_DIR,
         kernelSource: candidatePath,

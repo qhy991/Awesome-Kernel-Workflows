@@ -10,6 +10,16 @@ for the versioning policy.
 
 ### Fixed
 
+- **SOL benchmark mechanics are delegated to the workflow Host.** The shared
+  substrate feature-detects the Host's `evaluate(sol-execbench-v1)` primitive;
+  K-Search, CUDA-Agent, AdaExplore, KernelAgent, and KernelFoundry send exact
+  candidate source to that single deterministic pack/run/parse transaction and
+  keep the prompt-operated path only as a legacy-host adapter. Explicit SOL
+  mode also bypasses the redundant integration-strategist turn. This changes
+  development workflows only; release qualification remains owned by KerSor's
+  fail-closed registry. (`_substrate/embedded/sol_execbench_eval.js`, core-five
+  workflows, `_meta/tools/test/`)
+
 - **SOL packaging follows candidate source type.** The shared packer now emits
   native Triton or PyTorch modules for Python candidates with a top-level
   `run`, while CUDA extensions alone require `PYBIND11_MODULE`. Embedded SOL

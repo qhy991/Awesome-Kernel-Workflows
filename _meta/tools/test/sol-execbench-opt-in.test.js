@@ -53,3 +53,21 @@ test('new sol workflows declare the runtime evaluation arguments', () => {
     assert.match(source, /sol_execbench_solution/)
   }
 })
+
+test('KerSor core five delegate SOL execution to the Host and skip deterministic routing turns', () => {
+  for (const [dir, file] of [
+    ['CUDAAgent', 'cuda-agent-kernel-optimization.js'],
+    ['KSearch', 'ksearch-kernel-optimization.js'],
+    ['AdaExplore', 'adaexplore-kernel-optimization.js'],
+    ['KernelAgent', 'kernelagent-triton-synthesis.js'],
+    ['KernelFoundry', 'kernelfoundry-kernel-optimization.js'],
+  ]) {
+    const source = read(path.join(dir, file))
+    assert.match(source, /await __solExecbenchEvaluate\(/, `${dir} does not call the Host evaluator`)
+    assert.match(
+      source,
+      /let INTEGRATION_DECISION = \{[\s\S]*?if \(INTEGRATION_PATTERN !== 'sol_execbench_solution'\)/,
+      `${dir} still asks a model to resolve an explicit SOL integration mode`,
+    )
+  }
+})
