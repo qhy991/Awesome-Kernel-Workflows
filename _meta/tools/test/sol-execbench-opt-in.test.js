@@ -71,3 +71,10 @@ test('KerSor core five delegate SOL execution to the Host and skip deterministic
     )
   }
 })
+
+test('CUDAAgent does not profile an explicit SOL baseline through an LLM worker', () => {
+  const source = read('CUDAAgent/cuda-agent-kernel-optimization.js')
+  assert.match(source, /const profileResult = IS_SOL\s*\? \{[\s\S]*?: await agentRetry\(\(\) => agent\(`/)
+  assert.match(source, /eager_time_ms: null,[\s\S]*compile_time_ms: null/)
+  assert.match(source, /best_speedup_vs_eager: IS_SOL \? null/)
+})

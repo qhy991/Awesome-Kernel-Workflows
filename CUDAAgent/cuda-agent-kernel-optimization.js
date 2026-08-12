@@ -705,7 +705,16 @@ if (PROFILING_DECISION.method === 'native_profiler' && !NCU_CMD) {
 // =============================================================================
 phase('Profile')
 
-const profileResult = await agentRetry(() => agent(`You are a CUDA performance profiler. Profile the baseline PyTorch model.
+const profileResult = IS_SOL
+  ? {
+      eager_time_ms: null,
+      compile_time_ms: null,
+      bottlenecks: ['contract-owned SOL GEMM baseline; optimize candidate execution'],
+      optimization_strategy: 'generate and evaluate a complete SOL candidate',
+      fusion_plan: 'single GEMM solution entry point',
+      heuristic_bclass: 'compute_bound',
+    }
+  : await agentRetry(() => agent(`You are a CUDA performance profiler. Profile the baseline PyTorch model.
 
 # Model Code:
 \`\`\`python
@@ -757,10 +766,12 @@ Then append:
   },
 }), { retries: 5 })
 
-eagerTime = profileResult.eager_time_ms || 1.0
-compileTime = profileResult.compile_time_ms || 1.0
+eagerTime = IS_SOL ? null : (profileResult.eager_time_ms || 1.0)
+compileTime = IS_SOL ? null : (profileResult.compile_time_ms || 1.0)
 
-log(`Baseline: eager=${eagerTime}ms, compile=${compileTime}ms | Bottlenecks: ${profileResult.bottlenecks.join(', ')}`)
+log(IS_SOL
+  ? `Baseline: owned by the SOL evaluation contract | Bottlenecks: ${profileResult.bottlenecks.join(', ')}`
+  : `Baseline: eager=${eagerTime}ms, compile=${compileTime}ms | Bottlenecks: ${profileResult.bottlenecks.join(', ')}`)
 log(`Strategy: ${profileResult.optimization_strategy}`)
 
 // =============================================================================
@@ -839,9 +850,12 @@ ${modelCode.substring(0, 3000)}
 # Bottlenecks to Address: ${profileResult.bottlenecks.join('; ')}
 
 # Baseline Performance:
-- Eager: ${eagerTime}ms
+${IS_SOL
+    ? `- The SOL contract owns the reference measurements; optimize the official aggregate speedup.
+- Target: ${TARGET_SPEEDUP !== null ? `>${TARGET_SPEEDUP}x official aggregate speedup` : 'explore (no numeric target — run to MAX_TURNS / stagnation)'}`
+    : `- Eager: ${eagerTime}ms
 - torch.compile: ${compileTime}ms
-- Target: ${TARGET_SPEEDUP !== null ? `>${TARGET_SPEEDUP}x speedup over torch.compile (=${(compileTime / TARGET_SPEEDUP).toFixed(3)}ms)` : 'explore (no numeric target — run to MAX_TURNS / stagnation)'}
+- Target: ${TARGET_SPEEDUP !== null ? `>${TARGET_SPEEDUP}x speedup over torch.compile (=${(compileTime / TARGET_SPEEDUP).toFixed(3)}ms)` : 'explore (no numeric target — run to MAX_TURNS / stagnation)'}`}
 ${historyContext}${proactiveKnowledgeHint}${algorithmicPriorsHint}${embeddedProposalBlock}
 
 # CUDA Agent Workspace Requirements:
@@ -1270,10 +1284,13 @@ if (terminationReason !== 'turn_limit') {
 # CUDA Agent Optimization Results
 - Adaptation scope: ${ADAPTATION_SCOPE}
 - Operation: ${OP_DESC}
-- Baseline eager: ${eagerTime}ms
+${IS_SOL
+    ? `- Baseline: owned by the SOL evaluation contract
+- Best official aggregate speedup: ${bestSpeedup.toFixed(2)}x`
+    : `- Baseline eager: ${eagerTime}ms
 - Baseline compile: ${compileTime}ms
 - Best kernel time: ${compileTime / (bestSpeedup || 1)}ms
-- Best speedup vs compile: ${bestSpeedup.toFixed(2)}x
+- Best speedup vs compile: ${bestSpeedup.toFixed(2)}x`}
 - Target: ${TARGET_SPEEDUP !== null ? `${TARGET_SPEEDUP}x | ${targetMet ? 'ACHIEVED' : 'NOT MET'}` : 'explore (no target)'}
 - Turns used: ${currentAttempt}/${MAX_TURNS}
 - Convergence status: ${convergence_status}
@@ -1316,7 +1333,7 @@ return {
   eager_time_ms: eagerTime,
   compile_time_ms: compileTime,
   best_speedup_vs_compile: bestSpeedup,
-  best_speedup_vs_eager: eagerTime / (compileTime / (bestSpeedup || 1)),
+  best_speedup_vs_eager: IS_SOL ? null : eagerTime / (compileTime / (bestSpeedup || 1)),
   target_met: targetMet,
   convergence_status,
   termination_reason: terminationReason,

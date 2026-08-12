@@ -19,6 +19,9 @@ for the versioning policy.
   development workflows only; release qualification remains owned by KerSor's
   fail-closed registry. (`_substrate/embedded/sol_execbench_eval.js`, core-five
   workflows, `_meta/tools/test/`)
+  CUDA-Agent also treats an explicit SOL baseline as contract-owned, skips its
+  generic LLM-operated baseline profiler before candidate generation, and
+  reports legacy eager/compile baseline fields as null rather than placeholders.
 
 - **SOL packaging follows candidate source type.** The shared packer now emits
   native Triton or PyTorch modules for Python candidates with a top-level

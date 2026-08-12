@@ -16,6 +16,8 @@
   是否发布仍由 KerSor fail-closed registry 的重新验收决定。
   (`_substrate/embedded/sol_execbench_eval.js`、核心五路 workflow、
   `_meta/tools/test/`)
+  CUDA-Agent 也把显式 SOL baseline 视为合同事实，在候选生成前跳过通用的 LLM
+  baseline profiler，并将旧 eager/compile baseline 字段报告为 null，而非占位值。
 
 - **SOL 打包遵循候选源码类型。** 共享 packer 对含顶层 `run` 的 Python 候选原生
   输出 Triton 或 PyTorch module，只有 CUDA extension 要求 `PYBIND11_MODULE`。
