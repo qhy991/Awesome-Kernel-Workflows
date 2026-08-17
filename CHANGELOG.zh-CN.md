@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+### 新增（Added）
+
+- **Harness Engineering workflow。** 新增基于 arXiv:2607.17979 的冻结契约、
+  profile 驱动优化循环。编译/正确性、可选深度验证与计时仍由调用方命令拥有；
+  候选只写入 `exp_dir`，只有正确且严格更快才晋升，并保留原始产物。
+  (`HarnessEngineering/`)
+- **Atrex 严格适配器。** 新增对 Atrex Kernel Agent 唯一受支持入口
+  `orchestrator/optimize.py` 的 fail-closed adapter。V0/V1、clean-session Long
+  Horizon episode、profiling、optimization dropout、完整 workload 验证、同
+  allocation ABBA 与 squash promotion 仍由官方 supervisor 负责。(`Atrex/`)
+- **研究支持的验证配置。** 根据 arXiv:2608.12700、arXiv:2607.16241 与
+  arXiv:2607.27231 文档化 `contract-grade`、`kernelbench-verified`、
+  `kernelgenbench` 三类证据义务；配置名不能替代项目可执行 verifier。
+  (`_substrate/verification/README.md`)
+
 ### 修复（Fixed）
 
 - **SOL benchmark 机械步骤改由 workflow Host 执行。** 共享 substrate 会探测 Host

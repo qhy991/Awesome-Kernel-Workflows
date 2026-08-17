@@ -1,0 +1,205 @@
+schema_version: '1.1'
+name: atrex-kernel-optimization
+entrypoint: atrex-kernel-optimization.js
+backend:
+  portability: method_intrinsic
+  matrix_eligible: false
+  intrinsic_to: Atrex Kernel Agent orchestrator
+  method_supported_backends:
+  - cuda
+  - rocm
+  supported:
+  - cuda
+  - rocm
+  default: cuda
+  notes: 'Strict adapter to an existing Atrex Kernel Agent checkout. The official
+    orchestrator owns isolated worktrees, clean-session episodes, profiling,
+    budgets, terminal validation, same-allocation ABBA verification, and squash
+    promotion.'
+source:
+  paper_title: 'Are LLM-Generated GPU Kernels Production-Ready? A Trace-Driven Benchmark and Optimization Agent'
+  paper_url: https://arxiv.org/abs/2607.14541
+  paper_venue: arXiv 2026
+  repo_url: https://github.com/alibaba/atrex-kernel-agent
+  commit_or_tag: ''
+  license: Apache-2.0
+  notes: 'Strict adapter to the single supported optimization entry point,
+    orchestrator/optimize.py. The adapter does not duplicate the Long Horizon
+    engine, optimization dropout, GPU wiki, hidden workload handling, or ABBA
+    promotion logic.'
+workflow:
+  name: atrex-kernel-optimization
+  description: Strict adapter that launches and audits one Atrex Kernel Agent campaign while leaving all optimization and promotion authority with the official orchestrator.
+  when_to_use: Use for SOL-ExecBench or native Atrex-Bench operators when an existing Atrex Kernel Agent checkout, platform configuration, GPU gateway, and complete campaign command are available.
+  output_filename: atrex-kernel-optimization.js
+  directory: Atrex/
+routing:
+  accepts:
+    problem_type:
+    - atrex-kernel-optimization
+    - production-kernel-optimization
+    - sol-execbench-operator-optimization
+    constraints:
+    - external_orchestrator
+  best_kernel_field: best_kernel_path
+  topology: iterative
+  seed_contract: greenfield
+  requires_harness: true
+  languages:
+  - cuda
+  - triton
+  - gluon
+  - flydsl
+  - cutedsl
+  backends:
+  - cuda
+  - rocm
+  method_category: iterative_self_improving
+  role: optimizer
+  speedup_field: best_speedup
+  fidelity_boundary: strict_high_fidelity
+  required_args:
+  - atrex_root
+  - operator_input
+  - atrex_command
+  - platform
+  - framework
+  all_args:
+  - atrex_root
+  - operator_input
+  - atrex_command
+  - platform
+  - framework
+  - mode
+  - max_iters
+  - exp_dir
+  - min_speedup
+  - model
+  - turn_timeout_min
+  integration_patterns:
+  - standalone
+  requires_ncu: false
+  optimization_phases:
+  - backend_native
+inputs:
+  supports_existing_kernel: true
+  supports_problem_definition: true
+  required_one_of:
+  - operator_input
+  generation:
+    enabled: true
+    seed_candidates_arg: ''
+    output_arg: best_kernel_path
+    requires_correctness_evidence: true
+method:
+  category: iterative_self_improving
+  core_insight: 'Atrex combines trace-derived workload importance and per-problem
+    roofline ceilings with a profile-driven measure-revise loop, optimization
+    dropout, and a layered GPU knowledge base. The official supervisor alone
+    owns budgets, terminal validation, ABBA verification, and promotion.'
+  feedback_signal:
+    type: throughput_delta
+    description: Correctness-passing complete-workload latency and roofline/SOL evidence from the official Atrex evaluator and same-allocation ABBA gate.
+    tool: atrex-orchestrator
+    higher_is_better: true
+topology:
+  type: iterative
+  iterative:
+    iterations_arg: max_iters
+    convergence_condition: The Atrex supervisor reaches its explicit budget or promotes/terminates the campaign under its own policy.
+    state_variables:
+    - name: canonicalMemory
+      type: object
+      initial_value: latest memory/v<N>.json
+      description: Official immutable version memory; live memory is observability only.
+    - name: episodeJournal
+      type: array
+      initial_value: official episode journal
+      description: Profile, research, plan, edit, repair, and handoff evidence.
+    - name: promotedVersion
+      type: string
+      initial_value: baseline version
+      description: Version promoted only by the official correctness and ABBA gate.
+phases:
+- name: Doctor
+  detail: Verify the Atrex checkout, sole supported entrypoint, command placeholders, platform, framework, and output boundary.
+  position: preamble
+- name: Launch Campaign
+  detail: Execute one official Atrex campaign and let its supervisor own every inner optimization decision.
+  position: loop_body
+- name: Evidence Audit
+  detail: Inspect canonical memory, journals, terminal validation, ABBA evidence, and promoted artifacts without substituting live observability state.
+  position: epilogue
+- name: Report
+  detail: Write an adapter report and return the exact official promoted candidate and evidence paths.
+  position: epilogue
+args:
+  required:
+  - name: atrex_root
+    type: string
+    description: Path to an existing Atrex Kernel Agent checkout.
+    example: /abs/path/atrex-kernel-agent
+  - name: operator_input
+    type: string
+    description: SOL task, Atrex-Bench operator, or public problem input accepted by the official orchestrator.
+    example: atrex-bench/attention_forward
+  - name: atrex_command
+    type: string
+    description: Complete user-supplied command template invoking orchestrator/optimize.py.
+    example: /abs/path/atrex-optimize --operator {operator_input} --workspace {exp_dir}
+  - name: platform
+    type: string
+    description: Platform identifier configured for the official Atrex gateway.
+    example: H20
+  - name: framework
+    type: string
+    description: Framework requested from the official orchestrator.
+    example: cuda
+  optional:
+  - name: mode
+    type: string
+    default: "'production'"
+    description: Atrex campaign mode such as production or leaderboard.
+  - name: max_iters
+    type: number
+    default: '300'
+    description: Mechanical campaign iteration budget passed through to Atrex.
+  - name: exp_dir
+    type: string
+    default: "'/tmp/atrex-akw'"
+    description: Parent directory for the official campaign and adapter report.
+  - name: min_speedup
+    type: number
+    default: '1.0'
+    description: Adapter success threshold applied only after official promotion evidence.
+  - name: model
+    type: string
+    default: "'sonnet'"
+    description: Model used for adapter doctor and audit turns, not the Atrex internal agent runtime.
+  - name: turn_timeout_min
+    type: number
+    default: '720'
+    description: Wall-clock limit for the long-running launch turn.
+evidence:
+  correctness:
+    owner: Atrex terminal validator
+    required: true
+    contract: 'Complete workload correctness from canonical memory/v<N>.json; memory/live.json is not promotion evidence.'
+  performance:
+    owner: Atrex same-allocation ABBA verifier
+    required: true
+    contract: 'Strict improvement paired with the exact incumbent and candidate allocation and aggregation provenance.'
+  promotion:
+    owner: Atrex supervisor
+    required: true
+    contract: 'Policy/protected-path checks plus terminal validation and squash promotion.'
+state:
+  artifacts:
+  - exp_dir/adapter-contract.json
+  - exp_dir/campaign/
+  - exp_dir/adapter-report.md
+  - exp_dir/genome.jsonl
+  memory:
+  - canonical memory/v<N>.json
+  - episode journals and terminal handoffs
+  - Git branches/worktrees and squash promotions

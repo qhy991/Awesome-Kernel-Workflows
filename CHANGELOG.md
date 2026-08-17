@@ -8,6 +8,24 @@ for the versioning policy.
 
 ## [Unreleased]
 
+### Added
+
+- **Harness Engineering workflow.** Adds a frozen-contract, profile-backed
+  optimization loop based on arXiv:2607.17979. Caller-owned commands remain
+  authoritative for compile/correctness, optional deeper verification, and
+  timing; candidates are isolated under `exp_dir`, promoted only when correct
+  and strictly faster, and retained with raw artifacts. (`HarnessEngineering/`)
+- **Atrex strict adapter.** Adds a fail-closed adapter to the sole supported
+  `orchestrator/optimize.py` entry point in Atrex Kernel Agent. The official
+  supervisor continues to own V0/V1 establishment, clean-session Long Horizon
+  episodes, profiling, optimization dropout, complete-workload validation,
+  same-allocation ABBA verification, and squash promotion. (`Atrex/`)
+- **Research-backed verification profiles.** Documents separate
+  `contract-grade`, `kernelbench-verified`, and `kernelgenbench` evidence
+  obligations from arXiv:2608.12700, arXiv:2607.16241, and arXiv:2607.27231.
+  Profile names do not replace executable project verifiers.
+  (`_substrate/verification/README.md`)
+
 ### Fixed
 
 - **SOL benchmark mechanics are delegated to the workflow Host.** The shared

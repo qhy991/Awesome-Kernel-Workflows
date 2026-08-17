@@ -60,6 +60,27 @@ evidence the harness emits stays provenance-tagged.
 - `verification_registry.json` — ladder + need-ladders + stamping
 - `tests/test_strategist.sh` — 16 assertions (no GPU/harness needed)
 
+## Research-backed evaluation profiles
+
+The strategist above answers **how deeply to run an available project verifier**.
+The following profile names answer a different question: **which evidence
+obligations should the project-owned verifier cover**. They are vocabulary and
+audit expectations, not built-in executable harnesses. A workflow must still
+receive a real command/artifact owner and must fail closed when the requested
+evidence is absent.
+
+| profile | evidence obligations | primary source |
+|---|---|---|
+| `contract-grade` | Explicit operator contract; adversarial properties such as non-finite behavior, determinism, shape variation, and accumulation semantics; each gate reported separately, including tolerance-free gates where applicable | [A Contract-Grade Verifier for LLM-Generated GPU Kernels](https://arxiv.org/abs/2608.12700) |
+| `kernelbench-verified` | Realistic TF32-enabled PyTorch baseline; all four hidden input distributions must pass; speed and peak-memory efficiency reported together; input-blind protection where the task requires it | [KernelBench-Verified](https://arxiv.org/abs/2607.16241), [official repository](https://github.com/facebookresearch/kernel_bench_verified) |
+| `kernelgenbench` | Operator/source identity, target chip, generation track, correctness result, performance result, and run provenance retained so results can be compared across supported hardware | [KernelGenBench](https://arxiv.org/abs/2607.27231), [official repository](https://github.com/flagos-ai/KernelGenBench) |
+| `custom` | A project-owned, explicitly frozen set of gates and aggregation rules | project contract |
+
+These profiles are complementary rather than a single linear ladder. For
+example, a campaign can use `reference_test` as its strategist method while the
+underlying command implements the `kernelbench-verified` obligations. The method
+and profile must therefore be recorded as separate fields in evidence.
+
 ## Scope boundary
 
 Applies to **generators** (no perf signal). Workflows whose evaluation target is a

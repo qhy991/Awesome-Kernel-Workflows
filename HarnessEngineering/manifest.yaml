@@ -1,0 +1,221 @@
+schema_version: '1.1'
+name: harness-engineering-kernel-optimization
+entrypoint: harness-engineering-kernel-optimization.js
+backend:
+  portability: method_intrinsic
+  matrix_eligible: false
+  intrinsic_to: supplied official-aligned evaluation harness
+  method_supported_backends:
+  - cuda
+  - triton
+  - cute
+  supported:
+  - cuda
+  - triton
+  - cute
+  default: cuda
+  notes: 'The workflow is intrinsic to a caller-supplied harness contract. It never
+    substitutes guessed compiler, correctness, verification, profiling, or timing
+    commands for the harness owner.'
+source:
+  paper_title: 'Harness Engineering for LLM-Driven GPU Kernel Generation'
+  paper_url: https://arxiv.org/abs/2607.17979
+  paper_venue: arXiv 2026
+  repo_url: https://github.com/syhya/mlsys26-flashinfer-contest
+  commit_or_tag: ''
+  license: Apache-2.0
+  notes: 'Workflow adaptation of the paper artifact''s profile-backed controller,
+    correctness-first official evaluator, and candidate artifact archive. It does
+    not reproduce the contest infrastructure, hidden tests, or model training.'
+workflow:
+  name: harness-engineering-kernel-optimization
+  description: Profile-backed kernel optimization under a frozen official-style harness contract with correctness-first promotion and complete artifact retention.
+  when_to_use: Use when an existing kernel must be optimized against a real evaluation harness whose compile, correctness, verification, timing, and artifact rules must remain authoritative.
+  output_filename: harness-engineering-kernel-optimization.js
+  directory: HarnessEngineering/
+routing:
+  accepts:
+    problem_type:
+    - gpu-kernel-optimization
+    - harness-constrained-kernel-optimization
+    - flashinfer-kernel-optimization
+    constraints:
+    - existing_kernel
+    - official_evaluator
+  best_kernel_field: best_kernel_path
+  topology: iterative
+  seed_contract: iterative
+  requires_harness: true
+  languages:
+  - cuda
+  - triton
+  - cute
+  backends:
+  - cuda
+  method_category: iterative_self_improving
+  role: optimizer
+  speedup_field: best_speedup
+  fidelity_boundary: workflow_adaptation
+  required_args:
+  - harness_root
+  - kernel_path
+  - test_command
+  - benchmark_command
+  all_args:
+  - harness_root
+  - kernel_path
+  - problem_path
+  - backend
+  - test_command
+  - benchmark_command
+  - profile_command
+  - verification_command
+  - verification_profile
+  - iterations
+  - min_speedup
+  - exp_dir
+  - model
+  - turn_timeout_min
+  integration_patterns:
+  - standalone
+  requires_ncu: false
+  optimization_phases:
+  - backend_native
+inputs:
+  supports_existing_kernel: true
+  supports_problem_definition: false
+  required_one_of:
+  - kernel_path
+  generation:
+    enabled: false
+method:
+  category: iterative_self_improving
+  core_insight: 'Freeze the evaluation contract before optimization, separate a
+    profile-backed decision controller from the official correctness/timing
+    evaluator, and promote only candidates whose evidence is both valid and better.'
+  feedback_signal:
+    type: throughput_delta
+    description: Correctness-gated latency or speedup emitted by the supplied official-style benchmark command.
+    tool: external-harness
+    higher_is_better: true
+topology:
+  type: iterative
+  iterative:
+    iterations_arg: iterations
+    convergence_condition: Iteration budget is exhausted or min_speedup is reached with a correct verified candidate.
+    state_variables:
+    - name: bestCandidate
+      type: string
+      initial_value: baseline candidate path
+      description: Candidate with the best correctness-gated measured evidence.
+    - name: bestEvidence
+      type: object
+      initial_value: baseline evaluator result
+      description: Authoritative evidence paired with bestCandidate.
+    - name: history
+      type: array
+      initial_value: '[]'
+      description: Accepted and rejected hypotheses with artifact paths.
+phases:
+- name: Freeze Contract
+  detail: Inspect the harness and materialize an immutable run contract under exp_dir.
+  position: preamble
+- name: Baseline
+  detail: Run the supplied correctness, optional verification, and timing commands on the baseline.
+  position: preamble
+- name: Profile and Decide
+  detail: Use current measurements and optional profile artifacts to choose one bounded optimization hypothesis.
+  position: loop_body
+- name: Implement
+  detail: Materialize one candidate under exp_dir without mutating the source kernel or harness.
+  position: loop_body
+- name: Official Gate
+  detail: Run the exact supplied evidence commands and deterministically keep or reject the candidate.
+  position: loop_body
+- name: Audit and Report
+  detail: Verify evidence-to-artifact binding and write a final report under exp_dir.
+  position: epilogue
+args:
+  required:
+  - name: harness_root
+    type: string
+    description: Path to the authoritative evaluation harness checkout.
+    example: /abs/path/mlsys26-flashinfer-contest
+  - name: kernel_path
+    type: string
+    description: Existing baseline kernel or solution path.
+    example: /abs/path/solution.py
+  - name: test_command
+    type: string
+    description: Harness-owned compile and correctness command template for a candidate.
+    example: ./run-test --candidate {candidate_path} --json {result_path}
+  - name: benchmark_command
+    type: string
+    description: Harness-owned timing command template for a correct candidate.
+    example: ./run-bench --candidate {candidate_path} --json {result_path}
+  optional:
+  - name: problem_path
+    type: string
+    default: "''"
+    description: Optional workload or task specification path.
+  - name: backend
+    type: string
+    default: "'cuda'"
+    description: Candidate language/backend label used for routing and reporting.
+  - name: profile_command
+    type: string
+    default: "''"
+    description: Optional harness-compatible profile command template.
+  - name: verification_command
+    type: string
+    default: "''"
+    description: Optional deeper verification command selected by verification_profile.
+  - name: verification_profile
+    type: string
+    default: "'contract-grade'"
+    description: contract-grade, kernelbench-verified, kernelgenbench, or custom; see the shared verification substrate documentation.
+  - name: iterations
+    type: number
+    default: '4'
+    description: Maximum candidate rounds.
+  - name: min_speedup
+    type: number
+    default: '1.01'
+    description: Correctness-gated speedup required for early success.
+  - name: exp_dir
+    type: string
+    default: "'/tmp/harness-engineering'"
+    description: Only directory in which the workflow may write candidates and evidence.
+  - name: model
+    type: string
+    default: "'sonnet'"
+    description: Model used for controller and implementation turns.
+  - name: turn_timeout_min
+    type: number
+    default: '12'
+    description: Per-agent-turn wall-clock limit.
+evidence:
+  correctness:
+    owner: test_command
+    required: true
+    contract: 'Must report compiled and correct. A false or absent correctness verdict blocks timing promotion.'
+  verification:
+    owner: verification_command
+    required: false
+    contract: 'Optional profile-specific gates. When supplied, verified=true is required for promotion.'
+  performance:
+    owner: benchmark_command
+    required: true
+    contract: 'Runs only after correctness and reports positive latency_ms or speedup.'
+state:
+  artifacts:
+  - exp_dir/contract.json
+  - exp_dir/baseline/evidence.json
+  - exp_dir/round-*/candidate/
+  - exp_dir/round-*/evidence.json
+  - exp_dir/report.md
+  - exp_dir/genome.jsonl
+  memory:
+  - accepted and rejected strategy ids
+  - profile-backed hypotheses
+  - immutable candidate/evidence bindings
