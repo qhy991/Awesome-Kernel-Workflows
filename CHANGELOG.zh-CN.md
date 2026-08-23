@@ -23,6 +23,10 @@
 
 ### 修复（Fixed）
 
+- **macOS 上可移植的 `nsys` 测试回退。** Substrate driver-script 测试的隔离
+  `PATH` 现在包含 `/bin`，使 `/usr/bin/env bash` launcher 可以解析 `bash`，
+  同时不放宽生产命令路径。(`_substrate/tests/test_driver_scripts.py`)
+
 - **SOL benchmark 机械步骤改由 workflow Host 执行。** 共享 substrate 会探测 Host
   的 `evaluate(sol-execbench-v1)` 原语；K-Search、CUDA-Agent、AdaExplore、
   KernelAgent 与 KernelFoundry 把候选精确源码交给同一个确定性打包/运行/解析

@@ -28,6 +28,11 @@ for the versioning policy.
 
 ### Fixed
 
+- **Portable `nsys` test fallback on macOS.** The substrate driver-script tests
+  now include `/bin` in their isolated `PATH`, allowing `/usr/bin/env bash`
+  launchers to resolve `bash` without weakening the production command path.
+  (`_substrate/tests/test_driver_scripts.py`)
+
 - **SOL benchmark mechanics are delegated to the workflow Host.** The shared
   substrate feature-detects the Host's `evaluate(sol-execbench-v1)` primitive;
   K-Search, CUDA-Agent, AdaExplore, KernelAgent, and KernelFoundry send exact
