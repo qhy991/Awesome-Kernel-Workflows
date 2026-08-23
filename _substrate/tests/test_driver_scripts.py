@@ -336,7 +336,8 @@ class TestCudaProfile(unittest.TestCase):
             prob = self._problem(td)
             out = os.path.join(td, 'native.sqlite')
             env = dict(os.environ)
-            env['PATH'] = td + os.pathsep + os.path.dirname(sys.executable) + os.pathsep + '/usr/bin'
+            env['PATH'] = (td + os.pathsep + os.path.dirname(sys.executable)
+                           + os.pathsep + '/usr/bin' + os.pathsep + '/bin')
             code, sout, serr = _run([self.SCRIPT, '--artifact', art,
                                      '--problem', prob, '--out', out], env=env)
             self.assertEqual(code, 0, msg=f"out={sout} err={serr}")
