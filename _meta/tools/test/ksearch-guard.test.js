@@ -69,6 +69,19 @@ test('legacy path: no backend_dir -> renders triton vocabulary, no load-driver a
     'legacy path must NOT issue load-driver agent (USE_DRIVER off-by-default)')
 })
 
+test('legacy CUDA path gives generated candidates a CUDA source extension', async () => {
+  const legacyReturns = { ...minimalReturns }
+  delete legacyReturns['load-driver']
+  for (const k of Object.keys(legacyReturns)) {
+    if (/^driver-/.test(k)) delete legacyReturns[k]
+  }
+  const caps = await run({ language: 'cuda' }, legacyReturns)
+  const generated = caps.find(c => c.label === 'gen-0-0')
+  assert.ok(generated, 'legacy CUDA path should generate a candidate')
+  assert.match(generated.prompt, /cycle_0_a0\.cu\b/)
+  assert.doesNotMatch(generated.prompt, /cycle_0_a0\.py\b/)
+})
+
 test('§6.4: args.backend matches manifest backend_id -> ok', async () => {
   await assert.doesNotReject(run(
     { backend_dir: '_substrate/backends/triton', backend: 'triton', language: 'triton' },
