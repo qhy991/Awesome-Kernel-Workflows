@@ -23,6 +23,11 @@
 
 ### 修复（Fixed）
 
+- **K-Search 的 legacy candidate 路径现在遵循已声明源码语言。** CUDA 生成会写入
+  `cycle_<n>_a<m>.cu`，不再把 CUDA 源码放在 `.py` 后缀下；driver-backed 路径仍
+  使用 driver 声明的扩展名。(`KSearch/ksearch-kernel-optimization.js`、
+  `_meta/tools/test/ksearch-guard.test.js`)
+
 - **macOS 上可移植的 `nsys` 测试回退。** Substrate driver-script 测试的隔离
   `PATH` 现在包含 `/bin`，使 `/usr/bin/env bash` launcher 可以解析 `bash`，
   同时不放宽生产命令路径。(`_substrate/tests/test_driver_scripts.py`)

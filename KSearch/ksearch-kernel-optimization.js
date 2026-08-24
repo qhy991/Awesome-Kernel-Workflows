@@ -478,7 +478,9 @@ function fenceToken() {
 }
 
 function ksearchNodeKernelPath(label) {
-  const ext = USE_DRIVER ? (DRIVER_SOURCE_EXT || '.py') : '.py'
+  const ext = USE_DRIVER
+    ? (DRIVER_SOURCE_EXT || '.py')
+    : (LANGUAGE === 'cuda' ? '.cu' : '.py')
   return `${EXP_DIR}/${label}${ext}`
 }
 function bestKernelPath() {
