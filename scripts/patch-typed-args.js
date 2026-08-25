@@ -10,6 +10,9 @@
 //   3. If it has no typed-args block -> INSERT the SSOT block right after the
 //      `// --- END inlined arg_guard ---` marker (the canonical location).
 //
+// `--refresh`: replace the content between existing inlined sentinels with the
+// current canonical block. Files without a complete sentinel pair are skipped.
+//
 // Propagating the block DECLARES the KerSor ②③ channels (EXPERIENCE_EXCERPTS,
 // ATTEMPT_EVIDENCE/PLAN, FAILED_STRATEGY_IDS) + the __experienceBlock() /
 // __attemptBlock() helpers in every workflow. The consts degrade safely to
@@ -45,7 +48,17 @@ function inlinedBlock(content) {
   return BEGIN_INLINED + '\n' + content + '\n' + END_INLINED
 }
 
-function transform(src, content, rel) {
+function transform(src, content, rel, refresh) {
+  if (refresh) {
+    const b = src.indexOf(BEGIN_INLINED)
+    if (b === -1) return { src, status: 'no-sentinels' }
+    const e = src.indexOf(END_INLINED, b)
+    if (e === -1) return { src, status: 'malformed-inlined' }
+    return {
+      src: src.slice(0, b) + inlinedBlock(content) + src.slice(e + END_INLINED.length),
+      status: 'refreshed',
+    }
+  }
   if (src.includes(BEGIN_INLINED)) return { src, status: 'already-wrapped' }
   // Case 2: has the old markers -> replace with inlined (verify content matches).
   if (src.includes(OLD_BEGIN)) {
@@ -72,16 +85,19 @@ function workflowFiles() {
 
 function main() {
   const content = readCanonContent()
+  const refresh = process.argv.includes('--refresh')
   const files = process.argv.slice(2).filter((a) => !a.startsWith('-')).map((p) => path.resolve(p)).filter((f) => fs.existsSync(f))
   const targets = files.length ? files : workflowFiles()
   const counts = {}
   for (const f of targets) {
     const orig = fs.readFileSync(f, 'utf8')
     const rel = path.relative(REPO, f)
-    const r = transform(orig, content, rel)
+    const r = transform(orig, content, rel, refresh)
     counts[r.status] = (counts[r.status] || 0) + 1
     if (r.status === 'drift') console.warn(`  DRIFT  ${rel}: typed-args content not byte-identical to SSOT — skipped`)
     if (r.status === 'no-arg-guard-end') console.warn(`  WARN  ${rel}: no '${ARG_GUARD_END}' marker — skipped (insert location unknown)`)
+    if (r.status === 'no-sentinels') console.warn(`  WARN  ${rel}: no inlined typed-args sentinels — skipped`)
+    if (r.status === 'malformed-inlined') console.warn(`  WARN  ${rel}: BEGIN without END — skipped`)
     if (r.src !== orig) {
       fs.writeFileSync(f, r.src)
       console.log(`  ${rel}: ${r.status}`)

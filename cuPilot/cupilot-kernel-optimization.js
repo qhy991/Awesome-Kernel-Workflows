@@ -75,9 +75,17 @@ function __experienceBlock() {
 // Solvers consume them as a HIGHER-authority signal than HANDOFF prose.
 const ATTEMPT_EVIDENCE = (args.attempt_evidence && typeof args.attempt_evidence === 'object') ? args.attempt_evidence : null
 const ATTEMPT_PLAN = (args.attempt_plan && typeof args.attempt_plan === 'object') ? args.attempt_plan : null
-const FAILED_STRATEGY_IDS = (ATTEMPT_EVIDENCE && Array.isArray(ATTEMPT_EVIDENCE.transfer_items))
-  ? ATTEMPT_EVIDENCE.transfer_items.filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
-  : []
+// The hard "do not re-propose" constraint is owned by the cumulative transfer
+// object, where a failed_strategy stops applying only when a later
+// validated_win supersedes it. Deriving it from the previous round alone drops
+// a strategy that failed in round 1 and simply was not retried in round 2.
+// KerSor emits the cumulative ids as `failed_strategy_ids`; the per-round
+// derivation stays as the fallback for a dispatch that predates that channel.
+const FAILED_STRATEGY_IDS = Array.isArray(args.failed_strategy_ids)
+  ? args.failed_strategy_ids.filter(id => typeof id === 'string' && id)
+  : ((ATTEMPT_EVIDENCE && Array.isArray(ATTEMPT_EVIDENCE.transfer_items))
+    ? ATTEMPT_EVIDENCE.transfer_items.filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
+    : [])
 function __attemptBlock() {
   if (!ATTEMPT_EVIDENCE && !ATTEMPT_PLAN) return ''
   const parts = ['\n# Prior attempt context (channel ③ — TYPED, machine-verified; HIGHER authority than handoff prose):']

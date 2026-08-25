@@ -23,6 +23,14 @@
 
 ### 修复（Fixed）
 
+- **累计失败策略约束现在遵循 transfer object 的权威状态。** Workflow typed
+  args 优先使用 KerSor 提供的累计 `failed_strategy_ids`，仅将逐轮 attempt
+  evidence 保留为旧调用方回退；因此失败策略会持续被排除，直到后续
+  validated win 将其覆盖。Typed-args codemod 也实现了已文档化的
+  `--refresh` 模式，使所有生成的 workflow 投影都能从脚手架 SSOT 重新同步。
+  (`_meta/scaffolding/typed-args.js`、`scripts/patch-typed-args.js`、workflow
+  投影、`_meta/tools/test/`)
+
 - **K-Search 的 legacy candidate 路径现在遵循已声明源码语言。** CUDA 生成会写入
   `cycle_<n>_a<m>.cu`，不再把 CUDA 源码放在 `.py` 后缀下；driver-backed 路径仍
   使用 driver 声明的扩展名。(`KSearch/ksearch-kernel-optimization.js`、

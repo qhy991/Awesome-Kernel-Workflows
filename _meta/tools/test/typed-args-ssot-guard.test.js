@@ -37,12 +37,27 @@ function canonContent() {
 }
 const CANON = canonContent()
 
+function failedStrategyIds(args) {
+  return Function('args', `${CANON}\nreturn FAILED_STRATEGY_IDS`)(args)
+}
+
 test('SSOT: typed-args.js defines the canonical ②③ channel block', () => {
   assert.match(SSOT, /EXPERIENCE_EXCERPTS/, 'SSOT must declare EXPERIENCE_EXCERPTS (channel ②)')
   assert.match(SSOT, /ATTEMPT_EVIDENCE/, 'SSOT must declare ATTEMPT_EVIDENCE (channel ③)')
   assert.match(SSOT, /FAILED_STRATEGY_IDS/, 'SSOT must declare FAILED_STRATEGY_IDS (the hard constraint)')
   assert.match(SSOT, /function __experienceBlock/, 'SSOT must define __experienceBlock')
   assert.match(SSOT, /function __attemptBlock/, 'SSOT must define __attemptBlock')
+})
+
+test('cumulative failed-strategy ids override the legacy per-round fallback', () => {
+  const attempt_evidence = {
+    transfer_items: [{ kind: 'failed_strategy', id: 'latest-round-only' }],
+  }
+  assert.deepEqual(
+    failedStrategyIds({ failed_strategy_ids: ['cumulative'], attempt_evidence }),
+    ['cumulative'],
+  )
+  assert.deepEqual(failedStrategyIds({ attempt_evidence }), ['latest-round-only'])
 })
 
 test('every workflow has the inlined typed-args block (②③ contract is universal)', () => {

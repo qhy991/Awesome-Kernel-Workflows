@@ -28,6 +28,15 @@ for the versioning policy.
 
 ### Fixed
 
+- **Cumulative failed-strategy constraints now follow their transfer-object
+  authority.** Typed workflow arguments prefer KerSor's cumulative
+  `failed_strategy_ids` and retain per-round attempt evidence only as a legacy
+  fallback, so a failed strategy remains excluded until a later validated win
+  supersedes it. The typed-args codemod now implements its documented
+  `--refresh` mode, allowing every generated workflow projection to be
+  resynchronized from the scaffolding SSOT. (`_meta/scaffolding/typed-args.js`,
+  `scripts/patch-typed-args.js`, workflow projections, `_meta/tools/test/`)
+
 - **K-Search preserves the declared source language on its legacy candidate
   paths.** CUDA generation now writes `cycle_<n>_a<m>.cu` instead of placing
   CUDA source behind a `.py` suffix; driver-backed paths continue to use the
