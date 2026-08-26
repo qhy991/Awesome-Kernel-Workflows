@@ -393,6 +393,12 @@ const MODEL = {
 
 // Token budget guard
 const EST_PER_ROUND = args.est_tokens_per_round || 60000
+// EST_PER_ROUND is a declared guess and nothing verifies it. Once one round has
+// been paid for its real cost is measurable, so let the measurement take over:
+// whether the guess was ever right stops mattering after the first round.
+let lastRoundStartSpend = null
+let observedPerRound = 0
+
 
 async function resolveInitialKernelFromProblem({ language, compileCommand, testCommand, benchmarkCommand }) {
   if (INPUT_MODE !== 'generate_then_optimize') return ''
@@ -807,7 +813,13 @@ Return the baseline performance metric.`, {
 // dispatch agent call + fixture burden for marginal gain.)
 try {
 for (let round = 0; round < ROUNDS; round++) {
-  if (typeof budget !== 'undefined' && budget.total && budget.remaining() < EST_PER_ROUND) { log(`token budget ~exhausted — stop`); break }
+  if (typeof budget !== 'undefined' && budget.total) {
+    const spentNow = budget.spent()
+    if (lastRoundStartSpend !== null) observedPerRound = Math.max(observedPerRound, spentNow - lastRoundStartSpend)
+    lastRoundStartSpend = spentNow
+  }
+  const affordPerRound = Math.max(EST_PER_ROUND, observedPerRound)
+  if (typeof budget !== 'undefined' && budget.total && budget.remaining() < affordPerRound) { log(`token budget ~exhausted — stop`); break }
 
   log(`\n=== Round ${round + 1}/${ROUNDS} | Best: ${bestScore} | Parent: ${currentParentName} | Experience: ${experienceMemory.length} | Dead-ends: ${deadEnds.length} ===`)
 

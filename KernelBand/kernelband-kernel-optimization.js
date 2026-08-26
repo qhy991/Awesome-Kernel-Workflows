@@ -299,6 +299,12 @@ const MODEL = {
 
 // --- Token Budget ---
 const EST_PER_ROUND = args.est_tokens_per_round || 60000
+// EST_PER_ROUND is a declared guess and nothing verifies it. Once one round has
+// been paid for its real cost is measurable, so let the measurement take over:
+// whether the guess was ever right stops mattering after the first round.
+let lastRoundStartSpend = null
+let observedPerRound = 0
+
 
 // --- Optional Args ---
 const HARNESS_PATH = args.harness_path || ''
@@ -662,7 +668,13 @@ log(`Hardware: DRAM=${hwSignature.dram_throughput_pct}% L2=${hwSignature.l2_thro
 // =============================================================================
 
 for (let t = 1; t <= ITERATIONS; t++) {
-  if (typeof budget !== 'undefined' && budget.total && budget.remaining() < EST_PER_ROUND) { log(`token budget ~exhausted — stop`); break }
+  if (typeof budget !== 'undefined' && budget.total) {
+    const spentNow = budget.spent()
+    if (lastRoundStartSpend !== null) observedPerRound = Math.max(observedPerRound, spentNow - lastRoundStartSpend)
+    lastRoundStartSpend = spentNow
+  }
+  const affordPerRound = Math.max(EST_PER_ROUND, observedPerRound)
+  if (typeof budget !== 'undefined' && budget.total && budget.remaining() < affordPerRound) { log(`token budget ~exhausted — stop`); break }
   log(`\n--- Iteration ${t}/${ITERATIONS} ---`)
 
   // ===========================================================================

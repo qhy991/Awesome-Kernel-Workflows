@@ -409,11 +409,24 @@ let bestPath = candidates.length > 0 && candidates[0].speedup > 0 ? candidates[0
 let stagnantRounds = 0
 log(`Generation done: ${candidates.filter(c => c.compiled && c.correct).length}/${SEED_CANDIDATES} correct | best ${bestSpeedup.toFixed(3)}x`)
 
+// 50,000 was a bare guess at what one round costs, and nothing verified it.
+// Once a round has been paid for its real cost is measurable, so the guess only
+// has to hold until then.
+const EST_PER_ROUND = args.est_tokens_per_round || 50000
+let lastRoundStartSpend = null
+let observedPerRound = 0
+
 phase('Optimize')
 for (let iter = 1; iter <= ITERATIONS; iter++) {
   if (bestSpeedup >= TARGET) { log(`Target ${TARGET}x reached — stop`); break }
   if (stagnantRounds >= STAGNATION_LIMIT) { log(`Stagnation limit — stop`); break }
-  if (typeof budget !== 'undefined' && budget.total && budget.remaining() < 50000) {
+  if (typeof budget !== 'undefined' && budget.total) {
+    const spentNow = budget.spent()
+    if (lastRoundStartSpend !== null) observedPerRound = Math.max(observedPerRound, spentNow - lastRoundStartSpend)
+    lastRoundStartSpend = spentNow
+  }
+  const affordPerRound = Math.max(EST_PER_ROUND, observedPerRound)
+  if (typeof budget !== 'undefined' && budget.total && budget.remaining() < affordPerRound) {
     log(`Budget nearly exhausted — stop`); break
   }
   log(`\n=== Optimization round ${iter}/${ITERATIONS} | best ${bestSpeedup.toFixed(3)}x ===`)

@@ -407,6 +407,12 @@ const MODEL = {
   judgment: args.model_judgment || 'opus',       // generating or editing Triton kernel code, refinement/debug, composition, report
 }
 const EST_PER_ROUND = args.est_tokens_per_round || 60000
+// EST_PER_ROUND is a declared guess and nothing verifies it. Once one round has
+// been paid for its real cost is measurable, so let the measurement take over:
+// whether the guess was ever right stops mattering after the first round.
+let lastRoundStartSpend = null
+let observedPerRound = 0
+
 
 // --- Backend driver wiring (P5b Stage B; off-by-default; legacy path byte-identical) ---
 const BACKEND_DIR = args.backend_dir || ''
@@ -1315,7 +1321,13 @@ const failedCandidates = candidates.filter(c => c.status === 'failed')
 let currentRound = 0
 
 while (!terminationReason && failedCandidates.length > 0 && currentRound < MAX_ROUNDS && verifiedKernels.length === 0) {
-  if (typeof budget !== 'undefined' && budget.total && budget.remaining() < EST_PER_ROUND) { log(`token budget ~exhausted — stop`); break }
+  if (typeof budget !== 'undefined' && budget.total) {
+    const spentNow = budget.spent()
+    if (lastRoundStartSpend !== null) observedPerRound = Math.max(observedPerRound, spentNow - lastRoundStartSpend)
+    lastRoundStartSpend = spentNow
+  }
+  const affordPerRound = Math.max(EST_PER_ROUND, observedPerRound)
+  if (typeof budget !== 'undefined' && budget.total && budget.remaining() < affordPerRound) { log(`token budget ~exhausted — stop`); break }
   currentRound++
   log(`Refinement round ${currentRound}/${MAX_ROUNDS} — ${failedCandidates.length} candidates to fix`)
 

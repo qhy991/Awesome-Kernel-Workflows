@@ -259,6 +259,12 @@ const KERNEL_PATH = args.kernel_path || ''
 const INPUT_MODE = KERNEL_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const MAX_REVISE_LOOPS = args.max_revise_loops || 3
 const EST_PER_ROUND = args.est_tokens_per_round || 60000
+// EST_PER_ROUND is a declared guess and nothing verifies it. Once one round has
+// been paid for its real cost is measurable, so let the measurement take over:
+// whether the guess was ever right stops mattering after the first round.
+let lastRoundStartSpend = null
+let observedPerRound = 0
+
 const LANGUAGE = args.language || 'cuda'
 const SEED_CANDIDATES = args.seed_candidates || 3
 
@@ -525,7 +531,13 @@ if (PROFILING_DECISION.method === 'native_profiler' && IS_EMBEDDED && !NCU_CMD) 
 
 for (epoch = 0; epoch < EPOCHS; epoch++) {
   for (generation = 0; generation < GENERATIONS; generation++) {
-    if (typeof budget !== 'undefined' && budget.total && budget.remaining() < EST_PER_ROUND) { log(`token budget ~exhausted — stop`); break }
+    if (typeof budget !== 'undefined' && budget.total) {
+      const spentNow = budget.spent()
+      if (lastRoundStartSpend !== null) observedPerRound = Math.max(observedPerRound, spentNow - lastRoundStartSpend)
+      lastRoundStartSpend = spentNow
+    }
+    const affordPerRound = Math.max(EST_PER_ROUND, observedPerRound)
+    if (typeof budget !== 'undefined' && budget.total && budget.remaining() < affordPerRound) { log(`token budget ~exhausted — stop`); break }
     log(`\n=== Epoch ${epoch + 1}/${EPOCHS}, Gen ${generation + 1}/${GENERATIONS} | Pop: ${population.length} | Best: ${bestKernel.speedup.toFixed(2)}x ===`)
 
     // =========================================================================

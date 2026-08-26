@@ -565,6 +565,12 @@ function substrateInstruction(script, cliArgs) {
 // P0 — token-budget wiring: rough per-unit output-token estimates for scaling + stopping.
 const EST_PER_CANDIDATE = args.est_tokens_per_candidate || 20000
 const EST_PER_ROUND = EST_PER_CANDIDATE * BREADTH + 15000
+// EST_PER_ROUND is a declared guess and nothing verifies it. Once one round has
+// been paid for its real cost is measurable, so let the measurement take over:
+// whether the guess was ever right stops mattering after the first round.
+let lastRoundStartSpend = null
+let observedPerRound = 0
+
 let generatedKernelPath = ''
 let initialCandidates = []
 let initialGenerationResult = null
@@ -896,7 +902,13 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
   log(`\n=== Iteration ${iter}/${ITERATIONS} | best ${bestSpeedup.toFixed(3)}x | beam ${candidateBeam.length} ===`)
 
   // P0 — token budget: stop if a full round can't fit; scale breadth to remaining budget.
-  if (typeof budget !== 'undefined' && budget.total && budget.remaining() < EST_PER_ROUND) {
+  if (typeof budget !== 'undefined' && budget.total) {
+    const spentNow = budget.spent()
+    if (lastRoundStartSpend !== null) observedPerRound = Math.max(observedPerRound, spentNow - lastRoundStartSpend)
+    lastRoundStartSpend = spentNow
+  }
+  const affordPerRound = Math.max(EST_PER_ROUND, observedPerRound)
+  if (typeof budget !== 'undefined' && budget.total && budget.remaining() < affordPerRound) {
     log(`token budget ~exhausted (${Math.round(budget.remaining() / 1000)}k < ${Math.round(EST_PER_ROUND / 1000)}k/round) — stop`)
     break
   }
