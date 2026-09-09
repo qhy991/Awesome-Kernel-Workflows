@@ -982,11 +982,25 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
   // falsy-guard alone is not enough: a string reply reaches .join() below and
   // kills the run with 'allowed.join is not a function'.  Coerce to an array.
   const _allowedRaw = gate && gate.allowed_methods
-  const allowed = Array.isArray(_allowedRaw)
+  const _allowedParsed = Array.isArray(_allowedRaw)
     ? _allowedRaw
     : (typeof _allowedRaw === 'string' && _allowedRaw.trim()
       ? _allowedRaw.split(',').map((m) => m.trim()).filter(Boolean)
       : [])
+  // The gate prompt documents allowed_methods:[] as its own unavailable-evidence
+  // fallback, and the Plan phase below is gated to this list, so an empty list
+  // means the solver is allowed to propose nothing and every iteration is a
+  // guaranteed no-op.  Observed on B300: ncu counters are blocked, the strategist
+  // downgraded, bottleneck_class came back `unknown`, allowed_methods came back
+  // empty, and two full iterations produced no candidate at all while spending
+  // 1.55M tokens.  method_gate.py's own table already defines what `unknown`
+  // permits; use it rather than treating missing evidence as a prohibition.
+  const GATE_UNKNOWN_DEFAULT = ['profile_first', 'baseline_confirm', 'noop_validate', 'conservative_tiling']
+  const allowed = _allowedParsed.length > 0 ? _allowedParsed : GATE_UNKNOWN_DEFAULT
+  if (_allowedParsed.length === 0) {
+    log(`method gate returned no allowed methods (bottleneck_class=${bclass}); `
+      + `falling back to the gate's own unknown-class set instead of proposing nothing`)
+  }
   const priorTech = (mem && mem.techniques) || []
   const deadEnds = (mem && mem.dead_ends) || []
   log(`allowed_methods = ${allowed.join(', ')} | prior techniques = ${priorTech.length} | dead-ends = ${deadEnds.length}`)

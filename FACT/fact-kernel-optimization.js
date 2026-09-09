@@ -1007,7 +1007,13 @@ Then append, using the values you just measured (status="done" if the best kerne
   }
 
   log(`Evaluated ${evaluationResult.kernels_evaluated} kernels`);
-  log(`Best: ${evaluationResult.best_kernel.gflops.toFixed(2)} GFLOPS (${evaluationResult.best_kernel.speedup_vs_baseline}x speedup)`);
+  // best_kernel and its gflops come from a model-shaped evaluation result, so
+  // neither is guaranteed.  Observed on B300: gflops was null and the run died
+  // with "Cannot read properties of null (reading 'toFixed')" after 1.0M tokens,
+  // losing everything the run had already learned.
+  const _bestGflops = Number(evaluationResult?.best_kernel?.gflops)
+  const _bestGflopsText = Number.isFinite(_bestGflops) ? _bestGflops.toFixed(2) : 'unmeasured'
+  log(`Best: ${_bestGflopsText} GFLOPS (${evaluationResult?.best_kernel?.speedup_vs_baseline ?? 'unknown'}x speedup)`);
 
   // ============================================================================
   // Phase 7: Report
@@ -1023,7 +1029,7 @@ Summary:
 - Patterns realized: ${realizedPatterns.length}
 - Kernels composed: ${composedKernels.length}
 - Kernels evaluated: ${evaluationResult.kernels_evaluated}
-- Best performance: ${evaluationResult.best_kernel.gflops.toFixed(2)} GFLOPS
+- Best performance: ${_bestGflopsText} GFLOPS
 - Speedup: ${evaluationResult.best_kernel.speedup_vs_baseline}x
 
 Critical patterns: ${ablationResult?.critical_patterns.join(', ') || 'N/A'}
