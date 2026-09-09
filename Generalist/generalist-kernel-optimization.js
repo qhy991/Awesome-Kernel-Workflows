@@ -956,7 +956,16 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
       `Return its stdout JSON verbatim ({bottleneck_class, allowed_methods, rationale}). If unavailable, return allowed_methods:[] with missing evidence.`,
       { label: `gate-${iter}`, phase: 'Retrieve', schema: JSON_PASSTHROUGH, model: MODEL.mechanical }), { retries: 5 }),
   ])
-  const allowed = (gate && gate.allowed_methods) || []
+  // `gate` comes back from an agent call declared with schema JSON_PASSTHROUGH,
+  // i.e. no schema at all, so allowed_methods is whatever the model emitted.  A
+  // falsy-guard alone is not enough: a string reply reaches .join() below and
+  // kills the run with 'allowed.join is not a function'.  Coerce to an array.
+  const _allowedRaw = gate && gate.allowed_methods
+  const allowed = Array.isArray(_allowedRaw)
+    ? _allowedRaw
+    : (typeof _allowedRaw === 'string' && _allowedRaw.trim()
+      ? _allowedRaw.split(',').map((m) => m.trim()).filter(Boolean)
+      : [])
   const priorTech = (mem && mem.techniques) || []
   const deadEnds = (mem && mem.dead_ends) || []
   log(`allowed_methods = ${allowed.join(', ')} | prior techniques = ${priorTech.length} | dead-ends = ${deadEnds.length}`)

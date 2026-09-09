@@ -873,7 +873,10 @@ Return {"written":true,"path":"${candidatePath}"}.`, {
       },
       required: ['written', 'path'],
     },
-  }), { retries: 0 })
+    // The embedded materialize below uses retries: 5 for the same operation.
+  // With retries: 0 a single transient broker error (observed:
+  // 'API Error: Connection closed mid-response') killed the whole run.
+}), { retries: 5 })
 
   const evalResult = IS_SOL
     ? await (async () => {
