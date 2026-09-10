@@ -1065,32 +1065,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
         seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD, ldLibraryPath: SOL_LD_LIBRARY_PATH,
         envPrefix: SOL_ENV_PREFIX, definitionPath: SOL_DEFINITION_PATH,
       })
-      // Measure with the Host, then state the result.  This file defines
-      // __solExecbenchEvaluate and never called it, so the block below asked a
-      // read-only activation with no shell to run three shell commands.
-      const solDirect = await __solExecbenchEvaluate({
-        label: `sol-eval-${solVariantName}`, phase: 'Evaluate',
-        substrateDir: SOL_SUBSTRATE_DIR, kernelSource: solCandidatePath,
-        candidateSource: (cand && cand.kernel_code) || '',
-        contractEnv: `${EXP_DIR}/contract.env`,
-        solutionOut: `${EXP_DIR}/${solVariantName}.solution.json`,
-        benchOut: `${EXP_DIR}/${solVariantName}.bench.jsonl`,
-        solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
-        seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
-        ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
-        definitionPath: SOL_DEFINITION_PATH,
-      })
-      solEvalBlock = solDirect ? [
-        '',
-        '# SOL-EXECBENCH EVALUATION — ALREADY MEASURED BY THE HOST',
-        'Do not run any command for this. The Host compiled and benchmarked the',
-        'candidate on the target GPU; use these measured values verbatim:',
-        `  compiled  = ${solDirect.compiled}`,
-        `  correct   = ${solDirect.correct}`,
-        `  speedup   = ${solDirect.speedup}`,
-        `  workloads = ${solDirect.n_pass}/${solDirect.n_total}`,
-        'Do not estimate, adjust or re-derive them.',
-      ].join('\n') : [
+      solEvalBlock = [
         '',
         '# SOL-EXECBENCH EVALUATION (overrides the standalone eval below)',
         `Write the kernel code above verbatim to ${solCandidatePath}, then run IN THIS EXACT ORDER:`,
@@ -1121,13 +1096,44 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
       `Then append, using the values you just measured (status="done" if compiled AND correct, else "error"; speedup is the measured speedup number, or null if unavailable):\n` +
       `{"workflow":"${WORKFLOW_NAME}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"iter-${iter}-cand-${i + 1}","technique":"${p.method}","speedup":<number or null>,"note":"<compiled? correct? + the failure reason if any, one line>"}`,
       { label: `impl-${iter}-${i + 1}`, phase: 'Evaluate', schema: METRICS_SCHEMA, model: MODEL.judgment, ...(useWorktree ? { isolation: 'worktree' } : {}) }), { retries: 5 })
+    // The agent writes the kernel to a path and reports its own metrics.  Measure
+    // that file with the Host and let the measurement win: a self-reported speedup
+    // is the failure mode this audit kept finding.  The evaluator reads an existing
+    // candidatePath when no source string is supplied.
+    let solMeasured = null
+    if (IS_SOL) {
+      solMeasured = await __solExecbenchEvaluate({
+        label: `sol-eval-${iter}-${i + 1}`, phase: 'Evaluate',
+        substrateDir: SOL_SUBSTRATE_DIR,
+        kernelSource: `${runDir}/kernel`, candidateSource: '',
+        contractEnv: `${EXP_DIR}/contract.env`,
+        solutionOut: `${EXP_DIR}/gen_${iter}_${i + 1}.solution.json`,
+        benchOut: `${EXP_DIR}/gen_${iter}_${i + 1}.bench.jsonl`,
+        solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+        seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+        ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+        definitionPath: SOL_DEFINITION_PATH,
+      })
+      if (solMeasured) {
+        log(`iter ${iter} cand ${i + 1} Host-measured: compiled=${solMeasured.compiled} `
+          + `correct=${solMeasured.correct} speedup=${solMeasured.speedup} `
+          + `workloads=${solMeasured.n_pass}/${solMeasured.n_total}`)
+      }
+    }
+
     const ac = await agentRetry(() => agent(
       `Write these metrics to ${runDir}/metrics.json:\n${JSON.stringify({ ...m, claimed_speedup: m.speedup })}\n` +
       `${substrateInstruction('anti_cheat.py', `--source ${runDir}/kernel --metrics ${runDir}/metrics.json`)} ` +
       `Return its stdout JSON verbatim. Then ${substrateInstruction('evidence_schema.py', `validate ${runDir}/metrics.json`)} ` +
       `If substrate commands are unavailable, mark valid=false with blocking_flags:["missing_substrate_command_prefix"].`,
       { label: `anticheat-${iter}-${i + 1}`, phase: 'Evaluate', schema: ANTICHEAT_SCHEMA, model: MODEL.mechanical }), { retries: 5 })
-    return { plan: p, metrics: m, anticheat: ac, code_path: `${runDir}/kernel`,
+    const measuredMetrics = solMeasured
+      ? { ...(m || {}), compiled: solMeasured.compiled === true,
+          correct: solMeasured.correct === true,
+          speedup: Number(solMeasured.speedup || 0),
+          measured_by: 'host-sol-execbench' }
+      : m
+    return { plan: p, metrics: measuredMetrics, anticheat: ac, code_path: `${runDir}/kernel`,
              recorded_speedup: ac.valid ? ac.recorded_speedup : 0,
              measured_speedup: ac.valid ? (ac.measured_speedup ?? 0) : 0 }
   }
