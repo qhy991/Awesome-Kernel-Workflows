@@ -1010,6 +1010,35 @@ Then append (rollout ${iter}, step ${step}):
           seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD, ldLibraryPath: SOL_LD_LIBRARY_PATH,
           envPrefix: SOL_ENV_PREFIX, definitionPath: SOL_DEFINITION_PATH,
         })
+        // Prefer the Host's deterministic evaluation.  This file already defines
+        // __solExecbenchEvaluate for exactly that, and never called it: every
+        // candidate was instead handed as three shell commands to a model running
+        // in a read-only activation with Read/Glob/Grep and no shell, which
+        // reported is_compilable=false every time.  Measured on B300: 78
+        // activations, 64 phases, 6.77M tokens, zero evaluations, and every step
+        // logged "all variants invalid".
+        const directSol = await __solExecbenchEvaluate({
+          label: `sol-eval-${suffix}`, phase: 'Evaluate',
+          substrateDir: SOL_SUBSTRATE_DIR, kernelSource: kPath, candidateSource: v.code || '',
+          contractEnv: `${EXP_DIR}/contract.env`,
+          solutionOut: `${EXP_DIR}/${variantName}.solution.json`,
+          benchOut: `${EXP_DIR}/${variantName}.bench.jsonl`,
+          solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+          seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+          ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+          definitionPath: SOL_DEFINITION_PATH,
+        })
+        if (directSol) {
+          evals.push({
+            is_correct: directSol.correct === true,
+            is_compilable: directSol.compiled === true,
+            elapsed_cycles: 0,
+            speedup: Number(directSol.speedup || 0),
+            improvement_pct: 0,
+            heuristic_bclass: 'unknown',
+          })
+          continue
+        }
         const solResult = await agentRetry(() => agent(
           `Evaluate this candidate with sol-execbench. Run IN THIS EXACT ORDER:\n1. Pack: ${plan.pack}\n2. Run: ${plan.run}\n3. Parse: ${plan.parse}\n` +
           `Parse the line SPEEDUP=<aggregate> REDUCTION=<contract reduction> STATUS=<PASS|FAIL> WORKLOADS=<passed>/<total>; do not fabricate values. Return {is_correct, is_compilable, elapsed_cycles, speedup, improvement_pct}. ${plan.cleanupInvariant}`,
