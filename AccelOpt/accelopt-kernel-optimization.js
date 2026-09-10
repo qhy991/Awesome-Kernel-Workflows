@@ -880,7 +880,12 @@ if (USE_DRIVER) {
 // For an inference-engine embedded operator (e.g. llama.cpp .cuh referenced via
 // kernel_path) can_compile_standalone=no, so the candidate is built/tested INSIDE the
 // host project rather than as an isolated TU. The standalone path stays byte-identical. ---
-let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
+// Honour an explicit caller declaration.  Without this the guard below only stops
+// the model from changing the decision; the declaration itself still had no effect,
+// so a caller asking for sol_execbench_solution silently got standalone.
+let INTEGRATION_DECISION = args.integration_pattern === 'sol_execbench_solution'
+  ? { method: 'sol_execbench_solution', build_fidelity: 'production', reversible: true }
+  : { method: 'standalone', build_fidelity: 'isolated', reversible: true }
 {
   const _profManifest = (USE_DRIVER && BACKEND_DIR) ? `${BACKEND_DIR}/manifest${DRIVER_EXT}` : `${SUBSTRATE}/backends/cuda/manifest.json`
   const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
@@ -892,7 +897,16 @@ let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', r
     `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
     `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
     { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
-  if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+  // A caller that declared `integration_pattern` has already made this decision;
+  // re-deciding it from an unvalidated model reply is how an explicit instruction
+  // gets silently discarded.  Measured on B300: KDA was given
+  // integration_pattern=sol_execbench_solution, ran the strategist anyway, adopted
+  // the reply and logged `integration method = null`, which switched off the
+  // deterministic sol-execbench path for the whole run.  Adopt only when the caller
+  // said nothing, and only a method from the known set.
+  if (!args.integration_pattern && _integ && ['standalone', 'embedded_inplace', 'embedded_dispatch', 'sol_execbench_solution', 'derive_adapter'].includes(_integ.method)) {
+    INTEGRATION_DECISION = _integ
+  }
 }
 log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
 if (INTEGRATION_DECISION.method === 'derive_adapter') {
@@ -1619,7 +1633,18 @@ Then append (iteration ${iter}, pair "${pair.plan_title}", a ${pair.type} exampl
   }
 
   phase('Iterate')
-  log(`Iteration ${iter + 1} done. ${(baselineLatency / bestLatency).toFixed(2)}x vs baseline. Beam size: ${candidateBeam.length}`)
+  // A ratio against an unmeasured baseline is not a speedup.  Observed on B300:
+  // the profiling step reported "NOT MEASURED - no profiling was performed. Static
+  // analysis only" and left baselineLatency at -1, after which this line still
+  // printed "1.00x vs baseline" for two full iterations.  Say unmeasured instead of
+  // inventing a number, which is the same fault the catalog already records against
+  // gpuforecasters for reporting simulated speedups without compiling.
+  const _measured = Number.isFinite(baselineLatency) && baselineLatency > 0
+    && Number.isFinite(bestLatency) && bestLatency > 0
+  const _ratio = _measured
+    ? `${(baselineLatency / bestLatency).toFixed(2)}x vs baseline`
+    : 'speedup unmeasured (no measured baseline)'
+  log(`Iteration ${iter + 1} done. ${_ratio}. Beam size: ${candidateBeam.length}`)
 }
 
 // =============================================================================

@@ -654,7 +654,12 @@ if (USE_DRIVER) {
 // compile as a standalone TU, so it must be evaluated inside the project build.
 // Default is standalone (legacy path byte-identical); only fires when a project
 // kernel file is provided.
-let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
+// Honour an explicit caller declaration.  Without this the guard below only stops
+// the model from changing the decision; the declaration itself still had no effect,
+// so a caller asking for sol_execbench_solution silently got standalone.
+let INTEGRATION_DECISION = args.integration_pattern === 'sol_execbench_solution'
+  ? { method: 'sol_execbench_solution', build_fidelity: 'production', reversible: true }
+  : { method: 'standalone', build_fidelity: 'isolated', reversible: true }
 if (KERNEL_PATH) {
   const _profManifest = (USE_DRIVER && BACKEND_DIR) ? `${BACKEND_DIR}/manifest.json` : `${SUBSTRATE}/backends/cuda/manifest.json`
   const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
@@ -666,7 +671,16 @@ if (KERNEL_PATH) {
     `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
     `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
     { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
-  if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+  // A caller that declared `integration_pattern` has already made this decision;
+  // re-deciding it from an unvalidated model reply is how an explicit instruction
+  // gets silently discarded.  Measured on B300: KDA was given
+  // integration_pattern=sol_execbench_solution, ran the strategist anyway, adopted
+  // the reply and logged `integration method = null`, which switched off the
+  // deterministic sol-execbench path for the whole run.  Adopt only when the caller
+  // said nothing, and only a method from the known set.
+  if (!args.integration_pattern && _integ && ['standalone', 'embedded_inplace', 'embedded_dispatch', 'sol_execbench_solution', 'derive_adapter'].includes(_integ.method)) {
+    INTEGRATION_DECISION = _integ
+  }
 }
 log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
 if (INTEGRATION_DECISION.method === 'derive_adapter') {

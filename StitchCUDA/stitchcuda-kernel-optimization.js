@@ -369,7 +369,12 @@ let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', no
 // scope so the attempt loop and exit-restore can read the decision. Default keeps
 // the legacy standalone path byte-identical when no embedded source is supplied. ---
 const KERNEL_PATH = args.kernel_path || ''
-let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
+// Honour an explicit caller declaration.  Without this the guard below only stops
+// the model from changing the decision; the declaration itself still had no effect,
+// so a caller asking for sol_execbench_solution silently got standalone.
+let INTEGRATION_DECISION = args.integration_pattern === 'sol_execbench_solution'
+  ? { method: 'sol_execbench_solution', build_fidelity: 'production', reversible: true }
+  : { method: 'standalone', build_fidelity: 'isolated', reversible: true }
 let USE_DRIVER_STANDALONE = USE_DRIVER  // narrowed after integration-strategist resolves
 let IS_EMBEDDED = false
 let ORIGINAL_BACKUP = ''
@@ -418,7 +423,16 @@ async function main() {
       `--cache ${EXPDIR}/integ_cache.json --trajectory ${EXPDIR}/genome.jsonl\`. ` +
       `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
       { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
-    if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+    // A caller that declared `integration_pattern` has already made this decision;
+  // re-deciding it from an unvalidated model reply is how an explicit instruction
+  // gets silently discarded.  Measured on B300: KDA was given
+  // integration_pattern=sol_execbench_solution, ran the strategist anyway, adopted
+  // the reply and logged `integration method = null`, which switched off the
+  // deterministic sol-execbench path for the whole run.  Adopt only when the caller
+  // said nothing, and only a method from the known set.
+  if (!args.integration_pattern && _integ && ['standalone', 'embedded_inplace', 'embedded_dispatch', 'sol_execbench_solution', 'derive_adapter'].includes(_integ.method)) {
+    INTEGRATION_DECISION = _integ
+  }
   }
   log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
   if (INTEGRATION_DECISION.method === 'derive_adapter') {
