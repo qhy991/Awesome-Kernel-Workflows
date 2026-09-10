@@ -1065,7 +1065,32 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
         seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD, ldLibraryPath: SOL_LD_LIBRARY_PATH,
         envPrefix: SOL_ENV_PREFIX, definitionPath: SOL_DEFINITION_PATH,
       })
-      solEvalBlock = [
+      // Measure with the Host, then state the result.  This file defines
+      // __solExecbenchEvaluate and never called it, so the block below asked a
+      // read-only activation with no shell to run three shell commands.
+      const solDirect = await __solExecbenchEvaluate({
+        label: `sol-eval-${solVariantName}`, phase: 'Evaluate',
+        substrateDir: SOL_SUBSTRATE_DIR, kernelSource: solCandidatePath,
+        candidateSource: (cand && cand.kernel_code) || '',
+        contractEnv: `${EXP_DIR}/contract.env`,
+        solutionOut: `${EXP_DIR}/${solVariantName}.solution.json`,
+        benchOut: `${EXP_DIR}/${solVariantName}.bench.jsonl`,
+        solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+        seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+        ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+        definitionPath: SOL_DEFINITION_PATH,
+      })
+      solEvalBlock = solDirect ? [
+        '',
+        '# SOL-EXECBENCH EVALUATION — ALREADY MEASURED BY THE HOST',
+        'Do not run any command for this. The Host compiled and benchmarked the',
+        'candidate on the target GPU; use these measured values verbatim:',
+        `  compiled  = ${solDirect.compiled}`,
+        `  correct   = ${solDirect.correct}`,
+        `  speedup   = ${solDirect.speedup}`,
+        `  workloads = ${solDirect.n_pass}/${solDirect.n_total}`,
+        'Do not estimate, adjust or re-derive them.',
+      ].join('\n') : [
         '',
         '# SOL-EXECBENCH EVALUATION (overrides the standalone eval below)',
         `Write the kernel code above verbatim to ${solCandidatePath}, then run IN THIS EXACT ORDER:`,

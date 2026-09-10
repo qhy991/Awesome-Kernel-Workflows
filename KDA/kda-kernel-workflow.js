@@ -921,6 +921,37 @@ Then append:
       seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD, ldLibraryPath: SOL_LD_LIBRARY_PATH,
       envPrefix: SOL_ENV_PREFIX, definitionPath: SOL_DEFINITION_PATH,
     })
+    // Measure with the Host, then state the result.  This file defines
+    // __solExecbenchEvaluate and never called it, so the block below asked a
+    // read-only activation with no shell to run three shell commands.
+    const solDirect = await __solExecbenchEvaluate({
+      label: `sol-eval-${solVariantName}`, phase: 'Validate',
+      substrateDir: SOL_SUBSTRATE_DIR, kernelSource: solCandidatePath,
+      candidateSource: (candidate && candidate.code) || '',
+      contractEnv: `${EXP_DIR}/contract.env`,
+      solutionOut: `${EXP_DIR}/${solVariantName}.solution.json`,
+      benchOut: `${EXP_DIR}/${solVariantName}.bench.jsonl`,
+      solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+      seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+      ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+      definitionPath: SOL_DEFINITION_PATH,
+    })
+    if (solDirect) {
+      log(`sol-execbench (Host-measured): compiled=${solDirect.compiled} correct=${solDirect.correct} `
+        + `speedup=${solDirect.speedup} workloads=${solDirect.n_pass}/${solDirect.n_total}`)
+      solEvalBlock = `
+
+# SOL-EXECBENCH EVALUATION — ALREADY MEASURED BY THE HOST
+Do not run any command for this. The Host compiled and benchmarked the candidate
+on the target GPU; use these measured values verbatim:
+
+  compiled  = ${solDirect.compiled}
+  correct   = ${solDirect.correct}
+  speedup   = ${solDirect.speedup}
+  workloads = ${solDirect.n_pass}/${solDirect.n_total}
+
+Do not estimate, adjust or re-derive them.`
+    } else {
     solEvalBlock = `
 
 # SOL-EXECBENCH EVALUATION (overrides the standalone steps below)
@@ -931,6 +962,7 @@ This candidate is evaluated by the sol-execbench CLI, which compiles it internal
 3. Parse: ${solPlan.parse}
 
 The parse step prints one line "SPEEDUP=<aggregate> REDUCTION=<contract reduction> STATUS=<PASS|FAIL> WORKLOADS=<passed>/<total>". Parse correctness and speedup STRICTLY from that line and the run output. Do NOT fabricate numbers. Map the result into the validation schema. ${solPlan.cleanupInvariant}`
+    }
   }
 
   const validation = await agentRetry(() => agent(`Validate this kernel candidate: run correctness and performance tests.${solEvalBlock}

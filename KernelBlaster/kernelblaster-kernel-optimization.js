@@ -1171,13 +1171,25 @@ Then append, using the values you just measured (status="done" if correct AND co
     phase('Reward')
 
     if (!bestStep) {
-      // All variants failed correctness/compile: penalize the attempted techniques.
+      // Distinguish "the technique was bad" from "nothing could be measured".  When
+      // no variant even compiled, the evidence is about the harness, not the idea:
+      // on B300 every step reported is_compilable=false because the evaluation had
+      // been handed to a model activation with no shell, and each one drove the
+      // technique's confidence down by 100 in the persistent optimization DB.  That
+      // poisons the learned model with infrastructure failures and makes the next
+      // rollout avoid techniques that were never actually tried.
+      const anyCompiled = evals.some((e) => e && e.is_compilable)
+      if (!anyCompiled) {
+        log(`Step ${step + 1}: no variant could be compiled or measured — `
+          + `not penalizing ${variants.length} techniques, the evidence is about the harness`)
+        continue
+      }
       for (const v of variants) {
         usedThisRollout.add(v.technique)
         updateOptimizationResult(optDb.optimization_strategies[currentState], v.technique, -100, null)
-        dbUpdateLog.push(`[${currentState}] ${v.technique}: FAILED (incorrect/uncompilable) -> confidence down`)
+        dbUpdateLog.push(`[${currentState}] ${v.technique}: FAILED (incorrect) -> confidence down`)
       }
-      log(`Step ${step + 1}: all variants invalid; penalized ${variants.length} techniques.`)
+      log(`Step ${step + 1}: all variants incorrect; penalized ${variants.length} techniques.`)
       continue
     }
 

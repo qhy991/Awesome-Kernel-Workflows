@@ -1028,6 +1028,38 @@ Return after writing the file.`, { label: `write-candidate-${outerIter}`, phase:
       seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD, ldLibraryPath: SOL_LD_LIBRARY_PATH,
       envPrefix: SOL_ENV_PREFIX, definitionPath: SOL_DEFINITION_PATH,
     })
+    // Measure first, then tell the agent what was measured.  This file defines
+    // __solExecbenchEvaluate - the Host-owned PACK/RUN/PARSE that needs no LLM turn -
+    // and never called it, so the block below asked a read-only activation with
+    // Read/Glob/Grep and no shell to run three shell commands.  It could not, and
+    // reported compiled=false.  When the Host can evaluate, hand the agent the
+    // result as a fact instead of asking it to produce one.
+    const solDirect = await __solExecbenchEvaluate({
+      label: `sol-eval-${solVariantName}`, phase: 'Validate',
+      substrateDir: SOL_SUBSTRATE_DIR, kernelSource: solCandidatePath,
+      candidateSource: currentCode, contractEnv: `${EXP_DIR}/contract.env`,
+      solutionOut: `${EXP_DIR}/${solVariantName}.solution.json`,
+      benchOut: `${EXP_DIR}/${solVariantName}.bench.jsonl`,
+      solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+      seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+      ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+      definitionPath: SOL_DEFINITION_PATH,
+    })
+    if (solDirect) {
+      log(`sol-execbench (Host-measured): compiled=${solDirect.compiled} correct=${solDirect.correct} `
+        + `speedup=${solDirect.speedup} workloads=${solDirect.n_pass}/${solDirect.n_total}`)
+      solEvalBlock = `
+# SOL-EXECBENCH EVALUATION — ALREADY MEASURED BY THE HOST
+Do not run any command for this. The Host compiled and benchmarked the candidate
+on the target GPU and these are the measured results:
+
+  compiled  = ${solDirect.compiled}
+  correct   = ${solDirect.correct}
+  speedup   = ${solDirect.speedup}
+  workloads = ${solDirect.n_pass}/${solDirect.n_total}
+
+Use these values verbatim in the schema. Do not estimate, adjust or re-derive them.`
+    } else {
     solEvalBlock = `
 # SOL-EXECBENCH EVALUATION (overrides the standalone steps below)
 This candidate is evaluated by the sol-execbench CLI, which compiles it internally. Write the transformed_code above verbatim to ${solCandidatePath}, then run these commands IN THIS EXACT ORDER:
@@ -1037,6 +1069,7 @@ This candidate is evaluated by the sol-execbench CLI, which compiles it internal
 3. Parse: ${solPlan.parse}
 
 The parse step prints one line "SPEEDUP=<aggregate> REDUCTION=<contract reduction> STATUS=<PASS|FAIL> WORKLOADS=<passed>/<total>". Parse correctness and latency STRICTLY from that line and the run output. Do NOT fabricate numbers. Map into the schema: compiled = run produced a bench.jsonl, correct = STATUS==PASS, speedup = the SPEEDUP value (kernel_time_ms may be left unavailable). ${solPlan.cleanupInvariant}`
+    }
   }
 
   const validateResult = await withTurnTimeout(agentRetry(() => agent(`You are the ARGUS Validator Agent (Section 6).
