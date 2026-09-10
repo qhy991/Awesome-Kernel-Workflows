@@ -19,6 +19,15 @@ SUPPORTED_REDUCTIONS = {"sum", "mean", "geomean"}
 def contract_reduction(path):
     if not path:
         return "geomean"
+    # A task-directory dispatch has an authoritative definition.json and no
+    # synthesized contract.env; pack_sol_candidate.py already treats the file's
+    # absence as fine and says so.  This parser used to raise instead, so the whole
+    # evaluation failed at its last step with exit 2 AFTER the candidate had been
+    # packed, shipped and benchmarked on the GPU - the workflow then saw
+    # `parse_failed` and threw the measurement away.  The contract only selects the
+    # aggregate reduction, and geomean is its documented default.
+    if not os.path.isfile(path):
+        return "geomean"
     values = {}
     with open(path) as fh:
         for raw in fh:
