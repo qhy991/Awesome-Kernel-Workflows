@@ -797,7 +797,14 @@ log(`Baseline Elapsed Cycles: ${baselineCycles} | ${ncuBaseline.profile_summary.
 // Database + replay buffer persist across rollouts (and, via OPT_DB_PATH, runs).
 // =============================================================================
 for (let iter = 0; iter < RL_ITERATIONS; iter++) {
-  log(`\n=== Rollout ${iter + 1}/${RL_ITERATIONS} | Best: ${bestCycles} cycles (${(baselineCycles / bestCycles).toFixed(2)}x) | Buffer: ${replayBuffer.length} trajectories ===`)
+  // Without a profiler run baselineCycles stays -1, and -1/-1 printed a confident
+  // "1.00x" on top of an explicit "PROFILING NOT PERFORMED - NO NCU EVIDENCE".
+  // Report the absence instead of a ratio of two unmeasured numbers.
+  const _cyclesMeasured = Number(baselineCycles) > 0 && Number(bestCycles) > 0
+  const _rollupRatio = _cyclesMeasured
+    ? `${(baselineCycles / bestCycles).toFixed(2)}x`
+    : 'ratio unmeasured'
+  log(`\n=== Rollout ${iter + 1}/${RL_ITERATIONS} | Best: ${_cyclesMeasured ? bestCycles + ' cycles' : 'no measured cycles'} (${_rollupRatio}) | Buffer: ${replayBuffer.length} trajectories ===`)
 
   const trajectory = { steps: [], total_reward: 0, initial_cycles: bestCycles, final_cycles: bestCycles }
   let currentCode = bestKernelCode

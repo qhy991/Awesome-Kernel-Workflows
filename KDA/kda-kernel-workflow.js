@@ -927,7 +927,7 @@ Then append:
     const solDirect = await __solExecbenchEvaluate({
       label: `sol-eval-${solVariantName}`, phase: 'Validate',
       substrateDir: SOL_SUBSTRATE_DIR, kernelSource: solCandidatePath,
-      candidateSource: (candidate && candidate.code) || '',
+      candidateSource: candidateCode || '',
       contractEnv: `${EXP_DIR}/contract.env`,
       solutionOut: `${EXP_DIR}/${solVariantName}.solution.json`,
       benchOut: `${EXP_DIR}/${solVariantName}.bench.jsonl`,
