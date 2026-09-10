@@ -15,6 +15,72 @@ export const meta = {
   ],
 }
 
+async function __solExecbenchEvaluate(ctx) {
+  // Claude's legacy Workflow host does not yet expose this optional primitive.
+  // Keep the prompt-driven path as a compatibility edge, while KerSor's Host
+  // owns exact source materialization and PACK/RUN/PARSE without an LLM turn.
+  if (typeof evaluate !== 'function') return null
+  return evaluate({
+    protocol: 'sol-execbench-v1',
+    label: ctx.label || 'sol-eval',
+    phase: ctx.phase || 'Evaluate',
+    candidatePath: ctx.kernelSource,
+    candidateSource: ctx.candidateSource,
+    substrateDir: ctx.substrateDir,
+    contractEnv: ctx.contractEnv,
+    solutionOut: ctx.solutionOut,
+    benchOut: ctx.benchOut,
+    normalizedOut: ctx.normalizedOut || `${ctx.benchOut}.result.json`,
+    solCli: ctx.solCli,
+    taskDir: ctx.taskDir,
+    benchConfig: ctx.benchConfig,
+    seedDir: ctx.seedDir,
+    cudaVisibleDevices: ctx.cudaVisibleDevices || '0',
+    ldLibraryPath: ctx.ldLibraryPath || '',
+    envPrefix: ctx.envPrefix || '',
+    definitionPath: ctx.definitionPath || '',
+    timeoutSeconds: ctx.timeoutSeconds || 0,
+  }).then(__solGuardHarnessFault)
+}
+
+// A `compiled: false` from the evaluator does not always mean the candidate is
+// bad.  `invalid_request` and `infrastructure_error` are the harness refusing or
+// failing before the candidate was ever built, and callers that map any
+// non-success onto compile_error burn refine turns and a stagnation budget on a
+// misconfiguration.  Observed: a candidate staged outside the evaluation roots
+// was rejected at preflight, reported three times as `compile_error`, and the run
+// stopped at the stagnation limit having never compiled anything.  Surface a
+// harness fault as a harness fault and stop, because retrying cannot fix it.
+function __solGuardHarnessFault(result) {
+  const HARNESS_FAULTS = ['invalid_request', 'infrastructure_error']
+  if (result && HARNESS_FAULTS.includes(result.failure_code)) {
+    const detail = result.stderr || result.stdout || ''
+    throw new Error(
+      `sol-execbench harness fault (${result.failure_code}) at stage `
+      + `${result.stage || 'unknown'}: ${String(detail).slice(0, 400)} `
+      + '- this is a harness or wiring fault, not a candidate compile error',
+    )
+  }
+  return result
+}
+
+// --- sol-execbench wiring (Host-owned PACK/RUN/PARSE; no LLM turn) -----------
+// These 15 workflows declared only the standalone path, so their benchmark was a
+// command string embedded in a prompt for a read-only activation with no shell.
+// The read-only allowlist deliberately excludes execution, so the agent could
+// never run it.  The Host can, and this is the protocol it exposes for exactly
+// that.
+const SOL_CLI = args.sol_cli || ''
+const SOL_TASK_DIR = args.sol_task_dir || ''
+const SOL_BENCH_CONFIG = args.sol_bench_config || ''
+const SOL_SEED_DIR = args.sol_seed_dir || ''
+const SOL_CVD = args.sol_cuda_visible_devices || '0'
+const SOL_LD_LIBRARY_PATH = args.sol_ld_library_path || ''
+const SOL_ENV_PREFIX = args.sol_env_prefix || ''
+const SOL_DEFINITION_PATH = args.sol_definition_path || ''
+const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || ''
+const SOL_AVAILABLE = Boolean(SOL_CLI && SOL_TASK_DIR && SOL_SUBSTRATE_DIR)
+
 // --- BEGIN model-tier (auto-inserted by scripts/patch-model-tier.js) ---
 // Tier-based model routing: mechanical steps (run substrate scripts, parse
 // JSON) use cheaper models; profile steps (run eval/ncu) use mid-tier;
@@ -767,6 +833,34 @@ Then append (this is loop iteration ${iteration}):
 
   phase('Evaluate')
 
+  // The commands below go to a read-only activation, which deliberately has no
+  // execution tool, so the agent can describe a benchmark but never run one.  When
+  // the caller wired sol-execbench, let the Host measure the candidate and treat
+  // that measurement as the truth; the agent step still runs for its qualitative
+  // reading, but it no longer decides the numbers.
+  let astraMeasured = null
+  if (SOL_AVAILABLE) {
+    const solVariant = `astra_iter_${iteration}`.replace(/[^A-Za-z0-9_]/g, '_')
+    astraMeasured = await __solExecbenchEvaluate({
+      label: `sol-eval-${solVariant}`, phase: 'Evaluate',
+      substrateDir: SOL_SUBSTRATE_DIR,
+      kernelSource: `${EXP_DIR}/${solVariant}.cu`,
+      candidateSource: (code && code.candidate_code) || '',
+      contractEnv: `${EXP_DIR}/contract.env`,
+      solutionOut: `${EXP_DIR}/${solVariant}.solution.json`,
+      benchOut: `${EXP_DIR}/${solVariant}.bench.jsonl`,
+      solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+      seedDir: SOL_SEED_DIR || EXP_DIR, cudaVisibleDevices: SOL_CVD,
+      ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+      definitionPath: SOL_DEFINITION_PATH,
+    })
+    if (astraMeasured) {
+      log(`iteration ${iteration} Host-measured: compiled=${astraMeasured.compiled} `
+        + `correct=${astraMeasured.correct} speedup=${astraMeasured.speedup} `
+        + `workloads=${astraMeasured.n_pass}/${astraMeasured.n_total}`)
+    }
+  }
+
   const evaluation = await agentRetry(() => agent(`You are Astra's Testing and Profiling Agents working together. Evaluate this candidate with real evidence.
 
 # Candidate code
@@ -913,6 +1007,15 @@ Then append, using the values you just measured (status="done" if it compiled an
     evaluation,
   }
   runLog.push(record)
+
+  // The Host measurement wins over whatever the agent reported about itself.
+  if (astraMeasured) {
+    evaluation.compiled = astraMeasured.compiled === true
+    evaluation.correct = astraMeasured.correct === true
+    evaluation.speedup = Number(astraMeasured.speedup || 0)
+    evaluation.workloads = `${astraMeasured.n_pass}/${astraMeasured.n_total}`
+    evaluation.measured_by = 'host-sol-execbench'
+  }
 
   if (isBetter(evaluation, bestResult)) {
     bestResult = evaluation
