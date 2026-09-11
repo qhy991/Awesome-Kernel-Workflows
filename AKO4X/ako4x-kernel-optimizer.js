@@ -1073,6 +1073,52 @@ Then append (this variant is round ${round + 1}, hypothesis "${plan.title}", sam
       const expectedNote = `Expected: ${plan.hypothesis}. Predicted: ${plan.expected_impact}. Risk: ${plan.risk}.`
       log(`[${iterLabel}] ${expectedNote}`)
 
+      // Both stages below hand a command to a model activation that has no shell:
+      // the smoke test asks "does it compile?" and the full bench declares itself
+      // "the performance verdict". Neither can run anything. AKO4X is careful to
+      // keep correctness and performance apart, and to pre-commit the hypothesis
+      // before benching, so the Host measures once here and each stage is handed
+      // only the part that belongs to it.
+      let __hostMeasured = null
+      if (SOL_AVAILABLE && (impl.code || '').trim()) {
+        __hostMeasured = await __solExecbenchEvaluate({
+          label: `sol-eval-${iterLabel}`, phase: 'Iterate',
+          substrateDir: SOL_SUBSTRATE_DIR,
+          kernelSource: `${EXP_DIR}/ako4x_${String(iterLabel).replace(/[^A-Za-z0-9_]/g, '_')}.cu`,
+          candidateSource: impl.code,
+          contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
+          solutionOut: `${EXP_DIR}/ako4x_${String(iterLabel).replace(/[^A-Za-z0-9_]/g, '_')}.solution.json`,
+          benchOut: `${EXP_DIR}/ako4x_${String(iterLabel).replace(/[^A-Za-z0-9_]/g, '_')}.bench.jsonl`,
+          solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+          seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+          ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+          definitionPath: SOL_DEFINITION_PATH,
+        })
+        if (__hostMeasured) {
+          log(`[${iterLabel}] Host-measured: compiled=${__hostMeasured.compiled} `
+            + `correct=${__hostMeasured.correct} speedup=${__hostMeasured.speedup} `
+            + `workloads=${__hostMeasured.n_pass}/${__hostMeasured.n_total}`)
+        }
+      }
+      // Correctness half - what the smoke stage is for.
+      const __smokeBlock = __hostMeasured ? `
+
+# ALREADY BUILT AND CHECKED ON THE HOST - use this verbatim
+compiled=${__hostMeasured.compiled} correct=${__hostMeasured.correct}
+workloads_passed=${__hostMeasured.n_pass}/${__hostMeasured.n_total}
+${__hostMeasured.failure_code ? `failure_code=${__hostMeasured.failure_code}` : ''}
+${__hostMeasured.stderr ? `compiler/run output:\n${String(__hostMeasured.stderr).substring(0, 2000)}` : ''}
+Do not re-derive the verdict. Report it, and if it failed, say what the output
+above shows. Stay out of performance, as this stage instructs.` : ''
+      // Performance half - kept separate, as this workflow keeps it separate.
+      const __benchBlock = __hostMeasured ? `
+
+# ALREADY MEASURED ON THE HOST - this is the performance verdict
+speedup_vs_baseline=${__hostMeasured.speedup} latency_ms=${__hostMeasured.latency_ms}
+workloads_passed=${__hostMeasured.n_pass}/${__hostMeasured.n_total}
+Report this rather than re-deriving it, and judge it against the hypothesis that
+was pre-committed above: did the predicted impact hold?` : ''
+
       // --- Smoke test (AKO4X: compile + correctness check, NOT performance verdict) ---
       const smokeCmd = SMOKE_TEST_CMD || (BENCHMARK_CMD ? `${BENCHMARK_CMD} --first 1` : '')
       let smokePassed = true
@@ -1088,7 +1134,7 @@ ${impl.variant_path}
 ${impl.code.substring(0, 4000)}
 \`\`\`
 
-# Smoke Test Command: ${smokeCmd}
+# Smoke Test Command: ${smokeCmd}${__smokeBlock}
 
 Run the command and check:
 1. Does it compile? (no compile errors)
@@ -1139,7 +1185,7 @@ ${impl.code.substring(0, 4000)}
 \`\`\`
 
 # Benchmark Command: ${BENCHMARK_CMD || 'static analysis only'}
-# Baseline Score: ${baselineScore}
+# Baseline Score: ${baselineScore}${__benchBlock}
 
 # Noise-aware protocol:
 - Run the benchmark command
