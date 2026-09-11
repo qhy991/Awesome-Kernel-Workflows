@@ -1471,6 +1471,51 @@ Then append (iteration ${iter}, variant ${variant.id}; status="done" if correct 
     }
   }
 
+  // The parallel evaluation above is explicitly an LLM static estimate - the
+  // schema field is named estimated_speedup and step 1 is a static correctness
+  // check - and the embedded branch already exists to overwrite those estimates
+  // with a real project-native measurement. Its comment notes "Standalone path
+  // never enters here", which left the sol-execbench path on estimates alone.
+  // Mirror the same overwrite for it. Unlike the embedded case this measures an
+  // isolated candidate rather than mutating the host project, so it can run
+  // concurrently.
+  if (!IS_EMBEDDED && SOL_AVAILABLE) {
+    const measured = await parallel(allVariants.map((variant, i) => async () => {
+      if (!evaluations[i] || !(variant.code || '').trim()) return null
+      const vid = String(variant.id).replace(/[^A-Za-z0-9_]/g, '_')
+      const r = await __solExecbenchEvaluate({
+        label: `sol-eval-${vid}`, phase: 'Evaluate',
+        substrateDir: SOL_SUBSTRATE_DIR,
+        kernelSource: `${EXP_DIR}/accelopt_${vid}.cu`,
+        candidateSource: variant.code,
+        contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
+        solutionOut: `${EXP_DIR}/accelopt_${vid}.solution.json`,
+        benchOut: `${EXP_DIR}/accelopt_${vid}.bench.jsonl`,
+        solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+        seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+        ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+        definitionPath: SOL_DEFINITION_PATH,
+      })
+      return r ? { i, r } : null
+    }))
+    for (const m of measured.filter(Boolean)) {
+      const e = evaluations[m.i]
+      const r = m.r
+      e.is_compilable = r.compiled !== false
+      e.is_correct = r.correct !== false
+      if (typeof r.speedup === 'number' && r.speedup > 0) {
+        e.estimated_speedup = r.speedup
+        if (typeof r.latency_ms === 'number' && r.latency_ms > 0) e.estimated_latency_ms = r.latency_ms
+      }
+      e.performance_analysis = `host-measured sol-execbench: compiled=${r.compiled} correct=${r.correct} `
+        + `speedup=${r.speedup} workloads=${r.n_pass}/${r.n_total}`
+        + (r.failure_code ? ` failure_code=${r.failure_code}` : '')
+        + `; ` + (e.performance_analysis || '')
+      log(`Host-measured ${allVariants[m.i].id}: compiled=${r.compiled} correct=${r.correct} `
+        + `speedup=${r.speedup} workloads=${r.n_pass}/${r.n_total}`)
+    }
+  }
+
   // Build results with evaluation data
   const results = []
   for (let i = 0; i < allVariants.length; i++) {
