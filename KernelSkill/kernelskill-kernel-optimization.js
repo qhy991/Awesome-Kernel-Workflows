@@ -934,12 +934,55 @@ for (let round = 0; round < ROUNDS; round++) {
   // ===========================================================================
   phase('Evaluate')
 
+  // "Produce execution feedback ... using Compiler + Verifier + Profiler" is the
+  // one thing a read-only activation cannot do: it has no execution tool, so
+  // there is no compiler output to feed back and no latency to profile, yet
+  // currentValid and currentLatency are carried into the next round from here.
+  // Measure on the Host so the feedback is execution feedback.
+  let __hostMeasured = null
+  if (SOL_AVAILABLE && (currentKernelCode || '').trim()) {
+    __hostMeasured = await __solExecbenchEvaluate({
+      label: `sol-eval-r${round}`, phase: 'Evaluate',
+      substrateDir: SOL_SUBSTRATE_DIR,
+      kernelSource: `${EXP_DIR}/kernelskill_r${round}.cu`,
+      candidateSource: currentKernelCode,
+      contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
+      solutionOut: `${EXP_DIR}/kernelskill_r${round}.solution.json`,
+      benchOut: `${EXP_DIR}/kernelskill_r${round}.bench.jsonl`,
+      solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+      seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+      ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+      definitionPath: SOL_DEFINITION_PATH,
+    })
+    if (__hostMeasured) {
+      log(`Host-measured r${round}: compiled=${__hostMeasured.compiled} `
+        + `correct=${__hostMeasured.correct} speedup=${__hostMeasured.speedup} `
+        + `workloads=${__hostMeasured.n_pass}/${__hostMeasured.n_total}`)
+      currentValid = __hostMeasured.compiled !== false && __hostMeasured.correct !== false
+      if (typeof __hostMeasured.latency_ms === 'number' && __hostMeasured.latency_ms > 0) {
+        currentLatency = __hostMeasured.latency_ms
+      }
+    }
+  }
+  const __measuredBlock = __hostMeasured ? `
+
+# ALREADY MEASURED ON THE HOST - this is the execution feedback, use it verbatim
+compiled=${__hostMeasured.compiled} correct=${__hostMeasured.correct}
+speedup=${__hostMeasured.speedup} latency_ms=${__hostMeasured.latency_ms}
+workloads_passed=${__hostMeasured.n_pass}/${__hostMeasured.n_total}
+${__hostMeasured.failure_code ? `failure_code=${__hostMeasured.failure_code}` : ''}
+${__hostMeasured.stderr ? `compiler/run output:\n${String(__hostMeasured.stderr).substring(0, 2000)}` : ''}
+Do not re-derive these. If it did not compile, base the repair on the compiler
+output above. The profiler section is yours to reason about; the compile,
+correctness and latency numbers are settled.` : ''
+
   const review = await agentRetry(() => agent(`You are the KernelSkill Reviewer for round ${round + 1}. Produce execution feedback for the CURRENT kernel using Compiler + Verifier + Profiler (ncu + nsys).
 
 # Reference task: ${REFERENCE_PATH}
 # Torch Eager baseline: ${baselineLatency}ms
 # Tolerance: rtol=${RTOL}, atol=${ATOL}
 # Target GPU: ${TARGET_GPU}
+${__measuredBlock}
 
 # Current kernel:
 \`\`\`${fenceToken()}
