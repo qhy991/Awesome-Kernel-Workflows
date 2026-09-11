@@ -1094,7 +1094,7 @@ ${wmSection}
 4. Target ${TARGET_GPU} architecture
 5. Include all necessary imports/headers
 6. PATCH-FIRST / NO-TRUNCATION (AWK #52): emit the kernel from the first line to the LAST closing brace. When parent code exists, edit ONLY the action-relevant spans and preserve the rest verbatim — do NOT rewrite unrelated regions (large whole-file rewrites are the #1 cause of mid-kernel truncation). Do NOT emit a skeleton/stub body. Your output is checked by \`${SUBSTRATE}/code_integrity.py\` — truncated or empty-body output is rejected and the attempt is discarded.
-7. NATIVE INTRINSICS FOR THE TARGET ARCH (AWK #53): ${target.guidance('mma') || 'use the matrix-core instructions native to this target; do not assume a vendor.'} ${target.arch ? `Target arch: ${target.arch}.` : ''}\n8. PERSIST (AWK #58/#59): Write the COMPLETE kernel to ${variantPath} (absolute path — the single source of truth for eval + the driver envelope; \`code\` is a display/compat payload only and may truncate for >20KB kernels). Return variant_path = this path.
+7. NATIVE INTRINSICS FOR THE TARGET ARCH (AWK #53): use matrix-core instructions native to ${TARGET_GPU}; do not assume a vendor or ISA that the task metadata does not name.\n8. PERSIST (AWK #58/#59): Write the COMPLETE kernel to ${variantPath} (absolute path — the single source of truth for eval + the driver envelope; \`code\` is a display/compat payload only and may truncate for >20KB kernels). Return variant_path = this path.
 
 Return the complete kernel code + variant_path.
 
