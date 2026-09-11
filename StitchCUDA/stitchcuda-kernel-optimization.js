@@ -948,29 +948,6 @@ Then append:
       const variant = `stitch_${attempt}`.replace(/[^A-Za-z0-9_]/g, '_');
       let embLatency = 0, embMetrics = {}, embBclass = 'unknown';
       if (INTEGRATION_DECISION.method === 'embedded_inplace' && ORIGINAL_BACKUP) {
-        // The benchmark command below reaches a read-only activation, which has no
-        // execution tool by design, so the agent can describe a run but never perform
-        // one. When the caller wired sol-execbench, measure with the Host first and
-        // let that measurement be the truth.
-        let __hostMeasured = null
-        if (SOL_AVAILABLE) {
-          __hostMeasured = await __solExecbenchEvaluate({
-            label: 'sol-eval', phase: 'Evaluate',
-            substrateDir: SOL_SUBSTRATE_DIR, kernelSource: kPath, candidateSource: '',
-            contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
-            solutionOut: `${kPath}.solution.json`,
-            benchOut: `${kPath}.bench.jsonl`,
-            solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
-            seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
-            ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
-            definitionPath: SOL_DEFINITION_PATH,
-          })
-          if (__hostMeasured) {
-            log(`Host-measured: compiled=${__hostMeasured.compiled} `
-              + `correct=${__hostMeasured.correct} speedup=${__hostMeasured.speedup} `
-              + `workloads=${__hostMeasured.n_pass}/${__hostMeasured.n_total}`)
-          }
-        }
         const embResult = await agentRetry(() => agent(
           `EMBEDDED-INPLACE EVAL (serial). Candidate: ${kPath} | project kernel: ${KERNEL_PATH} | pristine backup: ${ORIGINAL_BACKUP}\n` +
           `Run IN ORDER:\n1. Restore pristine: cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}\n` +
@@ -1005,6 +982,32 @@ Then append:
 
     log('Verifier: Checking correctness and performance...');
 
+    // This Verify prompt tells the agent to run the benchmark suite and return
+    // performance_gflops / execution_time_ms / speedup_vs_baseline as floats.  A
+    // read-only activation has no execution tool, so the agent cannot run
+    // anything - yet the schema still demands numbers, which leaves inventing
+    // them as the only way to answer.  Measure on the Host first and hand the
+    // agent the result, so the numbers it reports are ones something actually ran.
+    let __hostMeasured = null
+    if (SOL_AVAILABLE) {
+      __hostMeasured = await __solExecbenchEvaluate({
+        label: `sol-eval-${attempt + 1}`, phase: 'Verify',
+        substrateDir: SOL_SUBSTRATE_DIR,
+        kernelSource: attemptKernelPath(attempt), candidateSource: '',
+        contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
+        solutionOut: `${WORKSPACE}/attempt_${attempt}/solution.json`,
+        benchOut: `${WORKSPACE}/attempt_${attempt}/bench.jsonl`,
+        solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+        seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+        ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+        definitionPath: SOL_DEFINITION_PATH,
+      })
+      if (__hostMeasured) {
+        log(`Host-measured attempt ${attempt + 1}: compiled=${__hostMeasured.compiled} `
+          + `correct=${__hostMeasured.correct} speedup=${__hostMeasured.speedup} `
+          + `workloads=${__hostMeasured.n_pass}/${__hostMeasured.n_total}`)
+      }
+    }
     const verifyResult = await agentRetry(() => agent(
       `Verify ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel (Attempt ${attempt + 1}):
 
@@ -1032,6 +1035,13 @@ Verification process:
    - Run full benchmark suite
    - Aggregate scores
 
+${__hostMeasured ? `
+# ALREADY MEASURED ON THE HOST - use these numbers verbatim
+compiled=${__hostMeasured.compiled} correct=${__hostMeasured.correct}
+speedup_vs_baseline=${__hostMeasured.speedup} latency_ms=${__hostMeasured.latency_ms}
+workloads_passed=${__hostMeasured.n_pass}/${__hostMeasured.n_total}
+Do not estimate or re-derive these. Report them as given and explain what they mean.
+` : ''}
 Return JSON:
 {
   "attempt": ${attempt + 1},
