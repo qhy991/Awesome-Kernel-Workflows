@@ -23,6 +23,72 @@ const MODEL = {
   profile: (typeof args !== 'undefined' && args && args.model_profile) || 'sonnet',
   judgment: (typeof args !== 'undefined' && args && args.model_judgment) || 'opus',
 }
+async function __solExecbenchEvaluate(ctx) {
+  // Claude's legacy Workflow host does not yet expose this optional primitive.
+  // Keep the prompt-driven path as a compatibility edge, while KerSor's Host
+  // owns exact source materialization and PACK/RUN/PARSE without an LLM turn.
+  if (typeof evaluate !== 'function') return null
+  return evaluate({
+    protocol: 'sol-execbench-v1',
+    label: ctx.label || 'sol-eval',
+    phase: ctx.phase || 'Evaluate',
+    candidatePath: ctx.kernelSource,
+    candidateSource: ctx.candidateSource,
+    substrateDir: ctx.substrateDir,
+    contractEnv: ctx.contractEnv,
+    solutionOut: ctx.solutionOut,
+    benchOut: ctx.benchOut,
+    normalizedOut: ctx.normalizedOut || `${ctx.benchOut}.result.json`,
+    solCli: ctx.solCli,
+    taskDir: ctx.taskDir,
+    benchConfig: ctx.benchConfig,
+    seedDir: ctx.seedDir,
+    cudaVisibleDevices: ctx.cudaVisibleDevices || '0',
+    ldLibraryPath: ctx.ldLibraryPath || '',
+    envPrefix: ctx.envPrefix || '',
+    definitionPath: ctx.definitionPath || '',
+    timeoutSeconds: ctx.timeoutSeconds || 0,
+  }).then(__solGuardHarnessFault)
+}
+
+// A `compiled: false` from the evaluator does not always mean the candidate is
+// bad.  `invalid_request` and `infrastructure_error` are the harness refusing or
+// failing before the candidate was ever built, and callers that map any
+// non-success onto compile_error burn refine turns and a stagnation budget on a
+// misconfiguration.  Observed: a candidate staged outside the evaluation roots
+// was rejected at preflight, reported three times as `compile_error`, and the run
+// stopped at the stagnation limit having never compiled anything.  Surface a
+// harness fault as a harness fault and stop, because retrying cannot fix it.
+function __solGuardHarnessFault(result) {
+  const HARNESS_FAULTS = ['invalid_request', 'infrastructure_error']
+  if (result && HARNESS_FAULTS.includes(result.failure_code)) {
+    const detail = result.stderr || result.stdout || ''
+    throw new Error(
+      `sol-execbench harness fault (${result.failure_code}) at stage `
+      + `${result.stage || 'unknown'}: ${String(detail).slice(0, 400)} `
+      + '- this is a harness or wiring fault, not a candidate compile error',
+    )
+  }
+  return result
+}
+
+// --- sol-execbench wiring (Host-owned PACK/RUN/PARSE; no LLM turn) -----------
+// These 15 workflows declared only the standalone path, so their benchmark was a
+// command string embedded in a prompt for a read-only activation with no shell.
+// The read-only allowlist deliberately excludes execution, so the agent could
+// never run it.  The Host can, and this is the protocol it exposes for exactly
+// that.
+const SOL_CLI = args.sol_cli || ''
+const SOL_TASK_DIR = args.sol_task_dir || ''
+const SOL_BENCH_CONFIG = args.sol_bench_config || ''
+const SOL_SEED_DIR = args.sol_seed_dir || ''
+const SOL_CVD = args.sol_cuda_visible_devices || '0'
+const SOL_LD_LIBRARY_PATH = args.sol_ld_library_path || ''
+const SOL_ENV_PREFIX = args.sol_env_prefix || ''
+const SOL_DEFINITION_PATH = args.sol_definition_path || ''
+const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || ''
+const SOL_AVAILABLE = Boolean(SOL_CLI && SOL_TASK_DIR && SOL_SUBSTRATE_DIR)
+
 // __modelTierApplied
 // --- END model-tier ---
 
@@ -418,7 +484,16 @@ Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, 
       `--cache ${args.exp_dir}/integ_cache.json --trajectory ${args.exp_dir}/genome.jsonl\`. ` +
       `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
       { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
-    if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+    // A caller that declared `integration_pattern` has already made this decision;
+  // re-deciding it from an unvalidated model reply is how an explicit instruction
+  // gets silently discarded.  Measured on B300: KDA was given
+  // integration_pattern=sol_execbench_solution, ran the strategist anyway, adopted
+  // the reply and logged `integration method = null`, which switched off the
+  // deterministic sol-execbench path for the whole run.  Adopt only when the caller
+  // said nothing, and only a method from the known set.
+  if (!args.integration_pattern && _integ && ['standalone', 'embedded_inplace', 'embedded_dispatch', 'sol_execbench_solution', 'derive_adapter'].includes(_integ.method)) {
+    INTEGRATION_DECISION = _integ
+  }
   }
   log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
   if (INTEGRATION_DECISION.method === 'derive_adapter') {
@@ -1007,7 +1082,13 @@ Then append, using the values you just measured (status="done" if the best kerne
   }
 
   log(`Evaluated ${evaluationResult.kernels_evaluated} kernels`);
-  log(`Best: ${evaluationResult.best_kernel.gflops.toFixed(2)} GFLOPS (${evaluationResult.best_kernel.speedup_vs_baseline}x speedup)`);
+  // best_kernel and its gflops come from a model-shaped evaluation result, so
+  // neither is guaranteed.  Observed on B300: gflops was null and the run died
+  // with "Cannot read properties of null (reading 'toFixed')" after 1.0M tokens,
+  // losing everything the run had already learned.
+  const _bestGflops = Number(evaluationResult?.best_kernel?.gflops)
+  const _bestGflopsText = Number.isFinite(_bestGflops) ? _bestGflops.toFixed(2) : 'unmeasured'
+  log(`Best: ${_bestGflopsText} GFLOPS (${evaluationResult?.best_kernel?.speedup_vs_baseline ?? 'unknown'}x speedup)`);
 
   // ============================================================================
   // Phase 7: Report
@@ -1023,7 +1104,7 @@ Summary:
 - Patterns realized: ${realizedPatterns.length}
 - Kernels composed: ${composedKernels.length}
 - Kernels evaluated: ${evaluationResult.kernels_evaluated}
-- Best performance: ${evaluationResult.best_kernel.gflops.toFixed(2)} GFLOPS
+- Best performance: ${_bestGflopsText} GFLOPS
 - Speedup: ${evaluationResult.best_kernel.speedup_vs_baseline}x
 
 Critical patterns: ${ablationResult?.critical_patterns.join(', ') || 'N/A'}

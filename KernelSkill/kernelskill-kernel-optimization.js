@@ -13,6 +13,72 @@ export const meta = {
   ],
 }
 
+async function __solExecbenchEvaluate(ctx) {
+  // Claude's legacy Workflow host does not yet expose this optional primitive.
+  // Keep the prompt-driven path as a compatibility edge, while KerSor's Host
+  // owns exact source materialization and PACK/RUN/PARSE without an LLM turn.
+  if (typeof evaluate !== 'function') return null
+  return evaluate({
+    protocol: 'sol-execbench-v1',
+    label: ctx.label || 'sol-eval',
+    phase: ctx.phase || 'Evaluate',
+    candidatePath: ctx.kernelSource,
+    candidateSource: ctx.candidateSource,
+    substrateDir: ctx.substrateDir,
+    contractEnv: ctx.contractEnv,
+    solutionOut: ctx.solutionOut,
+    benchOut: ctx.benchOut,
+    normalizedOut: ctx.normalizedOut || `${ctx.benchOut}.result.json`,
+    solCli: ctx.solCli,
+    taskDir: ctx.taskDir,
+    benchConfig: ctx.benchConfig,
+    seedDir: ctx.seedDir,
+    cudaVisibleDevices: ctx.cudaVisibleDevices || '0',
+    ldLibraryPath: ctx.ldLibraryPath || '',
+    envPrefix: ctx.envPrefix || '',
+    definitionPath: ctx.definitionPath || '',
+    timeoutSeconds: ctx.timeoutSeconds || 0,
+  }).then(__solGuardHarnessFault)
+}
+
+// A `compiled: false` from the evaluator does not always mean the candidate is
+// bad.  `invalid_request` and `infrastructure_error` are the harness refusing or
+// failing before the candidate was ever built, and callers that map any
+// non-success onto compile_error burn refine turns and a stagnation budget on a
+// misconfiguration.  Observed: a candidate staged outside the evaluation roots
+// was rejected at preflight, reported three times as `compile_error`, and the run
+// stopped at the stagnation limit having never compiled anything.  Surface a
+// harness fault as a harness fault and stop, because retrying cannot fix it.
+function __solGuardHarnessFault(result) {
+  const HARNESS_FAULTS = ['invalid_request', 'infrastructure_error']
+  if (result && HARNESS_FAULTS.includes(result.failure_code)) {
+    const detail = result.stderr || result.stdout || ''
+    throw new Error(
+      `sol-execbench harness fault (${result.failure_code}) at stage `
+      + `${result.stage || 'unknown'}: ${String(detail).slice(0, 400)} `
+      + '- this is a harness or wiring fault, not a candidate compile error',
+    )
+  }
+  return result
+}
+
+// --- sol-execbench wiring (Host-owned PACK/RUN/PARSE; no LLM turn) -----------
+// These 15 workflows declared only the standalone path, so their benchmark was a
+// command string embedded in a prompt for a read-only activation with no shell.
+// The read-only allowlist deliberately excludes execution, so the agent could
+// never run it.  The Host can, and this is the protocol it exposes for exactly
+// that.
+const SOL_CLI = args.sol_cli || ''
+const SOL_TASK_DIR = args.sol_task_dir || ''
+const SOL_BENCH_CONFIG = args.sol_bench_config || ''
+const SOL_SEED_DIR = args.sol_seed_dir || ''
+const SOL_CVD = args.sol_cuda_visible_devices || '0'
+const SOL_LD_LIBRARY_PATH = args.sol_ld_library_path || ''
+const SOL_ENV_PREFIX = args.sol_env_prefix || ''
+const SOL_DEFINITION_PATH = args.sol_definition_path || ''
+const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || ''
+const SOL_AVAILABLE = Boolean(SOL_CLI && SOL_TASK_DIR && SOL_SUBSTRATE_DIR)
+
 // --- BEGIN model-tier (auto-inserted by scripts/patch-model-tier.js) ---
 // Tier-based model routing: mechanical steps (run substrate scripts, parse
 // JSON) use cheaper models; profile steps (run eval/ncu) use mid-tier;
@@ -654,7 +720,12 @@ if (USE_DRIVER) {
 // compile as a standalone TU, so it must be evaluated inside the project build.
 // Default is standalone (legacy path byte-identical); only fires when a project
 // kernel file is provided.
-let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
+// Honour an explicit caller declaration.  Without this the guard below only stops
+// the model from changing the decision; the declaration itself still had no effect,
+// so a caller asking for sol_execbench_solution silently got standalone.
+let INTEGRATION_DECISION = args.integration_pattern === 'sol_execbench_solution'
+  ? { method: 'sol_execbench_solution', build_fidelity: 'production', reversible: true }
+  : { method: 'standalone', build_fidelity: 'isolated', reversible: true }
 if (KERNEL_PATH) {
   const _profManifest = (USE_DRIVER && BACKEND_DIR) ? `${BACKEND_DIR}/manifest.json` : `${SUBSTRATE}/backends/cuda/manifest.json`
   const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
@@ -666,7 +737,16 @@ if (KERNEL_PATH) {
     `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
     `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
     { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
-  if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+  // A caller that declared `integration_pattern` has already made this decision;
+  // re-deciding it from an unvalidated model reply is how an explicit instruction
+  // gets silently discarded.  Measured on B300: KDA was given
+  // integration_pattern=sol_execbench_solution, ran the strategist anyway, adopted
+  // the reply and logged `integration method = null`, which switched off the
+  // deterministic sol-execbench path for the whole run.  Adopt only when the caller
+  // said nothing, and only a method from the known set.
+  if (!args.integration_pattern && _integ && ['standalone', 'embedded_inplace', 'embedded_dispatch', 'sol_execbench_solution', 'derive_adapter'].includes(_integ.method)) {
+    INTEGRATION_DECISION = _integ
+  }
 }
 log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
 if (INTEGRATION_DECISION.method === 'derive_adapter') {

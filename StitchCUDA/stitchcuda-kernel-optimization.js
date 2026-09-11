@@ -61,6 +61,72 @@ function __embeddedEvalPlan(ctx) {
     cleanupInvariant: `On ANY failure or non-improvement, run the unregister command and confirm via list that ${variant} is gone, leaving the project byte-exact pristine.`,
   }
 }
+async function __solExecbenchEvaluate(ctx) {
+  // Claude's legacy Workflow host does not yet expose this optional primitive.
+  // Keep the prompt-driven path as a compatibility edge, while KerSor's Host
+  // owns exact source materialization and PACK/RUN/PARSE without an LLM turn.
+  if (typeof evaluate !== 'function') return null
+  return evaluate({
+    protocol: 'sol-execbench-v1',
+    label: ctx.label || 'sol-eval',
+    phase: ctx.phase || 'Evaluate',
+    candidatePath: ctx.kernelSource,
+    candidateSource: ctx.candidateSource,
+    substrateDir: ctx.substrateDir,
+    contractEnv: ctx.contractEnv,
+    solutionOut: ctx.solutionOut,
+    benchOut: ctx.benchOut,
+    normalizedOut: ctx.normalizedOut || `${ctx.benchOut}.result.json`,
+    solCli: ctx.solCli,
+    taskDir: ctx.taskDir,
+    benchConfig: ctx.benchConfig,
+    seedDir: ctx.seedDir,
+    cudaVisibleDevices: ctx.cudaVisibleDevices || '0',
+    ldLibraryPath: ctx.ldLibraryPath || '',
+    envPrefix: ctx.envPrefix || '',
+    definitionPath: ctx.definitionPath || '',
+    timeoutSeconds: ctx.timeoutSeconds || 0,
+  }).then(__solGuardHarnessFault)
+}
+
+// A `compiled: false` from the evaluator does not always mean the candidate is
+// bad.  `invalid_request` and `infrastructure_error` are the harness refusing or
+// failing before the candidate was ever built, and callers that map any
+// non-success onto compile_error burn refine turns and a stagnation budget on a
+// misconfiguration.  Observed: a candidate staged outside the evaluation roots
+// was rejected at preflight, reported three times as `compile_error`, and the run
+// stopped at the stagnation limit having never compiled anything.  Surface a
+// harness fault as a harness fault and stop, because retrying cannot fix it.
+function __solGuardHarnessFault(result) {
+  const HARNESS_FAULTS = ['invalid_request', 'infrastructure_error']
+  if (result && HARNESS_FAULTS.includes(result.failure_code)) {
+    const detail = result.stderr || result.stdout || ''
+    throw new Error(
+      `sol-execbench harness fault (${result.failure_code}) at stage `
+      + `${result.stage || 'unknown'}: ${String(detail).slice(0, 400)} `
+      + '- this is a harness or wiring fault, not a candidate compile error',
+    )
+  }
+  return result
+}
+
+// --- sol-execbench wiring (Host-owned PACK/RUN/PARSE; no LLM turn) -----------
+// These 15 workflows declared only the standalone path, so their benchmark was a
+// command string embedded in a prompt for a read-only activation with no shell.
+// The read-only allowlist deliberately excludes execution, so the agent could
+// never run it.  The Host can, and this is the protocol it exposes for exactly
+// that.
+const SOL_CLI = args.sol_cli || ''
+const SOL_TASK_DIR = args.sol_task_dir || ''
+const SOL_BENCH_CONFIG = args.sol_bench_config || ''
+const SOL_SEED_DIR = args.sol_seed_dir || ''
+const SOL_CVD = args.sol_cuda_visible_devices || '0'
+const SOL_LD_LIBRARY_PATH = args.sol_ld_library_path || ''
+const SOL_ENV_PREFIX = args.sol_env_prefix || ''
+const SOL_DEFINITION_PATH = args.sol_definition_path || ''
+const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || ''
+const SOL_AVAILABLE = Boolean(SOL_CLI && SOL_TASK_DIR && SOL_SUBSTRATE_DIR)
+
 // --- END embedded-eval substrate ---
 
 // --- BEGIN model-tier (auto-inserted by scripts/patch-model-tier.js) ---
@@ -369,7 +435,12 @@ let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', no
 // scope so the attempt loop and exit-restore can read the decision. Default keeps
 // the legacy standalone path byte-identical when no embedded source is supplied. ---
 const KERNEL_PATH = args.kernel_path || ''
-let INTEGRATION_DECISION = { method: 'standalone', build_fidelity: 'isolated', reversible: true }
+// Honour an explicit caller declaration.  Without this the guard below only stops
+// the model from changing the decision; the declaration itself still had no effect,
+// so a caller asking for sol_execbench_solution silently got standalone.
+let INTEGRATION_DECISION = args.integration_pattern === 'sol_execbench_solution'
+  ? { method: 'sol_execbench_solution', build_fidelity: 'production', reversible: true }
+  : { method: 'standalone', build_fidelity: 'isolated', reversible: true }
 let USE_DRIVER_STANDALONE = USE_DRIVER  // narrowed after integration-strategist resolves
 let IS_EMBEDDED = false
 let ORIGINAL_BACKUP = ''
@@ -418,7 +489,16 @@ async function main() {
       `--cache ${EXPDIR}/integ_cache.json --trajectory ${EXPDIR}/genome.jsonl\`. ` +
       `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
       { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
-    if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+    // A caller that declared `integration_pattern` has already made this decision;
+  // re-deciding it from an unvalidated model reply is how an explicit instruction
+  // gets silently discarded.  Measured on B300: KDA was given
+  // integration_pattern=sol_execbench_solution, ran the strategist anyway, adopted
+  // the reply and logged `integration method = null`, which switched off the
+  // deterministic sol-execbench path for the whole run.  Adopt only when the caller
+  // said nothing, and only a method from the known set.
+  if (!args.integration_pattern && _integ && ['standalone', 'embedded_inplace', 'embedded_dispatch', 'sol_execbench_solution', 'derive_adapter'].includes(_integ.method)) {
+    INTEGRATION_DECISION = _integ
+  }
   }
   log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
   if (INTEGRATION_DECISION.method === 'derive_adapter') {
@@ -902,6 +982,32 @@ Then append:
 
     log('Verifier: Checking correctness and performance...');
 
+    // This Verify prompt tells the agent to run the benchmark suite and return
+    // performance_gflops / execution_time_ms / speedup_vs_baseline as floats.  A
+    // read-only activation has no execution tool, so the agent cannot run
+    // anything - yet the schema still demands numbers, which leaves inventing
+    // them as the only way to answer.  Measure on the Host first and hand the
+    // agent the result, so the numbers it reports are ones something actually ran.
+    let __hostMeasured = null
+    if (SOL_AVAILABLE) {
+      __hostMeasured = await __solExecbenchEvaluate({
+        label: `sol-eval-${attempt + 1}`, phase: 'Verify',
+        substrateDir: SOL_SUBSTRATE_DIR,
+        kernelSource: attemptKernelPath(attempt), candidateSource: '',
+        contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
+        solutionOut: `${WORKSPACE}/attempt_${attempt}/solution.json`,
+        benchOut: `${WORKSPACE}/attempt_${attempt}/bench.jsonl`,
+        solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+        seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+        ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+        definitionPath: SOL_DEFINITION_PATH,
+      })
+      if (__hostMeasured) {
+        log(`Host-measured attempt ${attempt + 1}: compiled=${__hostMeasured.compiled} `
+          + `correct=${__hostMeasured.correct} speedup=${__hostMeasured.speedup} `
+          + `workloads=${__hostMeasured.n_pass}/${__hostMeasured.n_total}`)
+      }
+    }
     const verifyResult = await agentRetry(() => agent(
       `Verify ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel (Attempt ${attempt + 1}):
 
@@ -929,6 +1035,13 @@ Verification process:
    - Run full benchmark suite
    - Aggregate scores
 
+${__hostMeasured ? `
+# ALREADY MEASURED ON THE HOST - use these numbers verbatim
+compiled=${__hostMeasured.compiled} correct=${__hostMeasured.correct}
+speedup_vs_baseline=${__hostMeasured.speedup} latency_ms=${__hostMeasured.latency_ms}
+workloads_passed=${__hostMeasured.n_pass}/${__hostMeasured.n_total}
+Do not estimate or re-derive these. Report them as given and explain what they mean.
+` : ''}
 Return JSON:
 {
   "attempt": ${attempt + 1},

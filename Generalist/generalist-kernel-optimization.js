@@ -85,7 +85,28 @@ async function __solExecbenchEvaluate(ctx) {
     envPrefix: ctx.envPrefix || '',
     definitionPath: ctx.definitionPath || '',
     timeoutSeconds: ctx.timeoutSeconds || 0,
-  })
+  }).then(__solGuardHarnessFault)
+}
+
+// A `compiled: false` from the evaluator does not always mean the candidate is
+// bad.  `invalid_request` and `infrastructure_error` are the harness refusing or
+// failing before the candidate was ever built, and callers that map any
+// non-success onto compile_error burn refine turns and a stagnation budget on a
+// misconfiguration.  Observed: a candidate staged outside the evaluation roots
+// was rejected at preflight, reported three times as `compile_error`, and the run
+// stopped at the stagnation limit having never compiled anything.  Surface a
+// harness fault as a harness fault and stop, because retrying cannot fix it.
+function __solGuardHarnessFault(result) {
+  const HARNESS_FAULTS = ['invalid_request', 'infrastructure_error']
+  if (result && HARNESS_FAULTS.includes(result.failure_code)) {
+    const detail = result.stderr || result.stdout || ''
+    throw new Error(
+      `sol-execbench harness fault (${result.failure_code}) at stage `
+      + `${result.stage || 'unknown'}: ${String(detail).slice(0, 400)} `
+      + '- this is a harness or wiring fault, not a candidate compile error',
+    )
+  }
+  return result
 }
 // --- END sol-execbench-eval substrate ---
 
@@ -724,7 +745,16 @@ let INTEGRATION_DECISION = {
       `Then run exactly: \`cat ${decisionPath}\` and return its stdout JSON verbatim. ` +
       `Do not modify, summarize, or invent any field.`,
       { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
-    if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+    // A caller that declared `integration_pattern` has already made this decision;
+  // re-deciding it from an unvalidated model reply is how an explicit instruction
+  // gets silently discarded.  Measured on B300: KDA was given
+  // integration_pattern=sol_execbench_solution, ran the strategist anyway, adopted
+  // the reply and logged `integration method = null`, which switched off the
+  // deterministic sol-execbench path for the whole run.  Adopt only when the caller
+  // said nothing, and only a method from the known set.
+  if (!args.integration_pattern && _integ && ['standalone', 'embedded_inplace', 'embedded_dispatch', 'sol_execbench_solution', 'derive_adapter'].includes(_integ.method)) {
+    INTEGRATION_DECISION = _integ
+  }
   } else {
     log('integration: no substrate_command_prefix set; keeping default standalone routing')
   }
@@ -956,7 +986,30 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
       `Return its stdout JSON verbatim ({bottleneck_class, allowed_methods, rationale}). If unavailable, return allowed_methods:[] with missing evidence.`,
       { label: `gate-${iter}`, phase: 'Retrieve', schema: JSON_PASSTHROUGH, model: MODEL.mechanical }), { retries: 5 }),
   ])
-  const allowed = (gate && gate.allowed_methods) || []
+  // `gate` comes back from an agent call declared with schema JSON_PASSTHROUGH,
+  // i.e. no schema at all, so allowed_methods is whatever the model emitted.  A
+  // falsy-guard alone is not enough: a string reply reaches .join() below and
+  // kills the run with 'allowed.join is not a function'.  Coerce to an array.
+  const _allowedRaw = gate && gate.allowed_methods
+  const _allowedParsed = Array.isArray(_allowedRaw)
+    ? _allowedRaw
+    : (typeof _allowedRaw === 'string' && _allowedRaw.trim()
+      ? _allowedRaw.split(',').map((m) => m.trim()).filter(Boolean)
+      : [])
+  // The gate prompt documents allowed_methods:[] as its own unavailable-evidence
+  // fallback, and the Plan phase below is gated to this list, so an empty list
+  // means the solver is allowed to propose nothing and every iteration is a
+  // guaranteed no-op.  Observed on B300: ncu counters are blocked, the strategist
+  // downgraded, bottleneck_class came back `unknown`, allowed_methods came back
+  // empty, and two full iterations produced no candidate at all while spending
+  // 1.55M tokens.  method_gate.py's own table already defines what `unknown`
+  // permits; use it rather than treating missing evidence as a prohibition.
+  const GATE_UNKNOWN_DEFAULT = ['profile_first', 'baseline_confirm', 'noop_validate', 'conservative_tiling']
+  const allowed = _allowedParsed.length > 0 ? _allowedParsed : GATE_UNKNOWN_DEFAULT
+  if (_allowedParsed.length === 0) {
+    log(`method gate returned no allowed methods (bottleneck_class=${bclass}); `
+      + `falling back to the gate's own unknown-class set instead of proposing nothing`)
+  }
   const priorTech = (mem && mem.techniques) || []
   const deadEnds = (mem && mem.dead_ends) || []
   log(`allowed_methods = ${allowed.join(', ')} | prior techniques = ${priorTech.length} | dead-ends = ${deadEnds.length}`)
@@ -1043,13 +1096,44 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
       `Then append, using the values you just measured (status="done" if compiled AND correct, else "error"; speedup is the measured speedup number, or null if unavailable):\n` +
       `{"workflow":"${WORKFLOW_NAME}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"iter-${iter}-cand-${i + 1}","technique":"${p.method}","speedup":<number or null>,"note":"<compiled? correct? + the failure reason if any, one line>"}`,
       { label: `impl-${iter}-${i + 1}`, phase: 'Evaluate', schema: METRICS_SCHEMA, model: MODEL.judgment, ...(useWorktree ? { isolation: 'worktree' } : {}) }), { retries: 5 })
+    // The agent writes the kernel to a path and reports its own metrics.  Measure
+    // that file with the Host and let the measurement win: a self-reported speedup
+    // is the failure mode this audit kept finding.  The evaluator reads an existing
+    // candidatePath when no source string is supplied.
+    let solMeasured = null
+    if (IS_SOL) {
+      solMeasured = await __solExecbenchEvaluate({
+        label: `sol-eval-${iter}-${i + 1}`, phase: 'Evaluate',
+        substrateDir: SOL_SUBSTRATE_DIR,
+        kernelSource: `${runDir}/kernel`, candidateSource: '',
+        contractEnv: `${EXP_DIR}/contract.env`,
+        solutionOut: `${EXP_DIR}/gen_${iter}_${i + 1}.solution.json`,
+        benchOut: `${EXP_DIR}/gen_${iter}_${i + 1}.bench.jsonl`,
+        solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+        seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+        ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+        definitionPath: SOL_DEFINITION_PATH,
+      })
+      if (solMeasured) {
+        log(`iter ${iter} cand ${i + 1} Host-measured: compiled=${solMeasured.compiled} `
+          + `correct=${solMeasured.correct} speedup=${solMeasured.speedup} `
+          + `workloads=${solMeasured.n_pass}/${solMeasured.n_total}`)
+      }
+    }
+
     const ac = await agentRetry(() => agent(
       `Write these metrics to ${runDir}/metrics.json:\n${JSON.stringify({ ...m, claimed_speedup: m.speedup })}\n` +
       `${substrateInstruction('anti_cheat.py', `--source ${runDir}/kernel --metrics ${runDir}/metrics.json`)} ` +
       `Return its stdout JSON verbatim. Then ${substrateInstruction('evidence_schema.py', `validate ${runDir}/metrics.json`)} ` +
       `If substrate commands are unavailable, mark valid=false with blocking_flags:["missing_substrate_command_prefix"].`,
       { label: `anticheat-${iter}-${i + 1}`, phase: 'Evaluate', schema: ANTICHEAT_SCHEMA, model: MODEL.mechanical }), { retries: 5 })
-    return { plan: p, metrics: m, anticheat: ac, code_path: `${runDir}/kernel`,
+    const measuredMetrics = solMeasured
+      ? { ...(m || {}), compiled: solMeasured.compiled === true,
+          correct: solMeasured.correct === true,
+          speedup: Number(solMeasured.speedup || 0),
+          measured_by: 'host-sol-execbench' }
+      : m
+    return { plan: p, metrics: measuredMetrics, anticheat: ac, code_path: `${runDir}/kernel`,
              recorded_speedup: ac.valid ? ac.recorded_speedup : 0,
              measured_speedup: ac.valid ? (ac.measured_speedup ?? 0) : 0 }
   }

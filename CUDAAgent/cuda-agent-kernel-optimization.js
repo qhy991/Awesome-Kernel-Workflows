@@ -83,7 +83,28 @@ async function __solExecbenchEvaluate(ctx) {
     envPrefix: ctx.envPrefix || '',
     definitionPath: ctx.definitionPath || '',
     timeoutSeconds: ctx.timeoutSeconds || 0,
-  })
+  }).then(__solGuardHarnessFault)
+}
+
+// A `compiled: false` from the evaluator does not always mean the candidate is
+// bad.  `invalid_request` and `infrastructure_error` are the harness refusing or
+// failing before the candidate was ever built, and callers that map any
+// non-success onto compile_error burn refine turns and a stagnation budget on a
+// misconfiguration.  Observed: a candidate staged outside the evaluation roots
+// was rejected at preflight, reported three times as `compile_error`, and the run
+// stopped at the stagnation limit having never compiled anything.  Surface a
+// harness fault as a harness fault and stop, because retrying cannot fix it.
+function __solGuardHarnessFault(result) {
+  const HARNESS_FAULTS = ['invalid_request', 'infrastructure_error']
+  if (result && HARNESS_FAULTS.includes(result.failure_code)) {
+    const detail = result.stderr || result.stdout || ''
+    throw new Error(
+      `sol-execbench harness fault (${result.failure_code}) at stage `
+      + `${result.stage || 'unknown'}: ${String(detail).slice(0, 400)} `
+      + '- this is a harness or wiring fault, not a candidate compile error',
+    )
+  }
+  return result
 }
 // --- END sol-execbench-eval substrate ---
 
@@ -671,7 +692,16 @@ if (INTEGRATION_PATTERN !== 'sol_execbench_solution') {
         `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
       ` Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
       { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
-    if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+    // A caller that declared `integration_pattern` has already made this decision;
+  // re-deciding it from an unvalidated model reply is how an explicit instruction
+  // gets silently discarded.  Measured on B300: KDA was given
+  // integration_pattern=sol_execbench_solution, ran the strategist anyway, adopted
+  // the reply and logged `integration method = null`, which switched off the
+  // deterministic sol-execbench path for the whole run.  Adopt only when the caller
+  // said nothing, and only a method from the known set.
+  if (!args.integration_pattern && _integ && ['standalone', 'embedded_inplace', 'embedded_dispatch', 'sol_execbench_solution', 'derive_adapter'].includes(_integ.method)) {
+    INTEGRATION_DECISION = _integ
+  }
   }
 }
 log(`Integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)

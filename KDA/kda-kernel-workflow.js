@@ -97,7 +97,28 @@ async function __solExecbenchEvaluate(ctx) {
     envPrefix: ctx.envPrefix || '',
     definitionPath: ctx.definitionPath || '',
     timeoutSeconds: ctx.timeoutSeconds || 0,
-  })
+  }).then(__solGuardHarnessFault)
+}
+
+// A `compiled: false` from the evaluator does not always mean the candidate is
+// bad.  `invalid_request` and `infrastructure_error` are the harness refusing or
+// failing before the candidate was ever built, and callers that map any
+// non-success onto compile_error burn refine turns and a stagnation budget on a
+// misconfiguration.  Observed: a candidate staged outside the evaluation roots
+// was rejected at preflight, reported three times as `compile_error`, and the run
+// stopped at the stagnation limit having never compiled anything.  Surface a
+// harness fault as a harness fault and stop, because retrying cannot fix it.
+function __solGuardHarnessFault(result) {
+  const HARNESS_FAULTS = ['invalid_request', 'infrastructure_error']
+  if (result && HARNESS_FAULTS.includes(result.failure_code)) {
+    const detail = result.stderr || result.stdout || ''
+    throw new Error(
+      `sol-execbench harness fault (${result.failure_code}) at stage `
+      + `${result.stage || 'unknown'}: ${String(detail).slice(0, 400)} `
+      + '- this is a harness or wiring fault, not a candidate compile error',
+    )
+  }
+  return result
 }
 // --- END sol-execbench-eval substrate ---
 
@@ -776,7 +797,16 @@ let INTEGRATION_DECISION = {
     `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
     `Return stdout JSON verbatim {method, build_fidelity, reversible, rationale}.`,
     { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: { type: 'object', additionalProperties: true } }), { retries: 5, allowNull: true })
-  if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+  // A caller that declared `integration_pattern` has already made this decision;
+  // re-deciding it from an unvalidated model reply is how an explicit instruction
+  // gets silently discarded.  Measured on B300: KDA was given
+  // integration_pattern=sol_execbench_solution, ran the strategist anyway, adopted
+  // the reply and logged `integration method = null`, which switched off the
+  // deterministic sol-execbench path for the whole run.  Adopt only when the caller
+  // said nothing, and only a method from the known set.
+  if (!args.integration_pattern && _integ && ['standalone', 'embedded_inplace', 'embedded_dispatch', 'sol_execbench_solution', 'derive_adapter'].includes(_integ.method)) {
+    INTEGRATION_DECISION = _integ
+  }
 }
 log(`integration method = ${INTEGRATION_DECISION.method}`)
 if (INTEGRATION_DECISION.method === 'derive_adapter') {
@@ -891,6 +921,37 @@ Then append:
       seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD, ldLibraryPath: SOL_LD_LIBRARY_PATH,
       envPrefix: SOL_ENV_PREFIX, definitionPath: SOL_DEFINITION_PATH,
     })
+    // Measure with the Host, then state the result.  This file defines
+    // __solExecbenchEvaluate and never called it, so the block below asked a
+    // read-only activation with no shell to run three shell commands.
+    const solDirect = await __solExecbenchEvaluate({
+      label: `sol-eval-${solVariantName}`, phase: 'Validate',
+      substrateDir: SOL_SUBSTRATE_DIR, kernelSource: solCandidatePath,
+      candidateSource: candidateCode || '',
+      contractEnv: `${EXP_DIR}/contract.env`,
+      solutionOut: `${EXP_DIR}/${solVariantName}.solution.json`,
+      benchOut: `${EXP_DIR}/${solVariantName}.bench.jsonl`,
+      solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+      seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+      ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+      definitionPath: SOL_DEFINITION_PATH,
+    })
+    if (solDirect) {
+      log(`sol-execbench (Host-measured): compiled=${solDirect.compiled} correct=${solDirect.correct} `
+        + `speedup=${solDirect.speedup} workloads=${solDirect.n_pass}/${solDirect.n_total}`)
+      solEvalBlock = `
+
+# SOL-EXECBENCH EVALUATION — ALREADY MEASURED BY THE HOST
+Do not run any command for this. The Host compiled and benchmarked the candidate
+on the target GPU; use these measured values verbatim:
+
+  compiled  = ${solDirect.compiled}
+  correct   = ${solDirect.correct}
+  speedup   = ${solDirect.speedup}
+  workloads = ${solDirect.n_pass}/${solDirect.n_total}
+
+Do not estimate, adjust or re-derive them.`
+    } else {
     solEvalBlock = `
 
 # SOL-EXECBENCH EVALUATION (overrides the standalone steps below)
@@ -901,6 +962,7 @@ This candidate is evaluated by the sol-execbench CLI, which compiles it internal
 3. Parse: ${solPlan.parse}
 
 The parse step prints one line "SPEEDUP=<aggregate> REDUCTION=<contract reduction> STATUS=<PASS|FAIL> WORKLOADS=<passed>/<total>". Parse correctness and speedup STRICTLY from that line and the run output. Do NOT fabricate numbers. Map the result into the validation schema. ${solPlan.cleanupInvariant}`
+    }
   }
 
   const validation = await agentRetry(() => agent(`Validate this kernel candidate: run correctness and performance tests.${solEvalBlock}

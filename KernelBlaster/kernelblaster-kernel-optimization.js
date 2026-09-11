@@ -85,7 +85,28 @@ async function __solExecbenchEvaluate(ctx) {
     envPrefix: ctx.envPrefix || '',
     definitionPath: ctx.definitionPath || '',
     timeoutSeconds: ctx.timeoutSeconds || 0,
-  })
+  }).then(__solGuardHarnessFault)
+}
+
+// A `compiled: false` from the evaluator does not always mean the candidate is
+// bad.  `invalid_request` and `infrastructure_error` are the harness refusing or
+// failing before the candidate was ever built, and callers that map any
+// non-success onto compile_error burn refine turns and a stagnation budget on a
+// misconfiguration.  Observed: a candidate staged outside the evaluation roots
+// was rejected at preflight, reported three times as `compile_error`, and the run
+// stopped at the stagnation limit having never compiled anything.  Surface a
+// harness fault as a harness fault and stop, because retrying cannot fix it.
+function __solGuardHarnessFault(result) {
+  const HARNESS_FAULTS = ['invalid_request', 'infrastructure_error']
+  if (result && HARNESS_FAULTS.includes(result.failure_code)) {
+    const detail = result.stderr || result.stdout || ''
+    throw new Error(
+      `sol-execbench harness fault (${result.failure_code}) at stage `
+      + `${result.stage || 'unknown'}: ${String(detail).slice(0, 400)} `
+      + '- this is a harness or wiring fault, not a candidate compile error',
+    )
+  }
+  return result
 }
 // --- END sol-execbench-eval substrate ---
 
@@ -679,7 +700,16 @@ let INTEGRATION_DECISION = {
     `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
     `Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
     { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
-  if (_integ && _integ.method) INTEGRATION_DECISION = _integ
+  // A caller that declared `integration_pattern` has already made this decision;
+  // re-deciding it from an unvalidated model reply is how an explicit instruction
+  // gets silently discarded.  Measured on B300: KDA was given
+  // integration_pattern=sol_execbench_solution, ran the strategist anyway, adopted
+  // the reply and logged `integration method = null`, which switched off the
+  // deterministic sol-execbench path for the whole run.  Adopt only when the caller
+  // said nothing, and only a method from the known set.
+  if (!args.integration_pattern && _integ && ['standalone', 'embedded_inplace', 'embedded_dispatch', 'sol_execbench_solution', 'derive_adapter'].includes(_integ.method)) {
+    INTEGRATION_DECISION = _integ
+  }
 }
 log(`integration method = ${INTEGRATION_DECISION.method} (fidelity=${INTEGRATION_DECISION.build_fidelity || 'n/a'})`)
 if (INTEGRATION_DECISION.method === 'derive_adapter') {
@@ -767,7 +797,14 @@ log(`Baseline Elapsed Cycles: ${baselineCycles} | ${ncuBaseline.profile_summary.
 // Database + replay buffer persist across rollouts (and, via OPT_DB_PATH, runs).
 // =============================================================================
 for (let iter = 0; iter < RL_ITERATIONS; iter++) {
-  log(`\n=== Rollout ${iter + 1}/${RL_ITERATIONS} | Best: ${bestCycles} cycles (${(baselineCycles / bestCycles).toFixed(2)}x) | Buffer: ${replayBuffer.length} trajectories ===`)
+  // Without a profiler run baselineCycles stays -1, and -1/-1 printed a confident
+  // "1.00x" on top of an explicit "PROFILING NOT PERFORMED - NO NCU EVIDENCE".
+  // Report the absence instead of a ratio of two unmeasured numbers.
+  const _cyclesMeasured = Number(baselineCycles) > 0 && Number(bestCycles) > 0
+  const _rollupRatio = _cyclesMeasured
+    ? `${(baselineCycles / bestCycles).toFixed(2)}x`
+    : 'ratio unmeasured'
+  log(`\n=== Rollout ${iter + 1}/${RL_ITERATIONS} | Best: ${_cyclesMeasured ? bestCycles + ' cycles' : 'no measured cycles'} (${_rollupRatio}) | Buffer: ${replayBuffer.length} trajectories ===`)
 
   const trajectory = { steps: [], total_reward: 0, initial_cycles: bestCycles, final_cycles: bestCycles }
   let currentCode = bestKernelCode
@@ -980,6 +1017,35 @@ Then append (rollout ${iter}, step ${step}):
           seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD, ldLibraryPath: SOL_LD_LIBRARY_PATH,
           envPrefix: SOL_ENV_PREFIX, definitionPath: SOL_DEFINITION_PATH,
         })
+        // Prefer the Host's deterministic evaluation.  This file already defines
+        // __solExecbenchEvaluate for exactly that, and never called it: every
+        // candidate was instead handed as three shell commands to a model running
+        // in a read-only activation with Read/Glob/Grep and no shell, which
+        // reported is_compilable=false every time.  Measured on B300: 78
+        // activations, 64 phases, 6.77M tokens, zero evaluations, and every step
+        // logged "all variants invalid".
+        const directSol = await __solExecbenchEvaluate({
+          label: `sol-eval-${suffix}`, phase: 'Evaluate',
+          substrateDir: SOL_SUBSTRATE_DIR, kernelSource: kPath, candidateSource: v.code || '',
+          contractEnv: `${EXP_DIR}/contract.env`,
+          solutionOut: `${EXP_DIR}/${variantName}.solution.json`,
+          benchOut: `${EXP_DIR}/${variantName}.bench.jsonl`,
+          solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+          seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+          ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+          definitionPath: SOL_DEFINITION_PATH,
+        })
+        if (directSol) {
+          evals.push({
+            is_correct: directSol.correct === true,
+            is_compilable: directSol.compiled === true,
+            elapsed_cycles: 0,
+            speedup: Number(directSol.speedup || 0),
+            improvement_pct: 0,
+            heuristic_bclass: 'unknown',
+          })
+          continue
+        }
         const solResult = await agentRetry(() => agent(
           `Evaluate this candidate with sol-execbench. Run IN THIS EXACT ORDER:\n1. Pack: ${plan.pack}\n2. Run: ${plan.run}\n3. Parse: ${plan.parse}\n` +
           `Parse the line SPEEDUP=<aggregate> REDUCTION=<contract reduction> STATUS=<PASS|FAIL> WORKLOADS=<passed>/<total>; do not fabricate values. Return {is_correct, is_compilable, elapsed_cycles, speedup, improvement_pct}. ${plan.cleanupInvariant}`,
@@ -1112,13 +1178,25 @@ Then append, using the values you just measured (status="done" if correct AND co
     phase('Reward')
 
     if (!bestStep) {
-      // All variants failed correctness/compile: penalize the attempted techniques.
+      // Distinguish "the technique was bad" from "nothing could be measured".  When
+      // no variant even compiled, the evidence is about the harness, not the idea:
+      // on B300 every step reported is_compilable=false because the evaluation had
+      // been handed to a model activation with no shell, and each one drove the
+      // technique's confidence down by 100 in the persistent optimization DB.  That
+      // poisons the learned model with infrastructure failures and makes the next
+      // rollout avoid techniques that were never actually tried.
+      const anyCompiled = evals.some((e) => e && e.is_compilable)
+      if (!anyCompiled) {
+        log(`Step ${step + 1}: no variant could be compiled or measured — `
+          + `not penalizing ${variants.length} techniques, the evidence is about the harness`)
+        continue
+      }
       for (const v of variants) {
         usedThisRollout.add(v.technique)
         updateOptimizationResult(optDb.optimization_strategies[currentState], v.technique, -100, null)
-        dbUpdateLog.push(`[${currentState}] ${v.technique}: FAILED (incorrect/uncompilable) -> confidence down`)
+        dbUpdateLog.push(`[${currentState}] ${v.technique}: FAILED (incorrect) -> confidence down`)
       }
-      log(`Step ${step + 1}: all variants invalid; penalized ${variants.length} techniques.`)
+      log(`Step ${step + 1}: all variants incorrect; penalized ${variants.length} techniques.`)
       continue
     }
 
