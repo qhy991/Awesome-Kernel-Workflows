@@ -85,6 +85,18 @@ def summarize(path, reduction="geomean"):
     if rows:
         if reduction == "geomean":
             speedup = math.exp(sum(math.log(row[0]) for row in rows) / len(rows))
+            # The latency aggregates were only filled in by the sum/mean branch, so
+            # under the documented default reduction every caller saw
+            # candidate_latency_aggregate_ms=None even though each row carried a
+            # latency.  Workflows that reason about latency got nothing from data
+            # that was already parsed: kernelskill left currentLatency unset and
+            # kernelband reported latency_us as unavailable.  Reduce the latencies
+            # the same way the speedup is reduced.
+            lat = [(row[1], row[2]) for row in rows
+                   if row[1] is not None and row[2] is not None and row[1] > 0 and row[2] > 0]
+            if lat:
+                reference_aggregate = math.exp(sum(math.log(r) for r, _ in lat) / len(lat))
+                candidate_aggregate = math.exp(sum(math.log(c) for _, c in lat) / len(lat))
         else:
             reference_aggregate = sum(row[1] for row in rows)
             candidate_aggregate = sum(row[2] for row in rows)
