@@ -1001,8 +1001,50 @@ Map per-candidate results into evaluation_results: compilation_success=build suc
     }
   }
 
+  // This prompt asks the agent to compile each kernel, execute it on the GPU and
+  // measure time/GFLOPS.  A read-only activation has no execution tool, so none
+  // of that can happen.  FACT is at least honest about it - the prompt forbids
+  // guessing and tells the agent to report values as unavailable - so the
+  // outcome here is not a fabricated number but no measurement at all.
+  // Measure every composed kernel on the Host first and hand the agent the
+  // table, so ranking and best_kernel rest on numbers something produced.
+  let __measured = []
+  if (SOL_AVAILABLE && composedKernels.length) {
+    __measured = await parallel(composedKernels.map((k, idx) => async () => {
+      const kid = k.kernel_id || `k${idx}`
+      const variant = `fact_${kid}`.replace(/[^A-Za-z0-9_]/g, '_')
+      const r = await __solExecbenchEvaluate({
+        label: `sol-eval-${variant}`, phase: 'Evaluation',
+        substrateDir: SOL_SUBSTRATE_DIR,
+        kernelSource: `${args.exp_dir}/${variant}.cu`,
+        candidateSource: k.kernel_code || '',
+        contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
+        solutionOut: `${args.exp_dir}/${variant}.solution.json`,
+        benchOut: `${args.exp_dir}/${variant}.bench.jsonl`,
+        solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+        seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+        ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+        definitionPath: SOL_DEFINITION_PATH,
+      })
+      return r ? { kernel_id: kid, ...r } : null
+    }))
+    __measured = __measured.filter(Boolean)
+    for (const m of __measured) {
+      log(`Host-measured ${m.kernel_id}: compiled=${m.compiled} correct=${m.correct} `
+        + `speedup=${m.speedup} workloads=${m.n_pass}/${m.n_total}`)
+    }
+  }
+  const __measuredBlock = __measured.length ? `
+
+# ALREADY MEASURED ON THE HOST - use these numbers verbatim
+${__measured.map(m => `kernel_id=${m.kernel_id} compiled=${m.compiled} correct=${m.correct} `
+  + `latency_ms=${m.latency_ms} speedup_vs_baseline=${m.speedup} `
+  + `workloads_passed=${m.n_pass}/${m.n_total}`).join('\n')}
+Rank and pick best_kernel from these. Do not re-derive or estimate them, and do
+not mark a kernel unavailable that appears above.` : ''
+
   const evaluationResult = await agentRetry(() => agent(
-    `Evaluate all composed kernels:${evaluationEmbeddingBlock}
+    `Evaluate all composed kernels:${evaluationEmbeddingBlock}${__measuredBlock}
 
 Kernels to evaluate: ${composedKernels.length}
 Target: ${setupResult.target_architecture}
