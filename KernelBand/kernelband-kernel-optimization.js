@@ -1020,6 +1020,44 @@ Then append (this is bandit iteration ${t}; the arm pulled is strategy ${selecte
   // ===========================================================================
   phase('Evaluate')
 
+  // compiled / correct / latency_us from this turn become the bandit's reward, so
+  // the strategy KernelBand learns to prefer is only as real as these numbers.
+  // The prompt asks the agent to compile, run torch.allclose over 10+ shapes and
+  // benchmark; a read-only activation has no execution tool and can do none of
+  // it. Measure on the Host so the bandit updates on measurements.
+  let __hostMeasured = null
+  if (SOL_AVAILABLE && generatedCode.trim()) {
+    __hostMeasured = await __solExecbenchEvaluate({
+      label: `sol-eval-t${t}`, phase: 'Evaluate',
+      substrateDir: SOL_SUBSTRATE_DIR,
+      kernelSource: `${EXP_DIR}/kernelband_iter_${t}.cu`,
+      candidateSource: generatedCode,
+      contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
+      solutionOut: `${EXP_DIR}/kernelband_iter_${t}.solution.json`,
+      benchOut: `${EXP_DIR}/kernelband_iter_${t}.bench.jsonl`,
+      solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+      seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+      ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+      definitionPath: SOL_DEFINITION_PATH,
+    })
+    if (__hostMeasured) {
+      log(`Host-measured t${t}: compiled=${__hostMeasured.compiled} `
+        + `correct=${__hostMeasured.correct} speedup=${__hostMeasured.speedup} `
+        + `workloads=${__hostMeasured.n_pass}/${__hostMeasured.n_total}`)
+    }
+  }
+  const __measuredBlock = __hostMeasured ? `
+
+# ALREADY MEASURED ON THE HOST - use these numbers verbatim
+compiled=${__hostMeasured.compiled} correct=${__hostMeasured.correct}
+latency_us=${__hostMeasured.latency_ms != null ? __hostMeasured.latency_ms * 1000 : 'unavailable'}
+speedup_vs_baseline=${__hostMeasured.speedup}
+workloads_passed=${__hostMeasured.n_pass}/${__hostMeasured.n_total}
+${__hostMeasured.failure_code ? `failure_code=${__hostMeasured.failure_code}` : ''}
+Steps 1-3 already ran. Report these values rather than re-deriving them; spend
+your turn on step 4, the behavioural features, and on whether the change did
+what the strategy intended.` : ''
+
   const evalResult = await agentRetry(() => agent(`You are the KernelBand Evaluation module. Verify correctness and measure performance.
 
 # Generated Kernel:
@@ -1040,7 +1078,7 @@ ${generatedCode.substring(0, 6000)}
    - Registers per thread, shared memory, block dim, occupancy
    ${NCU_CMD ? `Profile: ${NCU_CMD}` : ''}
 
-# Baseline latency: ${baselineLatency} μs
+# Baseline latency: ${baselineLatency} μs${__measuredBlock}
 # Previous best: ${bestKernel.latency === Infinity ? 'N/A' : bestKernel.latency.toFixed(1) + ' μs (' + bestKernel.speedup.toFixed(2) + 'x)'}
 
 Return evaluation results.
