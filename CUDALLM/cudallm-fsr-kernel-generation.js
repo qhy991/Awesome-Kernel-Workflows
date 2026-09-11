@@ -847,6 +847,42 @@ Then append:
 
     phase('Evaluate')
 
+    // Rule 3 below tells the agent to report compiled=false, speedup=0 and explain
+    // the missing evidence when it cannot benchmark, which is the honest outcome
+    // but still leaves the candidate unmeasured: a read-only activation has no
+    // execution tool, so "materialize the kernel and run it" cannot happen.
+    // Measure on the Host first and hand the agent the evidence it was asked for.
+    let __hostMeasured = null
+    if (SOL_AVAILABLE && (generation.candidate_code || '').trim()) {
+      __hostMeasured = await __solExecbenchEvaluate({
+        label: `sol-eval-${iteration}-${sample}`, phase: 'Evaluate',
+        substrateDir: SOL_SUBSTRATE_DIR,
+        kernelSource: cudallmCandidatePath(iteration, sample),
+        candidateSource: generation.candidate_code,
+        contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
+        solutionOut: `${EXP_DIR}/cudallm_iter_${iteration}_sample_${sample}.solution.json`,
+        benchOut: `${EXP_DIR}/cudallm_iter_${iteration}_sample_${sample}.bench.jsonl`,
+        solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+        seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+        ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+        definitionPath: SOL_DEFINITION_PATH,
+      })
+      if (__hostMeasured) {
+        log(`Host-measured ${iteration}-${sample}: compiled=${__hostMeasured.compiled} `
+          + `correct=${__hostMeasured.correct} speedup=${__hostMeasured.speedup} `
+          + `workloads=${__hostMeasured.n_pass}/${__hostMeasured.n_total}`)
+      }
+    }
+    const __measuredBlock = __hostMeasured ? `
+
+# ALREADY MEASURED ON THE HOST - this is the evidence, use it verbatim
+compiled=${__hostMeasured.compiled} correct=${__hostMeasured.correct}
+speedup=${__hostMeasured.speedup} latency_ms=${__hostMeasured.latency_ms}
+workloads_passed=${__hostMeasured.n_pass}/${__hostMeasured.n_total}
+${__hostMeasured.failure_code ? `failure_code=${__hostMeasured.failure_code}` : ''}
+Rule 3 does not apply: the evidence exists. Report these numbers and base the
+reward on them. Still report any reward-hacking signs you see in the code.` : ''
+
     const evaluation = await agentRetry(() => agent(`Evaluate this ${langToken(LEGACY_EVAL_LANG_TOKEN)} candidate with compile, correctness, and latency evidence.
 
 # Candidate code
@@ -855,7 +891,7 @@ ${(generation.candidate_code || '').substring(0, 16000)}
 \`\`\`
 
 # Eval command
-${EVAL_CMD || '(no benchmark_command provided)'}
+${EVAL_CMD || '(no benchmark_command provided)'}${__measuredBlock}
 
 # Paths
 - kernel_path: ${cudallmCandidatePath(iteration, sample)}
