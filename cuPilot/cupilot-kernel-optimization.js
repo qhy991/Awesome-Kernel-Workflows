@@ -77,6 +77,18 @@ const SOL_ENV_PREFIX = args.sol_env_prefix || ''
 const SOL_DEFINITION_PATH = args.sol_definition_path || ''
 const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || ''
 const SOL_AVAILABLE = Boolean(SOL_CLI && SOL_TASK_DIR && SOL_SUBSTRATE_DIR)
+// pack_sol_candidate rejects a CUDA/C++ candidate that does not expose run()
+// through PYBIND11_MODULE.  Across tasks 001-003 that rejection accounted for
+// 112 wasted evaluations, all with the same message, and every workflow that hit
+// it lacked this sentence in its generation prompt.
+const SOL_CANDIDATE_CONTRACT = SOL_AVAILABLE ? `
+MANDATORY candidate shape: emit a COMPLETE, self-contained translation unit that
+compiles on its own. Read the seed kernel and keep its entry point and bindings
+intact - the same \`run(...)\` signature and the same
+\`PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)\` block - changing only the
+implementation. Emit every line: no "same as above", "unchanged", "rest
+byte-identical", or "..." standing in for code. The candidate is compiled and
+packed exactly as given.` : ''
 
 // __modelTierApplied (declaration pre-existing)
 
@@ -683,6 +695,7 @@ Then append (this is epoch ${epoch}, generation ${generation}):
     const translatedKernels = await parallel(
       newStrategies.slice(0, 5).map((strat, idx) => () =>
         agentRetry(() => agent(`You are the cuPilot Strategy Translator (Section 4.1).
+${SOL_CANDIDATE_CONTRACT}
 Apply this optimization strategy to produce an optimized CUDA kernel.
 
 # Base Kernel:
