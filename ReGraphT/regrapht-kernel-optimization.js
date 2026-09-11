@@ -78,6 +78,15 @@ const SOL_ENV_PREFIX = args.sol_env_prefix || ''
 const SOL_DEFINITION_PATH = args.sol_definition_path || ''
 const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || ''
 const SOL_AVAILABLE = Boolean(SOL_CLI && SOL_TASK_DIR && SOL_SUBSTRATE_DIR)
+// pack_sol_candidate requires a CUDA/C++ candidate to expose run() through
+// PYBIND11_MODULE and rejects anything else.  Stating this is what separates
+// workflows that pack reliably from ones that comply by luck.
+const SOL_CANDIDATE_CONTRACT = SOL_AVAILABLE ? `
+MANDATORY candidate shape: emit a COMPLETE, self-contained translation unit that
+compiles on its own. Keep the seed kernel's entry point and bindings intact - the
+same \`run(...)\` signature and the same \`PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)\`
+block - and change only the implementation. Emit every line: no "same as above",
+"unchanged", "rest byte-identical", or "..." standing in for code.` : ''
 
 // --- BEGIN model-tier (auto-inserted by scripts/patch-model-tier.js) ---
 // Tier-based model routing: mechanical steps (run substrate scripts, parse
@@ -838,7 +847,7 @@ ${setupResult.evaluator_contract}
 2. Produce complete compilable CUDA/C++ code, not a patch fragment.
 3. Preserve correctness according to the input/output contract.
 4. If a selected method is unsuitable, explain why and apply the next suitable method in the path.
-5. Do not claim speedup without evaluator evidence.
+5. Do not claim speedup without evaluator evidence.${SOL_CANDIDATE_CONTRACT}
 
 Return candidate code and suitability decisions for each method.
 
@@ -863,7 +872,44 @@ Then append (this is MCGS attempt ${attempt}):
 
   phase('Evaluate')
 
+  // "with real evidence" is exactly what a read-only activation cannot supply:
+  // it has no execution tool, so it can neither build nor time the candidate.
+  // Measure on the Host and hand the evidence over.
+  let __hostMeasured = null
+  if (SOL_AVAILABLE && (generation.candidate_code || '').trim()) {
+    __hostMeasured = await __solExecbenchEvaluate({
+      label: `sol-eval-${attempt}`, phase: 'Evaluate',
+      substrateDir: SOL_SUBSTRATE_DIR,
+      kernelSource: `${EXP_DIR}/regrapht_attempt_${attempt}.cu`,
+      candidateSource: generation.candidate_code,
+      contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
+      solutionOut: `${EXP_DIR}/regrapht_attempt_${attempt}.solution.json`,
+      benchOut: `${EXP_DIR}/regrapht_attempt_${attempt}.bench.jsonl`,
+      solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+      seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+      ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+      definitionPath: SOL_DEFINITION_PATH,
+    })
+    if (__hostMeasured) {
+      log(`Host-measured attempt ${attempt}: compiled=${__hostMeasured.compiled} `
+        + `correct=${__hostMeasured.correct} speedup=${__hostMeasured.speedup} `
+        + `workloads=${__hostMeasured.n_pass}/${__hostMeasured.n_total}`)
+    }
+  }
+  const __measuredBlock = __hostMeasured ? `
+
+# ALREADY MEASURED ON THE HOST - this is the real evidence, use it verbatim
+compiled=${__hostMeasured.compiled} correct=${__hostMeasured.correct}
+speedup=${__hostMeasured.speedup} latency_ms=${__hostMeasured.latency_ms}
+workloads_passed=${__hostMeasured.n_pass}/${__hostMeasured.n_total}
+${__hostMeasured.failure_code ? `failure_code=${__hostMeasured.failure_code}` : ''}
+${__hostMeasured.stderr ? `build/run output:\n${String(__hostMeasured.stderr).substring(0, 1500)}` : ''}
+Report these rather than re-deriving them, and use the output above to say why
+the graph rewrite did or did not pay off.` : ''
+
   const evaluation = await agentRetry(() => agent(`Evaluate the generated CUDA candidate with real evidence.
+
+${__measuredBlock}
 
 # Candidate code
 \`\`\`${fenceToken()}
