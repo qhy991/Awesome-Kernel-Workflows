@@ -736,8 +736,48 @@ Then append (epoch ${epoch}, generation ${generation}, strategy index ${idx}):
     phase('Revise')
 
     const revisedResults = await parallel(
-      translatedKernels.filter(Boolean).map((tk, idx) => () =>
-        agentRetry(() => agent(`You are the cuPilot Kernel Revisor (Section 4.1, Figure 2 right side).
+      translatedKernels.filter(Boolean).map((tk, idx) => async () => {
+        // The revision loop below is compile -> function -> profile -> fix, and the
+        // schema requires compiled, correct and speedup.  A read-only activation
+        // has no execution tool, so the agent cannot compile, cannot obtain a
+        // compiler error to fix, and cannot measure - yet speedup is required,
+        // which leaves inventing it as the only way to return.  Measure on the
+        // Host first so the revision reacts to a real build and a real number.
+        let __hostMeasured = null
+        if (SOL_AVAILABLE && (tk.kernel_code || '').trim()) {
+          __hostMeasured = await __solExecbenchEvaluate({
+            label: `sol-eval-e${epoch}-g${generation}-k${idx}`, phase: 'Revise',
+            substrateDir: SOL_SUBSTRATE_DIR,
+            kernelSource: `${EXP_DIR}/cupilot_e${epoch}_g${generation}_k${idx}.cu`,
+            candidateSource: tk.kernel_code,
+            contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
+            solutionOut: `${EXP_DIR}/cupilot_e${epoch}_g${generation}_k${idx}.solution.json`,
+            benchOut: `${EXP_DIR}/cupilot_e${epoch}_g${generation}_k${idx}.bench.jsonl`,
+            solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+            seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+            ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+            definitionPath: SOL_DEFINITION_PATH,
+          })
+          if (__hostMeasured) {
+            log(`Host-measured e${epoch}-g${generation}-k${idx}: `
+              + `compiled=${__hostMeasured.compiled} correct=${__hostMeasured.correct} `
+              + `speedup=${__hostMeasured.speedup} `
+              + `workloads=${__hostMeasured.n_pass}/${__hostMeasured.n_total}`)
+          }
+        }
+        const __measuredBlock = __hostMeasured ? `
+
+# ALREADY MEASURED ON THE HOST - use these numbers verbatim
+compiled=${__hostMeasured.compiled} correct=${__hostMeasured.correct}
+speedup=${__hostMeasured.speedup} latency_ms=${__hostMeasured.latency_ms}
+workloads_passed=${__hostMeasured.n_pass}/${__hostMeasured.n_total}
+${__hostMeasured.failure_code ? `failure_code=${__hostMeasured.failure_code}` : ''}
+${__hostMeasured.stderr ? `build/run output:\n${String(__hostMeasured.stderr).substring(0, 2000)}` : ''}
+Steps 1-3 already ran against the real toolchain. Report these numbers rather
+than re-deriving them, and spend the revision on the output above: if it did not
+compile, fix what the compiler actually said; if it is slower, explain why.` : ''
+
+        return agentRetry(() => agent(`You are the cuPilot Kernel Revisor (Section 4.1, Figure 2 right side).
 Validate and refine this kernel through the revision loop.
 
 # Kernel to Revise:
@@ -746,7 +786,7 @@ ${(tk.kernel_code || '').substring(0, 4000)}
 \`\`\`
 
 # Strategy Applied: ${newStrategies[idx]?.strategy || 'unknown'}
-# GPU: ${GPU_TARGET}
+# GPU: ${GPU_TARGET}${__measuredBlock}
 
 # Revision Loop (up to ${MAX_REVISE_LOOPS} iterations):
 
@@ -799,7 +839,7 @@ Then append, using the values you just measured (status="done" if compiled AND c
             required: ['kernel_code', 'compiled', 'correct', 'speedup'],
           },
         }), { retries: 5 })
-      )
+      })
     )
 
     // =========================================================================
