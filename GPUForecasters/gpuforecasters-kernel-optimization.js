@@ -98,6 +98,12 @@ const SOL_ENV_PREFIX = args.sol_env_prefix || ''
 const SOL_DEFINITION_PATH = args.sol_definition_path || ''
 const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || ''
 const SOL_AVAILABLE = Boolean(SOL_CLI && SOL_TASK_DIR && SOL_SUBSTRATE_DIR)
+// A handoff must not fail because a turn legally omitted an optional field.
+// __fmt renders a number that may be absent without throwing; the array forms
+// below use `|| []` so a missing list yields an empty render instead of ending
+// the run and taking every earlier result with it.
+const __fmt = (v, d = 2) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(d) : 'unreported')
+
 
 // __modelTierApplied
 // --- END model-tier ---
@@ -183,9 +189,9 @@ const ATTEMPT_PLAN = (args.attempt_plan && typeof args.attempt_plan === 'object'
 // KerSor emits the cumulative ids as `failed_strategy_ids`; the per-round
 // derivation stays as the fallback for a dispatch that predates that channel.
 const FAILED_STRATEGY_IDS = Array.isArray(args.failed_strategy_ids)
-  ? args.failed_strategy_ids.filter(id => typeof id === 'string' && id)
+  ? (args.failed_strategy_ids || []).filter(id => typeof id === 'string' && id)
   : ((ATTEMPT_EVIDENCE && Array.isArray(ATTEMPT_EVIDENCE.transfer_items))
-    ? ATTEMPT_EVIDENCE.transfer_items.filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
+    ? (ATTEMPT_EVIDENCE.transfer_items || []).filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
     : [])
 function __attemptBlock() {
   if (!ATTEMPT_EVIDENCE && !ATTEMPT_PLAN) return ''
@@ -703,7 +709,7 @@ Then append:
 
   log(`Optimizing ${setupResult.kernel_name} on ${setupResult.target_gpu}`);
   log(`Search space: ${setupResult.optimization_space.search_space_size} configurations`);
-  log(`Forecaster models: ${setupResult.forecaster_models.join(', ')}`);
+  log(`Forecaster models: ${(setupResult.forecaster_models || []).join(', ')}`);
 
   const trainingBudget = REQUESTED_TRAINING_BUDGET || setupResult.training_budget || 100;
   const puctExploration = REQUESTED_PUCT_C || setupResult.puct_exploration_constant || 1.0;
@@ -729,7 +735,7 @@ ${taskContract()}
 
 Target: ${setupResult.kernel_name}
 Training budget: ${trainingBudget} kernel executions
-Forecaster models: ${setupResult.forecaster_models.join(', ')}
+Forecaster models: ${(setupResult.forecaster_models || []).join(', ')}
 
 Training process:
 1. Sample initial configurations (random, LHS, Sobol)
@@ -838,7 +844,7 @@ Then append (best_training_speedup is a measured speedup from training evaluatio
 
   log(`Trained ${trainingResult.trained_models.length} forecaster models`);
   for (const model of trainingResult.trained_models) {
-    log(`  ${model.model_name}: MAE=${model.train_mae.toFixed(3)}, abstain=${(model.abstention_rate * 100).toFixed(1)}%`);
+    log(`  ${model.model_name}: MAE=${__fmt(model.train_mae, 3)}, abstain=${(model.abstention_rate * 100).toFixed(1)}%`);
   }
 
   // Update best from training
@@ -859,7 +865,7 @@ Then append (best_training_speedup is a measured speedup from training evaluatio
 
 ${taskContract()}
 
-Trained models: ${trainingResult.trained_models.map(m => m.model_name).join(', ')}
+Trained models: ${(trainingResult.trained_models || []).map(m => m.model_name).join(', ')}
 
 Calibration process:
 1. Collect uncertainty estimates on validation set
@@ -930,7 +936,7 @@ Then append:
     return { success: false, reason: 'calibration_failed' };
   }
 
-  log(`Ensemble calibrated: MAE=${calibrationResult.ensemble_mae.toFixed(3)}, coverage=${(calibrationResult.ensemble_coverage * 100).toFixed(1)}%`);
+  log(`Ensemble calibrated: MAE=${__fmt(calibrationResult.ensemble_mae, 3)}, coverage=${(calibrationResult.ensemble_coverage * 100).toFixed(1)}%`);
 
   // ============================================================================
   // Phase 4: PUCT Search
@@ -950,7 +956,7 @@ Search parameters:
 - Tree depth limit: ${treeDepthLimit}
 
 Forecaster ensemble:
-- Models: ${calibrationResult.calibrated_models.map(m => m.model_name).join(', ')}
+- Models: ${(calibrationResult.calibrated_models || []).map(m => m.model_name).join(', ')}
 - Ensemble strategy: ${calibrationResult.ensemble_strategy}
 - Abstention rate: ${(calibrationResult.ensemble_abstention_rate * 100).toFixed(1)}%
 
@@ -1053,7 +1059,7 @@ Then append (candidate_id is the best config found; best_speedup is the measured
   }
 
   log(`PUCT search complete: ${puctResult.total_executions} GPU executions (saved ${puctResult.abstention_saved_executions} via forecasters)`);
-  log(`Best speedup: ${puctResult.best_speedup.toFixed(3)}x`);
+  log(`Best speedup: ${__fmt(puctResult.best_speedup, 3)}x`);
 
   // Update best
   if (puctResult.best_speedup > bestSpeedup) {
@@ -1076,7 +1082,7 @@ Then append (candidate_id is the best config found; best_speedup is the measured
 ${taskContract()}
 
 Best config from PUCT: ${puctResult.best_config}
-Best speedup: ${puctResult.best_speedup.toFixed(3)}x
+Best speedup: ${__fmt(puctResult.best_speedup, 3)}x
 
 Refinement strategies:
 1. Local search around best config:
@@ -1135,7 +1141,7 @@ Then append (candidate_id is the best refined config; best_refined_speedup is th
     log('Refinement failed, using PUCT result');
   } else {
     log(`Refinement complete: ${refinementResult.refinement_executions} additional executions`);
-    log(`Best refined speedup: ${refinementResult.best_refined_speedup.toFixed(3)}x (${refinementResult.improvement_over_puct > 0 ? '+' : ''}${(refinementResult.improvement_over_puct * 100).toFixed(1)}%)`);
+    log(`Best refined speedup: ${__fmt(refinementResult.best_refined_speedup, 3)}x (${refinementResult.improvement_over_puct > 0 ? '+' : ''}${(refinementResult.improvement_over_puct * 100).toFixed(1)}%)`);
 
     // Update best
     if (refinementResult.best_refined_speedup > bestSpeedup) {
@@ -1157,7 +1163,7 @@ Then append (candidate_id is the best refined config; best_refined_speedup is th
 ${taskContract()}
 
 Best config: ${bestConfig}
-Best speedup: ${bestSpeedup.toFixed(3)}x
+Best speedup: ${__fmt(bestSpeedup, 3)}x
 
 Validation:
 1. Materialize the final candidate under ${EXP_DIR}/final/${EMBEDDED ? (INTEGRATION_DECISION.method === 'embedded_inplace'
@@ -1254,7 +1260,7 @@ Then append (status="done" if correctness passed AND validation passed, else "er
     };
   }
 
-  log(`Validation passed: ${validationResult.mean_speedup.toFixed(3)}x ± ${validationResult.std_speedup.toFixed(3)}x`);
+  log(`Validation passed: ${__fmt(validationResult.mean_speedup, 3)}x ± ${__fmt(validationResult.std_speedup, 3)}x`);
 
   // ============================================================================
   // Phase 7: Report
@@ -1276,12 +1282,12 @@ Summary:
 - Executions saved by forecasters: ${puctResult.abstention_saved_executions}
 
 Results:
-- Baseline: ${setupResult.baseline_perf.toFixed(3)} ms
-- Best speedup: ${validationResult.mean_speedup.toFixed(3)}x ± ${validationResult.std_speedup.toFixed(3)}x
+- Baseline: ${__fmt(setupResult.baseline_perf, 3)} ms
+- Best speedup: ${__fmt(validationResult.mean_speedup, 3)}x ± ${__fmt(validationResult.std_speedup, 3)}x
 - Best config: ${validationResult.config}
 
 Forecaster performance:
-${calibrationResult.calibrated_models.map(m => `  ${m.model_name}: MAE=${m.calibrated_mae.toFixed(3)}, coverage=${(m.coverage * 100).toFixed(1)}%`).join('\n')}
+${(calibrationResult.calibrated_models || []).map(m => `  ${m.model_name}: MAE=${__fmt(m.calibrated_mae, 3)}, coverage=${(m.coverage * 100).toFixed(1)}%`).join('\n')}
 
 Generate report with:
 1. Executive summary
@@ -1349,7 +1355,7 @@ Then append (speedup is the final best validated speedup number, or null if unav
     user_note_present: !!USER_NOTE,
     search_space_size: setupResult.optimization_space.search_space_size,
     training_budget: trainingResult.training_samples,
-    forecaster_models: trainingResult.trained_models.map(m => m.model_name),
+    forecaster_models: (trainingResult.trained_models || []).map(m => m.model_name),
     ensemble_mae: calibrationResult.ensemble_mae,
     ensemble_coverage: calibrationResult.ensemble_coverage,
     puct_simulations: puctResult.simulations,

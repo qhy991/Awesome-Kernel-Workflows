@@ -79,6 +79,12 @@ const SOL_ENV_PREFIX = args.sol_env_prefix || ''
 const SOL_DEFINITION_PATH = args.sol_definition_path || ''
 const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || ''
 const SOL_AVAILABLE = Boolean(SOL_CLI && SOL_TASK_DIR && SOL_SUBSTRATE_DIR)
+// A handoff must not fail because a turn legally omitted an optional field.
+// __fmt renders a number that may be absent without throwing; the array forms
+// below use `|| []` so a missing list yields an empty render instead of ending
+// the run and taking every earlier result with it.
+const __fmt = (v, d = 2) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(d) : 'unreported')
+
 // pack_sol_candidate requires a CUDA/C++ candidate to expose run() through
 // PYBIND11_MODULE and rejects anything else.  Stating it is what separates
 // workflows that pack reliably from ones that comply by luck.
@@ -169,9 +175,9 @@ const ATTEMPT_PLAN = (args.attempt_plan && typeof args.attempt_plan === 'object'
 // KerSor emits the cumulative ids as `failed_strategy_ids`; the per-round
 // derivation stays as the fallback for a dispatch that predates that channel.
 const FAILED_STRATEGY_IDS = Array.isArray(args.failed_strategy_ids)
-  ? args.failed_strategy_ids.filter(id => typeof id === 'string' && id)
+  ? (args.failed_strategy_ids || []).filter(id => typeof id === 'string' && id)
   : ((ATTEMPT_EVIDENCE && Array.isArray(ATTEMPT_EVIDENCE.transfer_items))
-    ? ATTEMPT_EVIDENCE.transfer_items.filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
+    ? (ATTEMPT_EVIDENCE.transfer_items || []).filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
     : [])
 function __attemptBlock() {
   if (!ATTEMPT_EVIDENCE && !ATTEMPT_PLAN) return ''
@@ -559,7 +565,7 @@ function buildPlanContext(nodeId, langFence) {
   for (const c of children) {
     ctx += `- ${c.id}: runtime=${c.runtime !== null ? c.runtime + 'ms' : 'N/A'}, correct=${c.correct}, compile=${c.compile_ok}\n`
     if (c.plan) {
-      ctx += `  Plan: ${c.plan.substring(0, 200)}...\n`
+      ctx += `  Plan: ${String(c.plan ?? '').substring(0, 200)}...\n`
     }
   }
 
@@ -582,12 +588,12 @@ function buildCodeContext(nodeId, langFence) {
   const fence = langFence || LEGACY_FENCE_TOKEN
 
   let ctx = `# Context Window for CODE Agent\n\n## Selected Node (id=${nodeId})\n`
-  ctx += `Selected kernel code:\n\`\`\`${fence}\n${node.kernel_code.substring(0, 2500)}\n\`\`\`\n`
+  ctx += `Selected kernel code:\n\`\`\`${fence}\n${String(node.kernel_code ?? '').substring(0, 2500)}\n\`\`\`\n`
 
   ctx += `\n## Children of Selected Node (${children.length})\n`
   for (const c of children) {
     if (c.correct && c.runtime !== null) {
-      ctx += `- ${c.id}: SUCCESS, ${c.runtime}ms. Code snippet:\n\`\`\`${fence}\n${c.kernel_code.substring(0, 800)}\n\`\`\`\n`
+      ctx += `- ${c.id}: SUCCESS, ${c.runtime}ms. Code snippet:\n\`\`\`${fence}\n${String(c.kernel_code ?? '').substring(0, 800)}\n\`\`\`\n`
     } else if (!c.compile_ok || !c.correct) {
       ctx += `- ${c.id}: FAILED — ${c.logs?.substring(0, 200) || 'unknown error'}\n`
     }
@@ -596,7 +602,7 @@ function buildCodeContext(nodeId, langFence) {
   ctx += `\n## Sibling Nodes (${siblings.length}) — Transferable patches\n`
   for (const s of siblings) {
     if (s.correct && s.runtime !== null) {
-      ctx += `- ${s.id}: ${s.runtime}ms. Key implementation:\n\`\`\`${fence}\n${s.kernel_code.substring(0, 600)}\n\`\`\`\n`
+      ctx += `- ${s.id}: ${s.runtime}ms. Key implementation:\n\`\`\`${fence}\n${String(s.kernel_code ?? '').substring(0, 600)}\n\`\`\`\n`
     }
   }
 
@@ -612,7 +618,7 @@ function buildDebugContext(nodeId, langFence) {
   const fence = langFence || LEGACY_FENCE_TOKEN
 
   let ctx = `# Context Window for DEBUG Agent\n\n## Failing Node (id=${nodeId})\n`
-  ctx += `Failing kernel code:\n\`\`\`${fence}\n${node.kernel_code.substring(0, 2500)}\n\`\`\`\n`
+  ctx += `Failing kernel code:\n\`\`\`${fence}\n${String(node.kernel_code ?? '').substring(0, 2500)}\n\`\`\`\n`
   ctx += `\n## Error Logs\n\`\`\`\n${(node.logs || '').substring(0, 2000)}\n\`\`\`\n`
   ctx += `\n## Original Plan (if any)\n${node.plan || 'No plan recorded'}\n`
   ctx += `\n## Anchors (if any)\n${node.anchors || 'No anchors recorded'}\n`
@@ -621,7 +627,7 @@ function buildDebugContext(nodeId, langFence) {
   for (const s of siblings) {
     ctx += `### ${s.id}\n`
     if (s.correct) {
-      ctx += `CORRECT — ${s.runtime}ms:\n\`\`\`${fence}\n${s.kernel_code.substring(0, 800)}\n\`\`\`\n`
+      ctx += `CORRECT — ${s.runtime}ms:\n\`\`\`${fence}\n${String(s.kernel_code ?? '').substring(0, 800)}\n\`\`\`\n`
     } else {
       ctx += `Also failing — ${s.logs?.substring(0, 200) || 'unknown'}\n`
     }
@@ -1050,8 +1056,8 @@ Then append:
 
     newPlan = planResult.plan
     newAnchors = JSON.stringify(planResult.anchors)
-    log(`Plan: ${planResult.plan.substring(0, 120)}...`)
-    log(`Anchors: ${planResult.anchors.map(a => a.name).join(', ')}`)
+    log(`Plan: ${String(planResult.plan ?? '').substring(0, 120)}...`)
+    log(`Anchors: ${(planResult.anchors || []).map(a => a.name).join(', ')}`)
 
     // =========================================================================
     // Phase 4: Code — Realize grounded instructions
@@ -1069,11 +1075,11 @@ Plan: ${planResult.plan}
 
 Anchored Scaffold:
 \`\`\`${fenceToken()}
-${planResult.anchored_scaffold.substring(0, 4000)}
+${String(planResult.anchored_scaffold ?? '').substring(0, 4000)}
 \`\`\`
 
 # Anchor Details
-${planResult.anchors.map(a => `- ${a.name} (lines ${a.begin_line}-${a.end_line}): ${a.description}`).join('\n')}
+${(planResult.anchors || []).map(a => `- ${a.name} (lines ${a.begin_line}-${a.end_line}): ${a.description}`).join('\n')}
 
 # Instructions
 1. Replace each <<<IMPROVE BEGINS/ENDS>>> anchor with concrete, correct ${langToken(LEGACY_CODE_LANG_TOKEN)} code
@@ -1339,7 +1345,7 @@ const report = await agentRetry(() => agent(`Generate a comprehensive optimizati
 
 # Best Kernel (id=${bestNode.id})
 \`\`\`${fenceToken()}
-${bestNode.kernel_code.substring(0, 4000)}
+${String(bestNode.kernel_code ?? '').substring(0, 4000)}
 \`\`\`
 
 # Plan for Best Kernel

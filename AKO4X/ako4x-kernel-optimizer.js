@@ -87,6 +87,12 @@ const SOL_ENV_PREFIX = args.sol_env_prefix || ''
 const SOL_DEFINITION_PATH = args.sol_definition_path || ''
 const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || ''
 const SOL_AVAILABLE = Boolean(SOL_CLI && SOL_TASK_DIR && SOL_SUBSTRATE_DIR)
+// A handoff must not fail because a turn legally omitted an optional field.
+// __fmt renders a number that may be absent without throwing; the array forms
+// below use `|| []` so a missing list yields an empty render instead of ending
+// the run and taking every earlier result with it.
+const __fmt = (v, d = 2) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(d) : 'unreported')
+
 
 // __modelTierApplied (declaration pre-existing)
 
@@ -162,9 +168,9 @@ const ATTEMPT_PLAN = (args.attempt_plan && typeof args.attempt_plan === 'object'
 // KerSor emits the cumulative ids as `failed_strategy_ids`; the per-round
 // derivation stays as the fallback for a dispatch that predates that channel.
 const FAILED_STRATEGY_IDS = Array.isArray(args.failed_strategy_ids)
-  ? args.failed_strategy_ids.filter(id => typeof id === 'string' && id)
+  ? (args.failed_strategy_ids || []).filter(id => typeof id === 'string' && id)
   : ((ATTEMPT_EVIDENCE && Array.isArray(ATTEMPT_EVIDENCE.transfer_items))
-    ? ATTEMPT_EVIDENCE.transfer_items.filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
+    ? (ATTEMPT_EVIDENCE.transfer_items || []).filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
     : [])
 function __attemptBlock() {
   if (!ATTEMPT_EVIDENCE && !ATTEMPT_PLAN) return ''
@@ -437,7 +443,7 @@ function ako4xIterKernelPath(round, iterCount) {
 // kernels — the orchestrator prefers best_kernel_path, AWK #59).
 function ako4xCandidatePath(round, plan, si) {
   const ext = USE_DRIVER ? (DRIVER_SOURCE_EXT || '.py') : '.py'
-  const slug = plan.title.substring(0, 20).replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()
+  const slug = String(plan.title ?? '').substring(0, 20).replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()
   return `${EXP_DIR}/variants/r${round + 1}-${slug}-v${si}/kernel${ext}`
 }
 
@@ -683,7 +689,7 @@ baselineKernelCode = setupResult.kernel_code
 bestKernelCode = baselineKernelCode
 bestKernelPath = KERNEL_PATH || null  // AWK #59: if optimizing an existing kernel file, the baseline path is authoritative
 
-log(`Kernel: ${setupResult.op_type} (${detectedLang}) | Functions: ${setupResult.key_functions.join(', ')}`)
+log(`Kernel: ${setupResult.op_type} (${detectedLang}) | Functions: ${(setupResult.key_functions || []).join(', ')}`)
 
 // Create workspace
 await agentRetry(() => agent(`Create the optimization workspace:
@@ -1032,8 +1038,8 @@ Return {variant_path: "${variantPath}", code: <complete kernel>, implementation_
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (this variant is round ${round + 1}, hypothesis "${plan.title}", sample ${si + 1}):
-{"workflow":"${WORKFLOW_NAME}","phase":"Iterate","ts":"<ts>","status":"done","candidate_id":"r${round + 1}-${plan.title.substring(0, 20).replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}-v${si}","technique":"<the specific transformation you applied for this hypothesis>","speedup":null,"note":"<what changed vs the parent kernel, one line>"}`, {
-          label: `impl-${round}-${plan.title.substring(0, 10)}-v${si}`,
+{"workflow":"${WORKFLOW_NAME}","phase":"Iterate","ts":"<ts>","status":"done","candidate_id":"r${round + 1}-${String(plan.title ?? '').substring(0, 20).replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}-v${si}","technique":"<the specific transformation you applied for this hypothesis>","speedup":null,"note":"<what changed vs the parent kernel, one line>"}`, {
+          label: `impl-${round}-${String(plan.title ?? '').substring(0, 10)}-v${si}`,
           phase: 'Iterate',
           model: MODEL.judgment,
           isolation: WORKTREE_ISOLATION ? 'worktree' : 'fresh-process',
@@ -1067,7 +1073,7 @@ Then append (this variant is round ${round + 1}, hypothesis "${plan.title}", sam
       if (iterCount >= ITERS_PER_ROUND) break
       iterCount++
 
-      const iterLabel = `r${round + 1}-iter${iterCount}-${plan.title.substring(0, 20).replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}`
+      const iterLabel = `r${round + 1}-iter${iterCount}-${String(plan.title ?? '').substring(0, 20).replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}`
 
       // --- Pre-commit Expected (AKO4X: write hypothesis BEFORE benching) ---
       const expectedNote = `Expected: ${plan.hypothesis}. Predicted: ${plan.expected_impact}. Risk: ${plan.risk}.`
@@ -1131,7 +1137,7 @@ ${impl.variant_path}
 
 # Kernel Code (orientation snippet):
 \`\`\`${fenceLang}
-${impl.code.substring(0, 4000)}
+${String(impl.code ?? '').substring(0, 4000)}
 \`\`\`
 
 # Smoke Test Command: ${smokeCmd}${__smokeBlock}
@@ -1181,7 +1187,7 @@ ${impl.variant_path}
 
 # Kernel Code (orientation snippet):
 \`\`\`${fenceLang}
-${impl.code.substring(0, 4000)}
+${String(impl.code ?? '').substring(0, 4000)}
 \`\`\`
 
 # Benchmark Command: ${BENCHMARK_CMD || 'static analysis only'}
@@ -1214,7 +1220,7 @@ Return benchmark results.`, {
       const speedup = baselineScore ? baselineScore / benchResult.score : benchResult.speedup || 1.0
       const passed = benchResult.passed_workloads || 'N/N'
 
-      log(`[${iterLabel}] Score: ${benchResult.score} | Speedup: ${speedup.toFixed(2)}x | Passed: ${passed}`)
+      log(`[${iterLabel}] Score: ${benchResult.score} | Speedup: ${__fmt(speedup, 2)}x | Passed: ${passed}`)
 
       // --- Per-attempt Layer-A driver envelope (standalone driver-path only; embedded uses project-native eval) ---
       if (USE_DRIVER_STANDALONE) {
@@ -1337,12 +1343,12 @@ Return benchmark results.`, {
             bestKernelCode = impl.code
             bestKernelPath = impl.variant_path  // AWK #59: path is authoritative; survives where the code string may truncate
             bestScore = benchResult.score
-            log(`[${iterLabel}] NEW ROUND BEST: ${speedup.toFixed(2)}x`)
+            log(`[${iterLabel}] NEW ROUND BEST: ${__fmt(speedup, 2)}x`)
           }
         }
       } else if (speedup < 1.0) {
         // Record regression as dead-end with WHY
-        deadEnds.push(`${plan.title} (${iterLabel}): ${speedup.toFixed(2)}x regression (WHY: ${plan.bottleneck} — transformation did not address the actual bottleneck or introduced new overhead)`)
+        deadEnds.push(`${plan.title} (${iterLabel}): ${__fmt(speedup, 2)}x regression (WHY: ${plan.bottleneck} — transformation did not address the actual bottleneck or introduced new overhead)`)
       }
     }
   }
@@ -1361,7 +1367,7 @@ Write to ${EXP_DIR}/round-logs/round-${round + 1}-iterations.md with format:
 ## Summary
 | Iter | Title | Score | Speedup | Passed | Notes |
 |------|-------|-------|---------|--------|-------|
-${roundIterations.map(it => `| ${it.iter} | ${it.title} | ${it.score || 'FAILED'} | ${it.speedup ? it.speedup.toFixed(2) + 'x' : '-'} | ${it.passed} | ${it.notes} |`).join('\n')}
+${roundIterations.map(it => `| ${it.iter} | ${it.title} | ${it.score || 'FAILED'} | ${it.speedup ? __fmt(it.speedup, 2) + 'x' : '-'} | ${it.passed} | ${it.notes} |`).join('\n')}
 
 ## Notes
 ${roundIterations.map(it => `- **${it.iter}**: ${it.expected}`).join('\n')}
@@ -1390,13 +1396,13 @@ Execute this step.`, {
     const silentSkipCheck = await agentRetry(() => agent(`Check this kernel variant for silent-skip patterns.
 
 # Variant: ${roundBest.iterLabel}
-# Score: ${roundBest.score} (${roundBest.speedup.toFixed(2)}x vs baseline)
+# Score: ${roundBest.score} (${__fmt(roundBest.speedup, 2)}x vs baseline)
 # Hypothesis: ${roundBest.plan.title}
 # Implementation: ${roundBest.notes || 'see kernel code'}
 
 # Kernel Code (excerpt):
 \`\`\`${fenceLang}
-${roundBest.code.substring(0, 3000)}
+${String(roundBest.code ?? '').substring(0, 3000)}
 \`\`\`
 
 # Check for silent-skip patterns:
@@ -1428,7 +1434,7 @@ Return verdict: is this a legitimate improvement or suspicious?`, {
 
 # Kernel Code:
 \`\`\`${fenceLang}
-${roundBest.code.substring(0, 5000)}
+${String(roundBest.code ?? '').substring(0, 5000)}
 \`\`\`
 
 # BANNED (must NOT appear as the core compute):
@@ -1471,12 +1477,12 @@ Return verdict.`, {
 
     if (shouldArchive) {
       // Archive variant with 5-section header (AKO4X lessons-convention.md)
-      const variantName = `iter-${round + 1}-${roundBest.plan.title.substring(0, 30).replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}`
+      const variantName = `iter-${round + 1}-${String(roundBest.plan.title ?? '').substring(0, 30).replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}`
 
       await agentRetry(() => agent(`Archive this kernel variant with a 5-section AKO4X header.
 
 # Variant: ${variantName}
-# Score: ${roundBest.score} (${roundBest.speedup.toFixed(2)}x vs baseline)
+# Score: ${roundBest.score} (${__fmt(roundBest.speedup, 2)}x vs baseline)
 # Parent: ${currentParentName}
 # Hypothesis: ${roundBest.plan.title}
 # Evidence: ${roundBest.plan.profile_evidence || roundBest.plan.ncu_evidence || roundBest.plan.bottleneck}
@@ -1487,7 +1493,7 @@ ${roundBest.variant_path}
 
 # Kernel Code (orientation snippet):
 \`\`\`${fenceLang}
-${roundBest.code.substring(0, 5000)}
+${String(roundBest.code ?? '').substring(0, 5000)}
 \`\`\`
 
 # Instructions:
@@ -1499,7 +1505,7 @@ ${roundBest.code.substring(0, 5000)}
 # ${variantName} — reference kernel.py header
 #
 # Identity
-#   ${roundBest.score} (${roundBest.speedup.toFixed(2)}x vs baseline) — Round ${round + 1}, iter ${roundBest.iterLabel}.
+#   ${roundBest.score} (${__fmt(roundBest.speedup, 2)}x vs baseline) — Round ${round + 1}, iter ${roundBest.iterLabel}.
 #   Language: ${detectedLang}, GPU: ${TARGET_GPU}
 #
 # Delta from ${currentParentName}
@@ -1533,7 +1539,7 @@ Execute these steps.
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
-Then append (this is the archived round-best variant; speedup is the measured ${roundBest.speedup.toFixed(2)}x vs baseline, hypothesis was "${roundBest.plan.title}"):
+Then append (this is the archived round-best variant; speedup is the measured ${__fmt(roundBest.speedup, 2)}x vs baseline, hypothesis was "${roundBest.plan.title}"):
 {"workflow":"${WORKFLOW_NAME}","phase":"Archive","ts":"<ts>","status":"done","candidate_id":"${roundBest.iterLabel}","technique":"<the winning transformation, from the hypothesis above>","speedup":${roundBest.speedup},"note":"<archived variant score ${roundBest.score}; one-line on why it won>"}`, {
         label: `archive-${variantName}`,
         phase: 'Archive',
@@ -1557,7 +1563,7 @@ Then append (this is the archived round-best variant; speedup is the measured ${
         await agentRetry(() => agent(`Update ${EXP_DIR}/TRAPS.md with new silent-skip patterns discovered this round.
 
 # New patterns to add:
-${silentSkipCheck.concerns.map((c, i) => `${i + 1}. ${c}`).join('\n')}
+${(silentSkipCheck.concerns || []).map((c, i) => `${i + 1}. ${c}`).join('\n')}
 
 Append these to the existing TRAPS.md file. Format each as:
 ## <pattern-name>
@@ -1639,7 +1645,7 @@ Execute this step.`, {
 
 # Session Summary:
 - Round: ${round + 1}
-- Best variant: ${roundBest.iterLabel} (${roundBest.speedup.toFixed(2)}x)
+- Best variant: ${roundBest.iterLabel} (${__fmt(roundBest.speedup, 2)}x)
 - Hypotheses tested: ${validPlans.length}
 - Iterations: ${iterCount}
 - Dead-ends discovered: ${deadEnds.length}
@@ -1758,7 +1764,7 @@ const finalReport = await agentRetry(() => agent(`Write a comprehensive optimiza
 - Experience: ${experienceMemory.length} patterns | Dead-ends: ${deadEnds.length} | Traps: ${traps.length}
 
 ## Round History
-${roundHistory.map(r => `- Round ${r.round}: ${r.variant} (${r.speedup.toFixed(2)}x, ${r.iter}) — ${r.hypothesis}`).join('\n')}
+${roundHistory.map(r => `- Round ${r.round}: ${r.variant} (${__fmt(r.speedup, 2)}x, ${r.iter}) — ${r.hypothesis}`).join('\n')}
 
 ## Learned Patterns (with two-layer WHEN)
 ${experienceMemory.map((e, i) => `${i + 1}. ${e}`).join('\n\n')}

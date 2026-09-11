@@ -126,6 +126,12 @@ const SOL_ENV_PREFIX = args.sol_env_prefix || ''
 const SOL_DEFINITION_PATH = args.sol_definition_path || ''
 const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || ''
 const SOL_AVAILABLE = Boolean(SOL_CLI && SOL_TASK_DIR && SOL_SUBSTRATE_DIR)
+// A handoff must not fail because a turn legally omitted an optional field.
+// __fmt renders a number that may be absent without throwing; the array forms
+// below use `|| []` so a missing list yields an empty render instead of ending
+// the run and taking every earlier result with it.
+const __fmt = (v, d = 2) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(d) : 'unreported')
+
 // pack_sol_candidate requires a CUDA/C++ candidate to expose run() through
 // PYBIND11_MODULE, and rejects anything else with "has no PYBIND11_MODULE
 // binding".  Workflows that state this produce packable candidates; those that
@@ -223,9 +229,9 @@ const ATTEMPT_PLAN = (args.attempt_plan && typeof args.attempt_plan === 'object'
 // KerSor emits the cumulative ids as `failed_strategy_ids`; the per-round
 // derivation stays as the fallback for a dispatch that predates that channel.
 const FAILED_STRATEGY_IDS = Array.isArray(args.failed_strategy_ids)
-  ? args.failed_strategy_ids.filter(id => typeof id === 'string' && id)
+  ? (args.failed_strategy_ids || []).filter(id => typeof id === 'string' && id)
   : ((ATTEMPT_EVIDENCE && Array.isArray(ATTEMPT_EVIDENCE.transfer_items))
-    ? ATTEMPT_EVIDENCE.transfer_items.filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
+    ? (ATTEMPT_EVIDENCE.transfer_items || []).filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
     : [])
 function __attemptBlock() {
   if (!ATTEMPT_EVIDENCE && !ATTEMPT_PLAN) return ''
@@ -666,7 +672,7 @@ Current situation:
 - Consecutive compile failures: ${consecutiveCompileFailures}
 - Consecutive correctness failures: ${consecutiveCorrectnessFailures}
 - Performance stagnation: ${isStagnant(performanceHistory, replanHeuristics.stagnation_iterations)}
-- Recent performance: ${performanceHistory.slice(-3).map(p => p.toFixed(2)).join(' → ')} GFLOPS
+- Recent performance: ${performanceHistory.slice(-3).map(p => __fmt(p, 2)).join(' → ')} GFLOPS
 
 Current plan summary:
 ${currentPlan?.plan_summary || 'No plan yet'}
@@ -736,13 +742,13 @@ Then append:
 Kernel specification:
 - Operation: ${kernelSpec.operation}
 - Shapes: ${kernelSpec.shapes}
-- Data types: ${kernelSpec.dtypes.join(', ')}
+- Data types: ${(kernelSpec.dtypes || []).join(', ')}
 - Target: ${setupResult.target_architecture}
 
 ${shouldReplan && attempt > 0 ? `
 Replanning context:
 - Previous failures: compile=${consecutiveCompileFailures}, correctness=${consecutiveCorrectnessFailures}
-- Performance history: ${performanceHistory.slice(-5).map(p => p.toFixed(2)).join(', ')} GFLOPS
+- Performance history: ${performanceHistory.slice(-5).map(p => __fmt(p, 2)).join(', ')} GFLOPS
 ` : ''}
 
 Planning strategy:
@@ -820,7 +826,7 @@ Then append:
 
     currentPlan = planResult;
     log(`Plan: ${planResult.plan_summary}`);
-    log(`Strategies: ${planResult.key_strategies.join(', ')}`);
+    log(`Strategies: ${(planResult.key_strategies || []).join(', ')}`);
 
     // ==========================================================================
     // Phase 3: Code (Coder Agent)
@@ -839,9 +845,9 @@ Code generation:
 1. Implement complete ${langToken(LEGACY_CODE_LANG_TOKEN)} kernel following the plan
 2. ${codeFormatHint()}
 3. Implement all steps from the plan:
-${currentPlan.implementation_steps.map((s, idx) => `   ${idx + 1}. ${s.description}`).join('\n')}
+${(currentPlan.implementation_steps || []).map((s, idx) => `   ${idx + 1}. ${s.description}`).join('\n')}
 4. Apply key optimizations:
-${currentPlan.key_strategies.map((s, idx) => `   - ${s}`).join('\n')}
+${(currentPlan.key_strategies || []).map((s, idx) => `   - ${s}`).join('\n')}
 5. Include host launch code
 ${SOL_CANDIDATE_CONTRACT}
 
@@ -1028,7 +1034,7 @@ Then append:
 
 Kernel to verify:
 \`\`\`${fenceToken()}
-${codeResult.kernel_code.substring(0, 2500)}${codeResult.kernel_code.length > 2500 ? '\n... (truncated)' : ''}
+${String(codeResult.kernel_code ?? '').substring(0, 2500)}${codeResult.kernel_code.length > 2500 ? '\n... (truncated)' : ''}
 \`\`\`
 
 Verification process:
@@ -1115,7 +1121,7 @@ Then append, using the values you just measured (status="done" if verification_p
     if (!verifyResult.compilation_success) {
       consecutiveCompileFailures++;
       consecutiveCorrectnessFailures = 0;
-      log(`Compilation failed: ${verifyResult.compilation_errors.join(', ')}`);
+      log(`Compilation failed: ${(verifyResult.compilation_errors || []).join(', ')}`);
       continue;
     } else {
       consecutiveCompileFailures = 0;
@@ -1123,7 +1129,7 @@ Then append, using the values you just measured (status="done" if verification_p
 
     if (!verifyResult.correctness_passed) {
       consecutiveCorrectnessFailures++;
-      log(`Correctness failed: ${verifyResult.correctness_errors.join(', ')}`);
+      log(`Correctness failed: ${(verifyResult.correctness_errors || []).join(', ')}`);
       continue;
     } else {
       consecutiveCorrectnessFailures = 0;
@@ -1135,8 +1141,8 @@ Then append, using the values you just measured (status="done" if verification_p
     // run. Only a number reaches performanceHistory, which .toFixed() later.
     const _vg = typeof verifyResult.performance_gflops === 'number' ? verifyResult.performance_gflops : null
     const _vs = typeof verifyResult.speedup_vs_baseline === 'number' ? verifyResult.speedup_vs_baseline : null
-    log(`Verification passed: ${_vg != null ? _vg.toFixed(2) + ' GFLOPS' : 'GFLOPS unreported'}`
-      + ` (${_vs != null ? _vs.toFixed(2) + 'x' : 'speedup unreported'})`);
+    log(`Verification passed: ${_vg != null ? __fmt(_vg, 2) + ' GFLOPS' : 'GFLOPS unreported'}`
+      + ` (${_vs != null ? __fmt(_vs, 2) + 'x' : 'speedup unreported'})`);
 
     if (_vg != null) performanceHistory.push(_vg);
 
@@ -1149,7 +1155,7 @@ Then append, using the values you just measured (status="done" if verification_p
         code: currentCode,
         verification: verifyResult,
       };
-      log(`New best kernel: ${bestPerformance.toFixed(2)} GFLOPS`);
+      log(`New best kernel: ${__fmt(bestPerformance, 2)} GFLOPS`);
     }
 
     // Early termination if very good performance achieved
@@ -1176,16 +1182,16 @@ Then append, using the values you just measured (status="done" if verification_p
 Orchestration summary:
 - Target: ${kernelSpec.operation} on ${setupResult.target_architecture}
 - Total attempts: ${performanceHistory.length} successful / ${maxAttempts} max
-- Best performance: ${Number.isFinite(bestPerformance) ? bestPerformance.toFixed(2) + ' GFLOPS' : 'unreported'}
-- Speedup: ${typeof bestKernel?.verification?.speedup_vs_baseline === 'number' ? bestKernel.verification.speedup_vs_baseline.toFixed(2) + 'x' : 'unreported'}
+- Best performance: ${Number.isFinite(bestPerformance) ? __fmt(bestPerformance, 2) + ' GFLOPS' : 'unreported'}
+- Speedup: ${typeof bestKernel?.verification?.speedup_vs_baseline === 'number' ? __fmt(bestKernel.verification.speedup_vs_baseline, 2) + 'x' : 'unreported'}
 - Best attempt: ${bestKernel.attempt}
 
 Best kernel plan:
 ${bestKernel.plan.plan_summary}
-Key strategies: ${bestKernel.plan.key_strategies.join(', ')}
+Key strategies: ${(bestKernel.plan.key_strategies || []).join(', ')}
 
 Performance trajectory:
-${performanceHistory.map((p, idx) => `  Attempt ${idx + 1}: ${p.toFixed(2)} GFLOPS`).join('\n')}
+${performanceHistory.map((p, idx) => `  Attempt ${idx + 1}: ${__fmt(p, 2)} GFLOPS`).join('\n')}
 
 Generate report with:
 1. Executive summary

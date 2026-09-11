@@ -40,6 +40,12 @@ const SUBSTRATE = args.substrate_dir || '_substrate'
 const PY = args.substrate_command_prefix || ''
 const BACKEND_MANIFEST = args.backend_manifest || `${SUBSTRATE}/backends/xpu/manifest.json`
 const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
+// A handoff must not fail because a turn legally omitted an optional field.
+// __fmt renders a possibly-absent number without throwing; the array forms use
+// `|| []` so a missing list renders empty instead of ending the run and taking
+// every earlier result with it.
+const __fmt = (v, d = 2) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(d) : 'unreported')
+
 function substrateInstruction(script, cliArgs) {
   const p = `${SUBSTRATE}/${script}`
   return PY ? `Run exactly: \`${PY} ${p} ${cliArgs}\`.`
@@ -113,9 +119,9 @@ const ATTEMPT_PLAN = (args.attempt_plan && typeof args.attempt_plan === 'object'
 // KerSor emits the cumulative ids as `failed_strategy_ids`; the per-round
 // derivation stays as the fallback for a dispatch that predates that channel.
 const FAILED_STRATEGY_IDS = Array.isArray(args.failed_strategy_ids)
-  ? args.failed_strategy_ids.filter(id => typeof id === 'string' && id)
+  ? (args.failed_strategy_ids || []).filter(id => typeof id === 'string' && id)
   : ((ATTEMPT_EVIDENCE && Array.isArray(ATTEMPT_EVIDENCE.transfer_items))
-    ? ATTEMPT_EVIDENCE.transfer_items.filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
+    ? (ATTEMPT_EVIDENCE.transfer_items || []).filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
     : [])
 function __attemptBlock() {
   if (!ATTEMPT_EVIDENCE && !ATTEMPT_PLAN) return ''
@@ -339,7 +345,7 @@ Then append:
 Kernel specification:
 - Operation: ${kernelSpec.operation}
 - Shapes: ${kernelSpec.shapes}
-- Data types: ${kernelSpec.dtypes.join(', ')}
+- Data types: ${(kernelSpec.dtypes || []).join(', ')}
 
 Backend: ${targetBackend}
 
@@ -418,12 +424,12 @@ Then append:
 Backend: ${targetBackend}
 Current kernel:
 \`\`\`${targetBackend}
-${currentImplementation.kernel_code.substring(0, 3000)}${currentImplementation.kernel_code.length > 3000 ? '\n... (truncated)' : ''}
+${String(currentImplementation.kernel_code ?? '').substring(0, 3000)}${currentImplementation.kernel_code.length > 3000 ? '\n... (truncated)' : ''}
 \`\`\`
 
 Profiling analysis:
 1. Execute kernel on Intel XPU
-2. Profile with available tools: ${setupResult.profiling_tools.join(', ')}
+2. Profile with available tools: ${(setupResult.profiling_tools || []).join(', ')}
 3. Measure metrics:
    - Execution time
    - GFLOPS achieved
@@ -484,7 +490,7 @@ Then append, using the values you just measured:
       break;
     }
 
-    log(`Performance: ${analysisResult.gflops.toFixed(2)} GFLOPS`);
+    log(`Performance: ${__fmt(analysisResult.gflops, 2)} GFLOPS`);
     log(`Bottleneck: ${analysisResult.bottleneck_type} - ${analysisResult.bottleneck_details}`);
 
     // Update best
@@ -509,12 +515,12 @@ Then append, using the values you just measured:
     const planResult = await agentRetry(() => agent(
       `Plan optimizations based on analysis (Cycle ${cycle + 1}):
 
-Current performance: ${analysisResult.gflops.toFixed(2)} GFLOPS
+Current performance: ${__fmt(analysisResult.gflops, 2)} GFLOPS
 Bottleneck: ${analysisResult.bottleneck_type}
 Details: ${analysisResult.bottleneck_details}
 
 Optimization opportunities:
-${analysisResult.optimization_opportunities.map((opp, idx) => `${idx + 1}. ${opp}`).join('\n')}
+${(analysisResult.optimization_opportunities || []).map((opp, idx) => `${idx + 1}. ${opp}`).join('\n')}
 
 Backend: ${targetBackend}
 
@@ -603,11 +609,11 @@ Then append:
 
 Current implementation:
 \`\`\`${targetBackend}
-${currentImplementation.kernel_code.substring(0, 2000)}...
+${String(currentImplementation.kernel_code ?? '').substring(0, 2000)}...
 \`\`\`
 
 Strategies to apply:
-${planResult.strategies.map((s, idx) => `${idx + 1}. ${s.name}: ${s.implementation_approach}`).join('\n')}
+${(planResult.strategies || []).map((s, idx) => `${idx + 1}. ${s.name}: ${s.implementation_approach}`).join('\n')}
 
 Generate optimized implementation:
 1. Apply each strategy incrementally
@@ -668,7 +674,7 @@ Then append:
 
 Optimized kernel:
 \`\`\`${targetBackend}
-${optimizeResult.optimized_kernel_code.substring(0, 2000)}...
+${String(optimizeResult.optimized_kernel_code ?? '').substring(0, 2000)}...
 \`\`\`
 
 Verification:
@@ -736,7 +742,7 @@ Then append, using the values you just measured (status="done" if correctness pa
       continue;
     }
 
-    log(`Verification passed: ${verifyResult.performance_gflops.toFixed(2)} GFLOPS (${verifyResult.performance_improvement > 0 ? '+' : ''}${(verifyResult.performance_improvement * 100).toFixed(1)}%)`);
+    log(`Verification passed: ${__fmt(verifyResult.performance_gflops, 2)} GFLOPS (${verifyResult.performance_improvement > 0 ? '+' : ''}${(verifyResult.performance_improvement * 100).toFixed(1)}%)`);
 
     // Update current implementation
     currentImplementation = {
@@ -761,7 +767,7 @@ Then append, using the values you just measured (status="done" if correctness pa
       const refineDecision = await agentRetry(() => agent(
         `Decide whether to continue CoVeR cycles (Cycle ${cycle + 1}):
 
-Current performance: ${verifyResult.performance_gflops.toFixed(2)} GFLOPS
+Current performance: ${__fmt(verifyResult.performance_gflops, 2)} GFLOPS
 Improvement this cycle: ${(verifyResult.performance_improvement * 100).toFixed(1)}%
 Remaining cycles: ${coverCycles - cycle - 1}
 
@@ -812,10 +818,10 @@ Backend: ${targetBackend}
 CoVeR cycles: ${optimizationHistory.length}
 
 Optimization trajectory:
-${optimizationHistory.map(h => `  Cycle ${h.cycle}: ${h.gflops.toFixed(2)} GFLOPS (${h.bottleneck})`).join('\n')}
+${optimizationHistory.map(h => `  Cycle ${h.cycle}: ${__fmt(h.gflops, 2)} GFLOPS (${h.bottleneck})`).join('\n')}
 
 Final results:
-- Best performance: ${bestPerformance.toFixed(2)} GFLOPS
+- Best performance: ${__fmt(bestPerformance, 2)} GFLOPS
 - Baseline: ${kernelSpec.baseline_gflops || 'N/A'} GFLOPS
 - Speedup: ${kernelSpec.baseline_gflops ? (bestPerformance / kernelSpec.baseline_gflops).toFixed(2) + 'x' : 'N/A'}
 

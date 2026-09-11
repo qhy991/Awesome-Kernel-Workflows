@@ -79,6 +79,12 @@ const SOL_ENV_PREFIX = args.sol_env_prefix || ''
 const SOL_DEFINITION_PATH = args.sol_definition_path || ''
 const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || ''
 const SOL_AVAILABLE = Boolean(SOL_CLI && SOL_TASK_DIR && SOL_SUBSTRATE_DIR)
+// A handoff must not fail because a turn legally omitted an optional field.
+// __fmt renders a number that may be absent without throwing; the array forms
+// below use `|| []` so a missing list yields an empty render instead of ending
+// the run and taking every earlier result with it.
+const __fmt = (v, d = 2) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(d) : 'unreported')
+
 // pack_sol_candidate requires a CUDA/C++ candidate to expose run() through
 // PYBIND11_MODULE and rejects anything else with "has no PYBIND11_MODULE
 // binding".  Workflows that state this produce packable candidates; those that
@@ -163,9 +169,9 @@ const ATTEMPT_PLAN = (args.attempt_plan && typeof args.attempt_plan === 'object'
 // KerSor emits the cumulative ids as `failed_strategy_ids`; the per-round
 // derivation stays as the fallback for a dispatch that predates that channel.
 const FAILED_STRATEGY_IDS = Array.isArray(args.failed_strategy_ids)
-  ? args.failed_strategy_ids.filter(id => typeof id === 'string' && id)
+  ? (args.failed_strategy_ids || []).filter(id => typeof id === 'string' && id)
   : ((ATTEMPT_EVIDENCE && Array.isArray(ATTEMPT_EVIDENCE.transfer_items))
-    ? ATTEMPT_EVIDENCE.transfer_items.filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
+    ? (ATTEMPT_EVIDENCE.transfer_items || []).filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
     : [])
 function __attemptBlock() {
   if (!ATTEMPT_EVIDENCE && !ATTEMPT_PLAN) return ''
@@ -771,7 +777,7 @@ for (let t = 1; t <= ITERATIONS; t++) {
 # Task: Re-cluster the candidate kernel pool using K-Means on behavioral features.
 
 # Candidate Pool (${candidatePool.length} kernels):
-${candidatePool.map((c, idx) => `Kernel ${c.id}: φ = [T̄=${c.features.normalized_time.toFixed(3)}, reg=${c.features.registers_per_thread}, smem=${c.features.shared_mem_bytes}, block=${c.features.block_dimension}, occ=${c.features.occupancy.toFixed(3)}] speedup=${c.speedup.toFixed(2)}x`).join('\n')}
+${candidatePool.map((c, idx) => `Kernel ${c.id}: φ = [T̄=${__fmt(c.features.normalized_time, 3)}, reg=${c.features.registers_per_thread}, smem=${c.features.shared_mem_bytes}, block=${c.features.block_dimension}, occ=${__fmt(c.features.occupancy, 3)}] speedup=${__fmt(c.speedup, 2)}x`).join('\n')}
 
 # Parameters:
 - K = ${NUM_CLUSTERS} clusters
@@ -823,7 +829,7 @@ Then append (this is bandit iteration ${t}):
     }), { retries: 5, allowNull: true })
 
     if (clusterResult?.clusters) {
-      clusters = clusterResult.clusters.map(c => ({
+      clusters = (clusterResult.clusters || []).map(c => ({
         id: c.id,
         centroid_features: c.centroid_features,
         centroid_hw: hwSignature,
@@ -950,7 +956,7 @@ Then append (this is bandit iteration ${t}):
     ? clusterMembers.reduce((best, c) => c.speedup > best.speedup ? c : best, clusterMembers[0])
     : candidatePool[0]
 
-  log(`Select: cluster=${selectedCluster}, strategy=${selectedStrategy}, kernel=${selectedKernel.id} (UCB=${bestUCB.toFixed(3)})`)
+  log(`Select: cluster=${selectedCluster}, strategy=${selectedStrategy}, kernel=${selectedKernel.id} (UCB=${__fmt(bestUCB, 3)})`)
 
   // ===========================================================================
   // Code Generation: LLM applies strategy to kernel (Section 3.1)
@@ -963,7 +969,7 @@ Then append (this is bandit iteration ${t}):
 # Target Hardware: ${GPU_TARGET}
 # Operation: ${OP_DESCRIPTION}
 
-# Source Kernel (ID ${selectedKernel.id}, current speedup: ${selectedKernel.speedup.toFixed(2)}x):
+# Source Kernel (ID ${selectedKernel.id}, current speedup: ${__fmt(selectedKernel.speedup, 2)}x):
 \`\`\`${fenceToken()}
 ${(selectedKernel.code || '').substring(0, 6000)}
 \`\`\`
@@ -1094,7 +1100,7 @@ ${generatedCode.substring(0, 6000)}
    ${NCU_CMD ? `Profile: ${NCU_CMD}` : ''}
 
 # Baseline latency: ${baselineLatency} μs${__measuredBlock}
-# Previous best: ${bestKernel.latency === Infinity ? 'N/A' : bestKernel.latency.toFixed(1) + ' μs (' + bestKernel.speedup.toFixed(2) + 'x)'}
+# Previous best: ${bestKernel.latency === Infinity ? 'N/A' : __fmt(bestKernel.latency, 1) + ' μs (' + __fmt(bestKernel.speedup, 2) + 'x)'}
 
 Return evaluation results.
 
@@ -1277,7 +1283,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
     // Update best
     if (newLatency < bestKernel.latency) {
       bestKernel = { code: generatedCode, latency: newLatency, speedup: baselineLatency / newLatency }
-      log(`  NEW BEST: ${newLatency.toFixed(1)}μs (${bestKernel.speedup.toFixed(2)}x) via ${selectedStrategy}`)
+      log(`  NEW BEST: ${__fmt(newLatency, 1)}μs (${__fmt(bestKernel.speedup, 2)}x) via ${selectedStrategy}`)
     }
   }
 
@@ -1288,14 +1294,14 @@ Then append, using the values you just measured (status="done" if it compiled AN
     kernel_id: selectedKernel.id,
     compiled,
     correct,
-    reward: reward.toFixed(4),
+    reward: __fmt(reward, 4),
     latency: newLatency,
     speedup: compiled && correct ? (baselineLatency / newLatency).toFixed(2) : '0',
-    cumulative_reward: totalReward.toFixed(3),
+    cumulative_reward: __fmt(totalReward, 3),
   })
 
   const statusEmoji = compiled && correct ? (reward > 0 ? '↑' : '→') : '✗'
-  log(`  ${statusEmoji} t=${t}: ${selectedStrategy}@C${selectedCluster} → ${compiled && correct ? newLatency.toFixed(1) + 'μs (' + (baselineLatency / newLatency).toFixed(2) + 'x)' : 'FAIL'} r=${reward.toFixed(3)} Σr=${totalReward.toFixed(2)}`)
+  log(`  ${statusEmoji} t=${t}: ${selectedStrategy}@C${selectedCluster} → ${compiled && correct ? __fmt(newLatency, 1) + 'μs (' + (baselineLatency / newLatency).toFixed(2) + 'x)' : 'FAIL'} r=${__fmt(reward, 3)} Σr=${__fmt(totalReward, 2)}`)
 }
 
 // =============================================================================
@@ -1328,19 +1334,19 @@ const finalReport = await agentRetry(() => agent(`Write a KernelBand optimizatio
 
 # Performance
 - Baseline: ${baselineLatency} μs
-- Best: ${bestKernel.latency === Infinity ? 'No improvement' : bestKernel.latency.toFixed(1) + ' μs'}
-- Best Speedup: ${bestKernel.speedup.toFixed(2)}x
-- Cumulative Reward: ${totalReward.toFixed(3)}
+- Best: ${bestKernel.latency === Infinity ? 'No improvement' : __fmt(bestKernel.latency, 1) + ' μs'}
+- Best Speedup: ${__fmt(bestKernel.speedup, 2)}x
+- Cumulative Reward: ${__fmt(totalReward, 3)}
 - Candidate Pool Size: ${candidatePool.length}
 
 # Strategy Statistics:
 ${STRATEGIES.map(s => {
   const st = strategyStats[s]
-  return `- ${s}: ${st.attempts} attempts, ${st.successes} successes, avg_reward=${st.avg_reward.toFixed(3)}`
+  return `- ${s}: ${st.attempts} attempts, ${st.successes} successes, avg_reward=${__fmt(st.avg_reward, 3)}`
 }).join('\n')}
 
 # Bandit State (final μ̂ and N):
-${Object.entries(banditStats).map(([k, v]) => `  ${k}: μ̂=${v.mean_reward.toFixed(3)}, N=${v.count}, mask=${v.mask}`).join('\n')}
+${Object.entries(banditStats).map(([k, v]) => `  ${k}: μ̂=${__fmt(v.mean_reward, 3)}, N=${v.count}, mask=${v.mask}`).join('\n')}
 
 # Iteration Log (last 10):
 ${iterationLog.slice(-10).map(e => `  t=${e.t}: ${e.strategy}@C${e.cluster} → ${e.speedup}x (r=${e.reward})`).join('\n')}
@@ -1354,7 +1360,7 @@ Analyze:
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
-Then append, using the final results above (speedup is the best speedup ${bestKernel.speedup.toFixed(2)} as a number, or null if no improvement):
+Then append, using the final results above (speedup is the best speedup ${__fmt(bestKernel.speedup, 2)} as a number, or null if no improvement):
 {"workflow":"${WORKFLOW_NAME}","phase":"Report","ts":"<ts>","status":"done","technique":"<the winning strategy>","speedup":<number or null>,"note":"<best latency us + which strategy won + cumulative reward, one line>"}`, {
   label: 'report',
   phase: 'Report',

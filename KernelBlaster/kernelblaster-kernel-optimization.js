@@ -192,9 +192,9 @@ const ATTEMPT_PLAN = (args.attempt_plan && typeof args.attempt_plan === 'object'
 // KerSor emits the cumulative ids as `failed_strategy_ids`; the per-round
 // derivation stays as the fallback for a dispatch that predates that channel.
 const FAILED_STRATEGY_IDS = Array.isArray(args.failed_strategy_ids)
-  ? args.failed_strategy_ids.filter(id => typeof id === 'string' && id)
+  ? (args.failed_strategy_ids || []).filter(id => typeof id === 'string' && id)
   : ((ATTEMPT_EVIDENCE && Array.isArray(ATTEMPT_EVIDENCE.transfer_items))
-    ? ATTEMPT_EVIDENCE.transfer_items.filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
+    ? (ATTEMPT_EVIDENCE.transfer_items || []).filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
     : [])
 function __attemptBlock() {
   if (!ATTEMPT_EVIDENCE && !ATTEMPT_PLAN) return ''
@@ -554,8 +554,8 @@ function dbSummaryForPrompt(db) {
     const ranked = rankOptimizations(entry).slice(0, 5)
     lines.push(`## State: ${stateName} (${db.known_states[stateName] ? db.known_states[stateName].primary_bottleneck : 'unknown'})`)
     for (const o of ranked) {
-      const measured = (o.actual_speedup !== null && o.actual_speedup !== undefined) ? `${o.actual_speedup.toFixed(2)}x measured` : 'unmeasured'
-      lines.push(`- ${o.technique} (conf ${o.confidence_score.toFixed(2)}, used ${o.usage_count}x, ${measured}): ${o.description}`)
+      const measured = (o.actual_speedup !== null && o.actual_speedup !== undefined) ? `${__fmt(o.actual_speedup, 2)}x measured` : 'unmeasured'
+      lines.push(`- ${o.technique} (conf ${__fmt(o.confidence_score, 2)}, used ${o.usage_count}x, ${measured}): ${o.description}`)
     }
   }
   return lines.join('\n')
@@ -564,6 +564,12 @@ function dbSummaryForPrompt(db) {
 // =============================================================================
 // Phase 1: Setup — read kernel + driver, load/seed DB, NCU-profile baseline
 // =============================================================================
+// A handoff must not fail because a turn legally omitted an optional field.
+// __fmt renders a number that may be absent without throwing; the array forms
+// below use `|| []` so a missing list yields an empty render instead of ending
+// the run and taking every earlier result with it.
+const __fmt = (v, d = 2) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(d) : 'unreported')
+
 phase('Setup')
 
 if (INPUT_MODE === 'generate_then_optimize') {
@@ -654,7 +660,7 @@ if (setupResult.loaded_db && setupResult.loaded_db.optimization_strategies) {
   log(`Seeded fresh optimization DB (3 states, ${Object.values(optDb.optimization_strategies).reduce((n, e) => n + e.optimizations.length, 0)} strategies)`)
 }
 
-log(`Baseline: ${opType}, kernels: ${setupResult.key_functions.join(', ')}`)
+log(`Baseline: ${opType}, kernels: ${(setupResult.key_functions || []).join(', ')}`)
 
 // --- profiling-strategist: pick the analysis METHOD per backend×task×host, then
 // honor it below. The agent only classifies the task (fuzzy op_class/size); the
@@ -790,7 +796,7 @@ Profiling-strategist selected method='${PROFILING_DECISION.method}', confidence=
 
 baselineCycles = ncuBaseline.elapsed_cycles
 bestCycles = baselineCycles
-log(`Baseline Elapsed Cycles: ${baselineCycles} | ${ncuBaseline.profile_summary.substring(0, 120)}`)
+log(`Baseline Elapsed Cycles: ${baselineCycles} | ${String(ncuBaseline.profile_summary ?? '').substring(0, 120)}`)
 
 // =============================================================================
 // RL Rollouts — each rollout is a multi-step optimization trajectory.
@@ -859,7 +865,7 @@ Then append (rollout ${iter}, step ${step}):
     }), { retries: 5 })
 
     const currentState = optDb.optimization_strategies[stateResult.state_name] ? stateResult.state_name : 'latency_occupancy_limited'
-    log(`Step ${step + 1}: state=${currentState} | ${stateResult.evidence.substring(0, 90)}`)
+    log(`Step ${step + 1}: state=${currentState} | ${String(stateResult.evidence ?? '').substring(0, 90)}`)
 
     // -------------------------------------------------------------------------
     // Phase 3: Retrieve — rank candidate optimizations for the matched state
@@ -888,7 +894,7 @@ Then append (rollout ${iter}, step ${step}):
 # Performance state: ${currentState}
 # Retrieved strategy: ${cand.technique}
   ${cand.description}
-  DB stats: confidence=${cand.confidence_score.toFixed(2)}, usage=${cand.usage_count}, ${cand.actual_speedup ? `measured ${cand.actual_speedup.toFixed(2)}x` : 'unmeasured'}
+  DB stats: confidence=${__fmt(cand.confidence_score, 2)}, usage=${cand.usage_count}, ${cand.actual_speedup ? `measured ${__fmt(cand.actual_speedup, 2)}x` : 'unmeasured'}
 
 # NCU evidence
 ${stateResult.evidence}
@@ -911,7 +917,7 @@ Produce a plan that:
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (rollout ${iter}, step ${step}):
 {"workflow":"${WORKFLOW_NAME}","phase":"Plan","ts":"<ts>","status":"done","candidate_id":"r${iter}-s${step}-${cand.technique}","technique":"${cand.technique}","speedup":null,"note":"<the code region + transformation planned and the predicted_improvement, one line>"}`, {
-          label: `plan-${iter}-${step}-${cand.technique.substring(0, 12)}`,
+          label: `plan-${iter}-${step}-${String(cand.technique ?? '').substring(0, 12)}`,
           phase: 'Plan',
           schema: {
             type: 'object',
@@ -964,7 +970,7 @@ Return the complete CUDA code.
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append (rollout ${iter}, step ${step}):
 {"workflow":"${WORKFLOW_NAME}","phase":"Execute","ts":"<ts>","status":"done","candidate_id":"r${iter}-s${step}-${plan.technique}","technique":"${plan.technique}","speedup":null,"note":"<what changed in the kernel to apply this strategy, one line>"}`, {
-          label: `impl-${iter}-${step}-${plan.technique.substring(0, 12)}`,
+          label: `impl-${iter}-${step}-${String(plan.technique ?? '').substring(0, 12)}`,
           phase: 'Execute',
           schema: {
             type: 'object',
@@ -1126,7 +1132,7 @@ Then append (rollout ${iter}, step ${step}):
 
 # Kernel:
 \`\`\`cuda
-${v.code.substring(0, 4000)}
+${String(v.code ?? '').substring(0, 4000)}
 \`\`\`
 
 Steps:
@@ -1142,7 +1148,7 @@ Return the evaluation.
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
 Then append, using the values you just measured (status="done" if correct AND compilable, else "error"; speedup is the measured number, or null if no profiler/test evidence was available):
 {"workflow":"${WORKFLOW_NAME}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"r${iter}-s${step}-${v.technique}","technique":"${v.technique}","speedup":<number or null>,"note":"<compiled? correct? elapsed_cycles + improvement_pct; or the failure reason>"}`, {
-          label: `eval-${iter}-${step}-${v.technique.substring(0, 12)}`,
+          label: `eval-${iter}-${step}-${String(v.technique ?? '').substring(0, 12)}`,
           phase: 'Evaluate',
           schema: {
             type: 'object',
@@ -1210,7 +1216,7 @@ Then append, using the values you just measured (status="done" if correct AND co
 
     usedThisRollout.add(bestStep.variant.technique)
     updateOptimizationResult(optDb.optimization_strategies[currentState], bestStep.variant.technique, actualImprovement, actualSpeedup)
-    dbUpdateLog.push(`[${currentState}] ${bestStep.variant.technique}: ${actualImprovement.toFixed(1)}% (reward ${reward.toFixed(2)})`)
+    dbUpdateLog.push(`[${currentState}] ${bestStep.variant.technique}: ${__fmt(actualImprovement, 1)}% (reward ${__fmt(reward, 2)})`)
 
     trajectory.steps.push({
       state: currentState,
@@ -1223,7 +1229,7 @@ Then append, using the values you just measured (status="done" if correct AND co
     trajectory.total_reward += reward
     trajectory.final_cycles = newCycles
 
-    log(`Step ${step + 1}: ${bestStep.variant.technique} -> ${actualImprovement.toFixed(1)}% (${actualSpeedup.toFixed(2)}x), reward ${reward.toFixed(2)}`)
+    log(`Step ${step + 1}: ${bestStep.variant.technique} -> ${__fmt(actualImprovement, 1)}% (${__fmt(actualSpeedup, 2)}x), reward ${__fmt(reward, 2)}`)
 
     // Adopt improvement as the new current code for the next step.
     if (isFaster) {
@@ -1236,7 +1242,7 @@ Then append, using the values you just measured (status="done" if correct AND co
       }
     } else if (actualImprovement < -25) {
       // Severe degradation: stop the rollout (matches the paper's early stop).
-      log(`  Severe degradation (${actualImprovement.toFixed(1)}%); stopping rollout.`)
+      log(`  Severe degradation (${__fmt(actualImprovement, 1)}%); stopping rollout.`)
       break
     }
   }
@@ -1312,10 +1318,10 @@ Then append (after rollout ${iter}):
       opt.confidence_score = Math.max(0.05, Math.min(1.0, (opt.confidence_score || 0.5) + delta))
       applied += 1
     }
-    log(`Policy-update cycle: applied ${applied} confidence adjustments. ${policyUpdate.analysis.substring(0, 100)}`)
+    log(`Policy-update cycle: applied ${applied} confidence adjustments. ${String(policyUpdate.analysis ?? '').substring(0, 100)}`)
   }
 
-  log(`Rollout ${iter + 1} done. Trajectory reward: ${trajectory.total_reward.toFixed(2)}, ${trajectory.steps.length} steps.`)
+  log(`Rollout ${iter + 1} done. Trajectory reward: ${__fmt(trajectory.total_reward, 2)}, ${trajectory.steps.length} steps.`)
 }
 
 // =============================================================================
@@ -1357,7 +1363,7 @@ const finalReport = await agentRetry(() => agent(`Write a concise technical repo
 - Best Elapsed Cycles: ${bestCycles}
 - Overall speedup: ${(baselineCycles / bestCycles).toFixed(2)}x
 - RL rollouts: ${RL_ITERATIONS}, trajectories: ${replayBuffer.length}
-- Replay buffer: avg reward ${bufferStats.avg_reward.toFixed(2)}, success rate ${(bufferStats.success_rate * 100).toFixed(0)}%
+- Replay buffer: avg reward ${__fmt(bufferStats.avg_reward, 2)}, success rate ${(bufferStats.success_rate * 100).toFixed(0)}%
 
 # Knowledge-base mutations (chronological)
 ${dbUpdateLog.map((l, i) => `${i + 1}. ${l}`).join('\n') || '(none)'}

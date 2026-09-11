@@ -88,6 +88,12 @@ const SOL_ENV_PREFIX = args.sol_env_prefix || ''
 const SOL_DEFINITION_PATH = args.sol_definition_path || ''
 const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || ''
 const SOL_AVAILABLE = Boolean(SOL_CLI && SOL_TASK_DIR && SOL_SUBSTRATE_DIR)
+// A handoff must not fail because a turn legally omitted an optional field.
+// __fmt renders a number that may be absent without throwing; the array forms
+// below use `|| []` so a missing list yields an empty render instead of ending
+// the run and taking every earlier result with it.
+const __fmt = (v, d = 2) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(d) : 'unreported')
+
 
 // __modelTierApplied
 // --- END model-tier ---
@@ -174,9 +180,9 @@ const ATTEMPT_PLAN = (args.attempt_plan && typeof args.attempt_plan === 'object'
 // KerSor emits the cumulative ids as `failed_strategy_ids`; the per-round
 // derivation stays as the fallback for a dispatch that predates that channel.
 const FAILED_STRATEGY_IDS = Array.isArray(args.failed_strategy_ids)
-  ? args.failed_strategy_ids.filter(id => typeof id === 'string' && id)
+  ? (args.failed_strategy_ids || []).filter(id => typeof id === 'string' && id)
   : ((ATTEMPT_EVIDENCE && Array.isArray(ATTEMPT_EVIDENCE.transfer_items))
-    ? ATTEMPT_EVIDENCE.transfer_items.filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
+    ? (ATTEMPT_EVIDENCE.transfer_items || []).filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
     : [])
 function __attemptBlock() {
   if (!ATTEMPT_EVIDENCE && !ATTEMPT_PLAN) return ''
@@ -447,7 +453,7 @@ Then append:
   // must NOT assign confidence. Default keeps the happy path unchanged if the
   // decision is ignored. Useful for the ablation stage; does not disturb the
   // discover/realize/compose loop. ---
-  const _pd = await agentRetry(() => agent(`Classify the GEMM problem SIZE for the profiling strategist (the task is fixed to 'gemm'; you classify size only — one of tiny|small|large — based on the target operation ${kernelSpec.operation}, shapes ${kernelSpec.shapes}, and dtypes ${kernelSpec.dtypes.join(', ')}).
+  const _pd = await agentRetry(() => agent(`Classify the GEMM problem SIZE for the profiling strategist (the task is fixed to 'gemm'; you classify size only — one of tiny|small|large — based on the target operation ${kernelSpec.operation}, shapes ${kernelSpec.shapes}, and dtypes ${(kernelSpec.dtypes || []).join(', ')}).
 Then run exactly: \`${SUBSTRATE_PY} ${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${STRATEGIST_MANIFEST} --task gemm --size <tiny|small|large> --cache ${args.exp_dir}/prof_cache.json --trajectory ${args.exp_dir}/genome.jsonl\`
 Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}. Do NOT assign confidence yourself — the substrate stamps it.`, {
     model: MODEL.mechanical,
@@ -551,7 +557,7 @@ Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, 
 
 Target operation: ${kernelSpec.operation}
 Target architecture: ${setupResult.target_architecture}
-Exemplar kernels: ${setupResult.exemplar_kernels.join(', ')}
+Exemplar kernels: ${(setupResult.exemplar_kernels || []).join(', ')}
 Discovery depth: ${discoveryDepth}
 
 Pattern discovery process:
@@ -650,7 +656,7 @@ Then append:
 
 Target: ${kernelSpec.operation}
 Architecture: ${setupResult.target_architecture}
-Data types: ${kernelSpec.dtypes.join(', ')}
+Data types: ${(kernelSpec.dtypes || []).join(', ')}
 
 Patterns to realize:
 ${discoveredPatterns.map((p, idx) => `${idx + 1}. ${p.pattern_name}: ${p.description}`).join('\n')}
@@ -763,7 +769,7 @@ Emit every line of every candidate. Do NOT describe a candidate as a delta again
 Target specification:
 - Operation: ${kernelSpec.operation}
 - Shapes: ${kernelSpec.shapes}
-- Data types: ${kernelSpec.dtypes.join(', ')}
+- Data types: ${(kernelSpec.dtypes || []).join(', ')}
 - Architecture: ${setupResult.target_architecture}
 
 Available patterns: ${realizedPatterns.length}
@@ -1138,7 +1144,7 @@ Then append, using the values you just measured (status="done" if the best kerne
   // with "Cannot read properties of null (reading 'toFixed')" after 1.0M tokens,
   // losing everything the run had already learned.
   const _bestGflops = Number(evaluationResult?.best_kernel?.gflops)
-  const _bestGflopsText = Number.isFinite(_bestGflops) ? _bestGflops.toFixed(2) : 'unmeasured'
+  const _bestGflopsText = Number.isFinite(_bestGflops) ? __fmt(_bestGflops, 2) : 'unmeasured'
   log(`Best: ${_bestGflopsText} GFLOPS (${evaluationResult?.best_kernel?.speedup_vs_baseline ?? 'unknown'}x speedup)`);
 
   // ============================================================================

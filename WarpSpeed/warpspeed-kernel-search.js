@@ -120,9 +120,9 @@ const ATTEMPT_PLAN = (args.attempt_plan && typeof args.attempt_plan === 'object'
 // KerSor emits the cumulative ids as `failed_strategy_ids`; the per-round
 // derivation stays as the fallback for a dispatch that predates that channel.
 const FAILED_STRATEGY_IDS = Array.isArray(args.failed_strategy_ids)
-  ? args.failed_strategy_ids.filter(id => typeof id === 'string' && id)
+  ? (args.failed_strategy_ids || []).filter(id => typeof id === 'string' && id)
   : ((ATTEMPT_EVIDENCE && Array.isArray(ATTEMPT_EVIDENCE.transfer_items))
-    ? ATTEMPT_EVIDENCE.transfer_items.filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
+    ? (ATTEMPT_EVIDENCE.transfer_items || []).filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
     : [])
 function __attemptBlock() {
   if (!ATTEMPT_EVIDENCE && !ATTEMPT_PLAN) return ''
@@ -356,13 +356,21 @@ const REVIEWER_CMD_ARG = args.reviewer_cmd || ''
 const BENCH_SHAPE = args.bench_shape || 'default'
 const OP_DESC = args.op_description || ''
 const SINGLE_SPEC_RAW = Object.prototype.hasOwnProperty.call(args, 'single_spec_json') ? args.single_spec_json : null
-const SINGLE_SPEC = SINGLE_SPEC_RAW
-  ? (typeof SINGLE_SPEC_RAW === 'string' ? JSON.parse(SINGLE_SPEC_RAW) : SINGLE_SPEC_RAW)
-  : null
+const __parseArg = (name, raw) => {
+  if (typeof raw !== 'string') return raw
+  try {
+    return JSON.parse(raw)
+  } catch (e) {
+    // A malformed spec cannot be reconstructed, so this still fails - but a bare
+    // SyntaxError named neither the argument nor its text, which left the caller
+    // nothing to correct. Carry both into the message.
+    throw new Error(`args.${name} is not valid JSON (${e.message}); received: `
+      + `${raw.length > 400 ? raw.slice(0, 400) + '...' : raw}`)
+  }
+}
+const SINGLE_SPEC = SINGLE_SPEC_RAW ? __parseArg('single_spec_json', SINGLE_SPEC_RAW) : null
 const CONFIG_OVERRIDES_RAW = Object.prototype.hasOwnProperty.call(args, 'config_overrides') ? args.config_overrides : null
-const CONFIG_OVERRIDES = CONFIG_OVERRIDES_RAW
-  ? (typeof CONFIG_OVERRIDES_RAW === 'string' ? JSON.parse(CONFIG_OVERRIDES_RAW) : CONFIG_OVERRIDES_RAW)
-  : {}
+const CONFIG_OVERRIDES = CONFIG_OVERRIDES_RAW ? __parseArg('config_overrides', CONFIG_OVERRIDES_RAW) : {}
 
 // --- Project-native integration args (embedded inference-engine operators, e.g.
 // llama.cpp .cuh). ADDITIVE: when the integration-strategist routes to standalone
@@ -750,6 +758,12 @@ const REPORT_SCHEMA = withGroundingFields({
 // =============================================================================
 // Phase: Init
 // =============================================================================
+
+// A handoff must not fail because a turn legally omitted an optional field.
+// __fmt renders a number that may be absent without throwing; the array forms
+// below use `|| []` so a missing list yields an empty render instead of ending
+// the run and taking every earlier result with it.
+const __fmt = (v, d = 2) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(d) : 'unreported')
 
 phase('Init'); await __genomeReport('Init', WORKFLOW_NAME)
 log(`WarpSpeed: project=${PROJECT_DIR} target=${TARGET_GPU} fan-out<=${PARALLEL_AGENTS_ARG || '(config)'} max-rounds=${ITERATIONS}`)
