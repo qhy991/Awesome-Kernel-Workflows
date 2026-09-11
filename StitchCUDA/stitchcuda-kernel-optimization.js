@@ -1130,9 +1130,15 @@ Then append, using the values you just measured (status="done" if verification_p
     }
 
     // Verification fully passed
-    log(`Verification passed: ${verifyResult.performance_gflops.toFixed(2)} GFLOPS (${verifyResult.speedup_vs_baseline.toFixed(2)}x)`);
+    // performance_gflops and speedup_vs_baseline are optional in the schema
+    // above, so a Verify turn that omits them is valid and must not crash the
+    // run. Only a number reaches performanceHistory, which .toFixed() later.
+    const _vg = typeof verifyResult.performance_gflops === 'number' ? verifyResult.performance_gflops : null
+    const _vs = typeof verifyResult.speedup_vs_baseline === 'number' ? verifyResult.speedup_vs_baseline : null
+    log(`Verification passed: ${_vg != null ? _vg.toFixed(2) + ' GFLOPS' : 'GFLOPS unreported'}`
+      + ` (${_vs != null ? _vs.toFixed(2) + 'x' : 'speedup unreported'})`);
 
-    performanceHistory.push(verifyResult.performance_gflops);
+    if (_vg != null) performanceHistory.push(_vg);
 
     // Update best kernel
     if (verifyResult.performance_gflops > bestPerformance) {
@@ -1170,8 +1176,8 @@ Then append, using the values you just measured (status="done" if verification_p
 Orchestration summary:
 - Target: ${kernelSpec.operation} on ${setupResult.target_architecture}
 - Total attempts: ${performanceHistory.length} successful / ${maxAttempts} max
-- Best performance: ${bestPerformance.toFixed(2)} GFLOPS
-- Speedup: ${bestKernel.verification.speedup_vs_baseline.toFixed(2)}x
+- Best performance: ${Number.isFinite(bestPerformance) ? bestPerformance.toFixed(2) + ' GFLOPS' : 'unreported'}
+- Speedup: ${typeof bestKernel?.verification?.speedup_vs_baseline === 'number' ? bestKernel.verification.speedup_vs_baseline.toFixed(2) + 'x' : 'unreported'}
 - Best attempt: ${bestKernel.attempt}
 
 Best kernel plan:
