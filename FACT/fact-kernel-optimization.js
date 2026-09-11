@@ -748,6 +748,15 @@ Then append:
     ? `\n\n${EMBEDDING_CONTRACT}\n\nMANDATORY (embedded): Read the reference dispatch file at ${REFERENCE_FILE} and match its dispatch signature EXACTLY (same entry-point shape, template params, launch-bounds conventions). Each composed candidate's kernel_code MUST be a COMPLETE dispatch-compatible \`.cuh\` (NOT a standalone translation unit, NO main()/harness/top-level test code). Use ONLY symbols/headers the project already provides; do not register, build, or benchmark the variant yourself.`
     : '';
 
+  // The standalone branch needs the same explicitness.  Without it kernel_code
+  // came back as a patch description against a sibling candidate - "rest
+  // byte-identical to K001" - which cannot be compiled, packed or measured.
+  const SEED_KERNEL = args.kernel_path || (SOL_SEED_DIR ? `${SOL_SEED_DIR}/kernel.cu` : '')
+  const compositionStandaloneBlock = IS_EMBEDDED
+    ? ''
+    : `\n\nMANDATORY (standalone): each candidate's kernel_code MUST be a COMPLETE, self-contained translation unit that compiles on its own.${SEED_KERNEL ? ` Read the seed kernel at ${SEED_KERNEL} and keep its entry point and bindings intact - the same \`run(...)\` signature and the same \`PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)\` block - changing only the implementation.` : ' Preserve the seed kernel\'s entry point and its PYBIND11_MODULE binding, changing only the implementation.'}
+Emit every line of every candidate. Do NOT describe a candidate as a delta against another one, do NOT write "same as", "unchanged", "rest byte-identical", "..." or any other placeholder standing in for code. Each kernel_code is compiled exactly as given, so a description of a kernel fails where the kernel itself would have been measured.`;
+
   const compositionResult = await agentRetry(() => agent(
     `Compose patterns to generate optimized CUTLASS kernels:
 
@@ -795,7 +804,7 @@ Return JSON:
     ...
   ],
   "composition_summary": "summary of composition process"
-}${compositionEmbeddingBlock}
+}${compositionEmbeddingBlock}${compositionStandaloneBlock}
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
