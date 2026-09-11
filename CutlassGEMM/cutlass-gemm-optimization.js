@@ -928,37 +928,7 @@ Then append, using the values you just measured (this is tuning iteration ${iter
     const _variant = `cutlassgemm_iter${iter + 1}`.replace(/[^A-Za-z0-9_]/g, '_')
     let embLatency = 0, embBclass = 'unknown'
     if (INTEGRATION_DECISION.method === 'embedded_inplace' && ORIGINAL_BACKUP) {
-      const embResult = await agentRetry(() => agent(
-        `EMBEDDED-INPLACE EVAL (serial). Candidate solution: ${_candPath} | project embedded operator file: ${EMBEDDED_OP_PATH} | pristine backup: ${ORIGINAL_BACKUP}\n` +
-        `Run IN ORDER:\n1. Restore pristine: cp -a ${ORIGINAL_BACKUP} ${EMBEDDED_OP_PATH}\n` +
-        `2. Apply candidate CUTLASS-GEMM into the project operator file: ${EMBEDDED_OP_PATH} (use the candidate at ${_candPath})\n3. Build: ${BUILD_CMD}\n4. Test/correctness: ${PROJECT_BENCH_CMD ? '(see benchmark)' : BUILD_CMD}\n5. Benchmark: ${PROJECT_BENCH_CMD || BUILD_CMD}\n` +
-        `6. ALWAYS restore: cp -a ${ORIGINAL_BACKUP} ${EMBEDDED_OP_PATH}\n` +
-        `Profiling-strategist method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'): use perf_heuristic throughput (no ncu). ` +
-        `Parse latency_ms + heuristic_bclass (memory_bound|compute_bound|latency_bound). Return {latency_ms, heuristic_bclass, compiled, correct, avg_speedup, all_passed}.`,
-        { model: MODEL.profile, label: `embedded-inplace-${iter}`, phase: 'Tune', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
-      embLatency = Number(embResult?.latency_ms || 0)
-      embBclass = embResult?.heuristic_bclass || 'unknown'
-      if (typeof embResult?.avg_speedup === 'number') tuneResult.avg_speedup = embResult.avg_speedup
-      if (typeof embResult?.compiled === 'boolean') tuneResult.compilation_success = embResult.compiled
-      if (typeof embResult?.all_passed === 'boolean') tuneResult.all_passed = embResult.all_passed
-    } else if (INTEGRATION_DECISION.method === 'embedded_dispatch' && REGISTER_SCRIPT && PROJECT_ROOT) {
-      const _plan = typeof __embeddedEvalPlan === 'function'
-        ? __embeddedEvalPlan({ adapter: `python3 "${REGISTER_SCRIPT}"`, variant: _variant, source: _candPath, projectRoot: PROJECT_ROOT, buildCmd: BUILD_CMD, testCmd: PROJECT_BENCH_CMD || BUILD_CMD, benchmarkCmd: PROJECT_BENCH_CMD || BUILD_CMD })
-        : null
-      if (_plan) {
-        const embResult = await agentRetry(() => agent(
-          `EMBEDDED-DISPATCH EVAL (serial). Run IN ORDER:\n1. Register: ${_plan.register}\n2. Build: ${_plan.build}\n3. Test: ${_plan.test}\n4. Benchmark: ${_plan.benchmark}\n5. Unregister: ${_plan.unregister}\n${_plan.cleanupInvariant}\n` +
-          `Profiling-strategist method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'): use perf_heuristic throughput (no ncu). ` +
-          `Parse latency_ms + heuristic_bclass. Return {latency_ms, heuristic_bclass, compiled, correct, avg_speedup, all_passed}.`,
-          { model: MODEL.profile, label: `embedded-dispatch-${iter}`, phase: 'Tune', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
-        embLatency = Number(embResult?.latency_ms || 0)
-        embBclass = embResult?.heuristic_bclass || 'unknown'
-        if (typeof embResult?.avg_speedup === 'number') tuneResult.avg_speedup = embResult.avg_speedup
-        if (typeof embResult?.compiled === 'boolean') tuneResult.compilation_success = embResult.compiled
-        if (typeof embResult?.all_passed === 'boolean') tuneResult.all_passed = embResult.all_passed
-      }
-    }
-    log(`Iter ${iter + 1}: embedded eval (${INTEGRATION_DECISION.method}) latency=${embLatency}ms bclass=${embBclass}`)
+      log(`Iter ${iter + 1}: embedded eval (${INTEGRATION_DECISION.method}) latency=${embLatency}ms bclass=${embBclass}`)
   }
 
   if (!tuneResult.compilation_success) {

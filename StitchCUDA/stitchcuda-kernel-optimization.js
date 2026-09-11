@@ -948,6 +948,29 @@ Then append:
       const variant = `stitch_${attempt}`.replace(/[^A-Za-z0-9_]/g, '_');
       let embLatency = 0, embMetrics = {}, embBclass = 'unknown';
       if (INTEGRATION_DECISION.method === 'embedded_inplace' && ORIGINAL_BACKUP) {
+        // The benchmark command below reaches a read-only activation, which has no
+        // execution tool by design, so the agent can describe a run but never perform
+        // one. When the caller wired sol-execbench, measure with the Host first and
+        // let that measurement be the truth.
+        let __hostMeasured = null
+        if (SOL_AVAILABLE) {
+          __hostMeasured = await __solExecbenchEvaluate({
+            label: 'sol-eval', phase: 'Evaluate',
+            substrateDir: SOL_SUBSTRATE_DIR, kernelSource: kPath, candidateSource: '',
+            contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
+            solutionOut: `${kPath}.solution.json`,
+            benchOut: `${kPath}.bench.jsonl`,
+            solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+            seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+            ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+            definitionPath: SOL_DEFINITION_PATH,
+          })
+          if (__hostMeasured) {
+            log(`Host-measured: compiled=${__hostMeasured.compiled} `
+              + `correct=${__hostMeasured.correct} speedup=${__hostMeasured.speedup} `
+              + `workloads=${__hostMeasured.n_pass}/${__hostMeasured.n_total}`)
+          }
+        }
         const embResult = await agentRetry(() => agent(
           `EMBEDDED-INPLACE EVAL (serial). Candidate: ${kPath} | project kernel: ${KERNEL_PATH} | pristine backup: ${ORIGINAL_BACKUP}\n` +
           `Run IN ORDER:\n1. Restore pristine: cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}\n` +
