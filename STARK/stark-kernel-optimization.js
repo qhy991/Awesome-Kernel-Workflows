@@ -79,6 +79,15 @@ const SOL_ENV_PREFIX = args.sol_env_prefix || ''
 const SOL_DEFINITION_PATH = args.sol_definition_path || ''
 const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || ''
 const SOL_AVAILABLE = Boolean(SOL_CLI && SOL_TASK_DIR && SOL_SUBSTRATE_DIR)
+// pack_sol_candidate requires a CUDA/C++ candidate to expose run() through
+// PYBIND11_MODULE and rejects anything else.  Stating it is what separates
+// workflows that pack reliably from ones that comply by luck.
+const SOL_CANDIDATE_CONTRACT = SOL_AVAILABLE ? `
+MANDATORY candidate shape: emit a COMPLETE, self-contained translation unit that
+compiles on its own. Keep the seed kernel's entry point and bindings intact - the
+same \`run(...)\` signature and the same \`PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)\`
+block - and change only the implementation. Emit every line: no "same as above",
+"unchanged", "rest byte-identical", or "..." standing in for code.` : ''
 
 // --- BEGIN model-tier (auto-inserted by scripts/patch-model-tier.js) ---
 // Tier-based model routing: mechanical steps (run substrate scripts, parse
@@ -1071,7 +1080,7 @@ ${planResult.anchors.map(a => `- ${a.name} (lines ${a.begin_line}-${a.end_line})
 2. Preserve all code OUTSIDE the anchors exactly as-is
 3. Use successful patterns from sibling kernels when appropriate
 4. Ensure the resulting code is syntactically valid and compilable
-5. Do NOT use <<<IMPROVE>>> markers in the final output — they must be fully resolved
+5. Do NOT use <<<IMPROVE>>> markers in the final output — they must be fully resolved${SOL_CANDIDATE_CONTRACT}
 
 Return a JSON object with:
 - kernel_code: string (complete, anchor-free ${langToken(LEGACY_CODE_LANG_TOKEN)} kernel)
@@ -1104,7 +1113,44 @@ Then append:
   // ===========================================================================
   phase('Evaluate')
 
+  // Each node in the search tree is scored from this turn, so an unmeasured or
+  // invented number does not just mislead one report - it steers which branch
+  // STARK expands next. A read-only activation has no execution tool and cannot
+  // build or time anything, so measure on the Host and score on that.
+  let __hostMeasured = null
+  if (SOL_AVAILABLE && (newKernelCode || '').trim()) {
+    __hostMeasured = await __solExecbenchEvaluate({
+      label: `sol-eval-a${attemptCount}`, phase: 'Evaluate',
+      substrateDir: SOL_SUBSTRATE_DIR,
+      kernelSource: `${EXP_DIR}/stark_a${attemptCount}.cu`,
+      candidateSource: newKernelCode,
+      contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
+      solutionOut: `${EXP_DIR}/stark_a${attemptCount}.solution.json`,
+      benchOut: `${EXP_DIR}/stark_a${attemptCount}.bench.jsonl`,
+      solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+      seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+      ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+      definitionPath: SOL_DEFINITION_PATH,
+    })
+    if (__hostMeasured) {
+      log(`Host-measured a${attemptCount}: compiled=${__hostMeasured.compiled} `
+        + `correct=${__hostMeasured.correct} speedup=${__hostMeasured.speedup} `
+        + `workloads=${__hostMeasured.n_pass}/${__hostMeasured.n_total}`)
+    }
+  }
+  const __measuredBlock = __hostMeasured ? `
+
+# ALREADY MEASURED ON THE HOST - use these numbers verbatim
+compiled=${__hostMeasured.compiled} correct=${__hostMeasured.correct}
+speedup=${__hostMeasured.speedup} latency_ms=${__hostMeasured.latency_ms}
+workloads_passed=${__hostMeasured.n_pass}/${__hostMeasured.n_total}
+${__hostMeasured.failure_code ? `failure_code=${__hostMeasured.failure_code}` : ''}
+${__hostMeasured.stderr ? `build/run output:\n${String(__hostMeasured.stderr).substring(0, 1500)}` : ''}
+Report these rather than re-deriving them. Spend the turn on what the numbers
+mean for this node: worth expanding, or a dead branch.` : ''
+
   const evalResult = await agentRetry(() => agent(`Evaluate this kernel for correctness and performance.
+${__measuredBlock}
 
 # Kernel Code
 \`\`\`${fenceToken()}
