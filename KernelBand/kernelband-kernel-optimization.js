@@ -79,6 +79,19 @@ const SOL_ENV_PREFIX = args.sol_env_prefix || ''
 const SOL_DEFINITION_PATH = args.sol_definition_path || ''
 const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || ''
 const SOL_AVAILABLE = Boolean(SOL_CLI && SOL_TASK_DIR && SOL_SUBSTRATE_DIR)
+// pack_sol_candidate requires a CUDA/C++ candidate to expose run() through
+// PYBIND11_MODULE and rejects anything else with "has no PYBIND11_MODULE
+// binding".  Workflows that state this produce packable candidates; those that
+// only ask for "complete kernel code" comply by luck - stitchcuda packed on
+// attempt 1 and failed on attempt 2 under the same prompt.  Say it once here.
+const SOL_CANDIDATE_CONTRACT = SOL_AVAILABLE ? `
+MANDATORY candidate shape: emit a COMPLETE, self-contained translation unit that
+compiles on its own. Keep the seed kernel's entry point and bindings intact - the
+same \`run(...)\` signature and the same \`PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)\`
+block - and change only the implementation. Emit every line: no "same as above",
+"unchanged", "rest byte-identical", or "..." standing in for code. The candidate
+is compiled and packed exactly as given, so a description of a kernel fails where
+the kernel itself would have been measured.` : ''
 
 // __modelTierApplied (declaration pre-existing)
 
@@ -994,6 +1007,8 @@ ${selectedStrategy === 'access_layout' ? `ACCESS & LAYOUT: Optimize memory layou
 - Average reward so far: ${(banditStats[`${selectedCluster}_${selectedStrategy}`]?.mean_reward || 0).toFixed(3)}
 
 Return the optimized kernel code.
+
+${SOL_CANDIDATE_CONTRACT}
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
