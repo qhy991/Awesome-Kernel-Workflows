@@ -583,7 +583,7 @@ ${GEMMPTX_SKILL_HINT}
 2. Copy/read the original source.
 3. Implement only the stated instruction-level hypothesis.
 4. Keep the public API and harness interface compatible with the original.
-5. Return the complete candidate source in `kernel_code` - every line, no
+5. Return the complete candidate source in kernel_code - every line, no
    placeholders. A read-only activation has no tool that writes files, so do not
    try to write ${candidatePath}; the Host stages what you return.
 6. Do not benchmark in this phase.
