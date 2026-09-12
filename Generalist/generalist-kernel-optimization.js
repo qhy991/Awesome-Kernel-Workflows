@@ -439,6 +439,10 @@ const SOL_CLI = args.sol_cli || ''
 const SOL_TASK_DIR = args.sol_task_dir || ''
 const SOL_BENCH_CONFIG = args.sol_bench_config || ''
 const SOL_SEED_DIR = args.sol_seed_dir || (args.exp_dir || '.')
+// The staged filename needs an extension the toolchain recognises. Take it from
+// the caller when one is given rather than assuming .cu, which would bake a
+// backend into a workflow the target descriptor is allowed to change.
+const SOL_SOURCE_EXT = args.sol_source_ext || args.source_ext || '.cu'
 const SOL_CVD = args.sol_cuda_visible_devices || '0'
 const SOL_LD_LIBRARY_PATH = args.sol_ld_library_path || ''
 const SOL_ENV_PREFIX = args.sol_env_prefix || ''
@@ -600,8 +604,14 @@ const METRICS_SCHEMA = {
     compile_latency_ms: { type: ['number', 'null'] },
     speedup: { type: ['number', 'null'] },
     metrics: { type: 'object' },
+    // The turn was asked to write the kernel to a path, but a read-only
+    // activation has no tool that writes, so the file never appeared and every
+    // evaluation came back invalid_request: "needs candidateSource, or a
+    // candidatePath that already exists (ENOENT)". Return the source instead -
+    // that the turn can do - and let the Host stage and measure it.
+    kernel_code: { type: 'string' },
   },
-  required: ['compiled', 'correct', 'speedup', 'metrics'],
+  required: ['compiled', 'correct', 'speedup', 'metrics', 'kernel_code'],
 }
 const ANTICHEAT_SCHEMA = {
   type: 'object',
@@ -1081,8 +1091,11 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
       ? `\n\n${SOL_SOLUTION_CONTRACT}`
       : ''
     const m = await agentRetry(() => agent(
-      `Implement this plan on a COPY of ${best.code_path} into ${runDir}/kernel, respecting the ` +
+      `Implement this plan on a COPY of ${best.code_path}, respecting the ` +
       `<<<IMPROVE BEGINS/ENDS>>> anchors. Method: ${p.method}. Plan: ${JSON.stringify(p.plan)}.\n` +
+      `Return the full source in kernel_code - every line, no placeholders. You have ` +
+      `no tool that writes files here, so do not try to write ${runDir}/kernel; the ` +
+      `Host stages what you return and measures it.\n` +
       embeddedProposal +
       (integBlock
         ? integBlock + `\nThen map measured results into the JSON metrics schema.`
@@ -1105,7 +1118,8 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
       solMeasured = await __solExecbenchEvaluate({
         label: `sol-eval-${iter}-${i + 1}`, phase: 'Evaluate',
         substrateDir: SOL_SUBSTRATE_DIR,
-        kernelSource: `${runDir}/kernel`, candidateSource: '',
+        kernelSource: `${runDir}/kernel${SOL_SOURCE_EXT}`,
+        candidateSource: (m && m.kernel_code) || '',
         contractEnv: `${EXP_DIR}/contract.env`,
         solutionOut: `${EXP_DIR}/gen_${iter}_${i + 1}.solution.json`,
         benchOut: `${EXP_DIR}/gen_${iter}_${i + 1}.bench.jsonl`,
