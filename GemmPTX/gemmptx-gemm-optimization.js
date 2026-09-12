@@ -195,6 +195,73 @@ if (!['cuda', 'cu', 'cute', 'cutlass', 'cpp', 'c++'].includes(LANGUAGE)) {
 }
 
 const JSON_SCHEMA = { type: 'object', additionalProperties: true }
+
+async function __solExecbenchEvaluate(ctx) {
+  // Claude's legacy Workflow host does not yet expose this optional primitive.
+  // Keep the prompt-driven path as a compatibility edge, while KerSor's Host
+  // owns exact source materialization and PACK/RUN/PARSE without an LLM turn.
+  if (typeof evaluate !== 'function') return null
+  return evaluate({
+    protocol: 'sol-execbench-v1',
+    label: ctx.label || 'sol-eval',
+    phase: ctx.phase || 'Evaluate',
+    candidatePath: ctx.kernelSource,
+    candidateSource: ctx.candidateSource,
+    substrateDir: ctx.substrateDir,
+    contractEnv: ctx.contractEnv,
+    solutionOut: ctx.solutionOut,
+    benchOut: ctx.benchOut,
+    normalizedOut: ctx.normalizedOut || `${ctx.benchOut}.result.json`,
+    solCli: ctx.solCli,
+    taskDir: ctx.taskDir,
+    benchConfig: ctx.benchConfig,
+    seedDir: ctx.seedDir,
+    cudaVisibleDevices: ctx.cudaVisibleDevices || '0',
+    ldLibraryPath: ctx.ldLibraryPath || '',
+    envPrefix: ctx.envPrefix || '',
+    definitionPath: ctx.definitionPath || '',
+    timeoutSeconds: ctx.timeoutSeconds || 0,
+  }).then(__solGuardHarnessFault)
+}
+
+// A `compiled: false` from the evaluator does not always mean the candidate is
+// bad.  `invalid_request` and `infrastructure_error` are the harness refusing or
+// failing before the candidate was ever built, and callers that map any
+// non-success onto compile_error burn refine turns and a stagnation budget on a
+// misconfiguration.  Observed: a candidate staged outside the evaluation roots
+// was rejected at preflight, reported three times as `compile_error`, and the run
+// stopped at the stagnation limit having never compiled anything.  Surface a
+// harness fault as a harness fault and stop, because retrying cannot fix it.
+function __solGuardHarnessFault(result) {
+  const HARNESS_FAULTS = ['invalid_request', 'infrastructure_error']
+  if (result && HARNESS_FAULTS.includes(result.failure_code)) {
+    const detail = result.stderr || result.stdout || ''
+    throw new Error(
+      `sol-execbench harness fault (${result.failure_code}) at stage `
+      + `${result.stage || 'unknown'}: ${String(detail).slice(0, 400)} `
+      + '- this is a harness or wiring fault, not a candidate compile error',
+    )
+  }
+  return result
+}
+
+// --- sol-execbench wiring (Host-owned PACK/RUN/PARSE; no LLM turn) -----------
+// These 15 workflows declared only the standalone path, so their benchmark was a
+// command string embedded in a prompt for a read-only activation with no shell.
+// The read-only allowlist deliberately excludes execution, so the agent could
+// never run it.  The Host can, and this is the protocol it exposes for exactly
+// that.
+const SOL_CLI = args.sol_cli || ''
+const SOL_TASK_DIR = args.sol_task_dir || ''
+const SOL_BENCH_CONFIG = args.sol_bench_config || ''
+const SOL_SEED_DIR = args.sol_seed_dir || ''
+const SOL_CVD = args.sol_cuda_visible_devices || '0'
+const SOL_LD_LIBRARY_PATH = args.sol_ld_library_path || ''
+const SOL_ENV_PREFIX = args.sol_env_prefix || ''
+const SOL_DEFINITION_PATH = args.sol_definition_path || ''
+const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || ''
+const SOL_AVAILABLE = Boolean(SOL_CLI && SOL_TASK_DIR && SOL_SUBSTRATE_DIR)
+
 const GEMMPTX_SKILL_HINT = 'Before making GEMM instruction-path judgments, read the workflow-local skill at GemmPTX/skills/gemmptx-instruction-evidence/SKILL.md if it exists. Apply its PTX/SASS evidence gates, architecture map, and failure checklist.'
 const instructionCatalog = [
   {
@@ -516,7 +583,9 @@ ${GEMMPTX_SKILL_HINT}
 2. Copy/read the original source.
 3. Implement only the stated instruction-level hypothesis.
 4. Keep the public API and harness interface compatible with the original.
-5. Write the candidate source to ${candidatePath}.
+5. Return the complete candidate source in `kernel_code` - every line, no
+   placeholders. A read-only activation has no tool that writes files, so do not
+   try to write ${candidatePath}; the Host stages what you return.
 6. Do not benchmark in this phase.
 
 # Guardrail
@@ -595,6 +664,42 @@ ${genomeFooter('Disassemble Verify', candidateId)}`, {
   }
 
   phase('Profile')
+  // This turn is told to benchmark, and its `measured` flag gates acceptance at
+  // the Decide step below. A read-only activation cannot run a benchmark, so
+  // measured stayed false and every candidate was rejected with speedup=n/a -
+  // correct behaviour on the workflow's part, and the reason it never accepted
+  // anything. The Host measures, and the turn keeps the profile reasoning.
+  let __hostMeasured = null
+  if (SOL_AVAILABLE && (implementation.kernel_code || '').trim()) {
+    __hostMeasured = await __solExecbenchEvaluate({
+      label: `sol-eval-${candidateId}`, phase: 'Profile',
+      substrateDir: SOL_SUBSTRATE_DIR,
+      kernelSource: candidatePath,
+      candidateSource: implementation.kernel_code,
+      contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
+      solutionOut: `${EXP_DIR}/candidates/${candidateId}/solution.json`,
+      benchOut: `${EXP_DIR}/candidates/${candidateId}/bench.jsonl`,
+      solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+      seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+      ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+      definitionPath: SOL_DEFINITION_PATH,
+    })
+    if (__hostMeasured) {
+      log(`Host-measured ${candidateId}: compiled=${__hostMeasured.compiled} `
+        + `correct=${__hostMeasured.correct} speedup=${__hostMeasured.speedup} `
+        + `workloads=${__hostMeasured.n_pass}/${__hostMeasured.n_total}`)
+    }
+  }
+  const __measuredBlock = __hostMeasured ? `
+
+# ALREADY MEASURED ON THE HOST - use these verbatim
+measured=${__hostMeasured.compiled === true}
+correct=${__hostMeasured.correct} speedup_vs_baseline=${__hostMeasured.speedup}
+latency_ms=${__hostMeasured.latency_ms}
+workloads_passed=${__hostMeasured.n_pass}/${__hostMeasured.n_total}
+Report these rather than re-deriving them. Spend the turn on the profile and on
+mechanism_moved: did ${spec.target_instruction} appear and move the number the
+way the hypothesis predicted?` : ''
   const measured = await agentRetry(() => agent(`You are the measurement agent. The candidate already compiled, passed correctness, and verified its instruction path. Now benchmark and optionally profile it.
 
 # Candidate
@@ -606,6 +711,8 @@ ${genomeFooter('Disassemble Verify', candidateId)}`, {
 ${commandContract('Benchmark', BENCHMARK_COMMAND, `${EXP_DIR}/candidates/${candidateId}/bench.json`)}
 
 ${PROFILE_COMMAND ? commandContract('Profile', PROFILE_COMMAND, `${EXP_DIR}/candidates/${candidateId}/profile.json`) : '# Profile command: not provided. Skip NCU/profile and mark profile_available=false.'}
+
+${__measuredBlock}
 
 # Return
 - measured: true if benchmark succeeded
@@ -624,8 +731,11 @@ ${genomeFooter('Profile', candidateId)}`, {
   }), { retries: 5 })
 
   phase('Decide')
+  // best.speedup arrived NaN and every comparison against it was false, so
+  // candidates were logged as "rejected ... best=NaN" with no reason given.
   const speedup = Number(measured.speedup_vs_baseline || measured.speedup || 0)
-  const accepted = measured.measured !== false && measured.correct !== false && speedup >= Math.max(best.speedup * MIN_SPEEDUP, best.speedup + 0.000001)
+  const bestSpeedup = Number.isFinite(best.speedup) ? best.speedup : 0
+  const accepted = measured.measured !== false && measured.correct !== false && speedup >= Math.max(bestSpeedup * MIN_SPEEDUP, bestSpeedup + 0.000001)
   const record = {
     candidate_id: candidateId,
     status: accepted ? 'accepted' : 'rejected',
