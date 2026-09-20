@@ -3,13 +3,15 @@
 
 No LLM, no network.  The source representation owns the transport contract:
 Python/Triton candidates expose a module-level ``run`` function, while CUDA C++
-candidates expose ``run`` through ``PYBIND11_MODULE``.  A failed pack removes a
-stale output so a later stage cannot accidentally evaluate an older candidate.
+candidates expose ``run`` or the seed's ``forward`` through ``PYBIND11_MODULE``.
+A failed pack removes a stale output so a later stage cannot accidentally
+evaluate an older candidate.
 """
 import argparse
 import ast
 import json
 import os
+import re
 import sys
 
 
@@ -68,13 +70,43 @@ def python_language(kernel_src_text):
     return "triton" if uses_triton else "pytorch"
 
 
+def cuda_entry_point(source):
+    """Use the Python-visible binding name, not the C++ function name.
+
+    Existing seeds expose either run or forward. Prefer run when both exist,
+    preserving the previous contract, and reject missing literal bindings at
+    pack time instead of inventing an entry that fails after a GPU build.
+    """
+    source = re.sub(
+        r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"',
+        lambda match: match.group(0) if match.group(0).startswith('"') else ' ',
+        source,
+    )
+    modules = re.findall(
+        r'\bPYBIND11_MODULE\s*\(\s*[^,]+,\s*([A-Za-z_]\w*)\s*[,)]', source
+    )
+    exports = set()
+    for module in modules:
+        exports.update(re.findall(
+            rf'\b{re.escape(module)}\s*\.\s*def\s*\(\s*"([A-Za-z_]\w*)"',
+            source,
+        ))
+    for entry in ("run", "forward"):
+        if entry in exports:
+            return entry
+    raise SystemExit(
+        "pack_sol_candidate: PYBIND11_MODULE must bind run() or forward() "
+        "with a literal module.def name; preserve the seed's public binding"
+    )
+
+
 def build_solution(kernel_src_text, kernel_filename, contract):
     task = contract.get("task_name") or contract.get("op") or "candidate"
     has_binding = "PYBIND11_MODULE" in kernel_src_text
     if has_binding:
         kernel_filename = normalize_cuda_filename(kernel_filename)
         sources = [{"path": kernel_filename, "content": kernel_src_text}]
-        entry_point = f"{kernel_filename}::run"
+        entry_point = f"{kernel_filename}::{cuda_entry_point(kernel_src_text)}"
         spec = {
             # sol-execbench validates this against its public SolutionSpec enum.
             # "cuda" is a backend name, not a supported source-language value.

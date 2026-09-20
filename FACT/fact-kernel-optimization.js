@@ -760,10 +760,21 @@ Then append:
   const SEED_KERNEL = args.kernel_path || (SOL_SEED_DIR ? `${SOL_SEED_DIR}/kernel.cu` : '')
   const compositionStandaloneBlock = IS_EMBEDDED
     ? ''
-    : `\n\nMANDATORY (standalone): each candidate's kernel_code MUST be a COMPLETE, self-contained translation unit that compiles on its own.${SEED_KERNEL ? ` Read the seed kernel at ${SEED_KERNEL} and keep its entry point and bindings intact - the same \`run(...)\` signature and the same \`PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)\` block - changing only the implementation.` : ' Preserve the seed kernel\'s entry point and its PYBIND11_MODULE binding, changing only the implementation.'}
+    : `\n\nMANDATORY (standalone): each candidate's kernel_code MUST be a COMPLETE, self-contained translation unit that compiles on its own.${SEED_KERNEL ? ` Read the seed kernel at ${SEED_KERNEL} and keep its entry point and bindings intact - the same Python-visible \`run(...)\` or \`forward(...)\` signature and the same \`PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)\` block - changing only the implementation.` : ' Preserve the seed kernel\'s entry point and its PYBIND11_MODULE binding, changing only the implementation.'}
 Emit every line of every candidate. Do NOT describe a candidate as a delta against another one, do NOT write "same as", "unchanged", "rest byte-identical", "..." or any other placeholder standing in for code. Each kernel_code is compiled exactly as given, so a description of a kernel fails where the kernel itself would have been measured.`;
 
-  const compositionResult = await agentRetry(() => agent(
+  // A batch of full translation units can exhaust one structured tool response.
+  // Keep the requested search count, but give each candidate its own receipt and
+  // retry boundary. Carry only composition metadata forward, not repeated code.
+  const compositionCount = Math.min(compositionBudget, 20);
+  for (let compositionIndex = 0; compositionIndex < compositionCount; compositionIndex++) {
+    const candidateId = `k${compositionIndex + 1}`;
+    const priorCompositions = composedKernels.map(k => ({
+      kernel_id: k.kernel_id,
+      applied_patterns: k.applied_patterns,
+      pattern_parameters: k.pattern_parameters,
+    }));
+    const compositionResult = await agentRetry(() => agent(
     `Compose patterns to generate optimized CUTLASS kernels:
 
 Target specification:
@@ -773,7 +784,9 @@ Target specification:
 - Architecture: ${setupResult.target_architecture}
 
 Available patterns: ${realizedPatterns.length}
-Dependency graph: ${realizationResult.dependency_graph}
+Realized patterns (authoritative handoff; use these directly, no registry file is required):
+${JSON.stringify(realizedPatterns)}
+Dependency graph: ${JSON.stringify(realizationResult.dependency_graph)}
 Composition budget: ${compositionBudget} kernel candidates
 
 Composition strategies:
@@ -792,22 +805,24 @@ Composition strategies:
    - For each composition, tune pattern parameters
    - Use heuristics or light autotuning
 
-Generate top ${Math.min(compositionBudget, 20)} kernel candidates.
+Generate exactly ONE complete kernel candidate: ${candidateId}, slot ${compositionIndex + 1} of ${compositionCount}.
+Do not emit the other candidates in this response. Preserve the full source and bindings of this one candidate.
+Avoid repeating an already accepted composition:
+${JSON.stringify(priorCompositions)}
 
 Return JSON:
 {
   "composition_strategy": "greedy|dependency-aware|search-based",
-  "candidates_generated": <int>,
+  "candidates_generated": 1,
   "composed_kernels": [
     {
-      "kernel_id": "unique_id",
+      "kernel_id": "${candidateId}",
       "applied_patterns": ["pattern_id1", "pattern_id2", ...],
       "pattern_parameters": {"pattern_id": {"param": value}, ...},
       "kernel_code": "complete CUTLASS kernel code",
       "estimated_performance": "performance estimate if available",
       "composition_rationale": "why these patterns were composed"
-    },
-    ...
+    }
   ],
   "composition_summary": "summary of composition process"
 }${compositionEmbeddingBlock}${compositionStandaloneBlock}
@@ -817,19 +832,21 @@ Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shel
 Then append:
 {"workflow":"${WORKFLOW_NAME}","phase":"Pattern Composition","ts":"<ts>","status":"done","technique":"<composition strategy, e.g. greedy|dependency-aware|search-based>","note":"<how many kernel candidates composed + patterns most frequently applied, one line>"}`,
     {
-      label: 'Compose patterns',
+      label: `Compose patterns ${compositionIndex + 1}`,
       phase: 'Pattern Composition',
       schema: {
         type: 'object',
         properties: {
           composition_strategy: { type: 'string' },
-          candidates_generated: { type: 'integer' },
+          candidates_generated: { type: 'integer', const: 1 },
           composed_kernels: {
             type: 'array',
+            minItems: 1,
+            maxItems: 1,
             items: {
               type: 'object',
               properties: {
-                kernel_id: { type: 'string' },
+                kernel_id: { type: 'string', const: candidateId },
                 applied_patterns: { type: 'array', items: { type: 'string' } },
                 pattern_parameters: { type: 'object' },
                 kernel_code: { type: 'string' },
@@ -846,12 +863,18 @@ Then append:
     }
   ), { retries: 5, allowNull: true });
 
-  if (!compositionResult || compositionResult.composed_kernels.length === 0) {
+    if (!compositionResult || compositionResult.composed_kernels?.length !== 1) {
+      log(`Pattern composition ${candidateId} failed; retaining earlier candidates`);
+      continue;
+    }
+    composedKernels.push(compositionResult.composed_kernels[0]);
+  }
+
+  if (composedKernels.length === 0) {
     log('Pattern composition failed');
     return { success: false, reason: 'composition_failed' };
   }
 
-  composedKernels = compositionResult.composed_kernels;
   log(`Generated ${composedKernels.length} composed kernel candidates`);
 
   // ============================================================================

@@ -28,6 +28,19 @@ for the versioning policy.
 
 ### Fixed
 
+- Generate FACT's complete composed kernels one per structured activation,
+  passing realized patterns directly instead of assuming a writable registry,
+  and preserving its composition count while avoiding oversized multi-kernel tool
+  responses. Each candidate has its own retry receipt; a later failed response
+  no longer discards earlier generated candidates. Seed `forward` bindings are
+  explicitly preserved. (`FACT/fact-kernel-optimization.js`, its contract test)
+
+- Preserve CUDA candidates' exported `forward` entry when packaging SOL
+  solutions, instead of unconditionally writing `::run` and failing to load a
+  successfully built extension. Existing `run` bindings keep precedence, and
+  missing public bindings now fail before GPU compilation.
+  (`_substrate/integration/pack_sol_candidate.py`, its regression tests)
+
 - **Cumulative failed-strategy constraints now follow their transfer-object
   authority.** Typed workflow arguments prefer KerSor's cumulative
   `failed_strategy_ids` and retain per-round attempt evidence only as a legacy

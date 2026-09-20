@@ -23,6 +23,17 @@
 
 ### 修复（Fixed）
 
+- FACT 直接传递已实现的 pattern，不再假定只读 agent 能写入 registry；
+  改为每次结构化调用生成一个完整候选，保留原 composition 数量，避免
+  多个完整 kernel 挤在同一个工具响应中。每个候选有独立重试回执，后续响应
+  失败也不会丢弃已生成的候选；提示词明确保留 seed 的 `forward` 绑定。
+  (`FACT/fact-kernel-optimization.js` 及其契约测试)
+
+- 打包 SOL solution 时保留 CUDA 候选实际导出的 `forward` 入口，不再一律写成
+  `::run`，避免扩展构建成功后仍无法加载。已有 `run` 绑定继续优先；缺少公共
+  绑定的候选在 GPU 编译前报错。
+  (`_substrate/integration/pack_sol_candidate.py` 及其回归测试)
+
 - **累计失败策略约束现在遵循 transfer object 的权威状态。** Workflow typed
   args 优先使用 KerSor 提供的累计 `failed_strategy_ids`，仅将逐轮 attempt
   evidence 保留为旧调用方回退；因此失败策略会持续被排除，直到后续
