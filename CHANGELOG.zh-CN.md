@@ -6,6 +6,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- 修复 B300 审查暴露的执行缺口：GemmPTX 由 Host 提供基线、硬件与指令证据；KernelSkill 只用实测候选选优与更新记忆并评测最后一次修改；STARK Debug 保留完整源码和绑定契约；FACT 每个组合生成后立即评测，后续响应失败时保留已有回执（`GemmPTX/`、`KernelSkill/`、`STARK/`、`FACT/`、`_meta/tools/test/`）。
+
+
 ### 新增（Added）
 
 - **Harness Engineering workflow。** 新增基于 arXiv:2607.17979 的冻结契约、

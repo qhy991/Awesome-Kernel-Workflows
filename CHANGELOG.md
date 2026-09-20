@@ -28,6 +28,8 @@ for the versioning policy.
 
 ### Fixed
 
+- Fix B300 audit execution gaps: GemmPTX obtains baseline/hardware/instruction gates from the Host, KernelSkill selects and updates only measured candidates and evaluates the final edit, STARK Debug retains full source and binding contracts, and FACT evaluates each composition immediately and keeps prior receipts after later response failures (`GemmPTX/`, `KernelSkill/`, `STARK/`, `FACT/`, `_meta/tools/test/`).
+
 - Generate FACT's complete composed kernels one per structured activation,
   passing realized patterns directly instead of assuming a writable registry,
   and preserving its composition count while avoiding oversized multi-kernel tool

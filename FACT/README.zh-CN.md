@@ -165,3 +165,7 @@ FACT 实现了 **三阶段组合式合成流水线**：模式发现 → 模式�
 - **StitchCUDA**: 三智能体编排的 CUDA 内核合成
 - **KernelFoundryDx**: 诊断驱动的多岛进化（Triton）
 - **Xe-Forge**: Intel XPU 多阶段 CoVeR 优化
+
+## B300 执行修复（2026-09-20）
+
+Pattern realization 每次响应只实现一个模式。在 KerSor SOL 中，每个完整组合都会在生成下一候选前立即评测，后续组合可见实测反馈；后续结构化响应失败时保留先前评测回执。

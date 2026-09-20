@@ -285,3 +285,7 @@ Workflow({name: 'stark-kernel-optimization', args: {
 - **L3**（完整架构）：100% 成功率，最高 **1.6×** 加速
 
 Sampling Agent L1 成功率仅 57%；Reflexion Agent 虽能通过测试但常生成比 baseline 更慢的内核。
+
+## B300 execution repair (2026-09-20)
+
+Both Code and Debug paths carry the complete candidate source and SOL entry-binding contract; the selected kernel is not reduced to a prefix that can omit its binding.

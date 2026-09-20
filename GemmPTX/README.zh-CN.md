@@ -82,3 +82,7 @@ Workflow({name: 'gemmptx-gemm-optimization', args: {
 这是 AKW 原创的工程 workflow，不是某篇论文的严格复现。它的关键机制是证据闭环：硬件事实和 GEMM signature 生成指令假设，compile/test/disassembly 验证假设，benchmark/profile 决定接受或拒绝。
 
 它最适合 tensor-core GEMM。对于更广义的 compute-bound 任务，可以复用 evidence schema，但需要换成对应算子自己的 rule pack。
+
+## B300 执行修复（2026-09-20）
+
+在 KerSor SOL 路径中，Host 在模型分析前评测完整的 `seed.solution.json`，并拥有候选正确性、延迟、硬件身份和 SASS 正则验证。缺少反汇编证据时明确拒绝；模型文字不能提供或覆盖实测指标。非 SOL 集成继续使用其显式命令契约。

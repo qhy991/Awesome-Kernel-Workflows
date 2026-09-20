@@ -588,7 +588,7 @@ function buildCodeContext(nodeId, langFence) {
   const fence = langFence || LEGACY_FENCE_TOKEN
 
   let ctx = `# Context Window for CODE Agent\n\n## Selected Node (id=${nodeId})\n`
-  ctx += `Selected kernel code:\n\`\`\`${fence}\n${String(node.kernel_code ?? '').substring(0, 2500)}\n\`\`\`\n`
+  ctx += `Selected kernel code:\n\`\`\`${fence}\n${String(node.kernel_code ?? '')}\n\`\`\`\n`
 
   ctx += `\n## Children of Selected Node (${children.length})\n`
   for (const c of children) {
@@ -618,7 +618,7 @@ function buildDebugContext(nodeId, langFence) {
   const fence = langFence || LEGACY_FENCE_TOKEN
 
   let ctx = `# Context Window for DEBUG Agent\n\n## Failing Node (id=${nodeId})\n`
-  ctx += `Failing kernel code:\n\`\`\`${fence}\n${String(node.kernel_code ?? '').substring(0, 2500)}\n\`\`\`\n`
+  ctx += `Failing kernel code:\n\`\`\`${fence}\n${String(node.kernel_code ?? '')}\n\`\`\`\n`
   ctx += `\n## Error Logs\n\`\`\`\n${(node.logs || '').substring(0, 2000)}\n\`\`\`\n`
   ctx += `\n## Original Plan (if any)\n${node.plan || 'No plan recorded'}\n`
   ctx += `\n## Anchors (if any)\n${node.anchors || 'No anchors recorded'}\n`
@@ -965,7 +965,7 @@ ${debugCtx}
 1. Analyze the error logs carefully
 2. Look at sibling kernels for successful fix patterns (e.g., off-by-one guards, stride/index alignment, launch parameter tweaks, shared memory sizing)
 3. Make MINIMAL changes to fix the bug — preserve the overall approach
-4. Return the COMPLETE fixed kernel code
+4. Return the COMPLETE fixed kernel code${SOL_CANDIDATE_CONTRACT}
 
 Return a JSON object with:
 - kernel_code: string (complete fixed ${langToken(LEGACY_DEBUG_LANG_TOKEN)} kernel)

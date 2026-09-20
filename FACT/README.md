@@ -165,3 +165,7 @@ REPORT:
 - **StitchCUDA**: Three-agent orchestration for CUDA kernel synthesis
 - **KernelFoundryDx**: Diagnostic-driven multi-island evolution for Triton
 - **Xe-Forge**: Multi-stage CoVeR optimization for Intel XPU
+
+## B300 execution repair (2026-09-20)
+
+Pattern realization is bounded to one pattern per response. On KerSor SOL, each complete composition is evaluated immediately before the next composition, and its measured feedback is visible to later slots. Later structured-response failures retain earlier evaluator receipts.

@@ -82,3 +82,7 @@ Workflow({name: 'gemmptx-gemm-optimization', args: {
 This is an original AKW engineering workflow, not a strict reproduction of a single paper. Its load-bearing mechanism is the evidence loop: hardware facts and GEMM signature propose an instruction hypothesis, compile/test/disassembly verify the hypothesis, and benchmark/profile decide whether to accept it.
 
 The workflow is strongest for tensor-core GEMM work. For broader compute-bound tasks, use the same evidence schema but a different operator-specific rule pack.
+
+## B300 execution repair (2026-09-20)
+
+On KerSor SOL runs, the Host evaluates the complete `seed.solution.json` before model analysis and owns candidate correctness, latency, hardware identity, and the SASS regex gate. Missing disassembly fails closed. Model prose cannot supply or override measured metrics. Non-SOL integrations retain their explicit command contracts.

@@ -24,6 +24,9 @@ async function __solExecbenchEvaluate(ctx) {
     phase: ctx.phase || 'Evaluate',
     candidatePath: ctx.kernelSource,
     candidateSource: ctx.candidateSource,
+    baselineSolutionPath: ctx.baselineSolutionPath,
+    remoteEvidence: true,
+
     substrateDir: ctx.substrateDir,
     contractEnv: ctx.contractEnv,
     solutionOut: ctx.solutionOut,
@@ -767,7 +770,54 @@ if (PROFILING_DECISION.method === 'native_profiler' && !NCU_BINARY) {
     profiler_name: 'test-harness-perf', rationale: 'native_profiler but no ncu_binary -> perf_heuristic' }
 }
 
-const baseline = await agentRetry(() => agent(`You are a GPU benchmarking expert. Establish the Torch Eager baseline latency for this PyTorch reference, which is the denominator for speedup (speedup = baseline_latency / kernel_latency).
+const HOST_SOL = SOL_AVAILABLE && typeof evaluate === 'function'
+const SOL_SOURCE_CONTRACT = HOST_SOL ? `
+The Host accepts a COMPLETE self-contained CUDA/C++ translation unit, including
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m). Preserve the seed's Python-visible run/forward
+signature. Read the complete seed at ${KERNEL_PATH}; no Python load_inline wrapper,
+no patch-only output, no omitted binding or trailing code.` : ''
+const hostMeasurements = new Map()
+async function measureKernel(code, label, baseline = false) {
+  if (!HOST_SOL) return null
+  if (!baseline && hostMeasurements.has(code)) return hostMeasurements.get(code)
+  const prefix = `${EXP_DIR}/kernelskill_${label}`
+  const result = await __solExecbenchEvaluate({
+    label: `sol-eval-${label}`, phase: 'Evaluate',
+    substrateDir: SOL_SUBSTRATE_DIR, kernelSource: `${prefix}.cu`,
+    candidateSource: baseline ? undefined : code,
+    baselineSolutionPath: baseline ? `${SOL_SEED_DIR}/seed.solution.json` : undefined,
+    contractEnv: `${SOL_SEED_DIR}/contract.env`, solutionOut: `${prefix}.solution.json`,
+    benchOut: `${prefix}.bench.jsonl`, solCli: SOL_CLI, taskDir: SOL_TASK_DIR,
+    benchConfig: SOL_BENCH_CONFIG, seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+    ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX, definitionPath: SOL_DEFINITION_PATH,
+  })
+  if (!baseline) hostMeasurements.set(code, result)
+  return result
+}
+function validHostResult(result) {
+  return Boolean(result && result.compiled === true && result.correct === true
+    && result.n_total > 0 && result.n_total === result.n_pass
+    && Number.isFinite(result.speedup) && result.speedup > 0)
+}
+function hostReview(result) {
+  return { is_compilable: result?.compiled === true, is_correct: validHostResult(result),
+    latency_ms: result?.latency_ms || null, speedup: validHostResult(result) ? result.speedup : null,
+    error_excerpt: result?.stderr || result?.failure_code || '', ncu_metrics: null }
+}
+function recordHostResult(code, result) {
+  const valid = validHostResult(result)
+  if (valid && (bestSpeedup == null || result.speedup > bestSpeedup)) {
+    bestSpeedup = result.speedup
+    bestKernelCode = code
+  }
+  return valid
+}
+const hostBaseline = HOST_SOL ? await measureKernel('', 'baseline', true) : null
+const baseline = HOST_SOL ? {
+  baseline_available: validHostResult(hostBaseline),
+  baseline_latency_ms: validHostResult(hostBaseline) ? hostBaseline.reference_latency_ms : null,
+  harness_notes: 'Reference latency measured by the Host on the complete workload set.',
+} : await agentRetry(() => agent(`You are a GPU benchmarking expert. Establish the Torch Eager baseline latency for this PyTorch reference, which is the denominator for speedup (speedup = baseline_latency / kernel_latency).
 
 # Reference task: ${REFERENCE_PATH}
 # Operation: ${OP_DESC} (${opType})
@@ -823,12 +873,12 @@ ${referenceCode.substring(0, 4000)}
 
 # Requirements
 1. Materialize as many operator-level custom CUDA kernels as is natural (this gives later optimization more surface to work with).
-2. Use torch.utils.cpp_extension (load_inline) or an equivalent so the module is drop-in for the reference.
+2. ${HOST_SOL ? "Return a complete native CUDA/C++ source with the seed entry binding." : "Use torch.utils.cpp_extension (load_inline) or an equivalent so the module is drop-in for the reference."}
 3. Keep the public forward() signature identical to the reference Model.
 4. Functionally correct first; performance comes later.
 5. This is seed candidate ${i + 1}/${SEED_CANDIDATES} — vary the decomposition/strategy from a naive baseline so the seeds are diverse.
 
-Return the complete kernel source.
+Return the complete kernel source.${SOL_SOURCE_CONTRACT}
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -850,10 +900,11 @@ Then append:
 )
 
 const validSeeds = seedKernels.filter(Boolean).filter(s => s.code)
+if (!validSeeds.length) return { success: false, reason: 'no_seed_candidates', best_speedup: null }
 log(`Generated ${validSeeds.length}/${SEED_CANDIDATES} seed candidates`)
 
 // Reviewer evaluates each seed; pick the best VALID one (fastest), else the first that compiles.
-const seedEvals = await parallel(
+const seedEvals = HOST_SOL ? await Promise.all(validSeeds.map(async (seed, i) => hostReview(await measureKernel(seed.code, `seed${i}`)))) : await parallel(
   validSeeds.map((seed, i) => () =>
     agentRetry(() => agent(`You are the KernelSkill Reviewer (Compiler + Verifier + Profiler). Evaluate this SEED kernel against the PyTorch reference.
 
@@ -916,12 +967,12 @@ currentValid = !!(chosenEval.is_compilable && chosenEval.is_correct)
 currentLatency = chosenEval.latency_ms || null
 if (currentValid) {
   bestKernelCode = currentKernelCode
-  bestSpeedup = chosenEval.speedup || (currentLatency ? baselineLatency / currentLatency : 1.0)
+  bestSpeedup = chosenEval.speedup || (currentLatency && baselineLatency > 0 ? baselineLatency / currentLatency : null)
   speedupTrajectory.push(bestSpeedup)
 } else {
   speedupTrajectory.push(null)
 }
-log(`Chosen seed #${chosenIdx + 1}: valid=${currentValid}, speedup=${currentValid ? bestSpeedup.toFixed(2) + 'x' : 'n/a'}`)
+log(`Chosen seed #${chosenIdx + 1}: valid=${currentValid}, speedup=${Number.isFinite(bestSpeedup) ? bestSpeedup.toFixed(2) + 'x' : 'n/a'}`)
 
 // =============================================================================
 // Refinement loop — two-branch rounds (repair vs optimize)
@@ -939,30 +990,11 @@ for (let round = 0; round < ROUNDS; round++) {
   // there is no compiler output to feed back and no latency to profile, yet
   // currentValid and currentLatency are carried into the next round from here.
   // Measure on the Host so the feedback is execution feedback.
-  let __hostMeasured = null
-  if (SOL_AVAILABLE && (currentKernelCode || '').trim()) {
-    __hostMeasured = await __solExecbenchEvaluate({
-      label: `sol-eval-r${round}`, phase: 'Evaluate',
-      substrateDir: SOL_SUBSTRATE_DIR,
-      kernelSource: `${EXP_DIR}/kernelskill_r${round}.cu`,
-      candidateSource: currentKernelCode,
-      contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
-      solutionOut: `${EXP_DIR}/kernelskill_r${round}.solution.json`,
-      benchOut: `${EXP_DIR}/kernelskill_r${round}.bench.jsonl`,
-      solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
-      seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
-      ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
-      definitionPath: SOL_DEFINITION_PATH,
-    })
-    if (__hostMeasured) {
-      log(`Host-measured r${round}: compiled=${__hostMeasured.compiled} `
-        + `correct=${__hostMeasured.correct} speedup=${__hostMeasured.speedup} `
-        + `workloads=${__hostMeasured.n_pass}/${__hostMeasured.n_total}`)
-      currentValid = __hostMeasured.compiled !== false && __hostMeasured.correct !== false
-      if (typeof __hostMeasured.latency_ms === 'number' && __hostMeasured.latency_ms > 0) {
-        currentLatency = __hostMeasured.latency_ms
-      }
-    }
+  const __hostMeasured = HOST_SOL ? await measureKernel(currentKernelCode, `r${round}`) : null
+  if (__hostMeasured) {
+    currentValid = recordHostResult(currentKernelCode, __hostMeasured)
+    currentLatency = __hostMeasured.latency_ms || null
+    log(`Host-measured r${round}: compiled=${__hostMeasured.compiled} correct=${__hostMeasured.correct} speedup=${__hostMeasured.speedup}`)
   }
   const __measuredBlock = __hostMeasured ? `
 
@@ -1146,14 +1178,15 @@ Then append, using the values you just measured (status="done" if compiles AND c
     review.driver_envelope = { latency_ms: embLatency, metrics: embMetrics, bottleneck_class: embBclass, backend_id: 'embedded' }
   }
 
+  if (HOST_SOL) Object.assign(review, hostReview(__hostMeasured))
   currentValid = !!(review.is_compilable && review.is_correct)
   const roundSpeedup = currentValid
-    ? (review.speedup || (review.latency_ms ? baselineLatency / review.latency_ms : (bestSpeedup || 1.0)))
+    ? (review.speedup || (review.latency_ms ? baselineLatency / review.latency_ms : null))
     : null
   currentLatency = review.latency_ms || currentLatency
 
   // Update best (unconditionally tracks the fastest valid kernel)
-  if (currentValid && (bestSpeedup == null || roundSpeedup > bestSpeedup)) {
+  if (currentValid && Number.isFinite(roundSpeedup) && (bestSpeedup == null || roundSpeedup > bestSpeedup)) {
     bestSpeedup = roundSpeedup
     bestKernelCode = currentKernelCode
     log(`NEW BEST: ${bestSpeedup.toFixed(2)}x`)
@@ -1172,7 +1205,7 @@ ${(review.error_excerpt || 'unknown failure').slice(0, 1500)}
 
 # Current (faulty) kernel:
 \`\`\`${fenceToken()}
-${currentKernelCode.substring(0, 3500)}
+${currentKernelCode}
 \`\`\`
 
 # Chained repair memory (prior attempts in THIS fault chain):
@@ -1199,13 +1232,13 @@ Return: root_cause (concise), repair_strategy (a concrete, DIFFERENT plan than a
 
 # Faulty kernel:
 \`\`\`${fenceToken()}
-${currentKernelCode.substring(0, 4000)}
+${currentKernelCode}
 \`\`\`
 
 # Error excerpt:
 ${(review.error_excerpt || '').slice(0, 1000)}
 
-Keep the forward() signature identical to the reference. Return the complete fixed kernel source.
+Keep the public signature identical to the reference. Return the complete fixed kernel source.${SOL_SOURCE_CONTRACT}
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -1250,7 +1283,7 @@ Then append:
 
 # Kernel source:
 \`\`\`${fenceToken()}
-${currentKernelCode.substring(0, 4000)}
+${currentKernelCode}
 \`\`\`
 
 # Feature schema (provide every field):
@@ -1297,7 +1330,11 @@ Return ONLY the features object (booleans + the two ints).`, {
 
     // 2) Deterministic Gate (machine_check) -> allowed_methods.
     //    Run the decision policy as an explicit, auditable agent over the embedded skill library.
-    const gate = await agentRetry(() => agent(`You are the KernelSkill deterministic GATE (machine_check layer). You DETERMINISTICALLY evaluate the decision policy. You do NOT use judgment about which optimization is "best" — you only apply the rules to compute normalized fields, derived fields, the headroom tier, the matched bottleneck case, and the resulting allowed_methods set.
+    const gate = HOST_SOL && !review.ncu_metrics ? {
+      matched_case_id: 'MISSING_PROFILE', allowed_methods: [],
+      key_metrics: 'No Host profiler receipt. Metrics are unknown, not zero. Use source hypotheses only.',
+      tier: 'unknown', bottleneck_id: 'unknown',
+    } : await agentRetry(() => agent(`You are the KernelSkill deterministic GATE (machine_check layer). You DETERMINISTICALLY evaluate the decision policy. You do NOT use judgment about which optimization is "best" — you only apply the rules to compute normalized fields, derived fields, the headroom tier, the matched bottleneck case, and the resulting allowed_methods set.
 
 # Decision policy (long-term memory, machine_check layer):
 ${asJsonBlock({
@@ -1368,7 +1405,7 @@ ${buildOptimizeMemoryBlock(optimizeMemory, 8)}
 
 # Current kernel:
 \`\`\`${fenceToken()}
-${currentKernelCode.substring(0, 3500)}
+${currentKernelCode}
 \`\`\`
 
 Rules:
@@ -1403,7 +1440,7 @@ ${skillLibrary.llm_assist[plan.method_name] || '(self-generated method — follo
 
 # Current kernel:
 \`\`\`${fenceToken()}
-${currentKernelCode.substring(0, 4000)}
+${currentKernelCode}
 \`\`\`
 
 Requirements:
@@ -1416,7 +1453,8 @@ Return the optimized kernel.
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
-Then append (the speedup of this edit is measured next round, so leave it null here):
+${SOL_SOURCE_CONTRACT}
+Then append (the speedup of this edit is not measured by this agent, so leave it null here):
 {"workflow":"${WORKFLOW_NAME}","phase":"Optimize","ts":"<ts>","status":"done","candidate_id":"round-${round}","technique":"${plan.method_name}","speedup":null,"note":"<what you changed to apply ${plan.method_name} + the metric evidence it targets>"}`, {
       label: `optimize-${round}`,
       phase: 'Optimize',
@@ -1452,15 +1490,23 @@ Then append (the speedup of this edit is measured next round, so leave it null h
   // Phase: Iterate — backfill memory outcomes from the latest measurement
   // ===========================================================================
   phase('Iterate')
-  // Backfill the previous optimize-memory entry's measured result once we have a new speedup.
-  if (optimizeMemory.length > 0 && currentValid) {
-    const last = optimizeMemory[optimizeMemory.length - 1]
-    if (last.speedup_after == null && last.outcome === 'pending') {
-      // roundSpeedup reflects the kernel measured at the start of THIS round, i.e. the
-      // result of the PREVIOUS round's edit — attribute it to the prior memory entry.
-      // (First fill happens on the round after the edit.)
+  if (HOST_SOL) {
+    // Measure the edit before advancing, including the final round. Memory is
+    // updated for the edit that produced these exact bytes, never a prior kernel.
+    const after = await measureKernel(currentKernelCode, `after${round}`)
+    currentValid = recordHostResult(currentKernelCode, after)
+    currentLatency = after?.latency_ms || null
+    const pending = optimizeMemory[optimizeMemory.length - 1]
+    if (pending?.outcome === 'pending') {
+      pending.speedup_after = currentValid ? after.speedup : null
+      pending.outcome = !currentValid ? 'invalid'
+        : after.speedup > pending.speedup_before ? 'improved' : 'not_improved'
     }
+    const repair = repairMemory[repairMemory.length - 1]
+    if (repair && repair.fixed == null) repair.fixed = currentValid
+    speedupTrajectory.push(currentValid ? after.speedup : null)
   }
+
 }
 
 // --- Embedded exit restore: for embedded_inplace, the project kernel file was

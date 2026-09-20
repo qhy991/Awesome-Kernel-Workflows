@@ -24,7 +24,7 @@ async function runComposition({ count = 3, failSlot = null } = {}) {
         exemplar_kernels: ['/seed/kernel.cu'], composition_budget: count,
       }
       if (label === 'Discover patterns') return { patterns_discovered: [{ pattern_id: 'tile', pattern_name: 'tile', description: 'change tiling' }] }
-      if (label === 'Realize patterns') return { patterns_realized: [{ pattern_id: 'tile', code_template: 'PATTERN_IMPLEMENTATION' }], dependency_graph: { tile: [] } }
+      if (label.startsWith('Realize pattern ')) return { patterns_realized: [{ pattern_id: 'tile', code_template: 'PATTERN_IMPLEMENTATION' }], dependency_graph: '{"tile":[]}' }
       if (label.startsWith('Compose patterns ')) {
         calls.push({ prompt, schema: options.schema, label })
         const index = Number(label.split(' ').at(-1))
@@ -50,7 +50,7 @@ test('FACT keeps the composition count with one full-source response per candida
     assert.match(call.prompt, /Generate exactly ONE complete kernel candidate/)
     assert.match(call.prompt, /forward/)
     assert.match(call.prompt, /PATTERN_IMPLEMENTATION/)
-    assert.match(call.prompt, /Dependency graph: \{"tile":\[\]\}/)
+    assert.match(call.prompt, /Dependency graph:.*tile/)
     assert.equal(call.schema.properties.composed_kernels.maxItems, 1)
     assert.equal(call.schema.properties.composed_kernels.minItems, 1)
     assert.equal(call.schema.properties.candidates_generated.const, 1)

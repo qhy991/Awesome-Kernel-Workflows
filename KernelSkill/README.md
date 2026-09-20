@@ -148,3 +148,7 @@ This workflow is a faithful **decision-process** adaptation, not a line-for-line
   url={https://arxiv.org/abs/2603.10085}
 }
 ```
+
+## B300 execution repair (2026-09-20)
+
+For KerSor SOL, every seed and edited candidate, including the last round, is measured by the Host. Selection and memory updates use those receipts; absent profiler counters remain unknown and do not enter the metric-dependent gate. The source contract is a complete native translation unit with the original entry binding.

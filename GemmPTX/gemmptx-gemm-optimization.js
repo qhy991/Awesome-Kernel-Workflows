@@ -207,6 +207,11 @@ async function __solExecbenchEvaluate(ctx) {
     phase: ctx.phase || 'Evaluate',
     candidatePath: ctx.kernelSource,
     candidateSource: ctx.candidateSource,
+    baselineSolutionPath: ctx.baselineSolutionPath,
+    remoteEvidence: true,
+    disassemble: true,
+    sassPattern: ctx.sassPattern || '',
+
     substrateDir: ctx.substrateDir,
     contractEnv: ctx.contractEnv,
     solutionOut: ctx.solutionOut,
@@ -326,13 +331,47 @@ let best = {
   artifact_path: '',
 }
 const history = []
+const HOST_SOL = SOL_AVAILABLE && typeof evaluate === 'function'
+async function measureInstructionCandidate(label, candidatePath, source, baseline = false, sassPattern = '') {
+  const prefix = `${EXP_DIR}/host-${label}`
+  const result = await __solExecbenchEvaluate({
+    label: `sol-eval-${label}`, phase: baseline ? 'Baseline Evidence' : 'Disassemble Verify',
+    kernelSource: candidatePath, candidateSource: source,
+    baselineSolutionPath: baseline ? `${SOL_SEED_DIR}/seed.solution.json` : undefined,
+    sassPattern, substrateDir: SOL_SUBSTRATE_DIR,
+    contractEnv: `${SOL_SEED_DIR}/contract.env`, solutionOut: `${prefix}.solution.json`,
+    benchOut: `${prefix}.bench.jsonl`, solCli: SOL_CLI, taskDir: SOL_TASK_DIR,
+    benchConfig: SOL_BENCH_CONFIG, seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+    ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX, definitionPath: SOL_DEFINITION_PATH,
+  })
+  return result
+}
+function measuredEvidence(result) {
+  return Boolean(result && result.compiled === true && result.correct === true
+    && result.n_total > 0 && result.n_pass === result.n_total
+    && Number.isFinite(result.speedup) && result.speedup > 0)
+}
+const hostBaseline = HOST_SOL ? await measureInstructionCandidate('baseline', KERNEL_PATH, undefined, true) : null
+if (HOST_SOL && !measuredEvidence(hostBaseline)) {
+  return { ok: false, error: 'baseline_invalid', baseline: hostBaseline }
+}
+if (HOST_SOL && (!hostBaseline.environment || !hostBaseline.disassembly?.ok)) {
+  return { ok: false, error: 'missing_evidence_contract', baseline: hostBaseline,
+    reason: 'Host baseline requires actual hardware identity and disassembly receipt.' }
+}
 
 // =============================================================================
 // Phase 1: Hardware Census
 // =============================================================================
 phase('Hardware Census')
 
-const hardware = await agentRetry(() => agent(`You are the hardware-census agent for a GEMM/PTX optimization workflow.
+const hardware = HOST_SOL ? {
+  measured: true, gpu_name: hostBaseline.environment.hardware,
+  compute_capability: hostBaseline.environment.compute_capability,
+  arch: `sm_${String(hostBaseline.environment.compute_capability || '').replace('.', '')}`,
+  sm_count: hostBaseline.environment.sms, cuda_version: hostBaseline.environment.libs?.cuda || null,
+  caveats: ['Hardware identity comes from the Host baseline evaluator receipt.'],
+} : await agentRetry(() => agent(`You are the hardware-census agent for a GEMM/PTX optimization workflow.
 
 # Goal
 Collect target GPU facts that constrain PTX/SASS-level GEMM decisions.
@@ -421,7 +460,12 @@ if (signature.is_gemm === false) {
 // =============================================================================
 phase('Baseline Evidence')
 
-const baseline = await agentRetry(() => agent(`You are the baseline-evidence agent. Establish measured baseline correctness, latency, and instruction evidence before any edit.
+const baseline = HOST_SOL ? {
+  ...hostBaseline, artifact_path: hostBaseline.solution_path,
+  sass_path: hostBaseline.disassembly.sass_path,
+  observed_instructions: (hostBaseline.disassembly.top_mnemonics || []).map(x => x[0]),
+  instruction_summary: hostBaseline.disassembly.note,
+} : await agentRetry(() => agent(`You are the baseline-evidence agent. Establish measured baseline correctness, latency, and instruction evidence before any edit.
 
 # Baseline source
 ${KERNEL_PATH}
@@ -584,7 +628,7 @@ ${GEMMPTX_SKILL_HINT}
 3. Implement only the stated instruction-level hypothesis.
 4. Keep the public API and harness interface compatible with the original.
 5. Return the complete candidate source in kernel_code - every line, no
-   placeholders. A read-only activation has no tool that writes files, so do not
+   placeholders. Preserve the original Python-visible run/forward signature and PYBIND11_MODULE binding. A read-only activation has no tool that writes files, so do not
    try to write ${candidatePath}; the Host stages what you return.
 6. Do not benchmark in this phase.
 
@@ -604,7 +648,20 @@ ${genomeFooter('Implement', candidateId)}`, {
   }
 
   phase('Disassemble Verify')
-  const verify = await agentRetry(() => agent(`You are the instruction-evidence gate. Compile, test, and disassemble the candidate, then verify the expected PTX/SASS regexes.
+  const hostCandidate = HOST_SOL ? await measureInstructionCandidate(candidateId, candidatePath,
+    implementation.kernel_code || '', false, spec.sass_regex || '') : null
+  const hostInstructionVerified = measuredEvidence(hostCandidate)
+    && hostCandidate.disassembly?.ok === true && hostCandidate.disassembly.instruction_verified === true
+  const verify = HOST_SOL ? {
+    compiled: hostCandidate?.compiled === true, correct: hostCandidate?.correct === true,
+    status: !hostCandidate?.compiled ? 'compile_error' : !hostCandidate?.correct ? 'incorrect'
+      : hostInstructionVerified ? 'verified' : 'hypothesis_not_realized',
+    instruction_verified: hostInstructionVerified,
+    observed_instructions: hostInstructionVerified ? [spec.target_instruction] : [],
+    sass_path: hostCandidate?.disassembly?.sass_path || null,
+    artifact_path: hostCandidate?.solution_path || null,
+    error: hostCandidate?.stderr || hostCandidate?.disassembly?.error || '',
+  } : await agentRetry(() => agent(`You are the instruction-evidence gate. Compile, test, and disassemble the candidate, then verify the expected PTX/SASS regexes.
 
 # Candidate
 - candidate_id: ${candidateId}
@@ -669,8 +726,8 @@ ${genomeFooter('Disassemble Verify', candidateId)}`, {
   // measured stayed false and every candidate was rejected with speedup=n/a -
   // correct behaviour on the workflow's part, and the reason it never accepted
   // anything. The Host measures, and the turn keeps the profile reasoning.
-  let __hostMeasured = null
-  if (SOL_AVAILABLE && (implementation.kernel_code || '').trim()) {
+  let __hostMeasured = hostCandidate
+  if (!HOST_SOL && SOL_AVAILABLE && (implementation.kernel_code || '').trim()) {
     __hostMeasured = await __solExecbenchEvaluate({
       label: `sol-eval-${candidateId}`, phase: 'Profile',
       substrateDir: SOL_SUBSTRATE_DIR,
@@ -730,6 +787,12 @@ ${genomeFooter('Profile', candidateId)}`, {
     schema: JSON_SCHEMA,
   }), { retries: 5 })
 
+  if (HOST_SOL) {
+    // A narrative review cannot replace, fabricate, or downgrade Host metrics.
+    Object.assign(measured, { measured: measuredEvidence(hostCandidate),
+      correct: hostCandidate.correct === true, speedup_vs_baseline: hostCandidate.speedup,
+      latency_ms: hostCandidate.latency_ms, profile_available: false, metrics: {} })
+  }
   phase('Decide')
   // best.speedup arrived NaN and every comparison against it was false, so
   // candidates were logged as "rejected ... best=NaN" with no reason given.

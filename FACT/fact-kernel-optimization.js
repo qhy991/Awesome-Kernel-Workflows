@@ -651,7 +651,11 @@ Then append:
 
   log('Realizing patterns as CUTLASS code transformations...');
 
-  const realizationResult = await agentRetry(() => agent(
+  const realizedResults = [];
+  for (const patternToRealize of discoveredPatterns) {
+  let realizationResult = null;
+  try {
+  realizationResult = await agentRetry(() => agent(
     `Realize discovered patterns as concrete code transformations:
 
 Target: ${kernelSpec.operation}
@@ -659,7 +663,8 @@ Architecture: ${setupResult.target_architecture}
 Data types: ${(kernelSpec.dtypes || []).join(', ')}
 
 Patterns to realize:
-${discoveredPatterns.map((p, idx) => `${idx + 1}. ${p.pattern_name}: ${p.description}`).join('\n')}
+${JSON.stringify(patternToRealize)}
+Return exactly one realized pattern for this pattern_id. Other discovered patterns are dependency names only.
 
 Realization process:
 1. For each pattern:
@@ -703,13 +708,13 @@ Append exactly one line to ${args.exp_dir}/genome.jsonl (create if missing; shel
 Then append:
 {"workflow":"${WORKFLOW_NAME}","phase":"Pattern Realization","ts":"<ts>","status":"done","technique":"pattern_realization","note":"<how many patterns realized as code transformations + key dependencies, one line>"}`,
     {
-      label: 'Realize patterns',
+      label: `Realize pattern ${patternToRealize.pattern_id}`,
       phase: 'Pattern Realization',
       schema: {
         type: 'object',
         properties: {
           patterns_realized: {
-            type: 'array',
+            type: 'array', minItems: 1, maxItems: 1,
             items: {
               type: 'object',
               properties: {
@@ -732,12 +737,19 @@ Then append:
     }
   ), { retries: 5, allowNull: true });
 
-  if (!realizationResult || realizationResult.patterns_realized.length === 0) {
-    log('Pattern realization failed');
-    return { success: false, reason: 'realization_failed' };
+  } catch (error) {
+    log(`Pattern realization failed for ${patternToRealize.pattern_id}: ${String(error.message || error).slice(0, 300)}`);
   }
-
-  realizedPatterns.push(...realizationResult.patterns_realized);
+  if (realizationResult?.patterns_realized?.length === 1) {
+    realizedPatterns.push(realizationResult.patterns_realized[0]);
+    realizedResults.push(realizationResult);
+  }
+  }
+  if (!realizedPatterns.length) return { success: false, reason: 'realization_failed' };
+  const realizationResult = {
+    patterns_realized: realizedPatterns,
+    dependency_graph: realizedResults.map(r => r.dependency_graph || '').filter(Boolean).join('\n'),
+  };
   log(`Realized ${realizedPatterns.length} patterns as code transformations`);
 
   // ============================================================================
@@ -766,6 +778,29 @@ Emit every line of every candidate. Do NOT describe a candidate as a delta again
   // A batch of full translation units can exhaust one structured tool response.
   // Keep the requested search count, but give each candidate its own receipt and
   // retry boundary. Carry only composition metadata forward, not repeated code.
+  const __measured = [];
+  async function measureComposedKernel(k, idx) {
+    if (!SOL_AVAILABLE) return;
+    const kid = k.kernel_id || `k${idx}`;
+    const variant = `fact_${kid}`.replace(/[^A-Za-z0-9_]/g, '_');
+    const r = await __solExecbenchEvaluate({
+      label: `sol-eval-${variant}`, phase: 'Evaluation',
+      substrateDir: SOL_SUBSTRATE_DIR,
+      kernelSource: `${args.exp_dir}/${variant}.cu`, candidateSource: k.kernel_code || '',
+      contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
+      solutionOut: `${args.exp_dir}/${variant}.solution.json`,
+      benchOut: `${args.exp_dir}/${variant}.bench.jsonl`,
+      solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+      seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+      ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+      definitionPath: SOL_DEFINITION_PATH,
+    });
+    if (r) {
+      __measured.push({ kernel_id: kid, ...r });
+      log(`Host-measured ${kid}: compiled=${r.compiled} correct=${r.correct} speedup=${r.speedup}`);
+    }
+  }
+
   const compositionCount = Math.min(compositionBudget, 20);
   for (let compositionIndex = 0; compositionIndex < compositionCount; compositionIndex++) {
     const candidateId = `k${compositionIndex + 1}`;
@@ -773,8 +808,14 @@ Emit every line of every candidate. Do NOT describe a candidate as a delta again
       kernel_id: k.kernel_id,
       applied_patterns: k.applied_patterns,
       pattern_parameters: k.pattern_parameters,
+      measurement: __measured.filter(m => m.kernel_id === k.kernel_id).map(m => ({
+        compiled: m.compiled, correct: m.correct, speedup: m.speedup,
+        failure_code: m.failure_code, diagnostics: String(m.stderr || '').slice(-2000),
+      }))[0] || null,
     }));
-    const compositionResult = await agentRetry(() => agent(
+    let compositionResult = null;
+    try {
+    compositionResult = await agentRetry(() => agent(
     `Compose patterns to generate optimized CUTLASS kernels:
 
 Target specification:
@@ -863,11 +904,18 @@ Then append:
     }
   ), { retries: 5, allowNull: true });
 
+    } catch (error) {
+      log(`Composition failed; retaining ${__measured.length} Host receipts: ${String(error.message || error).slice(0, 300)}`);
+      if (__measured.length) break;
+    }
     if (!compositionResult || compositionResult.composed_kernels?.length !== 1) {
       log(`Pattern composition ${candidateId} failed; retaining earlier candidates`);
       continue;
     }
     composedKernels.push(compositionResult.composed_kernels[0]);
+    // Commit this candidate's evaluator receipt before asking for the next one.
+    await measureComposedKernel(compositionResult.composed_kernels[0], compositionIndex);
+    phase('Pattern Composition');
   }
 
   if (composedKernels.length === 0) {
@@ -1046,32 +1094,6 @@ Map per-candidate results into evaluation_results: compilation_success=build suc
   // outcome here is not a fabricated number but no measurement at all.
   // Measure every composed kernel on the Host first and hand the agent the
   // table, so ranking and best_kernel rest on numbers something produced.
-  let __measured = []
-  if (SOL_AVAILABLE && composedKernels.length) {
-    __measured = await parallel(composedKernels.map((k, idx) => async () => {
-      const kid = k.kernel_id || `k${idx}`
-      const variant = `fact_${kid}`.replace(/[^A-Za-z0-9_]/g, '_')
-      const r = await __solExecbenchEvaluate({
-        label: `sol-eval-${variant}`, phase: 'Evaluation',
-        substrateDir: SOL_SUBSTRATE_DIR,
-        kernelSource: `${args.exp_dir}/${variant}.cu`,
-        candidateSource: k.kernel_code || '',
-        contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
-        solutionOut: `${args.exp_dir}/${variant}.solution.json`,
-        benchOut: `${args.exp_dir}/${variant}.bench.jsonl`,
-        solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
-        seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
-        ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
-        definitionPath: SOL_DEFINITION_PATH,
-      })
-      return r ? { kernel_id: kid, ...r } : null
-    }))
-    __measured = __measured.filter(Boolean)
-    for (const m of __measured) {
-      log(`Host-measured ${m.kernel_id}: compiled=${m.compiled} correct=${m.correct} `
-        + `speedup=${m.speedup} workloads=${m.n_pass}/${m.n_total}`)
-    }
-  }
   const __measuredBlock = __measured.length ? `
 
 # ALREADY MEASURED ON THE HOST - use these numbers verbatim
@@ -1081,7 +1103,7 @@ ${__measured.map(m => `kernel_id=${m.kernel_id} compiled=${m.compiled} correct=$
 Rank and pick best_kernel from these. Do not re-derive or estimate them, and do
 not mark a kernel unavailable that appears above.` : ''
 
-  const evaluationResult = await agentRetry(() => agent(
+  let evaluationResult = await agentRetry(() => agent(
     `Evaluate all composed kernels:${evaluationEmbeddingBlock}${__measuredBlock}
 
 Kernels to evaluate: ${composedKernels.length}
@@ -1156,6 +1178,12 @@ Then append, using the values you just measured (status="done" if the best kerne
     }
   ), { retries: 5, allowNull: true });
 
+  if (SOL_AVAILABLE && __measured.length) {
+    const valid = __measured.filter(m => m.compiled === true && m.correct === true && m.n_total > 0 && m.n_pass === m.n_total);
+    const best = valid.reduce((a, b) => !a || b.speedup > a.speedup ? b : a, null);
+    evaluationResult = { ...(evaluationResult || {}), kernels_evaluated: __measured.length,
+      evaluation_results: __measured, best_kernel: best ? { ...best, speedup_vs_baseline: best.speedup } : null };
+  }
   if (!evaluationResult) {
     log('Evaluation failed');
     return { success: false, reason: 'evaluation_failed' };
