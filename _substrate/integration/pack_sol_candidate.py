@@ -74,8 +74,8 @@ def cuda_entry_point(source):
     """Use the Python-visible binding name, not the C++ function name.
 
     Existing seeds expose either run or forward. Prefer run when both exist,
-    preserving the previous contract, and reject missing literal bindings at
-    pack time instead of inventing an entry that fails after a GPU build.
+    preserving the previous contract. Macro-generated bindings keep the legacy
+    run entry; the compiler/loader remains authoritative for those bindings.
     """
     source = re.sub(
         r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"',
@@ -94,10 +94,7 @@ def cuda_entry_point(source):
     for entry in ("run", "forward"):
         if entry in exports:
             return entry
-    raise SystemExit(
-        "pack_sol_candidate: PYBIND11_MODULE must bind run() or forward() "
-        "with a literal module.def name; preserve the seed's public binding"
-    )
+    return "run"
 
 
 def build_solution(kernel_src_text, kernel_filename, contract):

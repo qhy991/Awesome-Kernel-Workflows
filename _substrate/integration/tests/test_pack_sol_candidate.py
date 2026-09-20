@@ -110,21 +110,13 @@ class PackSolTests(unittest.TestCase):
         ).replace(', m)', ', module)').replace('m.def', 'module.def')
         self.assertEqual(self._run(source, CONTRACT)["spec"]["entry_point"], "kernel.cu::forward")
 
-    def test_missing_public_binding_fails_and_removes_stale_output(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            kernel = root / "kernel.cu"
-            out = root / "solution.json"
-            kernel.write_text(KERNEL_WITH_BINDING.replace('m.def("run",', 'm.def("helper",'))
-            out.write_text('{"stale": true}\n')
-            result = subprocess.run(
-                [sys.executable, str(PACK), "--kernel", str(kernel),
-                 "--contract", str(root / "missing-contract.env"), "--out", str(out)],
-                capture_output=True, text=True,
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("bind run() or forward()", result.stderr)
-            self.assertFalse(out.exists())
+    def test_macro_generated_run_binding_keeps_legacy_transport(self):
+        source = '#define PUBLIC_ENTRY "run"\n' + KERNEL_WITH_BINDING.replace(
+            'm.def("run",', 'm.def(PUBLIC_ENTRY,'
+        )
+        sol = self._run(source, CONTRACT)
+        self.assertEqual(sol["spec"]["entry_point"], "kernel.cu::run")
+        self.assertEqual(sol["sources"][0]["content"], source)
 
     def test_bare_kernel_fails_loudly(self):
         bare = "__global__ void k(){}\n"  # no pybind

@@ -38,7 +38,7 @@ for the versioning policy.
 - Preserve CUDA candidates' exported `forward` entry when packaging SOL
   solutions, instead of unconditionally writing `::run` and failing to load a
   successfully built extension. Existing `run` bindings keep precedence, and
-  missing public bindings now fail before GPU compilation.
+  macro-generated `run` bindings retain their legacy transport.
   (`_substrate/integration/pack_sol_candidate.py`, its regression tests)
 
 - **Cumulative failed-strategy constraints now follow their transfer-object
