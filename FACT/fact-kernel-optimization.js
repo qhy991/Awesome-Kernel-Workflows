@@ -438,6 +438,9 @@ Then append:
     log('Setup failed');
     return { success: false, reason: 'setup_failed' };
   }
+  // Optional arrays may be legally omitted by a structured response.
+  setupResult.exemplar_kernels = Array.isArray(setupResult.exemplar_kernels)
+    ? setupResult.exemplar_kernels : (args.kernel_path ? [args.kernel_path] : []);
 
   log(`Target: ${setupResult.kernel_spec.operation} on ${setupResult.target_architecture}`);
   log(`CUTLASS ${setupResult.cutlass_version}, Tensor Cores: ${setupResult.tensor_cores_available ? 'Yes' : 'No'}`);
@@ -633,7 +636,7 @@ Then append:
     }
   ), { retries: 5, allowNull: true });
 
-  if (!discoveryResult || discoveryResult.patterns_discovered.length === 0) {
+  if (!Array.isArray(discoveryResult?.patterns_discovered) || discoveryResult.patterns_discovered.length === 0) {
     log('Pattern discovery failed or no patterns found');
     return { success: false, reason: 'discovery_failed' };
   }
@@ -1006,7 +1009,9 @@ Then append (status="done" if ablation completed, else "error"):
   if (!ablationResult) {
     log('Ablation studies failed');
   } else {
-    log(`Ablation complete: identified ${ablationResult.critical_patterns.length} critical patterns`);
+  if (ablationResult) ablationResult.critical_patterns = Array.isArray(ablationResult.critical_patterns)
+    ? ablationResult.critical_patterns : [];
+  log(`Ablation complete: identified ${ablationResult?.critical_patterns?.length || 0} critical patterns`);
   }
 
   // ============================================================================
@@ -1179,7 +1184,7 @@ Then append, using the values you just measured (status="done" if the best kerne
   ), { retries: 5, allowNull: true });
 
   if (SOL_AVAILABLE && __measured.length) {
-    const valid = __measured.filter(m => m.compiled === true && m.correct === true && m.n_total > 0 && m.n_pass === m.n_total);
+    const valid = __measured.filter(m => m.measurement_valid !== false && m.compiled === true && m.correct === true && m.n_total > 0 && m.n_pass === m.n_total);
     const best = valid.reduce((a, b) => !a || b.speedup > a.speedup ? b : a, null);
     evaluationResult = { ...(evaluationResult || {}), kernels_evaluated: __measured.length,
       evaluation_results: __measured, best_kernel: best ? { ...best, speedup_vs_baseline: best.speedup } : null };

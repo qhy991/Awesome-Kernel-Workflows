@@ -347,7 +347,7 @@ async function measureInstructionCandidate(label, candidatePath, source, baselin
   return result
 }
 function measuredEvidence(result) {
-  return Boolean(result && result.compiled === true && result.correct === true
+  return Boolean(result && result.measurement_valid !== false && result.compiled === true && result.correct === true
     && result.n_total > 0 && result.n_pass === result.n_total
     && Number.isFinite(result.speedup) && result.speedup > 0)
 }

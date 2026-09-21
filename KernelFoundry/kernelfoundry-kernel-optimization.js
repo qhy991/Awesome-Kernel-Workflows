@@ -69,6 +69,8 @@ async function __solExecbenchEvaluate(ctx) {
     phase: ctx.phase || 'Evaluate',
     candidatePath: ctx.kernelSource,
     candidateSource: ctx.candidateSource,
+    bindingOut: ctx.bindingOut, bindingWorkflow: ctx.bindingWorkflow, candidateId: ctx.candidateId,
+
     substrateDir: ctx.substrateDir,
     contractEnv: ctx.contractEnv,
     solutionOut: ctx.solutionOut,
@@ -917,6 +919,9 @@ Return {"written":true,"path":"${candidatePath}"}.`, {
         substrateDir: SOL_SUBSTRATE_DIR,
         kernelSource: candidatePath,
         candidateSource: offspringCode,
+        bindingOut: `${EXP_DIR}/bindings/gen_${generation}.json`, bindingWorkflow: WORKFLOW_NAME,
+        candidateId: `gen${generation}`,
+
         contractEnv: `${EXP_DIR}/contract.env`,
         solutionOut: `${EXP_DIR}/${variant}.solution.json`,
         benchOut: `${EXP_DIR}/${variant}.bench.jsonl`,
@@ -1117,7 +1122,9 @@ Then append (this is generation ${generation}; status="done" if it compiled AND 
   }
   if (EVIDENCE_MODE === 'measured') {
     const generationBindingPath = `${EXP_DIR}/bindings/gen_${generation}.json`
-    const canonicalEval = await agentRetry(() => agent(`Create the immutable
+    const canonicalEval = IS_SOL && typeof evaluate === 'function'
+      ? (evalResult.artifact_binding || { verified: false, compiled: false, correct: false, speedup: 0 })
+      : await agentRetry(() => agent(`Create the immutable
 KernelFoundry source-measurement binding for candidate gen${generation}.
 
 Run one small deterministic Python program; do not infer or repair anything:
@@ -1296,6 +1303,10 @@ Run one small deterministic Python program; do not infer or repair anything:
     evalResult.driver_envelope = { latency_ms: embLatency, metrics: embMetrics, bottleneck_class: embBclass, backend_id: 'embedded' }
   }
 
+  if (evalResult.measurement_valid === false) {
+    log(`Measurement rejected for generation ${generation}; no archive or fitness update`)
+    continue
+  }
   const fitness = computeFitness(evalResult.compiled, evalResult.correct, evalResult.speedup || 0)
   const cellKey = `${evalResult.d_mem || 0},${evalResult.d_algo || 0},${evalResult.d_sync || 0}`
 

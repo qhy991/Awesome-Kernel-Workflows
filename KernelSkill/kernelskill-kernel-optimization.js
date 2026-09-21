@@ -795,7 +795,7 @@ async function measureKernel(code, label, baseline = false) {
   return result
 }
 function validHostResult(result) {
-  return Boolean(result && result.compiled === true && result.correct === true
+  return Boolean(result && result.measurement_valid !== false && result.compiled === true && result.correct === true
     && result.n_total > 0 && result.n_total === result.n_pass
     && Number.isFinite(result.speedup) && result.speedup > 0)
 }

@@ -117,3 +117,54 @@ test('STARK Debug context carries complete source and entry contract', () => {
   assert.ok(context.includes('PYBIND11_MODULE'))
   assert.match(source.slice(source.indexOf('You are a kernel debugging expert.'), source.indexOf("label: `debug-")), /SOL_CANDIDATE_CONTRACT/)
 })
+
+test('FACT accepts omitted optional arrays and cannot rank a reference outlier', async () => {
+  let measured = 0
+  const output = await run('FACT/fact-kernel-optimization.js', {
+    evaluate: async () => ++measured === 1 ? result(2) : result(700, {measurement_valid:false}),
+    agent: (prompt, o) => {
+      if (o.label === 'Setup FACT') return {target_architecture:'sm_103',cutlass_version:'3',kernel_spec:{operation:'attention'},composition_budget:2}
+      if (o.label === 'Discover patterns') return {patterns_discovered:[{pattern_id:'one',pattern_name:'one',description:'test'}]}
+      if (o.label.startsWith('Realize pattern ')) return {patterns_realized:[{pattern_id:'one',pattern_name:'one',code_template:'test'}]}
+      if (o.label.startsWith('Compose patterns ')) return {composed_kernels:[{kernel_id:`k${o.label.endsWith('1')?1:2}`,kernel_code:'source',applied_patterns:[]}]}
+      if (o.label.toLowerCase().includes('ablation')) return {}
+      if (o.label === 'Evaluate kernels') return {kernels_evaluated:2,evaluation_results:[],best_kernel:{kernel_id:'k2',speedup_vs_baseline:700}}
+    },
+  })
+  assert.equal(measured,2)
+  assert.equal(output.speedup,2)
+  assert.equal(output.best_kernel_id,'k1')
+})
+
+test('KernelBand baseline and candidate score come from Host, not model denominator', async () => {
+  const output = await run('KernelBand/kernelband-kernel-optimization.js', {
+    evaluate: async r => r.baselineSolutionPath ? result(1,{latency_ms:.04}) : result(.9157,{latency_ms:.03}),
+    agent: (prompt,o) => {
+      if (o.label==='setup') return {kernel_code:'seed-source',baseline_latency_us:110.39}
+      if (o.label.startsWith('generate-')) return {optimized_kernel:'candidate-source'}
+      if (o.phase==='Evaluate') return {compiled:true,correct:true,latency_us:29.9578,speedup:999}
+    },
+  })
+  assert.equal(output.baseline_latency_us,40)
+  assert.equal(output.best_speedup,.9157)
+  assert.equal(output.best_latency_us,30)
+})
+
+test('KernelFoundry keeps Host binding and measured fitness without canonical-bind agent', async () => {
+  const output = await run('KernelFoundry/kernelfoundry-kernel-optimization.js', {
+    evaluate: async r => {
+      assert.equal(r.candidateId,'gen0')
+      assert.ok(r.bindingOut.endsWith('/bindings/gen_0.json'))
+      return result(63.5,{artifact_binding:{verified:true,compiled:true,correct:true,speedup:63.5,n_pass:2,n_total:2,
+        candidate_sha256:'a'.repeat(64),measurement_sha256:'b'.repeat(64),binding_sha256:'c'.repeat(64),task_sha256:'d'.repeat(64),
+        task_fingerprint_kind:'file_sha256',binding_path:r.bindingOut,result_path:r.normalizedOut}})
+    },
+    agent: (prompt,o) => {
+      if(o.label==='setup') return {operator_code:'reference',baseline_time_ms:1}
+      if(o.label==='vary-0') return {kernel_code:'complete-source',strategy_description:'test',d_mem:1,d_algo:1,d_sync:1}
+      if(o.label.startsWith('canonical-bind-')) throw new Error('Host binding must not be delegated to a read-only agent')
+    },
+  },{generations:1,min_generations:1,descriptor_result_path:'/exp/descriptor.json',archive_update_result_path:'/exp/archive.json'})
+  assert.equal(output.best_speedup,63.5)
+  assert.equal(output.best_candidate_id,'gen0')
+})

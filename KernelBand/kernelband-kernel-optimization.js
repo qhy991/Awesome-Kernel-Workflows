@@ -25,6 +25,7 @@ async function __solExecbenchEvaluate(ctx) {
     phase: ctx.phase || 'Evaluate',
     candidatePath: ctx.kernelSource,
     candidateSource: ctx.candidateSource,
+    baselineSolutionPath: ctx.baselineSolutionPath,
     substrateDir: ctx.substrateDir,
     contractEnv: ctx.contractEnv,
     solutionOut: ctx.solutionOut,
@@ -735,7 +736,19 @@ if (USE_DRIVER_STANDALONE) {
     { model: MODEL.mechanical, label: 'driver-anti-cheat-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 
-baselineLatency = setupResult?.baseline_latency_us || 1000
+const HOST_SOL = SOL_AVAILABLE && typeof evaluate === 'function'
+const hostBaseline = HOST_SOL ? await __solExecbenchEvaluate({
+  label: 'sol-eval-baseline', phase: 'Setup', substrateDir: SOL_SUBSTRATE_DIR,
+  kernelSource: `${EXP_DIR}/baseline.cu`, baselineSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
+  contractEnv: `${SOL_SEED_DIR}/contract.env`, solutionOut: `${EXP_DIR}/baseline.solution.json`,
+  benchOut: `${EXP_DIR}/baseline.bench.jsonl`, solCli: SOL_CLI, taskDir: SOL_TASK_DIR,
+  benchConfig: SOL_BENCH_CONFIG, seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+  envPrefix: SOL_ENV_PREFIX, ldLibraryPath: SOL_LD_LIBRARY_PATH, definitionPath: SOL_DEFINITION_PATH,
+}) : null
+if (HOST_SOL && (!hostBaseline?.correct || hostBaseline.measurement_valid === false)) {
+  return { success: false, reason: 'baseline_unverified', baseline: hostBaseline }
+}
+baselineLatency = HOST_SOL ? hostBaseline.latency_ms * 1000 : setupResult?.baseline_latency_us || 1000
 const initialCode = setupResult?.kernel_code || ''
 const hwSignature = setupResult?.hardware_signature || { dram_throughput_pct: 50, l2_throughput_pct: 50, sm_throughput_pct: 50 }
 const initialFeatures = setupResult?.behavioral_features || { normalized_time: 1.0, registers_per_thread: 32, shared_mem_bytes: 0, block_dimension: 256, occupancy: 0.5 }
@@ -1237,6 +1250,15 @@ Then append, using the values you just measured (status="done" if it compiled AN
   // ===========================================================================
   phase('Update')
 
+  if (HOST_SOL && __hostMeasured?.measurement_valid === false) {
+    iterationLog.push({ t, failure_code: 'measurement_invalid', reward: null })
+    continue
+  }
+  if (HOST_SOL) Object.assign(evalResult, {
+    compiled: __hostMeasured?.compiled === true, correct: __hostMeasured?.correct === true,
+    latency_us: __hostMeasured?.latency_ms != null ? __hostMeasured.latency_ms * 1000 : null,
+    speedup: __hostMeasured?.speedup || 0,
+  })
   const compiled = evalResult?.compiled || false
   const correct = evalResult?.correct || false
   const newLatency = evalResult?.latency_us || baselineLatency
@@ -1273,7 +1295,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
       id: newId,
       code: generatedCode,
       latency: newLatency,
-      speedup: baselineLatency / newLatency,
+      speedup: newSpeedup,
       features,
       hw_signature: evalResult?.hw_signature || selectedKernel.hw_signature,
       cluster: selectedCluster,
@@ -1282,7 +1304,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
 
     // Update best
     if (newLatency < bestKernel.latency) {
-      bestKernel = { code: generatedCode, latency: newLatency, speedup: baselineLatency / newLatency }
+      bestKernel = { code: generatedCode, latency: newLatency, speedup: newSpeedup }
       log(`  NEW BEST: ${__fmt(newLatency, 1)}μs (${__fmt(bestKernel.speedup, 2)}x) via ${selectedStrategy}`)
     }
   }
@@ -1296,12 +1318,12 @@ Then append, using the values you just measured (status="done" if it compiled AN
     correct,
     reward: __fmt(reward, 4),
     latency: newLatency,
-    speedup: compiled && correct ? (baselineLatency / newLatency).toFixed(2) : '0',
+    speedup: compiled && correct ? newSpeedup.toFixed(2) : '0',
     cumulative_reward: __fmt(totalReward, 3),
   })
 
   const statusEmoji = compiled && correct ? (reward > 0 ? '↑' : '→') : '✗'
-  log(`  ${statusEmoji} t=${t}: ${selectedStrategy}@C${selectedCluster} → ${compiled && correct ? __fmt(newLatency, 1) + 'μs (' + (baselineLatency / newLatency).toFixed(2) + 'x)' : 'FAIL'} r=${__fmt(reward, 3)} Σr=${__fmt(totalReward, 2)}`)
+  log(`  ${statusEmoji} t=${t}: ${selectedStrategy}@C${selectedCluster} → ${compiled && correct ? __fmt(newLatency, 1) + 'μs (' + newSpeedup.toFixed(2) + 'x)' : 'FAIL'} r=${__fmt(reward, 3)} Σr=${__fmt(totalReward, 2)}`)
 }
 
 // =============================================================================
