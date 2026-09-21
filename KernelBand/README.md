@@ -198,3 +198,7 @@ Workflow({name: 'kernelband-kernel-optimization', args: {
 ## 参考文献
 
 - [KernelBand](https://arxiv.org/abs/2511.18868) — Ran, Xie 等 (北大等, 2026)
+
+### 2026-09-21 follow-up
+
+SOL scores are taken directly from the Host. The seed is measured on the Host, generation sees its full source, and invalid reference timing does not enter bandit updates.

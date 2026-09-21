@@ -169,3 +169,7 @@ REPORT:
 ## B300 execution repair (2026-09-20)
 
 Pattern realization is bounded to one pattern per response. On KerSor SOL, each complete composition is evaluated immediately before the next composition, and its measured feedback is visible to later slots. Later structured-response failures retain earlier evaluator receipts.
+
+### 2026-09-21 follow-up
+
+Optional setup and ablation arrays may be omitted. Host-invalid timing is excluded from candidate ranking while raw receipts remain available.

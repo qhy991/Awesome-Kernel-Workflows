@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- KernelBand 的 SOL 生成上下文保留完整选中源码和末尾 run/forward 绑定（`KernelBand/kernelband-kernel-optimization.js`）。
+
 - 修复 FACT 可选数组及异常计时选优；KernelFoundry 由 Host 绑定结果，KernelBand 使用 Host 基线/分数，避免有效成果丢失和分数虚高（FACT/、KernelFoundry/、KernelBand/、KernelSkill/、GemmPTX/、tests）。
 
 - 修复 B300 审查暴露的执行缺口：GemmPTX 由 Host 提供基线、硬件与指令证据；KernelSkill 只用实测候选选优与更新记忆并评测最后一次修改；STARK Debug 保留完整源码和绑定契约；FACT 每个组合生成后立即评测，后续响应失败时保留已有回执（`GemmPTX/`、`KernelSkill/`、`STARK/`、`FACT/`、`_meta/tools/test/`）。

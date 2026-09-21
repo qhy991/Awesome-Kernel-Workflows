@@ -141,3 +141,7 @@ Workflow({name: 'kernelfoundry-kernel-optimization', args: {
 
 - [KernelFoundry](https://arxiv.org/abs/2603.12440) — Wiedemann 等 (Intel, 2026)
 - [MAP-Elites](https://arxiv.org/abs/1504.04909) — Mouret & Clune (2015)
+
+### 2026-09-21 follow-up
+
+On the SOL path, immutable candidate/measurement/task bindings are written and hashed by the Host evaluator. Read-only agents no longer create bindings or overwrite verified scores.

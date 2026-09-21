@@ -18,3 +18,7 @@
 ## 论文
 
 - [KernelFoundry: Hardware-aware evolutionary GPU kernel optimization](https://arxiv.org/abs/2603.12440)
+
+### 2026-09-21 follow-up
+
+SOL 路径的候选/测量/任务绑定由 Host evaluator 写入并计算哈希。只读 agent 不再负责创建绑定，也不覆盖已验证分数。
