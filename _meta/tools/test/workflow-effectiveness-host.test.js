@@ -137,14 +137,17 @@ test('FACT accepts omitted optional arrays and cannot rank a reference outlier',
 })
 
 test('KernelBand baseline and candidate score come from Host, not model denominator', async () => {
+  const longSeed = 'x'.repeat(7000) + 'PYBIND11_MODULE end-of-file';
+  let sawWholeSeed = false
   const output = await run('KernelBand/kernelband-kernel-optimization.js', {
     evaluate: async r => r.baselineSolutionPath ? result(1,{latency_ms:.04}) : result(.9157,{latency_ms:.03}),
     agent: (prompt,o) => {
-      if (o.label==='setup') return {kernel_code:'seed-source',baseline_latency_us:110.39}
-      if (o.label.startsWith('generate-')) return {optimized_kernel:'candidate-source'}
+      if (o.label==='setup') return {kernel_code:longSeed,baseline_latency_us:110.39}
+      if (o.label.startsWith('generate-')) { sawWholeSeed = prompt.includes(longSeed); return {optimized_kernel:'candidate-source'} }
       if (o.phase==='Evaluate') return {compiled:true,correct:true,latency_us:29.9578,speedup:999}
     },
   })
+  assert.equal(sawWholeSeed,true)
   assert.equal(output.baseline_latency_us,40)
   assert.equal(output.best_speedup,.9157)
   assert.equal(output.best_latency_us,30)

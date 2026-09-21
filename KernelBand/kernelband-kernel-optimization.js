@@ -94,7 +94,7 @@ const __fmt = (v, d = 2) => (typeof v === 'number' && Number.isFinite(v) ? v.toF
 const SOL_CANDIDATE_CONTRACT = SOL_AVAILABLE ? `
 MANDATORY candidate shape: emit a COMPLETE, self-contained translation unit that
 compiles on its own. Keep the seed kernel's entry point and bindings intact - the
-same \`run(...)\` signature and the same \`PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)\`
+same Python-visible \`run(...)\` or \`forward(...)\` signature and the same \`PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)\`
 block - and change only the implementation. Emit every line: no "same as above",
 "unchanged", "rest byte-identical", or "..." standing in for code. The candidate
 is compiled and packed exactly as given, so a description of a kernel fails where
@@ -984,7 +984,7 @@ Then append (this is bandit iteration ${t}):
 
 # Source Kernel (ID ${selectedKernel.id}, current speedup: ${__fmt(selectedKernel.speedup, 2)}x):
 \`\`\`${fenceToken()}
-${(selectedKernel.code || '').substring(0, 6000)}
+${HOST_SOL ? (selectedKernel.code || '') : (selectedKernel.code || '').substring(0, 6000)}
 \`\`\`
 
 # Strategy: ${selectedStrategy}
