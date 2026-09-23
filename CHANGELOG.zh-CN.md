@@ -17,6 +17,11 @@
 
 ### 新增（Added）
 
+- KSearch 将 CuTe DSL 声明为可选择的 Python 源码语言，并把语法约束传入种子生成、
+  调试和改进提示词；遇到 CUDA C++ 驱动或尚未验证的 SOL-ExecBench 打包路径时明确
+  拒绝，避免离线派发误用 `.cu`／`nvcc` 契约。（`KSearch/manifest.yaml`、
+  `KSearch/ksearch-kernel-optimization.js`、`_meta/tools/test/ksearch-guard.test.js`）
+
 - **Harness Engineering workflow。** 新增基于 arXiv:2607.17979 的冻结契约、
   profile 驱动优化循环。编译/正确性、可选深度验证与计时仍由调用方命令拥有；
   候选只写入 `exp_dir`，只有正确且严格更快才晋升，并保留原始产物。

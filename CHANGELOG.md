@@ -10,6 +10,13 @@ for the versioning policy.
 
 ### Added
 
+- Let KSearch declare CuTe DSL as a selectable Python-source language and carry
+  its syntax requirement into seed, debug, and improve prompts. Explicitly
+  reject the CUDA C++ driver and unqualified SOL-ExecBench packaging for this
+  DSL, so offline routing cannot silently use a `.cu`/`nvcc` contract.
+  (`KSearch/manifest.yaml`, `KSearch/ksearch-kernel-optimization.js`,
+  `_meta/tools/test/ksearch-guard.test.js`)
+
 - **Harness Engineering workflow.** Adds a frozen-contract, profile-backed
   optimization loop based on arXiv:2607.17979. Caller-owned commands remain
   authoritative for compile/correctness, optional deeper verification, and

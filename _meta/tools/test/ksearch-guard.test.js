@@ -82,6 +82,32 @@ test('legacy CUDA path gives generated candidates a CUDA source extension', asyn
   assert.doesNotMatch(generated.prompt, /cycle_0_a0\.py\b/)
 })
 
+test('explicit CuTe DSL reaches generation as Python source with DSL guidance', async () => {
+  const legacyReturns = { ...minimalReturns }
+  delete legacyReturns['load-driver']
+  for (const k of Object.keys(legacyReturns)) {
+    if (/^driver-/.test(k)) delete legacyReturns[k]
+  }
+  const calls = await run({ language: 'cute-dsl' }, legacyReturns)
+  const generated = calls.find(c => c.label === 'gen-0-0')
+  assert.ok(generated, 'CuTe DSL must reach the candidate generation branch')
+  assert.match(generated.prompt, /cycle_0_a0\.py\b/)
+  assert.match(generated.prompt, /Requested DSL: CuTe DSL/)
+  assert.match(generated.prompt, /cutlass\.cute/)
+  assert.ok(!calls.some(c => c.label === 'load-driver'))
+})
+
+test('CuTe DSL rejects CUDA C++ driver and unqualified SOL packaging', async () => {
+  await assert.rejects(
+    run({ language: 'cute-dsl', backend_dir: '_substrate/backends/cuda' }),
+    /CuTe DSL source is Python/,
+  )
+  await assert.rejects(
+    run({ language: 'cute-dsl', integration_pattern: 'sol_execbench_solution' }, minimalReturns),
+    /CuTe DSL SOL-ExecBench packaging is not qualified/,
+  )
+})
+
 test('§6.4: args.backend matches manifest backend_id -> ok', async () => {
   await assert.doesNotReject(run(
     { backend_dir: '_substrate/backends/triton', backend: 'triton', language: 'triton' },

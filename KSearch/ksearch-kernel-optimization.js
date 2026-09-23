@@ -454,6 +454,9 @@ if (!KERNEL_SPEC_PATH && !PROBLEM_DEFINITION && !BASELINE_CODE_PATH) {
 
 // --- Backend driver wiring (P5d Stage B; off-by-default; legacy path byte-identical) ---
 const BACKEND_DIR = args.backend_dir || ''
+if (LANGUAGE === 'cute-dsl' && BACKEND_DIR) {
+  throw new Error('CuTe DSL source is Python; the shipped CUDA backend driver compiles .cu with nvcc. Use caller-owned correctness and benchmark commands until a CuTe DSL driver is qualified.')
+}
 const SUBSTRATE = args.substrate_dir || '_substrate'
 const SH = args.driver_shell_prefix || ''
 const PY = args.substrate_command_prefix || ''
@@ -702,6 +705,9 @@ if (INTEGRATION_DECISION.method === 'derive_adapter') {
 const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'standalone'
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
 const IS_SOL = INTEGRATION_DECISION.method === 'sol_execbench_solution'
+if (LANGUAGE === 'cute-dsl' && IS_SOL) {
+  throw new Error('CuTe DSL SOL-ExecBench packaging is not qualified; use a caller-owned standalone harness.')
+}
 if (IS_SOL) {
   const missing = [
     ['sol_cli', SOL_CLI], ['sol_task_dir', SOL_TASK_DIR],
@@ -1059,6 +1065,9 @@ Then append:
   // embedded project mutation retain one owner.
   const wmSection =
     `\n\n# World Model (persistent decision tree — use it to guide design):\n${JSON.stringify(decisionTree, null, 2).substring(0, 3000)}` +
+    (LANGUAGE === 'cute-dsl'
+      ? '\n\n# Requested DSL: CuTe DSL\nWrite Python .py source using cutlass.cute and @cute.kernel where appropriate. Preserve the task callable entry point and argument contract. Keep the implementation in CuTe DSL; do not switch to CUDA C++ or Triton. The caller-owned correctness and benchmark commands provide execution evidence.'
+      : '') +
     (IS_SOL ? `\n\n${SOL_SOLUTION_CONTRACT}` : '')
   const seedIndexes = Array.from({ length: SEED_CANDIDATES }, (_, seedAttempt) => seedAttempt)
   const generateSeedCandidate = (attempt) => {
