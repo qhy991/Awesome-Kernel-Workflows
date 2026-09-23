@@ -35,6 +35,7 @@ for the versioning policy.
 
 ### Fixed
 
+- Bind CUDAAgent's Sol candidate to the deterministic Host evaluation and return that exact measured source for a qualified handoff. A correct agent report without a matching Host binding no longer becomes the selected best candidate. (`CUDAAgent/cuda-agent-kernel-optimization.js`, `_meta/tools/lib/run-workflow.js`, `_meta/tools/test/cudaagent-host-binding.test.js`)
 - Return KernelFoundry's exact Host-bound candidate path for measured results; its optional checkpoint copy could be absent, which blocked a qualified second-workflow handoff despite a correct full-workload measurement. (`KernelFoundry/kernelfoundry-kernel-optimization.js`, `_meta/tools/lib/run-workflow.js`, `_meta/tools/test/kernelfoundry-guard.test.js`)
 - Preserve the entire selected KernelBand source, including trailing run/forward bindings, in SOL generation context (`KernelBand/kernelband-kernel-optimization.js`).
 

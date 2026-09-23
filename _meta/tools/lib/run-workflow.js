@@ -19,9 +19,10 @@ const schemaStub = require('./schema-stub.js')
  * @param {string} source       — raw workflow source (may start with `export `)
  * @param {object} args         — injected as the `args` global in the sandbox
  * @param {object} agentReturns — label→value map; consulted BEFORE schemaStub fallback
+ * @param {object} evaluationReturns — label→Host evaluation for deterministic evaluator tests
  * @returns {Promise<{meta: any, calls: Array<{seq,label,phase,prompt,schema}>, result: any}>}
  */
-async function runWorkflow(source, args, agentReturns) {
+async function runWorkflow(source, args, agentReturns, evaluationReturns = {}) {
   // Strip the lone leading `export ` token so `export const meta = ...` becomes
   // `const meta = ...` and the body is no longer an ES module.
   const strippedBody = source.replace(/^export\s+/, '')
@@ -74,6 +75,14 @@ async function runWorkflow(source, args, agentReturns) {
   function log() {}
   function budget() {}
 
+  function evaluationStub(request) {
+    const label = request && request.label
+    if (Object.prototype.hasOwnProperty.call(evaluationReturns, label)) {
+      return Promise.resolve(evaluationReturns[label])
+    }
+    throw new Error(`missing canned Host evaluation for ${label}`)
+  }
+
   const sandbox = {
     args,
     agent: agentStub,
@@ -82,6 +91,8 @@ async function runWorkflow(source, args, agentReturns) {
     pipeline,
     log,
     budget,
+    evaluate: evaluationStub,
+    __solExecbenchEvaluate: evaluationStub,
     // Provide console so any debug logging in the workflow doesn't crash
     console,
     // Provide JSON so workflows can use JSON.parse / JSON.stringify

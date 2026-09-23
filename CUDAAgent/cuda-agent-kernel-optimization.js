@@ -553,6 +553,8 @@ let bestSpeedup = 0
 let bestCompiled = false
 let bestCorrect = false
 let bestCandidateId = ''
+let bestArtifactBinding = null
+let bestBoundSourcePath = ''
 let checkpointedBestId = ''
 let currentAttempt = 0
 let turnsCompleted = 0
@@ -1048,6 +1050,9 @@ Parse correctness (pass/fail) and latency STRICTLY from the test/benchmark comma
       ldLibraryPath: SOL_LD_LIBRARY_PATH,
       envPrefix: SOL_ENV_PREFIX,
       definitionPath: SOL_DEFINITION_PATH,
+      bindingPath: `${EXP_DIR}/bindings/${variantName}.json`,
+      bindingWorkflow: WORKFLOW_NAME,
+      candidateId: `attempt-${currentAttempt}`,
     })
     const plan = __solExecbenchEvalPlan({
       substrateDir: SOL_SUBSTRATE_DIR,
@@ -1192,7 +1197,11 @@ Then append, using the values you just measured (status="done" if correctness pa
 
   // Update best
   const prevBest = bestSpeedup
-  if (verifyResult.correct && (verifyResult.speedup_vs_compile || 0) > bestSpeedup) {
+  const boundSourceReady = !IS_SOL || (
+    directSolResult?.artifact_binding?.verified === true &&
+    directSolResult.artifact_binding.candidate_sha256 === directSolResult.candidate_sha256
+  )
+  if (verifyResult.correct && boundSourceReady && (verifyResult.speedup_vs_compile || 0) > bestSpeedup) {
     bestKernelCode = implResult.kernel_code
     bestBindingCode = implResult.binding_code
     bestModelNew = implResult.model_new_code
@@ -1200,6 +1209,10 @@ Then append, using the values you just measured (status="done" if correctness pa
     bestCompiled = verifyResult.compiled === true
     bestCorrect = verifyResult.correct === true
     bestCandidateId = `attempt-${currentAttempt}`
+    if (IS_SOL) {
+      bestArtifactBinding = directSolResult.artifact_binding
+      bestBoundSourcePath = directSolResult.candidate_path
+    }
     log(`  NEW BEST: ${bestSpeedup.toFixed(2)}x vs compile (reward=${verifyResult.reward})`)
   }
 
@@ -1364,7 +1377,14 @@ return {
   input_mode: INPUT_MODE,
   problem_definition: PROBLEM_DEFINITION,
   problem_path: PROBLEM_PATH,
-  generated_kernel_path: bestKernelCode ? bestKernelPath() : generatedKernelPath,
+  generated_kernel_path: IS_SOL && bestArtifactBinding?.verified
+    ? bestBoundSourcePath : (bestKernelCode ? bestKernelPath() : generatedKernelPath),
+  ...(IS_SOL ? {
+    artifact_binding_required: true,
+    artifact_binding_path: bestArtifactBinding?.binding_path || '',
+    best_candidate_id: bestCandidateId,
+    canonical_metric: { name: 'speedup', value: bestSpeedup },
+  } : {}),
   initial_candidates: initialCandidates,
   initial_generation_result: initialGenerationResult,
   operation: OP_DESC,
@@ -1383,7 +1403,8 @@ return {
   reward_history: history.map(h => h.reward),
   adaptation_scope: ADAPTATION_SCOPE,
   best_kernel_code: bestKernelCode,
-  best_kernel_path: bestKernelCode ? bestKernelPath() : null,
+  best_kernel_path: IS_SOL && bestArtifactBinding?.verified
+    ? bestBoundSourcePath : (bestKernelCode ? bestKernelPath() : null),
   best_binding_code: bestBindingCode,
   best_model_new: bestModelNew,
   report: finalReport,
