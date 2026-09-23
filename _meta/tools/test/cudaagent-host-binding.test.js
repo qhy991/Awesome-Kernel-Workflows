@@ -38,8 +38,13 @@ function measured(binding) {
 
 test('CUDAAgent Sol returns the exact Host-bound source and matching binding', async () => {
   const {result} = await runWorkflow(source, args, agentReturns, {
-    'sol-eval-0': measured({verified: true, candidate_sha256: candidateSha,
-      binding_path: bindingPath}),
+    'sol-eval-0': request => {
+      assert.equal(request.bindingOut, bindingPath)
+      assert.equal(request.bindingWorkflow, 'cuda-agent-kernel-optimization')
+      assert.equal(request.candidateId, 'attempt-0')
+      return measured({verified: true, candidate_sha256: candidateSha,
+        binding_path: bindingPath})
+    },
   })
   assert.equal(result.artifact_binding_required, true)
   assert.equal(result.artifact_binding_path, bindingPath)
@@ -50,12 +55,8 @@ test('CUDAAgent Sol returns the exact Host-bound source and matching binding', a
     {name: 'speedup', value: 1.2})
 })
 
-test('CUDAAgent Sol refuses to promote a measured candidate with no Host binding', async () => {
-  const {result} = await runWorkflow(source, args, agentReturns, {
+test('CUDAAgent Sol fails when a correct Host measurement lacks binding', async () => {
+  await assert.rejects(() => runWorkflow(source, args, agentReturns, {
     'sol-eval-0': measured(null),
-  })
-  assert.equal(result.artifact_binding_required, true)
-  assert.equal(result.artifact_binding_path, '')
-  assert.equal(result.best_candidate_id, '')
-  assert.equal(result.canonical_metric.value, 0)
+  }), /Host artifact binding missing/)
 })

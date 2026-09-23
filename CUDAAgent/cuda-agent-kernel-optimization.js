@@ -82,6 +82,9 @@ async function __solExecbenchEvaluate(ctx) {
     ldLibraryPath: ctx.ldLibraryPath || '',
     envPrefix: ctx.envPrefix || '',
     definitionPath: ctx.definitionPath || '',
+    bindingOut: ctx.bindingPath || '',
+    bindingWorkflow: ctx.bindingWorkflow || '',
+    candidateId: ctx.candidateId || '',
     timeoutSeconds: ctx.timeoutSeconds || 0,
   }).then(__solGuardHarnessFault)
 }
@@ -1054,6 +1057,11 @@ Parse correctness (pass/fail) and latency STRICTLY from the test/benchmark comma
       bindingWorkflow: WORKFLOW_NAME,
       candidateId: `attempt-${currentAttempt}`,
     })
+    if (directSolResult?.correct && directSolResult?.measurement_valid &&
+        directSolResult?.full_workload_set &&
+        directSolResult?.artifact_binding?.verified !== true) {
+      throw new Error('Host artifact binding missing for a correct measured Sol candidate')
+    }
     const plan = __solExecbenchEvalPlan({
       substrateDir: SOL_SUBSTRATE_DIR,
       kernelSource: candidatePath,
@@ -1217,7 +1225,8 @@ Then append, using the values you just measured (status="done" if correctness pa
   }
 
   // Check if target met (#41: skip when TARGET_SPEEDUP is null — explore mode has no numeric target)
-  if (TARGET_SPEEDUP !== null && verifyResult.correct && (verifyResult.speedup_vs_compile || 0) >= TARGET_SPEEDUP) {
+  if (TARGET_SPEEDUP !== null && verifyResult.correct && boundSourceReady &&
+      (verifyResult.speedup_vs_compile || 0) >= TARGET_SPEEDUP) {
     targetMet = true
     log(`  TARGET MET: ${verifyResult.speedup_vs_compile?.toFixed(2)}x ≥ ${TARGET_SPEEDUP}x`)
   } else {

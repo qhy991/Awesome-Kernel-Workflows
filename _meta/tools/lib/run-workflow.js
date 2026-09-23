@@ -78,7 +78,8 @@ async function runWorkflow(source, args, agentReturns, evaluationReturns = {}) {
   function evaluationStub(request) {
     const label = request && request.label
     if (Object.prototype.hasOwnProperty.call(evaluationReturns, label)) {
-      return Promise.resolve(evaluationReturns[label])
+      const response = evaluationReturns[label]
+      return Promise.resolve(typeof response === 'function' ? response(request) : response)
     }
     throw new Error(`missing canned Host evaluation for ${label}`)
   }

@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- 将 CUDAAgent 的产物绑定请求完整传入共用 Sol 评测器。此前正确的 Host 测量会丢失这些字段，返回无绑定的空最优源码，还可能误报达到加速目标。现在正确实测候选缺少 Host 绑定时会明确失败。(`_substrate/embedded/sol_execbench_eval.js`、`CUDAAgent/cuda-agent-kernel-optimization.js`、`_meta/tools/lib/run-workflow.js`、`_meta/tools/test/cudaagent-host-binding.test.js`)
 - CUDAAgent 的 Sol 候选现在绑定确定性 Host 评测，并返回被测量的精确源码用于合格交接；只有 agent 报告正确、却没有匹配 Host 绑定的候选不再成为最优候选。(`CUDAAgent/cuda-agent-kernel-optimization.js`, `_meta/tools/lib/run-workflow.js`, `_meta/tools/test/cudaagent-host-binding.test.js`)
 - KernelFoundry 的实测结果返回 Host 绑定的精确候选源码路径；可选的 checkpoint 副本缺失时，此前会让已经通过全 workload 测量的第二步交接被阻断。(`KernelFoundry/kernelfoundry-kernel-optimization.js`, `_meta/tools/lib/run-workflow.js`, `_meta/tools/test/kernelfoundry-guard.test.js`)
 - KernelBand 的 SOL 生成上下文保留完整选中源码和末尾 run/forward 绑定（`KernelBand/kernelband-kernel-optimization.js`）。

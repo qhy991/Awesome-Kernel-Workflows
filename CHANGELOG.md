@@ -8,6 +8,15 @@ for the versioning policy.
 
 ## [Unreleased]
 
+### Fixed
+
+- Forward CUDAAgent's artifact-binding request through the shared Sol evaluator
+  helper. A correct Host measurement previously lost these fields, returned an
+  unbound empty best source, and could falsely report its speedup target as met.
+  CUDAAgent now fails clearly if a correct measured candidate has no Host binding.
+  (`_substrate/embedded/sol_execbench_eval.js`, `CUDAAgent/cuda-agent-kernel-optimization.js`,
+  `_meta/tools/lib/run-workflow.js`, `_meta/tools/test/cudaagent-host-binding.test.js`)
+
 ### Added
 
 - Let KSearch declare CuTe DSL as a selectable Python-source language and carry
