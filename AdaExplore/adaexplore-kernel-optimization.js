@@ -78,6 +78,7 @@ async function __solExecbenchEvaluate(ctx) {
     phase: ctx.phase || 'Evaluate',
     candidatePath: ctx.kernelSource,
     candidateSource: ctx.candidateSource,
+    baselineSolutionPath: ctx.baselineSolutionPath || '',
     substrateDir: ctx.substrateDir,
     contractEnv: ctx.contractEnv,
     solutionOut: ctx.solutionOut,
@@ -91,21 +92,15 @@ async function __solExecbenchEvaluate(ctx) {
     ldLibraryPath: ctx.ldLibraryPath || '',
     envPrefix: ctx.envPrefix || '',
     definitionPath: ctx.definitionPath || '',
-    bindingOut: ctx.bindingPath || '',
+    bindingOut: ctx.bindingOut || ctx.bindingPath || '',
     bindingWorkflow: ctx.bindingWorkflow || '',
     candidateId: ctx.candidateId || '',
     timeoutSeconds: ctx.timeoutSeconds || 0,
   }).then(__solGuardHarnessFault)
 }
 
-// A `compiled: false` from the evaluator does not always mean the candidate is
-// bad.  `invalid_request` and `infrastructure_error` are the harness refusing or
-// failing before the candidate was ever built, and callers that map any
-// non-success onto compile_error burn refine turns and a stagnation budget on a
-// misconfiguration.  Observed: a candidate staged outside the evaluation roots
-// was rejected at preflight, reported three times as `compile_error`, and the run
-// stopped at the stagnation limit having never compiled anything.  Surface a
-// harness fault as a harness fault and stop, because retrying cannot fix it.
+// A harness refusal occurs before a candidate is built. Preserve that boundary
+// instead of spending a solver refine turn on a nonexistent compile failure.
 function __solGuardHarnessFault(result) {
   const HARNESS_FAULTS = ['invalid_request', 'infrastructure_error']
   if (result && HARNESS_FAULTS.includes(result.failure_code)) {

@@ -10,6 +10,16 @@ for the versioning policy.
 
 ### Fixed
 
+- Generalist now measures its supplied Sol seed and candidates through the Host,
+  scores candidates against that seed, and promotes the exact measured source.
+  Previously its read-only anti-cheat agent could not run substrate commands, so
+  even four correct full-workload Host results produced zero valid attempts and a
+  baseline-only return. The shared Sol helper now forwards full-solution baseline
+  requests and consistently rejects harness refusals; its inlined copies are
+  synchronized. (`Generalist/generalist-kernel-optimization.js`,
+  `_substrate/embedded/sol_execbench_eval.js`, the nine Sol workflow entrypoints,
+  `_meta/tools/test/generalist-host-sol.test.js`)
+
 - Forward CUDAAgent's artifact-binding request through the shared Sol evaluator
   helper. A correct Host measurement previously lost these fields, returned an
   unbound empty best source, and could falsely report its speedup target as met.

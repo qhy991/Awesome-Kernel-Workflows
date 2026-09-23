@@ -71,6 +71,7 @@ async function __solExecbenchEvaluate(ctx) {
     phase: ctx.phase || 'Evaluate',
     candidatePath: ctx.kernelSource,
     candidateSource: ctx.candidateSource,
+    baselineSolutionPath: ctx.baselineSolutionPath || '',
     substrateDir: ctx.substrateDir,
     contractEnv: ctx.contractEnv,
     solutionOut: ctx.solutionOut,
@@ -84,21 +85,15 @@ async function __solExecbenchEvaluate(ctx) {
     ldLibraryPath: ctx.ldLibraryPath || '',
     envPrefix: ctx.envPrefix || '',
     definitionPath: ctx.definitionPath || '',
-    bindingOut: ctx.bindingPath || '',
+    bindingOut: ctx.bindingOut || ctx.bindingPath || '',
     bindingWorkflow: ctx.bindingWorkflow || '',
     candidateId: ctx.candidateId || '',
     timeoutSeconds: ctx.timeoutSeconds || 0,
   }).then(__solGuardHarnessFault)
 }
 
-// A `compiled: false` from the evaluator does not always mean the candidate is
-// bad.  `invalid_request` and `infrastructure_error` are the harness refusing or
-// failing before the candidate was ever built, and callers that map any
-// non-success onto compile_error burn refine turns and a stagnation budget on a
-// misconfiguration.  Observed: a candidate staged outside the evaluation roots
-// was rejected at preflight, reported three times as `compile_error`, and the run
-// stopped at the stagnation limit having never compiled anything.  Surface a
-// harness fault as a harness fault and stop, because retrying cannot fix it.
+// A harness refusal occurs before a candidate is built. Preserve that boundary
+// instead of spending a solver refine turn on a nonexistent compile failure.
 function __solGuardHarnessFault(result) {
   const HARNESS_FAULTS = ['invalid_request', 'infrastructure_error']
   if (result && HARNESS_FAULTS.includes(result.failure_code)) {
@@ -616,6 +611,11 @@ const METRICS_SCHEMA = {
   },
   required: ['compiled', 'correct', 'speedup', 'metrics', 'kernel_code'],
 }
+const SOL_IMPLEMENT_SCHEMA = {
+  type: 'object',
+  properties: { kernel_code: { type: 'string' } },
+  required: ['kernel_code'],
+}
 const ANTICHEAT_SCHEMA = {
   type: 'object',
   properties: {
@@ -786,6 +786,32 @@ if (INTEGRATION_DECISION.method === 'sol_execbench_solution') {
     ['sol_substrate_dir', SOL_SUBSTRATE_DIR],
   ].filter(([, value]) => !value).map(([name]) => name)
   if (missing.length) throw new Error(`sol_execbench_solution requires non-empty: ${missing.join(', ')}`)
+}
+const SOL_ACTIVE = INTEGRATION_DECISION.method === 'sol_execbench_solution'
+let solSeedLatencyMs = null
+if (SOL_ACTIVE) {
+  const seed = await __solExecbenchEvaluate({
+    label: 'sol-seed-baseline', phase: 'Setup',
+    substrateDir: SOL_SUBSTRATE_DIR,
+    kernelSource: `${EXP_DIR}/host_seed${SOL_SOURCE_EXT}`,
+    baselineSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
+    contractEnv: `${EXP_DIR}/contract.env`,
+    solutionOut: `${EXP_DIR}/host_seed.solution.json`,
+    benchOut: `${EXP_DIR}/host_seed.bench.jsonl`,
+    solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+    seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+    ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+    definitionPath: SOL_DEFINITION_PATH,
+  })
+  const latency = seed && seed.candidate_latency_aggregate_ms
+  if (!seed || seed.compiled !== true || seed.correct !== true ||
+      seed.full_workload_set !== true || seed.output_contract_valid !== true ||
+      seed.measurement_valid !== true ||
+      typeof latency !== 'number' || !Number.isFinite(latency) || latency <= 0) {
+    throw new Error('Host could not establish a complete measured Sol seed baseline')
+  }
+  solSeedLatencyMs = latency
+  log(`Host Sol seed baseline latency: ${solSeedLatencyMs} ms`)
 }
 const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'standalone'
 
@@ -1068,24 +1094,12 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
     if (IS_SOL) {
       const solVariantName = `sol_${iter}_${i + 1}`.replace(/[^A-Za-z0-9_]/g, '_')
       const solCandidatePath = `${EXP_DIR}/kernels/${solVariantName}.cu`
-      const solPlan = __solExecbenchEvalPlan({
-        substrateDir: SOL_SUBSTRATE_DIR,
-        kernelSource: solCandidatePath,
-        contractEnv: `${EXP_DIR}/contract.env`,
-        solutionOut: `${EXP_DIR}/${solVariantName}.solution.json`,
-        benchOut: `${EXP_DIR}/${solVariantName}.bench.jsonl`,
-        solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
-        seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD, ldLibraryPath: SOL_LD_LIBRARY_PATH,
-        envPrefix: SOL_ENV_PREFIX, definitionPath: SOL_DEFINITION_PATH,
-      })
       solEvalBlock = [
         '',
-        '# SOL-EXECBENCH EVALUATION (overrides the standalone eval below)',
-        `Write the kernel code above verbatim to ${solCandidatePath}, then run IN THIS EXACT ORDER:`,
-        `1. Pack:  ${solPlan.pack}`,
-        `2. Run:   ${solPlan.run}`,
-        `3. Parse: ${solPlan.parse}`,
-        `The parse step prints one line "SPEEDUP=<aggregate> REDUCTION=<contract reduction> STATUS=<PASS|FAIL> WORKLOADS=<passed>/<total>". Parse correctness and latency STRICTLY from that line. Do NOT fabricate numbers. Map into the schema: compiled = run produced a bench.jsonl, correct = STATUS==PASS, speedup = the SPEEDUP value. ${solPlan.cleanupInvariant}`,
+        '# SOL-EXECBENCH EVALUATION',
+        `Return the complete candidate source in kernel_code. The Host writes it to ${solCandidatePath}, ` +
+        `packs it, checks all workloads and measures it. This read-only turn cannot run ` +
+        `commands or know compiled, correct, latency or speedup; do not invent them.`,
       ].join('\n')
     }
     const embeddedProposal = INTEGRATION_DECISION.method === 'embedded_dispatch'
@@ -1103,15 +1117,17 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
       (integBlock
         ? integBlock + `\nThen map measured results into the JSON metrics schema.`
         : solEvalBlock
-          ? solEvalBlock + `\nThen map measured results into the JSON metrics schema.`
+          ? solEvalBlock
           : EVAL_CMD
             ? `Then run the benchmark command \`${EVAL_CMD}\` and return the JSON metrics per schema.`
             : `No benchmark_command provided; do not invent an evaluator. Return compiled=false, correct=false, speedup=0, and missing evidence fields.`) +
-      `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\n` +
+      (IS_SOL ? '' : `\n\n# Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)\n` +
       `Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ\n` +
       `Then append, using the values you just measured (status="done" if compiled AND correct, else "error"; speedup is the measured speedup number, or null if unavailable):\n` +
-      `{"workflow":"${WORKFLOW_NAME}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"iter-${iter}-cand-${i + 1}","technique":"${p.method}","speedup":<number or null>,"note":"<compiled? correct? + the failure reason if any, one line>"}`,
-      { label: `impl-${iter}-${i + 1}`, phase: 'Evaluate', schema: METRICS_SCHEMA, model: MODEL.judgment, ...(useWorktree ? { isolation: 'worktree' } : {}) }), { retries: 5 })
+      `{"workflow":"${WORKFLOW_NAME}","phase":"Evaluate","ts":"<ts>","status":"<done|error>","candidate_id":"iter-${iter}-cand-${i + 1}","technique":"${p.method}","speedup":<number or null>,"note":"<compiled? correct? + the failure reason if any, one line>"}`),
+      { label: `impl-${iter}-${i + 1}`, phase: 'Evaluate',
+        schema: IS_SOL ? SOL_IMPLEMENT_SCHEMA : METRICS_SCHEMA,
+        model: MODEL.judgment, ...(useWorktree ? { isolation: 'worktree' } : {}) }), { retries: 5 })
     // The agent writes the kernel to a path and reports its own metrics.  Measure
     // that file with the Host and let the measurement win: a self-reported speedup
     // is the failure mode this audit kept finding.  The evaluator reads an existing
@@ -1138,7 +1154,23 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
       }
     }
 
-    const ac = await agentRetry(() => agent(
+    if (IS_SOL && !solMeasured) {
+      throw new Error('Host deterministic Sol evaluator is unavailable')
+    }
+    const hostLatency = solMeasured && solMeasured.candidate_latency_aggregate_ms
+    const hostValid = Boolean(solMeasured && solMeasured.compiled === true &&
+      solMeasured.correct === true && solMeasured.full_workload_set === true &&
+      solMeasured.output_contract_valid === true && solMeasured.measurement_valid === true &&
+      typeof hostLatency === 'number' && Number.isFinite(hostLatency) && hostLatency > 0)
+    const seedRelativeSpeedup = hostValid ? solSeedLatencyMs / hostLatency : 0
+    const ac = IS_SOL ? {
+      valid: hostValid,
+      reward: !hostValid ? -1 : seedRelativeSpeedup >= TARGET ? 3 : seedRelativeSpeedup > 1 ? 1 : 0,
+      recorded_speedup: seedRelativeSpeedup,
+      measured_speedup: seedRelativeSpeedup,
+      reward_reason: hostValid ? 'complete Host measurement versus measured seed' :
+        (solMeasured.failure_code || 'Host candidate measurement invalid'),
+    } : await agentRetry(() => agent(
       `Write these metrics to ${runDir}/metrics.json:\n${JSON.stringify({ ...m, claimed_speedup: m.speedup })}\n` +
       `${substrateInstruction('anti_cheat.py', `--source ${runDir}/kernel --metrics ${runDir}/metrics.json`)} ` +
       `Return its stdout JSON verbatim. Then ${substrateInstruction('evidence_schema.py', `validate ${runDir}/metrics.json`)} ` +
@@ -1147,10 +1179,13 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
     const measuredMetrics = solMeasured
       ? { ...(m || {}), compiled: solMeasured.compiled === true,
           correct: solMeasured.correct === true,
-          speedup: Number(solMeasured.speedup || 0),
+          speedup: seedRelativeSpeedup,
+          candidate_latency_ms: hostValid ? hostLatency : null,
+          reference_speedup: Number(solMeasured.speedup || 0),
           measured_by: 'host-sol-execbench' }
       : m
-    return { plan: p, metrics: measuredMetrics, anticheat: ac, code_path: `${runDir}/kernel`,
+    return { plan: p, metrics: measuredMetrics, anticheat: ac,
+             code_path: hostValid ? solMeasured.candidate_path : `${runDir}/kernel`,
              recorded_speedup: ac.valid ? ac.recorded_speedup : 0,
              measured_speedup: ac.valid ? (ac.measured_speedup ?? 0) : 0 }
   }
@@ -1221,7 +1256,9 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
     `Return its stdout JSON verbatim. If unavailable, return {verified:false, reason:"missing_substrate_command_prefix"}.`,
     { label: `verify-insight-${iter}`, phase: 'Learn', schema: JSON_PASSTHROUGH, model: MODEL.mechanical }), { retries: 5, allowNull: true })
   verifiedInsights.push(verified)
-  const producedMeasured = (verified && verified.confidence) === 'measured'
+  const producedMeasured = SOL_ACTIVE
+    ? evaluated.some((item) => item.anticheat.valid)
+    : (verified && verified.confidence) === 'measured'
   log(`round insight confidence: ${(verified && verified.confidence) || 'n/a'}${refute.refuted ? ' (refuted -> downgraded)' : ''}`)
 
   // ---- Beam update (deterministic JS): merge, keep top-K by recorded speedup ----
@@ -1278,7 +1315,8 @@ return {
   input_mode: INPUT_MODE,
   problem_definition: PROBLEM_DEFINITION,
   problem_path: PROBLEM_PATH,
-  generated_kernel_path: generatedKernelPath,
+  generated_kernel_path: SOL_ACTIVE && candidateBeam[0].id !== 'baseline'
+    ? candidateBeam[0].code_path : generatedKernelPath,
   initial_candidates: initialCandidates,
   initial_generation_result: initialGenerationResult,
   solver: 'generalist-kernel-optimization',
