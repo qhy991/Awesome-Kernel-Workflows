@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- KernelFoundry 的实测结果返回 Host 绑定的精确候选源码路径；可选的 checkpoint 副本缺失时，此前会让已经通过全 workload 测量的第二步交接被阻断。(`KernelFoundry/kernelfoundry-kernel-optimization.js`, `_meta/tools/lib/run-workflow.js`, `_meta/tools/test/kernelfoundry-guard.test.js`)
 - KernelBand 的 SOL 生成上下文保留完整选中源码和末尾 run/forward 绑定（`KernelBand/kernelband-kernel-optimization.js`）。
 
 - 修复 FACT 可选数组及异常计时选优；KernelFoundry 由 Host 绑定结果，KernelBand 使用 Host 基线/分数，避免有效成果丢失和分数虚高（FACT/、KernelFoundry/、KernelBand/、KernelSkill/、GemmPTX/、tests）。

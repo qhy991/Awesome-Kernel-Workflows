@@ -35,6 +35,7 @@ for the versioning policy.
 
 ### Fixed
 
+- Return KernelFoundry's exact Host-bound candidate path for measured results; its optional checkpoint copy could be absent, which blocked a qualified second-workflow handoff despite a correct full-workload measurement. (`KernelFoundry/kernelfoundry-kernel-optimization.js`, `_meta/tools/lib/run-workflow.js`, `_meta/tools/test/kernelfoundry-guard.test.js`)
 - Preserve the entire selected KernelBand source, including trailing run/forward bindings, in SOL generation context (`KernelBand/kernelband-kernel-optimization.js`).
 
 - Fix optional FACT arrays and reject invalid timing in selection; bind KernelFoundry results on the Host and use Host baseline/score in KernelBand so valid results are neither discarded nor inflated (FACT/, KernelFoundry/, KernelBand/, KernelSkill/, GemmPTX/, tests).

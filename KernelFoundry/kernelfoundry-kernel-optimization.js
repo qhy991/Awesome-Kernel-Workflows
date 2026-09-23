@@ -1629,7 +1629,10 @@ return {
   input_mode: INPUT_MODE,
   problem_definition: TASK_SPEC,
   problem_path: PROBLEM_PATH,
-  generated_kernel_path: globalBest.code ? bestKernelPath() : '',
+  // The Host-bound candidate is the exact measured source. The optional
+  // checkpoint copy may be absent, so never make a qualified handoff depend on it.
+  generated_kernel_path: globalBest.binding_path && globalBest.candidate_path
+    ? globalBest.candidate_path : (globalBest.code ? bestKernelPath() : ''),
   best_candidate_id: globalBest.id || '',
   artifact_binding_required: EVIDENCE_MODE === 'measured',
   artifact_binding_path: globalBest.binding_path || '',

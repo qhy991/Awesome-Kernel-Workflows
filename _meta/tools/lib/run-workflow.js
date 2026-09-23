@@ -19,7 +19,7 @@ const schemaStub = require('./schema-stub.js')
  * @param {string} source       — raw workflow source (may start with `export `)
  * @param {object} args         — injected as the `args` global in the sandbox
  * @param {object} agentReturns — label→value map; consulted BEFORE schemaStub fallback
- * @returns {Promise<{meta: any, calls: Array<{seq,label,phase,prompt,schema}>}>}
+ * @returns {Promise<{meta: any, calls: Array<{seq,label,phase,prompt,schema}>, result: any}>}
  */
 async function runWorkflow(source, args, agentReturns) {
   // Strip the lone leading `export ` token so `export const meta = ...` becomes
@@ -100,7 +100,7 @@ async function runWorkflow(source, args, agentReturns) {
   const result = await vm.runInContext(wrapped, sandbox, { filename: 'workflow.js' })
 
   const meta = result && result.meta !== undefined ? result.meta : null
-  return { meta, calls }
+  return { meta, calls, result }
 }
 
 module.exports = runWorkflow

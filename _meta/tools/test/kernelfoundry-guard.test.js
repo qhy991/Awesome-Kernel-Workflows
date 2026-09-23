@@ -1,8 +1,10 @@
 'use strict'
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const path = require('node:path')
 const { capturePrompts } = require(path.resolve(__dirname, '..', 'print-workflow-prompts.js'))
+const runWorkflow = require(path.resolve(__dirname, '..', 'lib/run-workflow.js'))
 
 const WORKFLOW = path.resolve(__dirname, '..', '..', '..', 'KernelFoundry/kernelfoundry-kernel-optimization.js')
 
@@ -45,6 +47,25 @@ async function run(extra, agentReturns) {
     agentReturns: agentReturns || {},
   })
 }
+
+test('measured KernelFoundry returns the exact bound candidate for cross-workflow handoff', async () => {
+  const returns = { ...minimalReturns }
+  delete returns['load-driver']
+  for (const key of Object.keys(returns)) {
+    if (key.startsWith('driver-')) delete returns[key]
+  }
+  const source = fs.readFileSync(WORKFLOW, 'utf8')
+  const { result } = await runWorkflow(source, {
+    ...baseArgs,
+    language: 'cuda',
+    integration_pattern: 'standalone',
+    test_command: 'test {kernel_path}',
+    benchmark_command: 'bench {kernel_path}',
+  }, returns)
+  assert.equal(result.artifact_binding_required, true)
+  assert.equal(result.artifact_binding_path, '/tmp/kf-guard/bindings/gen_0.json')
+  assert.equal(result.generated_kernel_path, '/tmp/kf-guard/gen_0.cu')
+})
 
 test('legacy path: no backend_dir, language=cuda -> renders cuda vocabulary, no load-driver agent', async () => {
   const legacyReturns = { ...minimalReturns }
