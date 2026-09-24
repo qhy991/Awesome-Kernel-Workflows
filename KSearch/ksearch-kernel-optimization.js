@@ -70,6 +70,7 @@ async function __solExecbenchEvaluate(ctx) {
     phase: ctx.phase || 'Evaluate',
     candidatePath: ctx.kernelSource,
     candidateSource: ctx.candidateSource,
+    candidateLanguage: ctx.candidateLanguage || '',
     baselineSolutionPath: ctx.baselineSolutionPath || '',
     substrateDir: ctx.substrateDir,
     contractEnv: ctx.contractEnv,
@@ -703,9 +704,7 @@ if (INTEGRATION_DECISION.method === 'derive_adapter') {
 const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'standalone'
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
 const IS_SOL = INTEGRATION_DECISION.method === 'sol_execbench_solution'
-if (LANGUAGE === 'cute-dsl' && IS_SOL) {
-  throw new Error('CuTe DSL SOL-ExecBench packaging is not qualified; use a caller-owned standalone harness.')
-}
+let cuteSeedLatencyMs = null
 if (IS_SOL) {
   const missing = [
     ['sol_cli', SOL_CLI], ['sol_task_dir', SOL_TASK_DIR],
@@ -713,6 +712,31 @@ if (IS_SOL) {
     ['sol_substrate_dir', SOL_SUBSTRATE_DIR],
   ].filter(([, value]) => !value).map(([name]) => name)
   if (missing.length) throw new Error(`sol_execbench_solution requires non-empty: ${missing.join(', ')}`)
+  if (LANGUAGE === 'cute-dsl') {
+    const seed = await __solExecbenchEvaluate({
+      label: 'sol-cute-seed-baseline', phase: 'Setup',
+      candidateLanguage: 'cute-dsl',
+      substrateDir: SOL_SUBSTRATE_DIR,
+      kernelSource: `${EXP_DIR}/host_seed.py`,
+      baselineSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
+      contractEnv: `${EXP_DIR}/contract.env`,
+      solutionOut: `${EXP_DIR}/host_seed.solution.json`,
+      benchOut: `${EXP_DIR}/host_seed.bench.jsonl`,
+      solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+      seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+      ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+      definitionPath: SOL_DEFINITION_PATH,
+    })
+    const latency = seed && seed.candidate_latency_aggregate_ms
+    if (!seed || seed.compiled !== true || seed.correct !== true ||
+        seed.full_workload_set !== true || seed.output_contract_valid !== true ||
+        seed.measurement_valid !== true ||
+        typeof latency !== 'number' || !Number.isFinite(latency) || latency <= 0) {
+      throw new Error('Host could not establish a complete measured CuTe seed baseline')
+    }
+    cuteSeedLatencyMs = latency
+    log(`Host CuTe seed baseline latency: ${cuteSeedLatencyMs} ms`)
+  }
 }
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
@@ -1064,7 +1088,7 @@ Then append:
   const wmSection =
     `\n\n# World Model (persistent decision tree — use it to guide design):\n${JSON.stringify(decisionTree, null, 2).substring(0, 3000)}` +
     (LANGUAGE === 'cute-dsl'
-      ? '\n\n# Requested DSL: CuTe DSL\nWrite Python .py source using cutlass.cute and @cute.kernel where appropriate. Preserve the task callable entry point and argument contract. Keep the implementation in CuTe DSL; do not switch to CUDA C++ or Triton. The caller-owned correctness and benchmark commands provide execution evidence.'
+      ? '\n\n# Requested DSL: CuTe DSL\nWrite Python .py source using cutlass.cute and @cute.kernel where appropriate. Preserve the task callable entry point and argument contract. Every workload must execute a CuTe-compiled kernel; do not delegate GEMM to torch.matmul/mm/bmm/addmm/einsum, Python @, cuBLAS, cutlass.op.Gemm, or another library implementation. The Host rejects delegated candidates before GPU evaluation. Keep the implementation in CuTe DSL; do not switch to CUDA C++ or Triton. The caller-owned correctness and benchmark commands provide execution evidence.'
       : '') +
     (IS_SOL ? `\n\n${SOL_SOLUTION_CONTRACT}` : '')
   const seedIndexes = Array.from({ length: SEED_CANDIDATES }, (_, seedAttempt) => seedAttempt)
@@ -1270,6 +1294,7 @@ Then append:
           substrateDir: SOL_SUBSTRATE_DIR,
           kernelSource: candidatePath,
           candidateSource: genResult.code,
+          candidateLanguage: LANGUAGE === 'cute-dsl' ? 'cute-dsl' : '',
           contractEnv: `${EXP_DIR}/contract.env`,
           solutionOut: `${EXP_DIR}/${variant}.solution.json`,
           benchOut: `${EXP_DIR}/${variant}.bench.jsonl`,
@@ -1282,6 +1307,11 @@ Then append:
           ldLibraryPath: SOL_LD_LIBRARY_PATH,
           envPrefix: SOL_ENV_PREFIX,
           definitionPath: SOL_DEFINITION_PATH,
+          ...(LANGUAGE === 'cute-dsl' ? {
+            bindingPath: `${EXP_DIR}/bindings/${variant}.json`,
+            bindingWorkflow: WORKFLOW_NAME,
+            candidateId: `cycle_${cycle}_attempt_${attempt}`,
+          } : {}),
           label: `sol-eval-${cycle}-${attempt}`,
           phase: 'Evaluate',
         }
@@ -1289,17 +1319,36 @@ Then append:
         if (direct) {
           const nPass = Number(direct.n_pass || 0)
           const nTotal = Number(direct.n_total || 0)
-          const valid = direct.compiled === true && direct.correct === true && nTotal > 0 && nPass === nTotal
+          const bound = direct.artifact_binding?.verified === true &&
+            direct.artifact_binding.candidate_sha256 === direct.candidate_sha256
+          const latency = direct.candidate_latency_aggregate_ms
+          const valid = direct.compiled === true && direct.correct === true &&
+            direct.full_workload_set === true && direct.output_contract_valid === true &&
+            direct.measurement_valid === true && nTotal > 0 && nPass === nTotal &&
+            (LANGUAGE !== 'cute-dsl' || (typeof latency === 'number' &&
+              Number.isFinite(latency) && latency > 0)) &&
+            (LANGUAGE !== 'cute-dsl' || bound)
+          const score = LANGUAGE === 'cute-dsl' && valid
+            ? cuteSeedLatencyMs / latency : Number(direct.speedup || 0)
           return {
             is_valid: valid,
-            metric_value: Number(direct.speedup || 0),
-            latency_ms: Number(direct.candidate_latency_aggregate_ms || 0),
-            speedup_vs_baseline: Number(direct.speedup || 0),
+            metric_value: score,
+            latency_ms: Number(latency || 0),
+            speedup_vs_baseline: score,
+            reference_speedup: Number(direct.speedup || 0),
             pass_rate: `${nPass}/${nTotal}`,
             error_log: direct.stderr || '',
             performance_analysis: `host-owned ${direct.protocol} stage=${direct.stage}`,
             remaining_bottleneck: direct.failure_code || '',
+            ...(LANGUAGE === 'cute-dsl' ? {
+              host_candidate_path: valid ? direct.candidate_path : '',
+              host_candidate_sha256: valid ? direct.candidate_sha256 : '',
+              artifact_binding: valid ? direct.artifact_binding : null,
+            } : {}),
           }
+        }
+        if (LANGUAGE === 'cute-dsl') {
+          throw new Error('CuTe DSL requires the Host deterministic evaluator; an agent cannot run its benchmark')
         }
         const plan = __solExecbenchEvalPlan(evalContext)
         return agentRetry(() => agent(`Evaluate this K-Search candidate through the authoritative sol-execbench contract.
@@ -1515,7 +1564,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
     // Update cycle best (K-Search: only update if passed AND score > cycle_best_score)
     if (allPassed && roundScore > cycleBestScore) {
       cycleBestCode = genResult.code
-      cycleBestPath = genResult.variant_path || cycleBestPath  // AWK #59
+      cycleBestPath = evalResult.host_candidate_path || genResult.variant_path || cycleBestPath  // AWK #59
       cycleBestEval = evalResult
       cycleBestScore = roundScore
       hasPassedInCycle = true
@@ -1681,8 +1730,11 @@ Then append:
   }
   cycleCount = cycle + 1
   const plannedStall = runStagnation >= RUN_STAGNATION_LIMIT
-  const materializedBestPath = bestSolution?.code ? bestKernelPath() : null
-  const bestChanged = Boolean(bestSolution?.code && bestSolution.id !== checkpointedBestId)
+  const cuteHostBest = IS_SOL && LANGUAGE === 'cute-dsl' &&
+    bestSolution?.eval?.artifact_binding?.verified === true
+  const materializedBestPath = cuteHostBest ? bestSolution.eval.host_candidate_path
+    : (bestSolution?.code ? bestKernelPath() : null)
+  const bestChanged = Boolean(!cuteHostBest && bestSolution?.code && bestSolution.id !== checkpointedBestId)
   const speedupOverBaseline = (
     bestMetric != null && baselineMetric > 0
       ? bestMetric / baselineMetric
@@ -1815,7 +1867,15 @@ return {
   problem_definition: PROBLEM_DEFINITION,
   problem_path: KERNEL_SPEC_PATH,
   kernel_path: BASELINE_CODE_PATH,
-  generated_kernel_path: bestSolution?.code ? bestKernelPath() : '',
+  generated_kernel_path: IS_SOL && LANGUAGE === 'cute-dsl'
+    ? (bestSolution?.eval?.host_candidate_path || '')
+    : (bestSolution?.code ? bestKernelPath() : ''),
+  ...(IS_SOL && LANGUAGE === 'cute-dsl' ? {
+    artifact_binding_required: bestSolution?.eval?.artifact_binding?.verified === true,
+    artifact_binding_path: bestSolution?.eval?.artifact_binding?.binding_path || '',
+    best_candidate_id: bestSolution?.eval?.artifact_binding?.candidate_id || null,
+    canonical_metric: {name: 'speedup', value: bestSolution?.eval?.reference_speedup || 0},
+  } : {}),
   initial_candidates: solutionDb.filter(s => s.cycle === 0),
   initial_generation_result: {
     verified: solutionDb.some(s => s.eval?.is_valid),
@@ -1823,7 +1883,9 @@ return {
   },
   best_metric: bestMetric,
   best_solution_code: bestSolution?.code || '',
-  best_kernel_path: bestSolution?.code ? bestKernelPath() : null,
+  best_kernel_path: IS_SOL && LANGUAGE === 'cute-dsl'
+    ? (bestSolution?.eval?.host_candidate_path || null)
+    : (bestSolution?.code ? bestKernelPath() : null),
   cycles_completed: cycleCount,
   termination_reason: terminationReason,
   checkpoint_path: CHECKPOINT_PATH,

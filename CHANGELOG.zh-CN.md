@@ -8,6 +8,23 @@
 
 ### Fixed
 
+- 明确 KSearch 和 AKO4X 的 CuTe 候选契约。此前 AKO4X 要求 Python 候选保留
+  CUDA `PYBIND11_MODULE` 绑定，KSearch 则未明确禁止库 GEMM 代算；现在每个
+  workload 都必须执行 CuTe 编译内核。(`KSearch/ksearch-kernel-optimization.js`、
+  `AKO4X/ako4x-kernel-optimizer.js`)
+
+- KSearch 熔断回归测试现在匹配 checkpoint 安全停止：先记录熔断决定，
+  checkpoint 后再执行停止。(`_meta/tools/test/ksearch-circuit-breaker.test.js`)
+
+- CuTe DSL 的 Sol 候选现在由 Host 直接打包 Python 源码，不再交给仅支持 CUDA 的
+  packer。KSearch 与 AKO4X 由 Host 测量传入的 CuTe 种子、相对种子评价完整候选，
+  并返回精确实测源码及绑定。AKO4X 在此路径不再让只读 agent 执行跑分；manifest
+  声明其实际的 CuTe／Host 与非 Git fresh-process 契约。
+  (`_substrate/embedded/sol_execbench_eval.js`、
+  `KSearch/ksearch-kernel-optimization.js`、`AKO4X/ako4x-kernel-optimizer.js`、
+  `AKO4X/manifest.yaml`、`_meta/tools/test/ksearch-guard.test.js`、
+  `_meta/tools/test/ako4x-guard.test.js`)
+
 - CUDAAgent 现在由 Host 测量传入的 Sol 种子，按相对种子的增益给奖励、判断停止及
   晋升候选。此前比强种子更慢的候选也可能因快于框架 reference 而达到目标、在
   A→B 运行中替换种子；现在回退时保留输入源码，reference 相对指标另行标注。

@@ -10,6 +10,26 @@ for the versioning policy.
 
 ### Fixed
 
+- Clarify the CuTe candidate contract in KSearch and AKO4X. AKO4X previously
+  told Python candidates to preserve a CUDA `PYBIND11_MODULE` block, while
+  KSearch left library GEMM delegation ambiguous; both now require a real
+  CuTe-compiled path for every workload. (`KSearch/ksearch-kernel-optimization.js`,
+  `AKO4X/ako4x-kernel-optimizer.js`)
+
+- Keep KSearch's circuit-breaker regression aligned with the checkpoint-safe
+  stop: the decision is captured before the checkpoint and applied afterward.
+  (`_meta/tools/test/ksearch-circuit-breaker.test.js`)
+
+- CuTe DSL Sol candidates now pass their Python source to the Host instead of
+  the CUDA-only packer. KSearch and AKO4X measure the supplied CuTe seed on the
+  Host, score complete candidates against it, and return the exact measured
+  source and binding. AKO4X no longer asks a read-only agent to execute its
+  benchmark in this path; its manifest admits the actual CuTe/Host and
+  fresh-process contracts. (`_substrate/embedded/sol_execbench_eval.js`,
+  `KSearch/ksearch-kernel-optimization.js`, `AKO4X/ako4x-kernel-optimizer.js`,
+  `AKO4X/manifest.yaml`, `_meta/tools/test/ksearch-guard.test.js`,
+  `_meta/tools/test/ako4x-guard.test.js`)
+
 - CUDAAgent now measures the supplied Sol seed through the Host and uses
   seed-relative gain to reward, stop, and promote candidates. Previously a
   candidate slower than a strong seed could meet a target measured against the
