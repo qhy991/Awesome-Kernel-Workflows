@@ -8,6 +8,10 @@ for the versioning policy.
 
 ## [Unreleased]
 
+### Changed
+
+- KSearch CuTe DSL candidates use the Host SOL evaluator with complete task context and package Python source through the supported PyTorch SolutionSpec transport. Missing Host evaluation is rejected. (`KSearch/ksearch-kernel-optimization.js`, `KSearch/README.md`, `_substrate/integration/tests/test_pack_sol_candidate.py`)
+
 ### Fixed
 
 - CUDAAgent now measures the supplied Sol seed through the Host and uses

@@ -20,8 +20,10 @@ const SOL_SOLUTION_CONTRACT = [
   'the sol-execbench harness, which compiles it internally. Therefore:',
   '',
   '1. Emit a COMPLETE candidate with the task entry point run(...). CUDA C++',
-  '   requires a torch PYBIND11_MODULE binding; Python/Triton requires a',
-  '   module-level def run(...). Do NOT write a standalone main()/CLI harness.',
+  '   requires a torch PYBIND11_MODULE binding; Python/Triton/CuTe DSL requires a',
+  '   module-level def run(...). CuTe DSL is authored as Python source and the Host',
+  '   packages it with the supported PyTorch SolutionSpec language; do not invent',
+  '   a cute-dsl SolutionSpec enum. Do NOT write a standalone main()/CLI harness.',
   '2. Match the task reference signature exactly (same argument order/dtypes).',
   '3. Do NOT package, compile, or benchmark yourself — the workflow + substrate',
   '   handle pack -> sol-execbench -> parse. Return only the runnable source.',
@@ -703,8 +705,8 @@ if (INTEGRATION_DECISION.method === 'derive_adapter') {
 const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'standalone'
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
 const IS_SOL = INTEGRATION_DECISION.method === 'sol_execbench_solution'
-if (LANGUAGE === 'cute-dsl' && IS_SOL) {
-  throw new Error('CuTe DSL SOL-ExecBench packaging is not qualified; use a caller-owned standalone harness.')
+if (LANGUAGE === 'cute-dsl' && IS_SOL && typeof evaluate !== 'function') {
+  throw new Error('CuTe DSL SOL-ExecBench requires the Host-owned evaluator; refusing the agent-owned shell fallback.')
 }
 if (IS_SOL) {
   const missing = [
@@ -1064,7 +1066,9 @@ Then append:
   const wmSection =
     `\n\n# World Model (persistent decision tree — use it to guide design):\n${JSON.stringify(decisionTree, null, 2).substring(0, 3000)}` +
     (LANGUAGE === 'cute-dsl'
-      ? '\n\n# Requested DSL: CuTe DSL\nWrite Python .py source using cutlass.cute and @cute.kernel where appropriate. Preserve the task callable entry point and argument contract. Keep the implementation in CuTe DSL; do not switch to CUDA C++ or Triton. The caller-owned correctness and benchmark commands provide execution evidence.'
+      ? (IS_SOL
+        ? '\n\n# Requested DSL: CuTe DSL\nWrite a complete Python .py candidate using cutlass.cute and @cute.kernel where appropriate. Preserve the task callable run(...) signature and argument contract. Keep the implementation in CuTe DSL; do not switch to CUDA C++ or Triton. The Host-owned SOL-ExecBench evaluator packages this Python source and measures the complete official workload; do not use shell commands or invent metrics.'
+        : '\n\n# Requested DSL: CuTe DSL\nWrite Python .py source using cutlass.cute and @cute.kernel where appropriate. Preserve the task callable entry point and argument contract. Keep the implementation in CuTe DSL; do not switch to CUDA C++ or Triton.')
       : '') +
     (IS_SOL ? `\n\n${SOL_SOLUTION_CONTRACT}` : '')
   const seedIndexes = Array.from({ length: SEED_CANDIDATES }, (_, seedAttempt) => seedAttempt)

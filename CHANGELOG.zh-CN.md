@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- KSearch CuTe DSL 候选在任务上下文完整时走 Host SOL 评测器，Python 源码通过受支持的 PyTorch SolutionSpec 打包；缺少 Host 评测器时拒绝派发。（`KSearch/ksearch-kernel-optimization.js`、`KSearch/README.md`、`_substrate/integration/tests/test_pack_sol_candidate.py`）
+
 ### Fixed
 
 - CUDAAgent 现在由 Host 测量传入的 Sol 种子，按相对种子的增益给奖励、判断停止及

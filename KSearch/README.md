@@ -117,3 +117,12 @@ If you use this workflow in research or engineering reports, please cite the ori
   url={https://arxiv.org/abs/2602.19128}
 }
 ```
+
+## CuTe DSL with Host-owned SOL evaluation
+
+CuTe DSL candidates are Python source files with a module-level `run(...)`.
+The Host packer uses the benchmark's supported `pytorch` source-language label;
+`cute-dsl` remains the frozen authoring language in the KerSor Session, not an
+invented SolutionSpec enum. Official correctness and timing come only from the
+Host SOL evaluator. The pinned runtime must import `cutlass.cute`, and a full
+workload canary on the target GPU must pass before a larger matrix is dispatched.

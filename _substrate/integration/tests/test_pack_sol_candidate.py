@@ -173,5 +173,17 @@ class PackSolTests(unittest.TestCase):
         sol = self._run(KERNEL_WITH_BINDING, contract)
         self.assertEqual(sol["definition"], "025_rmsnorm_h4096")  # comment stripped, no trailing spaces
 
+
+    def test_cute_dsl_python_source_uses_supported_pytorch_transport(self):
+        source = (
+            "import cutlass.cute as cute\n"
+            "def run(a, b):\n"
+            "    return a @ b\n"
+        )
+        sol = self._run(source, CONTRACT, "candidate.py")
+        self.assertEqual(sol["spec"]["languages"], ["pytorch"])
+        self.assertEqual(sol["spec"]["entry_point"], "candidate.py::run")
+        self.assertEqual(sol["sources"][0]["content"], source)
+
 if __name__ == "__main__":
     unittest.main()
