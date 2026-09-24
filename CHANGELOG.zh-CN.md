@@ -8,6 +8,12 @@
 
 ### Fixed
 
+- CUDAAgent 现在由 Host 测量传入的 Sol 种子，按相对种子的增益给奖励、判断停止及
+  晋升候选。此前比强种子更慢的候选也可能因快于框架 reference 而达到目标、在
+  A→B 运行中替换种子；现在回退时保留输入源码，reference 相对指标另行标注。
+  (`CUDAAgent/cuda-agent-kernel-optimization.js`、
+  `_meta/tools/test/cudaagent-host-binding.test.js`)
+
 - Generalist 现在由 Host 测量传入的 Sol 强种子及候选，以种子为基准评分，并晋升精确实测源码。此前只读 anti-cheat agent 无法执行 substrate 命令，即使 Host 有四项完整正确测量，仍把全部候选判为无效并只返回基线。共用 Sol helper 同时传递完整 solution 基线请求、统一识别 harness 拒绝，并同步九个 workflow 的内联副本。(`Generalist/generalist-kernel-optimization.js`、`_substrate/embedded/sol_execbench_eval.js`、九个 Sol workflow 入口、`_meta/tools/test/generalist-host-sol.test.js`)
 
 - 将 CUDAAgent 的产物绑定请求完整传入共用 Sol 评测器。此前正确的 Host 测量会丢失这些字段，返回无绑定的空最优源码，还可能误报达到加速目标。现在正确实测候选缺少 Host 绑定时会明确失败。(`_substrate/embedded/sol_execbench_eval.js`、`CUDAAgent/cuda-agent-kernel-optimization.js`、`_meta/tools/lib/run-workflow.js`、`_meta/tools/test/cudaagent-host-binding.test.js`)

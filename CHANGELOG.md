@@ -10,6 +10,14 @@ for the versioning policy.
 
 ### Fixed
 
+- CUDAAgent now measures the supplied Sol seed through the Host and uses
+  seed-relative gain to reward, stop, and promote candidates. Previously a
+  candidate slower than a strong seed could meet a target measured against the
+  framework reference and replace that seed in an A→B run. Regressions now
+  retain the input source while the reference-relative metric remains labelled
+  separately. (`CUDAAgent/cuda-agent-kernel-optimization.js`,
+  `_meta/tools/test/cudaagent-host-binding.test.js`)
+
 - Generalist now measures its supplied Sol seed and candidates through the Host,
   scores candidates against that seed, and promotes the exact measured source.
   Previously its read-only anti-cheat agent could not run substrate commands, so

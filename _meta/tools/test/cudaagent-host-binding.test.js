@@ -27,10 +27,19 @@ const agentReturns = {
   },
 }
 
-function measured(binding) {
+function seedBaseline(request) {
+  assert.equal(request.baselineSolutionPath, '/tmp/seed/seed.solution.json')
+  return {
+    compiled: true, correct: true, measurement_valid: true, full_workload_set: true,
+    output_contract_valid: true, candidate_latency_aggregate_ms: 0.02,
+  }
+}
+
+function measured(binding, latency = 0.016) {
   return {
     compiled: true, correct: true, measurement_valid: true, full_workload_set: true,
     output_contract_valid: true, speedup: 1.2,
+    candidate_latency_aggregate_ms: latency,
     candidate_path: candidatePath, candidate_sha256: candidateSha,
     artifact_binding: binding,
   }
@@ -38,6 +47,7 @@ function measured(binding) {
 
 test('CUDAAgent Sol returns the exact Host-bound source and matching binding', async () => {
   const {result} = await runWorkflow(source, args, agentReturns, {
+    'sol-seed-baseline': seedBaseline,
     'sol-eval-0': request => {
       assert.equal(request.bindingOut, bindingPath)
       assert.equal(request.bindingWorkflow, 'cuda-agent-kernel-optimization')
@@ -53,10 +63,42 @@ test('CUDAAgent Sol returns the exact Host-bound source and matching binding', a
   assert.equal(result.best_candidate_id, 'attempt-0')
   assert.deepEqual(JSON.parse(JSON.stringify(result.canonical_metric)),
     {name: 'speedup', value: 1.2})
+  assert.equal(result.seed_relative_speedup, 1.25)
+  assert.equal(result.target_met, true)
 })
 
 test('CUDAAgent Sol fails when a correct Host measurement lacks binding', async () => {
   await assert.rejects(() => runWorkflow(source, args, agentReturns, {
+    'sol-seed-baseline': seedBaseline,
     'sol-eval-0': measured(null),
   }), /Host artifact binding missing/)
+})
+
+test('CUDAAgent Sol retains the supplied seed when the Host candidate regresses', async () => {
+  const {result} = await runWorkflow(source, args, agentReturns, {
+    'sol-seed-baseline': seedBaseline,
+    'sol-eval-0': measured({verified: true, candidate_sha256: candidateSha,
+      binding_path: bindingPath}, 0.022),
+  })
+  assert.equal(result.seed_relative_speedup, 1)
+  assert.equal(result.target_met, false)
+  assert.equal(result.generated_kernel_path, '')
+  assert.equal(result.artifact_binding_required, false)
+  assert.equal(result.best_kernel_path, args.kernel_path)
+})
+
+test('CUDAAgent Sol refuses an unmeasured supplied seed', async () => {
+  await assert.rejects(() => runWorkflow(source, args, agentReturns, {
+    'sol-seed-baseline': {compiled: false, correct: false},
+  }), /Host could not establish a complete measured Sol seed baseline/)
+})
+
+test('CUDAAgent Sol explores without a numeric target', async () => {
+  const {result} = await runWorkflow(source, {...args, target_speedup: 'none'}, agentReturns, {
+    'sol-seed-baseline': seedBaseline,
+    'sol-eval-0': measured({verified: true, candidate_sha256: candidateSha,
+      binding_path: bindingPath}),
+  })
+  assert.equal(result.seed_relative_speedup, 1.25)
+  assert.equal(result.target_met, false)
 })
