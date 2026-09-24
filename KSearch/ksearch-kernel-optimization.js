@@ -72,6 +72,8 @@ async function __solExecbenchEvaluate(ctx) {
     candidateSource: ctx.candidateSource,
     candidateLanguage: ctx.candidateLanguage || '',
     baselineSolutionPath: ctx.baselineSolutionPath || '',
+    baselineEvaluationPath: ctx.baselineEvaluationPath || '',
+    parentSolutionPath: ctx.parentSolutionPath || '',
     substrateDir: ctx.substrateDir,
     contractEnv: ctx.contractEnv,
     solutionOut: ctx.solutionOut,
@@ -705,6 +707,7 @@ const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'sta
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
 const IS_SOL = INTEGRATION_DECISION.method === 'sol_execbench_solution'
 let cuteSeedLatencyMs = null
+let cuteSeedMeasurementPath = null
 if (IS_SOL) {
   const missing = [
     ['sol_cli', SOL_CLI], ['sol_task_dir', SOL_TASK_DIR],
@@ -735,6 +738,7 @@ if (IS_SOL) {
       throw new Error('Host could not establish a complete measured CuTe seed baseline')
     }
     cuteSeedLatencyMs = latency
+    cuteSeedMeasurementPath = seed.result_path
     log(`Host CuTe seed baseline latency: ${cuteSeedLatencyMs} ms`)
   }
 }
@@ -1295,6 +1299,10 @@ Then append:
           kernelSource: candidatePath,
           candidateSource: genResult.code,
           candidateLanguage: LANGUAGE === 'cute-dsl' ? 'cute-dsl' : '',
+          ...(LANGUAGE === 'cute-dsl' ? {
+            baselineEvaluationPath: cuteSeedMeasurementPath,
+            parentSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
+          } : {}),
           contractEnv: `${EXP_DIR}/contract.env`,
           solutionOut: `${EXP_DIR}/${variant}.solution.json`,
           benchOut: `${EXP_DIR}/${variant}.bench.jsonl`,
@@ -1874,7 +1882,7 @@ return {
     artifact_binding_required: bestSolution?.eval?.artifact_binding?.verified === true,
     artifact_binding_path: bestSolution?.eval?.artifact_binding?.binding_path || '',
     best_candidate_id: bestSolution?.eval?.artifact_binding?.candidate_id || null,
-    canonical_metric: {name: 'speedup', value: bestSolution?.eval?.reference_speedup || 0},
+    canonical_metric: {name: 'speedup_vs_seed', value: bestSolution?.eval?.metric_value || 0},
   } : {}),
   initial_candidates: solutionDb.filter(s => s.cycle === 0),
   initial_generation_result: {

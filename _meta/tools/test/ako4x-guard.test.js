@@ -66,11 +66,14 @@ test('CuTe Sol candidates use Host seed and candidate scores without agent-run b
       assert.equal(request.candidateLanguage, 'cute-dsl')
       return {compiled: true, correct: true, full_workload_set: true,
         output_contract_valid: true, measurement_valid: true,
-        candidate_latency_aggregate_ms: 0.02}
+        candidate_latency_aggregate_ms: 0.02,
+        result_path: '/tmp/ako4x-guard/host_seed.bench.jsonl.result.json'}
     },
     'sol-eval-r1-iter1-vec': request => {
       assert.equal(request.candidateLanguage, 'cute-dsl')
       assert.equal(request.candidatePath, candidatePath)
+      assert.equal(request.baselineEvaluationPath, '/tmp/ako4x-guard/host_seed.bench.jsonl.result.json')
+      assert.equal(request.parentSolutionPath, '/tmp/seed/seed.solution.json')
       return {compiled: true, correct: true, full_workload_set: true,
         output_contract_valid: true, measurement_valid: true,
         n_pass: 1, n_total: 1, speedup: 1.2,

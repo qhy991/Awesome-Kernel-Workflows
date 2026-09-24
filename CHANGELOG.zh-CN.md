@@ -8,6 +8,15 @@
 
 ### Fixed
 
+- KSearch 与 AKO4X 的每个 CuTe 候选现在传递精确的 Host 实测输入父代，
+  并将绑定的种子相对指标与框架 reference 指标分别返回。此前内部种子相对
+  评分无法满足 KerSor 的严格跨 workflow 交接。
+  (`_substrate/embedded/sol_execbench_eval.js`、
+  `KSearch/ksearch-kernel-optimization.js`、
+  `AKO4X/ako4x-kernel-optimizer.js`、
+  `_meta/tools/test/ksearch-guard.test.js`、
+  `_meta/tools/test/ako4x-guard.test.js`)
+
 - 明确 KSearch 和 AKO4X 的 CuTe 候选契约。此前 AKO4X 要求 Python 候选保留
   CUDA `PYBIND11_MODULE` 绑定，KSearch 则未明确禁止库 GEMM 代算；现在每个
   workload 都必须执行 CuTe 编译内核。(`KSearch/ksearch-kernel-optimization.js`、

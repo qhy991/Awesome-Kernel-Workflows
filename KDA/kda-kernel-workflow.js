@@ -85,6 +85,8 @@ async function __solExecbenchEvaluate(ctx) {
     candidateSource: ctx.candidateSource,
     candidateLanguage: ctx.candidateLanguage || '',
     baselineSolutionPath: ctx.baselineSolutionPath || '',
+    baselineEvaluationPath: ctx.baselineEvaluationPath || '',
+    parentSolutionPath: ctx.parentSolutionPath || '',
     substrateDir: ctx.substrateDir,
     contractEnv: ctx.contractEnv,
     solutionOut: ctx.solutionOut,

@@ -10,6 +10,16 @@ for the versioning policy.
 
 ### Fixed
 
+- Forward each CuTe candidate's exact Host-measured input parent to KSearch
+  and AKO4X, and return the bound seed-relative metric separately from the
+  framework-reference metric. Previously internal seed-relative scores could
+  not satisfy KerSor's strict cross-workflow handoff.
+  (`_substrate/embedded/sol_execbench_eval.js`,
+  `KSearch/ksearch-kernel-optimization.js`,
+  `AKO4X/ako4x-kernel-optimizer.js`,
+  `_meta/tools/test/ksearch-guard.test.js`,
+  `_meta/tools/test/ako4x-guard.test.js`)
+
 - Clarify the CuTe candidate contract in KSearch and AKO4X. AKO4X previously
   told Python candidates to preserve a CUDA `PYBIND11_MODULE` block, while
   KSearch left library GEMM delegation ambiguous; both now require a real

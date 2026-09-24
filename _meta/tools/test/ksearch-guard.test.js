@@ -118,12 +118,15 @@ test('CuTe DSL rejects the CUDA C++ driver and binds a Host-measured Python cand
       assert.equal(request.baselineSolutionPath, '/tmp/seed/seed.solution.json')
       return {compiled: true, correct: true, full_workload_set: true,
         output_contract_valid: true, measurement_valid: true,
-        candidate_latency_aggregate_ms: 0.02}
+        candidate_latency_aggregate_ms: 0.02,
+        result_path: '/tmp/ksearch-guard/host_seed.bench.jsonl.result.json'}
     },
     'sol-eval-0-0': request => {
       assert.equal(request.candidateLanguage, 'cute-dsl')
       assert.equal(request.candidatePath, candidatePath)
       assert.equal(request.bindingOut, '/tmp/ksearch-guard/bindings/ksearch_c0_a0.json')
+      assert.equal(request.baselineEvaluationPath, '/tmp/ksearch-guard/host_seed.bench.jsonl.result.json')
+      assert.equal(request.parentSolutionPath, '/tmp/seed/seed.solution.json')
       return {
         compiled: true, correct: true, full_workload_set: true,
         output_contract_valid: true, measurement_valid: true,

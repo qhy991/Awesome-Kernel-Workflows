@@ -35,6 +35,8 @@ async function __solExecbenchEvaluate(ctx) {
     candidateSource: ctx.candidateSource,
     candidateLanguage: ctx.candidateLanguage || '',
     baselineSolutionPath: ctx.baselineSolutionPath || '',
+    baselineEvaluationPath: ctx.baselineEvaluationPath || '',
+    parentSolutionPath: ctx.parentSolutionPath || '',
     substrateDir: ctx.substrateDir,
     contractEnv: ctx.contractEnv,
     solutionOut: ctx.solutionOut,
@@ -818,6 +820,7 @@ if (PROFILING_DECISION.method === 'native_profiler' && !NCU_BINARY) {
 // Establish baseline (NCU profile if available, else benchmark)
 let baselineProfileSummary = ''
 let baselineLatency = null
+let cuteSeedMeasurementPath = null
 
 if (SOL_AVAILABLE && KERNEL_LANG === 'cute-dsl' &&
     INTEGRATION_DECISION.method === 'sol_execbench_solution') {
@@ -845,6 +848,7 @@ if (SOL_AVAILABLE && KERNEL_LANG === 'cute-dsl' &&
   baselineScore = latency
   bestScore = latency
   baselineLatency = latency
+  cuteSeedMeasurementPath = seed.result_path
   baselineProfileSummary = `Host-measured CuTe seed: ${latency} ms; IKET profiling depends on target GPU support.`
 } else if (HARNESS_PATH || HARNESS_BUILD_CMD) {
   const ncuSetup = await agentRetry(() => agent(`Profile the baseline kernel with Nsight Compute (ncu).
@@ -1145,6 +1149,10 @@ Then append (this variant is round ${round + 1}, hypothesis "${plan.title}", sam
           kernelSource: `${EXP_DIR}/ako4x_${String(iterLabel).replace(/[^A-Za-z0-9_]/g, '_')}${KERNEL_LANG === 'cute-dsl' ? '.py' : '.cu'}`,
           candidateSource: impl.code,
           candidateLanguage: KERNEL_LANG === 'cute-dsl' ? 'cute-dsl' : '',
+          ...(KERNEL_LANG === 'cute-dsl' ? {
+            baselineEvaluationPath: cuteSeedMeasurementPath,
+            parentSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
+          } : {}),
           contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
           solutionOut: `${EXP_DIR}/ako4x_${String(iterLabel).replace(/[^A-Za-z0-9_]/g, '_')}.solution.json`,
           benchOut: `${EXP_DIR}/ako4x_${String(iterLabel).replace(/[^A-Za-z0-9_]/g, '_')}.bench.jsonl`,
@@ -1178,7 +1186,7 @@ above shows. Stay out of performance, as this stage instructs.` : ''
       const __benchBlock = __hostMeasured ? `
 
 # ALREADY MEASURED ON THE HOST - this is the performance verdict
-speedup_vs_baseline=${__hostMeasured.speedup} latency_ms=${__hostMeasured.latency_ms}
+speedup_vs_baseline=${KERNEL_LANG === 'cute-dsl' ? __hostMeasured.speedup_vs_seed : __hostMeasured.speedup} latency_ms=${__hostMeasured.latency_ms}
 workloads_passed=${__hostMeasured.n_pass}/${__hostMeasured.n_total}
 Report this rather than re-deriving it, and judge it against the hypothesis that
 was pre-committed above: did the predicted impact hold?` : ''
@@ -1900,7 +1908,7 @@ return {
     artifact_binding_required: bestHostBinding?.verified === true,
     artifact_binding_path: bestHostBinding?.binding_path || '',
     best_candidate_id: bestHostBinding?.candidate_id || null,
-    canonical_metric: {name: 'speedup', value: bestHostBinding?.metric_value || 0},
+    canonical_metric: {name: 'speedup_vs_seed', value: bestHostBinding?.metric_value || 0},
   } : {}),
   initial_candidates: initialCandidates,
   initial_generation_result: initialGenerationResult,
