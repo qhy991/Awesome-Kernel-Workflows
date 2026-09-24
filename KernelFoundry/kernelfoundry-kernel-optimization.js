@@ -666,6 +666,7 @@ if (INTEGRATION_DECISION.method === 'derive_adapter') {
 const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'standalone'
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
 const IS_SOL = INTEGRATION_DECISION.method === 'sol_execbench_solution'
+let solSeedMeasurementPath = ''
 if (IS_SOL) {
   const missing = [
     ['sol_cli', SOL_CLI], ['sol_task_dir', SOL_TASK_DIR],
@@ -673,6 +674,29 @@ if (IS_SOL) {
     ['sol_substrate_dir', SOL_SUBSTRATE_DIR],
   ].filter(([, value]) => !value).map(([name]) => name)
   if (missing.length) throw new Error(`sol_execbench_solution requires non-empty: ${missing.join(', ')}`)
+  if (typeof evaluate !== 'function') throw new Error('KernelFoundry Sol requires Host evaluation')
+  const seed = await __solExecbenchEvaluate({
+    label: 'sol-seed-baseline', phase: 'Setup',
+    substrateDir: SOL_SUBSTRATE_DIR,
+    kernelSource: `${EXP_DIR}/host_seed.cu`,
+    baselineSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
+    contractEnv: `${SOL_SEED_DIR}/contract.env`,
+    solutionOut: `${EXP_DIR}/host_seed.solution.json`,
+    benchOut: `${EXP_DIR}/host_seed.bench.jsonl`,
+    normalizedOut: `${EXP_DIR}/host_seed.result.json`,
+    solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+    seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+    ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+    definitionPath: SOL_DEFINITION_PATH,
+  })
+  if (seed?.compiled !== true || seed?.correct !== true ||
+      seed?.full_workload_set !== true || seed?.output_contract_valid !== true ||
+      seed?.measurement_valid !== true ||
+      !(Number.isFinite(seed.candidate_latency_aggregate_ms) &&
+        seed.candidate_latency_aggregate_ms > 0) || !seed.result_path) {
+    throw new Error('Host could not establish a complete measured Sol seed baseline')
+  }
+  solSeedMeasurementPath = seed.result_path
 }
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
@@ -918,6 +942,8 @@ Return {"written":true,"path":"${candidatePath}"}.`, {
         substrateDir: SOL_SUBSTRATE_DIR,
         kernelSource: candidatePath,
         candidateSource: offspringCode,
+        baselineEvaluationPath: solSeedMeasurementPath,
+        parentSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
         bindingOut: `${EXP_DIR}/bindings/gen_${generation}.json`, bindingWorkflow: WORKFLOW_NAME,
         candidateId: `gen${generation}`,
 
@@ -937,6 +963,8 @@ Return {"written":true,"path":"${candidatePath}"}.`, {
       if (direct) {
         return {
           ...direct,
+          speedup: direct.speedup_vs_seed || 0,
+          metric_name: 'speedup_vs_seed',
           d_mem: Number(varyResult?.d_mem || 0),
           d_algo: Number(varyResult?.d_algo || 0),
           d_sync: Number(varyResult?.d_sync || 0),
@@ -1196,7 +1224,7 @@ Run one small deterministic Python program; do not infer or repair anything:
     evalResult.speedup = bindingVerified ? Number(canonicalEval.speedup || 0) : 0
     evalResult.n_pass = canonicalEval.n_pass
     evalResult.n_total = canonicalEval.n_total
-    evalResult.metric_name = 'speedup'
+    evalResult.metric_name = IS_SOL ? 'speedup_vs_seed' : 'speedup'
     evalResult.result_path = generationResultPath
     candidateBinding = {
       verified: bindingVerified,
@@ -1304,6 +1332,10 @@ Run one small deterministic Python program; do not infer or repair anything:
 
   if (evalResult.measurement_valid === false) {
     log(`Measurement rejected for generation ${generation}; no archive or fitness update`)
+    continue
+  }
+  if (IS_SOL && !(evalResult.speedup > 1)) {
+    log(`Generation ${generation} did not beat the inherited Host-measured seed`)
     continue
   }
   const fitness = computeFitness(evalResult.compiled, evalResult.correct, evalResult.speedup || 0)

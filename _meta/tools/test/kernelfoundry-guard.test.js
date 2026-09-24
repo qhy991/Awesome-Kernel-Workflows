@@ -67,6 +67,46 @@ test('measured KernelFoundry returns the exact bound candidate for cross-workflo
   assert.equal(result.generated_kernel_path, '/tmp/kf-guard/gen_0.cu')
 })
 
+test('KernelFoundry Sol scores a bound candidate against the inherited seed', async () => {
+  const source = fs.readFileSync(WORKFLOW, 'utf8')
+  const returns = { ...minimalReturns }
+  const binding = {
+    verified: true, compiled: true, correct: true, speedup: 1.25,
+    n_pass: 2, n_total: 2, binding_path: '/tmp/kf-guard/bindings/gen_0.json',
+    binding_sha256: 'a'.repeat(64), candidate_sha256: 'b'.repeat(64),
+    measurement_sha256: 'c'.repeat(64), task_sha256: 'd'.repeat(64),
+    task_fingerprint_kind: 'file_sha256',
+  }
+  const observed = {}
+  const {result} = await runWorkflow(source, {
+    ...baseArgs, language: 'cuda', integration_pattern: 'sol_execbench_solution',
+    test_command: 'test {kernel_path}', benchmark_command: 'bench {kernel_path}',
+    sol_cli: '/tmp/sol', sol_task_dir: '/tmp/task', sol_bench_config: '/tmp/config',
+    sol_seed_dir: '/tmp/seed', sol_substrate_dir: '/tmp/substrate',
+  }, returns, {
+    'sol-seed-baseline': request => {
+      assert.equal(request.baselineSolutionPath, '/tmp/seed/seed.solution.json')
+      return {compiled: true, correct: true, full_workload_set: true,
+        output_contract_valid: true, measurement_valid: true,
+        candidate_latency_aggregate_ms: 0.02,
+        result_path: '/tmp/kf-guard/host_seed.result.json'}
+    },
+    'sol-eval-0': request => {
+      observed.parent = request.parentSolutionPath
+      observed.baseline = request.baselineEvaluationPath
+      return {compiled: true, correct: true, full_workload_set: true,
+        output_contract_valid: true, measurement_valid: true,
+        n_pass: 2, n_total: 2, candidate_latency_aggregate_ms: 0.016,
+        speedup: 9, speedup_vs_seed: 1.25,
+        artifact_binding: binding, candidate_path: '/tmp/kf-guard/gen_0.cu'}
+    },
+  })
+  assert.equal(observed.parent, '/tmp/seed/seed.solution.json')
+  assert.equal(observed.baseline, '/tmp/kf-guard/host_seed.result.json')
+  assert.equal(result.best_speedup, 1.25)
+  assert.equal(result.artifact_binding_path, binding.binding_path)
+})
+
 test('legacy path: no backend_dir, language=cuda -> renders cuda vocabulary, no load-driver agent', async () => {
   const legacyReturns = { ...minimalReturns }
   delete legacyReturns['load-driver']
