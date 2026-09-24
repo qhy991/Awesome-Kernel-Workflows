@@ -12,6 +12,8 @@
 
 ### Fixed
 
+- AccelOpt 和 KSearch 现在由 Host 测量传入的 Sol seed，按相对 seed 的延迟选优，并返回与 Host 验收绑定的准确源码。此前相对框架参考实现的分数或估计分数可能把更慢、未绑定的源码传入 WSR 后续 workflow。（`AccelOpt/accelopt-kernel-optimization.js`、`KSearch/ksearch-kernel-optimization.js` 及对应 Host 测试）
+
 - CUDAAgent 现在由 Host 测量传入的 Sol 种子，按相对种子的增益给奖励、判断停止及
   晋升候选。此前比强种子更慢的候选也可能因快于框架 reference 而达到目标、在
   A→B 运行中替换种子；现在回退时保留输入源码，reference 相对指标另行标注。

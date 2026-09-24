@@ -97,14 +97,14 @@ test('explicit CuTe DSL reaches generation as Python source with DSL guidance', 
   assert.ok(!calls.some(c => c.label === 'load-driver'))
 })
 
-test('CuTe DSL rejects CUDA C++ driver and unqualified SOL packaging', async () => {
+test('CuTe DSL rejects CUDA C++ driver and incomplete Host SOL context', async () => {
   await assert.rejects(
     run({ language: 'cute-dsl', backend_dir: '_substrate/backends/cuda' }),
     /CuTe DSL source is Python/,
   )
   await assert.rejects(
     run({ language: 'cute-dsl', integration_pattern: 'sol_execbench_solution' }, minimalReturns),
-    /CuTe DSL SOL-ExecBench packaging is not qualified/,
+    /sol_execbench_solution requires non-empty: sol_cli, sol_task_dir, sol_bench_config/,
   )
 })
 

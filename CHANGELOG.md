@@ -14,6 +14,8 @@ for the versioning policy.
 
 ### Fixed
 
+- AccelOpt and KSearch now measure the supplied Sol seed through the Host, rank candidates by latency relative to that seed, and return the exact Host-bound winning source. Previously their framework-relative or estimated scores could advance a slower or unbound source into a WSR continuation. (`AccelOpt/accelopt-kernel-optimization.js`, `KSearch/ksearch-kernel-optimization.js`, `_meta/tools/test/accelopt-host-sol.test.js`, `_meta/tools/test/ksearch-host-sol.test.js`)
+
 - CUDAAgent now measures the supplied Sol seed through the Host and uses
   seed-relative gain to reward, stop, and promote candidates. Previously a
   candidate slower than a strong seed could meet a target measured against the

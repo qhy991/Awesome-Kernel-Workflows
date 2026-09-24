@@ -23,6 +23,7 @@ async function __solExecbenchEvaluate(ctx) {
     phase: ctx.phase || 'Evaluate',
     candidatePath: ctx.kernelSource,
     candidateSource: ctx.candidateSource,
+    baselineSolutionPath: ctx.baselineSolutionPath || '',
     substrateDir: ctx.substrateDir,
     contractEnv: ctx.contractEnv,
     solutionOut: ctx.solutionOut,
@@ -36,6 +37,9 @@ async function __solExecbenchEvaluate(ctx) {
     ldLibraryPath: ctx.ldLibraryPath || '',
     envPrefix: ctx.envPrefix || '',
     definitionPath: ctx.definitionPath || '',
+    bindingOut: ctx.bindingOut || '',
+    bindingWorkflow: ctx.bindingWorkflow || '',
+    candidateId: ctx.candidateId || '',
     timeoutSeconds: ctx.timeoutSeconds || 0,
   }).then(__solGuardHarnessFault)
 }
@@ -455,6 +459,7 @@ let baselineLatency = null
 let baselineNcuProfile = ''
 let candidateBeam = []          // [{code, latency, speedup, ncuSummary, planTitle}]
 let bottleneckClass = 'unknown'
+let solBestHostCandidate = null
 
 function legacyEvaluatePrompt(variant, bestLatency, ncuSetup) {
   return `You are a CUDA kernel evaluator using Nsight Compute. Evaluate this optimized kernel variant.
@@ -980,6 +985,7 @@ if (INTEGRATION_DECISION.method === 'derive_adapter') {
 }
 const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'standalone'
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+const IS_SOL = INTEGRATION_DECISION.method === 'sol_execbench_solution'
 // The embedded operator file we swap in place is the project-referenced KERNEL_PATH.
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
@@ -1073,6 +1079,31 @@ if (USE_DRIVER_STANDALONE) {
   }), { retries: 5 })
 }
 
+if (IS_SOL) {
+  if (typeof evaluate !== 'function') throw new Error('AccelOpt Sol requires Host evaluation')
+  const seed = await __solExecbenchEvaluate({
+    label: 'sol-seed-baseline', phase: 'Setup',
+    substrateDir: SOL_SUBSTRATE_DIR,
+    kernelSource: `${EXP_DIR}/host_seed.cu`,
+    baselineSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
+    contractEnv: `${SOL_SEED_DIR}/contract.env`,
+    solutionOut: `${EXP_DIR}/host_seed.solution.json`,
+    benchOut: `${EXP_DIR}/host_seed.bench.jsonl`,
+    solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+    seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+    ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+    definitionPath: SOL_DEFINITION_PATH,
+  })
+  const latency = seed?.candidate_latency_aggregate_ms
+  if (seed?.compiled !== true || seed?.correct !== true ||
+      seed?.full_workload_set !== true || seed?.output_contract_valid !== true ||
+      seed?.measurement_valid !== true ||
+      typeof latency !== 'number' || !Number.isFinite(latency) || latency <= 0) {
+    throw new Error('Host could not establish a complete measured Sol seed baseline')
+  }
+  ncuSetup = { ...ncuSetup, latency_ms: latency,
+    profile_summary: `${ncuSetup?.profile_summary || ''}; Host Sol seed latency=${latency}ms` }
+}
 baselineLatency = ncuSetup.latency_ms
 bestLatency = baselineLatency
 bestKernelCode = baselineKernel
@@ -1479,7 +1510,7 @@ Then append (iteration ${iter}, variant ${variant.id}; status="done" if correct 
   // Mirror the same overwrite for it. Unlike the embedded case this measures an
   // isolated candidate rather than mutating the host project, so it can run
   // concurrently.
-  if (!IS_EMBEDDED && SOL_AVAILABLE) {
+  if (IS_SOL && SOL_AVAILABLE) {
     const measured = await parallel(allVariants.map((variant, i) => async () => {
       if (!evaluations[i] || !(variant.code || '').trim()) return null
       const vid = String(variant.id).replace(/[^A-Za-z0-9_]/g, '_')
@@ -1488,6 +1519,9 @@ Then append (iteration ${iter}, variant ${variant.id}; status="done" if correct 
         substrateDir: SOL_SUBSTRATE_DIR,
         kernelSource: `${EXP_DIR}/accelopt_${vid}.cu`,
         candidateSource: variant.code,
+        bindingOut: `${EXP_DIR}/bindings/accelopt_${vid}.json`,
+        bindingWorkflow: WORKFLOW_NAME,
+        candidateId: String(variant.id),
         contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
         solutionOut: `${EXP_DIR}/accelopt_${vid}.solution.json`,
         benchOut: `${EXP_DIR}/accelopt_${vid}.bench.jsonl`,
@@ -1501,14 +1535,29 @@ Then append (iteration ${iter}, variant ${variant.id}; status="done" if correct 
     for (const m of measured.filter(Boolean)) {
       const e = evaluations[m.i]
       const r = m.r
-      e.is_compilable = r.compiled !== false
-      e.is_correct = r.correct !== false
-      if (typeof r.speedup === 'number' && r.speedup > 0) {
-        e.estimated_speedup = r.speedup
-        if (typeof r.latency_ms === 'number' && r.latency_ms > 0) e.estimated_latency_ms = r.latency_ms
+      const hostLatency = r.candidate_latency_aggregate_ms
+      const hostValid = r.compiled === true && r.correct === true &&
+        r.full_workload_set === true && r.output_contract_valid === true &&
+        r.measurement_valid === true &&
+        typeof hostLatency === 'number' && Number.isFinite(hostLatency) && hostLatency > 0
+      if (hostValid && r.artifact_binding?.verified !== true) {
+        throw new Error('AccelOpt Host artifact binding missing for a correct Sol candidate')
+      }
+      e.is_compilable = r.compiled === true
+      e.is_correct = hostValid
+      e.estimated_speedup = hostValid ? baselineLatency / hostLatency : 0
+      e.estimated_latency_ms = hostValid ? hostLatency : null
+      if (hostValid && hostLatency < baselineLatency &&
+          (!solBestHostCandidate || hostLatency < solBestHostCandidate.latency)) {
+        solBestHostCandidate = {
+          id: String(allVariants[m.i].id), code: allVariants[m.i].code,
+          path: r.candidate_path, sha256: r.candidate_sha256,
+          binding_path: r.artifact_binding.binding_path,
+          latency: hostLatency, gain: baselineLatency / hostLatency,
+        }
       }
       e.performance_analysis = `host-measured sol-execbench: compiled=${r.compiled} correct=${r.correct} `
-        + `speedup=${r.speedup} workloads=${r.n_pass}/${r.n_total}`
+        + `speedup_vs_seed=${e.estimated_speedup} reference_speedup=${r.speedup} workloads=${r.n_pass}/${r.n_total}`
         + (r.failure_code ? ` failure_code=${r.failure_code}` : '')
         + `; ` + (e.performance_analysis || '')
       log(`Host-measured ${allVariants[m.i].id}: compiled=${r.compiled} correct=${r.correct} `
@@ -1547,7 +1596,7 @@ Then append (iteration ${iter}, variant ${variant.id}; status="done" if correct 
     .map(r => ({
       code: r.variant.code,
       latency: r.evaluation.estimated_latency_ms || (baselineLatency / r.speedup),
-      speedup: r.speedup * (baselineLatency / bestLatency), // relative to original baseline
+      speedup: baselineLatency / r.evaluation.estimated_latency_ms,
       ncuSummary: r.evaluation.ncu_comparison || r.evaluation.performance_analysis || '',
       planTitle: r.variant.plan.title,
     }))
@@ -1840,12 +1889,15 @@ return {
   input_mode: INPUT_MODE,
   problem_definition: PROBLEM_DEFINITION,
   problem_path: PROBLEM_PATH,
-  generated_kernel_path: generatedKernelPath,
+  generated_kernel_path: IS_SOL ? (solBestHostCandidate?.path || '') : generatedKernelPath,
+  best_candidate_id: IS_SOL ? (solBestHostCandidate?.id || '') : '',
+  artifact_binding_required: IS_SOL && Boolean(solBestHostCandidate),
+  artifact_binding_path: IS_SOL ? (solBestHostCandidate?.binding_path || '') : '',
   initial_candidates: initialCandidates,
   initial_generation_result: initialGenerationResult,
   baseline_latency_ms: baselineLatency,
-  best_latency_ms: bestLatency,
-  overall_speedup: baselineLatency / bestLatency,
+  best_latency_ms: IS_SOL ? (solBestHostCandidate?.latency || baselineLatency) : bestLatency,
+  overall_speedup: IS_SOL ? (solBestHostCandidate?.gain || 1) : baselineLatency / bestLatency,
   iterations_completed: ITERATIONS,
   candidate_beam: candidateBeam.map(c => ({
     plan_title: c.planTitle,
@@ -1854,7 +1906,7 @@ return {
   })),
   experience_patterns_count: experienceMemory.length,
   experience_patterns: experienceMemory,
-  best_kernel_code: bestKernelCode,
+  best_kernel_code: IS_SOL ? (solBestHostCandidate?.code || '') : bestKernelCode,
   ncu_baseline_profile: baselineNcuProfile,
   report: finalReport,
   ...(USE_DRIVER ? {

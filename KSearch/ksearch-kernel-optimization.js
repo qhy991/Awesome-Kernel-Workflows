@@ -534,6 +534,7 @@ let cycleCount = 0
 let globalRound = 0
 let terminationReason = 'cycle_limit'
 let checkpointedBestId = ''
+let solSeedLatencyMs = null
 
 // =============================================================================
 // Phase 1: Setup — Read spec, evaluate baseline
@@ -715,6 +716,28 @@ if (IS_SOL) {
     ['sol_substrate_dir', SOL_SUBSTRATE_DIR],
   ].filter(([, value]) => !value).map(([name]) => name)
   if (missing.length) throw new Error(`sol_execbench_solution requires non-empty: ${missing.join(', ')}`)
+  if (typeof evaluate !== 'function') throw new Error('KSearch Sol requires Host evaluation')
+  const seed = await __solExecbenchEvaluate({
+    label: 'sol-seed-baseline', phase: 'Setup',
+    substrateDir: SOL_SUBSTRATE_DIR,
+    kernelSource: `${EXP_DIR}/host_seed.cu`,
+    baselineSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
+    contractEnv: `${SOL_SEED_DIR}/contract.env`,
+    solutionOut: `${EXP_DIR}/host_seed.solution.json`,
+    benchOut: `${EXP_DIR}/host_seed.bench.jsonl`,
+    solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+    seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+    ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+    definitionPath: SOL_DEFINITION_PATH,
+  })
+  const latency = seed?.candidate_latency_aggregate_ms
+  if (seed?.compiled !== true || seed?.correct !== true ||
+      seed?.full_workload_set !== true || seed?.output_contract_valid !== true ||
+      seed?.measurement_valid !== true ||
+      typeof latency !== 'number' || !Number.isFinite(latency) || latency <= 0) {
+    throw new Error('Host could not establish a complete measured Sol seed baseline')
+  }
+  solSeedLatencyMs = latency
 }
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
@@ -779,7 +802,7 @@ if (USE_DRIVER_STANDALONE) {
   }
 }
 
-baselineMetric = baselineEval.baseline_metric || 1.0
+baselineMetric = IS_SOL ? 1.0 : baselineEval.baseline_metric || 1.0
 bestMetric = baselineMetric
 log(`Baseline: metric=${baselineMetric}, latency=${baselineEval.baseline_latency_ms || 'N/A'}ms`)
 log(`Bottleneck: ${baselineEval.bottleneck_analysis || 'unknown'}`)
@@ -1274,6 +1297,9 @@ Then append:
           substrateDir: SOL_SUBSTRATE_DIR,
           kernelSource: candidatePath,
           candidateSource: genResult.code,
+          bindingOut: `${EXP_DIR}/bindings/${variant}.json`,
+          bindingWorkflow: WORKFLOW_NAME,
+          candidateId: `cycle-${cycle}-a${attempt}`,
           contractEnv: `${EXP_DIR}/contract.env`,
           solutionOut: `${EXP_DIR}/${variant}.solution.json`,
           benchOut: `${EXP_DIR}/${variant}.bench.jsonl`,
@@ -1293,18 +1319,32 @@ Then append:
         if (direct) {
           const nPass = Number(direct.n_pass || 0)
           const nTotal = Number(direct.n_total || 0)
-          const valid = direct.compiled === true && direct.correct === true && nTotal > 0 && nPass === nTotal
+          const hostLatency = direct.candidate_latency_aggregate_ms
+          const valid = direct.compiled === true && direct.correct === true &&
+            direct.full_workload_set === true && direct.output_contract_valid === true &&
+            direct.measurement_valid === true && nTotal > 0 && nPass === nTotal &&
+            typeof hostLatency === 'number' && Number.isFinite(hostLatency) && hostLatency > 0
+          if (valid && direct.artifact_binding?.verified !== true) {
+            throw new Error('KSearch Host artifact binding missing for a correct Sol candidate')
+          }
           return {
             is_valid: valid,
-            metric_value: Number(direct.speedup || 0),
-            latency_ms: Number(direct.candidate_latency_aggregate_ms || 0),
-            speedup_vs_baseline: Number(direct.speedup || 0),
+            metric_value: valid ? solSeedLatencyMs / hostLatency : 0,
+            latency_ms: valid ? hostLatency : null,
+            speedup_vs_baseline: valid ? solSeedLatencyMs / hostLatency : 0,
+            reference_speedup: Number(direct.speedup || 0),
             pass_rate: `${nPass}/${nTotal}`,
             error_log: direct.stderr || '',
             performance_analysis: `host-owned ${direct.protocol} stage=${direct.stage}`,
             remaining_bottleneck: direct.failure_code || '',
+            candidate_path: direct.candidate_path,
+            candidate_sha256: direct.candidate_sha256,
+            candidate_id: evalContext.candidateId,
+            artifact_binding: direct.artifact_binding || null,
+            result_path: direct.result_path,
           }
         }
+        throw new Error('KSearch Sol Host evaluation returned no result')
         const plan = __solExecbenchEvalPlan(evalContext)
         return agentRetry(() => agent(`Evaluate this K-Search candidate through the authoritative sol-execbench contract.
 
@@ -1517,9 +1557,9 @@ Then append, using the values you just measured (status="done" if it compiled AN
     const allPassed = evalResult.is_valid
 
     // Update cycle best (K-Search: only update if passed AND score > cycle_best_score)
-    if (allPassed && roundScore > cycleBestScore) {
+    if (allPassed && roundScore > cycleBestScore && (!IS_SOL || roundScore > 1)) {
       cycleBestCode = genResult.code
-      cycleBestPath = genResult.variant_path || cycleBestPath  // AWK #59
+      cycleBestPath = evalResult.candidate_path || genResult.variant_path || cycleBestPath
       cycleBestEval = evalResult
       cycleBestScore = roundScore
       hasPassedInCycle = true
@@ -1561,7 +1601,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
     if (bestMetric === null || cycleBestScore > bestMetric) {
       bestMetric = cycleBestScore
       bestSolution = {
-        id: `cycle_${cycle}_best`,
+        id: IS_SOL ? cycleBestEval.candidate_id : `cycle_${cycle}_best`,
         code: cycleBestCode,
         path: cycleBestPath,
         eval: cycleBestEval,
@@ -1733,7 +1773,9 @@ Then append:
     deadlineEpoch: DEADLINE_EPOCH,
     checkpoint: checkpointPayload,
     bestKernelPath: materializedBestPath,
-    bestKernelCode: bestSolution?.code || '',
+    bestKernelSourcePath: IS_SOL ? bestSolution?.path || null : null,
+    bestKernelExpectedSha256: IS_SOL ? bestSolution?.eval?.candidate_sha256 || null : null,
+    bestKernelCode: IS_SOL ? null : bestSolution?.code || '',
     bestLanguage: fenceToken(),
     materializeBest: bestChanged,
     label: `checkpoint-${cycle}`,
@@ -1819,7 +1861,10 @@ return {
   problem_definition: PROBLEM_DEFINITION,
   problem_path: KERNEL_SPEC_PATH,
   kernel_path: BASELINE_CODE_PATH,
-  generated_kernel_path: bestSolution?.code ? bestKernelPath() : '',
+  generated_kernel_path: IS_SOL ? (bestSolution?.path || '') : (bestSolution?.code ? bestKernelPath() : ''),
+  best_candidate_id: IS_SOL ? (bestSolution?.id || '') : '',
+  artifact_binding_required: IS_SOL && Boolean(bestSolution?.eval?.artifact_binding?.verified),
+  artifact_binding_path: IS_SOL ? (bestSolution?.eval?.artifact_binding?.binding_path || '') : '',
   initial_candidates: solutionDb.filter(s => s.cycle === 0),
   initial_generation_result: {
     verified: solutionDb.some(s => s.eval?.is_valid),
@@ -1827,7 +1872,7 @@ return {
   },
   best_metric: bestMetric,
   best_solution_code: bestSolution?.code || '',
-  best_kernel_path: bestSolution?.code ? bestKernelPath() : null,
+  best_kernel_path: IS_SOL ? (bestSolution?.path || null) : (bestSolution?.code ? bestKernelPath() : null),
   cycles_completed: cycleCount,
   termination_reason: terminationReason,
   checkpoint_path: CHECKPOINT_PATH,
