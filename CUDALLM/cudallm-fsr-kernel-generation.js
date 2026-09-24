@@ -25,6 +25,7 @@ async function __solExecbenchEvaluate(ctx) {
     phase: ctx.phase || 'Evaluate',
     candidatePath: ctx.kernelSource,
     candidateSource: ctx.candidateSource,
+    baselineSolutionPath: ctx.baselineSolutionPath || '',
     substrateDir: ctx.substrateDir,
     contractEnv: ctx.contractEnv,
     solutionOut: ctx.solutionOut,
@@ -38,6 +39,9 @@ async function __solExecbenchEvaluate(ctx) {
     ldLibraryPath: ctx.ldLibraryPath || '',
     envPrefix: ctx.envPrefix || '',
     definitionPath: ctx.definitionPath || '',
+    bindingOut: ctx.bindingOut || '',
+    bindingWorkflow: ctx.bindingWorkflow || '',
+    candidateId: ctx.candidateId || '',
     timeoutSeconds: ctx.timeoutSeconds || 0,
   }).then(__solGuardHarnessFault)
 }
@@ -374,7 +378,8 @@ const EXP_DIR = args.exp_dir || '/tmp/cudallm_fsr_exp'
 const DRIVER_PROBLEM_PATH = args.problem_json_path || `${EXP_DIR}/driver_problem.json`
 const PROFILE_SOURCE_PATH = args.profile_source_path || REFERENCE_CODE_PATH || ''
 const ADAPTATION_SCOPE = 'workflow_adaptation'
-const INPUT_MODE = 'generate_then_optimize'
+const INPUT_MODE = args.integration_pattern === 'sol_execbench_solution' && REFERENCE_CODE_PATH
+  ? 'optimize_existing' : 'generate_then_optimize'
 
 // --- Backend driver wiring (P5c Stage B; off-by-default; legacy path byte-identical) ---
 const BACKEND_DIR = args.backend_dir || ''
@@ -484,6 +489,7 @@ let featureCatalog = []
 let featureScores = {}
 let candidates = []
 let bestCandidate = null
+let solSeedLatencyMs = null
 
 function initFeatureScore(feature) {
   if (!featureScores[feature.id]) {
@@ -598,6 +604,31 @@ if (INTEGRATION_DECISION.method === 'derive_adapter') {
 }
 const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'standalone'
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
+const IS_SOL = INTEGRATION_DECISION.method === 'sol_execbench_solution'
+if (IS_SOL) {
+  if (typeof evaluate !== 'function') throw new Error('CUDALLM-FSR Sol requires Host evaluation')
+  const seed = await __solExecbenchEvaluate({
+    label: 'sol-seed-baseline', phase: 'Setup',
+    substrateDir: SOL_SUBSTRATE_DIR,
+    kernelSource: `${EXP_DIR}/host_seed.cu`,
+    baselineSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
+    contractEnv: `${SOL_SEED_DIR}/contract.env`,
+    solutionOut: `${EXP_DIR}/host_seed.solution.json`,
+    benchOut: `${EXP_DIR}/host_seed.bench.jsonl`,
+    solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+    seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+    ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+    definitionPath: SOL_DEFINITION_PATH,
+  })
+  const latency = seed?.candidate_latency_aggregate_ms
+  if (seed?.compiled !== true || seed?.correct !== true ||
+      seed?.full_workload_set !== true || seed?.output_contract_valid !== true ||
+      seed?.measurement_valid !== true ||
+      typeof latency !== 'number' || !Number.isFinite(latency) || latency <= 0) {
+    throw new Error('Host could not establish a complete measured Sol seed baseline')
+  }
+  solSeedLatencyMs = latency
+}
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
   await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${REFERENCE_CODE_PATH || PROFILE_SOURCE_PATH || TASK_SPEC_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
@@ -868,12 +899,15 @@ Then append:
     // execution tool, so "materialize the kernel and run it" cannot happen.
     // Measure on the Host first and hand the agent the evidence it was asked for.
     let __hostMeasured = null
-    if (SOL_AVAILABLE && (generation.candidate_code || '').trim()) {
+    if (IS_SOL && SOL_AVAILABLE && (generation.candidate_code || '').trim()) {
       __hostMeasured = await __solExecbenchEvaluate({
         label: `sol-eval-${iteration}-${sample}`, phase: 'Evaluate',
         substrateDir: SOL_SUBSTRATE_DIR,
         kernelSource: cudallmCandidatePath(iteration, sample),
         candidateSource: generation.candidate_code,
+        bindingOut: `${EXP_DIR}/bindings/cudallm_${iteration}_${sample}.json`,
+        bindingWorkflow: WORKFLOW_NAME,
+        candidateId: `iter_${iteration}_sample_${sample}`,
         contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
         solutionOut: `${EXP_DIR}/cudallm_iter_${iteration}_sample_${sample}.solution.json`,
         benchOut: `${EXP_DIR}/cudallm_iter_${iteration}_sample_${sample}.bench.jsonl`,
@@ -898,7 +932,7 @@ ${__hostMeasured.failure_code ? `failure_code=${__hostMeasured.failure_code}` : 
 Rule 3 does not apply: the evidence exists. Report these numbers and base the
 reward on them. Still report any reward-hacking signs you see in the code.` : ''
 
-    const evaluation = await agentRetry(() => agent(`Evaluate this ${langToken(LEGACY_EVAL_LANG_TOKEN)} candidate with compile, correctness, and latency evidence.
+    const agentEvaluation = await agentRetry(() => agent(`Evaluate this ${langToken(LEGACY_EVAL_LANG_TOKEN)} candidate with compile, correctness, and latency evidence.
 
 # Candidate code
 \`\`\`${fenceToken()}
@@ -949,12 +983,34 @@ Then append, using the values you just measured (status="done" only if compiled 
       },
     }), { retries: 5 })
 
+    const hostLatency = __hostMeasured?.candidate_latency_aggregate_ms
+    const hostValid = __hostMeasured?.compiled === true && __hostMeasured?.correct === true &&
+      __hostMeasured?.full_workload_set === true &&
+      __hostMeasured?.output_contract_valid === true &&
+      __hostMeasured?.measurement_valid === true &&
+      typeof hostLatency === 'number' && Number.isFinite(hostLatency) && hostLatency > 0
+    if (IS_SOL && hostValid && __hostMeasured?.artifact_binding?.verified !== true) {
+      throw new Error('CUDALLM-FSR Host artifact binding missing for a correct Sol candidate')
+    }
+    const evaluation = IS_SOL ? {
+      compiled: __hostMeasured?.compiled === true,
+      correct: hostValid,
+      speedup: hostValid ? solSeedLatencyMs / hostLatency : 0,
+      latency_ms: hostValid ? hostLatency : null,
+      baseline_latency_ms: solSeedLatencyMs,
+      passed_tests: Number(__hostMeasured?.n_pass || 0),
+      total_tests: Number(__hostMeasured?.n_total || 0),
+      reward_hacking_flags: agentEvaluation?.reward_hacking_flags || [],
+    } : agentEvaluation
+
     const candidate = {
       id: `iter_${iteration}_sample_${sample}`,
       selected_feature_ids: selection.selected_feature_ids || [],
       implemented_feature_ids: generation.implemented_feature_ids || [],
       code: generation.candidate_code || '',
       eval: evaluation,
+      path: IS_SOL && hostValid ? __hostMeasured.candidate_path : '',
+      binding_path: IS_SOL && hostValid ? __hostMeasured.artifact_binding.binding_path : '',
     }
 
     if (USE_DRIVER_STANDALONE) {
@@ -1061,7 +1117,8 @@ Then append, using the values you just measured (status="done" only if compiled 
 
     candidates.push(candidate)
 
-    if (isBetterCandidate(candidate, bestCandidate)) {
+    if ((!IS_SOL || (evaluation.correct && evaluation.speedup > 1)) &&
+        isBetterCandidate(candidate, bestCandidate)) {
       bestCandidate = candidate
     }
 
@@ -1180,6 +1237,8 @@ return {
   problem_definition: PROBLEM_DEFINITION,
   problem_path: TASK_SPEC_PATH,
   generated_kernel_path: bestCandidate?.path || '',
+  artifact_binding_required: IS_SOL && Boolean(bestCandidate?.binding_path),
+  artifact_binding_path: IS_SOL ? (bestCandidate?.binding_path || '') : '',
   initial_candidates: candidates,
   initial_generation_result: {
     verified: candidates.some(c => c.eval?.correct),

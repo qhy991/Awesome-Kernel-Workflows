@@ -14,6 +14,8 @@ for the versioning policy.
 
 ### Fixed
 
+- CUDALLM-FSR now treats a supplied Sol reference source as its incumbent, measures that seed through the Host, and scores and returns only a faster, Host-bound full-workload candidate. Previously its read-only evaluation agent could report a framework-relative score that did not prove gain over the inherited source. (`CUDALLM/cudallm-fsr-kernel-generation.js`, `_meta/tools/test/cudallm-host-sol.test.js`)
+
 - AccelOpt and KSearch now measure the supplied Sol seed through the Host, rank candidates by latency relative to that seed, and return the exact Host-bound winning source. Previously their framework-relative or estimated scores could advance a slower or unbound source into a WSR continuation. (`AccelOpt/accelopt-kernel-optimization.js`, `KSearch/ksearch-kernel-optimization.js`, `_meta/tools/test/accelopt-host-sol.test.js`, `_meta/tools/test/ksearch-host-sol.test.js`)
 
 - CUDAAgent now measures the supplied Sol seed through the Host and uses

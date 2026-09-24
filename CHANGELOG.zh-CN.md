@@ -12,6 +12,8 @@
 
 ### Fixed
 
+- CUDALLM-FSR 现在把传入的 Sol 参考源码作为 incumbent，由 Host 测量该 seed，只按完整 workload 上超过 seed 且与 Host 源码绑定的候选选优并返回。此前只读评测 agent 的相对框架参考实现分数不能证明超过继承源码。（`CUDALLM/cudallm-fsr-kernel-generation.js`、`_meta/tools/test/cudallm-host-sol.test.js`）
+
 - AccelOpt 和 KSearch 现在由 Host 测量传入的 Sol seed，按相对 seed 的延迟选优，并返回与 Host 验收绑定的准确源码。此前相对框架参考实现的分数或估计分数可能把更慢、未绑定的源码传入 WSR 后续 workflow。（`AccelOpt/accelopt-kernel-optimization.js`、`KSearch/ksearch-kernel-optimization.js` 及对应 Host 测试）
 
 - CUDAAgent 现在由 Host 测量传入的 Sol 种子，按相对种子的增益给奖励、判断停止及
