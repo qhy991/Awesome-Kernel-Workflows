@@ -156,9 +156,17 @@ test('KernelBand baseline and candidate score come from Host, not model denomina
 test('KernelFoundry keeps Host binding and measured fitness without canonical-bind agent', async () => {
   const output = await run('KernelFoundry/kernelfoundry-kernel-optimization.js', {
     evaluate: async r => {
+      if (r.label === 'sol-seed-baseline') {
+        assert.equal(r.baselineSolutionPath, '/exp/seed.solution.json')
+        return result(1, {full_workload_set: true, output_contract_valid: true,
+          measurement_valid: true, candidate_latency_aggregate_ms: 0.02,
+          result_path: '/exp/host_seed.result.json'})
+      }
       assert.equal(r.candidateId,'gen0')
       assert.ok(r.bindingOut.endsWith('/bindings/gen_0.json'))
-      return result(63.5,{artifact_binding:{verified:true,compiled:true,correct:true,speedup:63.5,n_pass:2,n_total:2,
+      assert.equal(r.baselineEvaluationPath, '/exp/host_seed.result.json')
+      assert.equal(r.parentSolutionPath, '/exp/seed.solution.json')
+      return result(999,{speedup_vs_seed:63.5,artifact_binding:{verified:true,compiled:true,correct:true,speedup:63.5,n_pass:2,n_total:2,
         candidate_sha256:'a'.repeat(64),measurement_sha256:'b'.repeat(64),binding_sha256:'c'.repeat(64),task_sha256:'d'.repeat(64),
         task_fingerprint_kind:'file_sha256',binding_path:r.bindingOut,result_path:r.normalizedOut}})
     },
