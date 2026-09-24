@@ -72,7 +72,10 @@ async function __solExecbenchEvaluate(ctx) {
     phase: ctx.phase || 'Evaluate',
     candidatePath: ctx.kernelSource,
     candidateSource: ctx.candidateSource,
+    candidateLanguage: ctx.candidateLanguage || '',
     baselineSolutionPath: ctx.baselineSolutionPath || '',
+    baselineEvaluationPath: ctx.baselineEvaluationPath || '',
+    parentSolutionPath: ctx.parentSolutionPath || '',
     substrateDir: ctx.substrateDir,
     contractEnv: ctx.contractEnv,
     solutionOut: ctx.solutionOut,
@@ -709,6 +712,8 @@ const IS_SOL = INTEGRATION_DECISION.method === 'sol_execbench_solution'
 if (LANGUAGE === 'cute-dsl' && IS_SOL && typeof evaluate !== 'function') {
   throw new Error('CuTe DSL SOL-ExecBench requires the Host-owned evaluator; refusing the agent-owned shell fallback.')
 }
+let cuteSeedLatencyMs = null
+let cuteSeedMeasurementPath = null
 if (IS_SOL) {
   const missing = [
     ['sol_cli', SOL_CLI], ['sol_task_dir', SOL_TASK_DIR],
@@ -720,7 +725,8 @@ if (IS_SOL) {
   const seed = await __solExecbenchEvaluate({
     label: 'sol-seed-baseline', phase: 'Setup',
     substrateDir: SOL_SUBSTRATE_DIR,
-    kernelSource: `${EXP_DIR}/host_seed.cu`,
+    kernelSource: `${EXP_DIR}/host_seed${LANGUAGE === 'cute-dsl' ? '.py' : '.cu'}`,
+    candidateLanguage: LANGUAGE === 'cute-dsl' ? 'cute-dsl' : '',
     baselineSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
     contractEnv: `${SOL_SEED_DIR}/contract.env`,
     solutionOut: `${EXP_DIR}/host_seed.solution.json`,
@@ -738,6 +744,10 @@ if (IS_SOL) {
     throw new Error('Host could not establish a complete measured Sol seed baseline')
   }
   solSeedLatencyMs = latency
+  if (LANGUAGE === 'cute-dsl') {
+    cuteSeedLatencyMs = latency
+    cuteSeedMeasurementPath = seed.result_path
+  }
 }
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
@@ -1089,9 +1099,7 @@ Then append:
   const wmSection =
     `\n\n# World Model (persistent decision tree — use it to guide design):\n${JSON.stringify(decisionTree, null, 2).substring(0, 3000)}` +
     (LANGUAGE === 'cute-dsl'
-      ? (IS_SOL
-        ? '\n\n# Requested DSL: CuTe DSL\nWrite a complete Python .py candidate using cutlass.cute and @cute.kernel where appropriate. Preserve the task callable run(...) signature and argument contract. Keep the implementation in CuTe DSL; do not switch to CUDA C++ or Triton. The Host-owned SOL-ExecBench evaluator packages this Python source and measures the complete official workload; do not use shell commands or invent metrics.'
-        : '\n\n# Requested DSL: CuTe DSL\nWrite Python .py source using cutlass.cute and @cute.kernel where appropriate. Preserve the task callable entry point and argument contract. Keep the implementation in CuTe DSL; do not switch to CUDA C++ or Triton.')
+      ? '\n\n# Requested DSL: CuTe DSL\nWrite a complete Python .py candidate using cutlass.cute and @cute.kernel where appropriate. Preserve the task callable run(...) signature and argument contract. Every workload must execute a CuTe-compiled kernel; do not delegate GEMM to torch.matmul/mm/bmm/addmm/einsum, Python @, cuBLAS, cutlass.op.Gemm, or another library implementation. The Host rejects delegated candidates before GPU evaluation. Do not use shell commands or invent metrics.'
       : '') +
     (IS_SOL ? `\n\n${SOL_SOLUTION_CONTRACT}` : '')
   const seedIndexes = Array.from({ length: SEED_CANDIDATES }, (_, seedAttempt) => seedAttempt)
@@ -1300,6 +1308,11 @@ Then append:
           bindingOut: `${EXP_DIR}/bindings/${variant}.json`,
           bindingWorkflow: WORKFLOW_NAME,
           candidateId: `cycle-${cycle}-a${attempt}`,
+          candidateLanguage: LANGUAGE === 'cute-dsl' ? 'cute-dsl' : '',
+          ...(LANGUAGE === 'cute-dsl' ? {
+            baselineEvaluationPath: cuteSeedMeasurementPath,
+            parentSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
+          } : {}),
           contractEnv: `${EXP_DIR}/contract.env`,
           solutionOut: `${EXP_DIR}/${variant}.solution.json`,
           benchOut: `${EXP_DIR}/${variant}.bench.jsonl`,
@@ -1320,18 +1333,21 @@ Then append:
           const nPass = Number(direct.n_pass || 0)
           const nTotal = Number(direct.n_total || 0)
           const hostLatency = direct.candidate_latency_aggregate_ms
+          const bound = direct.artifact_binding?.verified === true &&
+            direct.artifact_binding.candidate_sha256 === direct.candidate_sha256
           const valid = direct.compiled === true && direct.correct === true &&
             direct.full_workload_set === true && direct.output_contract_valid === true &&
             direct.measurement_valid === true && nTotal > 0 && nPass === nTotal &&
-            typeof hostLatency === 'number' && Number.isFinite(hostLatency) && hostLatency > 0
-          if (valid && direct.artifact_binding?.verified !== true) {
+            typeof hostLatency === 'number' && Number.isFinite(hostLatency) && hostLatency > 0 && bound
+          if (direct.correct === true && !bound) {
             throw new Error('KSearch Host artifact binding missing for a correct Sol candidate')
           }
+          const score = valid ? solSeedLatencyMs / hostLatency : 0
           return {
             is_valid: valid,
-            metric_value: valid ? solSeedLatencyMs / hostLatency : 0,
+            metric_value: score,
             latency_ms: valid ? hostLatency : null,
-            speedup_vs_baseline: valid ? solSeedLatencyMs / hostLatency : 0,
+            speedup_vs_baseline: score,
             reference_speedup: Number(direct.speedup || 0),
             pass_rate: `${nPass}/${nTotal}`,
             error_log: direct.stderr || '',
@@ -1342,6 +1358,8 @@ Then append:
             candidate_id: evalContext.candidateId,
             artifact_binding: direct.artifact_binding || null,
             result_path: direct.result_path,
+            host_candidate_path: valid ? direct.candidate_path : '',
+            host_candidate_sha256: valid ? direct.candidate_sha256 : '',
           }
         }
         throw new Error('KSearch Sol Host evaluation returned no result')
@@ -1725,8 +1743,11 @@ Then append:
   }
   cycleCount = cycle + 1
   const plannedStall = runStagnation >= RUN_STAGNATION_LIMIT
-  const materializedBestPath = bestSolution?.code ? bestKernelPath() : null
-  const bestChanged = Boolean(bestSolution?.code && bestSolution.id !== checkpointedBestId)
+  const cuteHostBest = IS_SOL && LANGUAGE === 'cute-dsl' &&
+    bestSolution?.eval?.artifact_binding?.verified === true
+  const materializedBestPath = cuteHostBest ? bestSolution.eval.host_candidate_path
+    : (bestSolution?.code ? bestKernelPath() : null)
+  const bestChanged = Boolean(!cuteHostBest && bestSolution?.code && bestSolution.id !== checkpointedBestId)
   const speedupOverBaseline = (
     bestMetric != null && baselineMetric > 0
       ? bestMetric / baselineMetric
@@ -1861,10 +1882,13 @@ return {
   problem_definition: PROBLEM_DEFINITION,
   problem_path: KERNEL_SPEC_PATH,
   kernel_path: BASELINE_CODE_PATH,
-  generated_kernel_path: IS_SOL ? (bestSolution?.path || '') : (bestSolution?.code ? bestKernelPath() : ''),
-  best_candidate_id: IS_SOL ? (bestSolution?.id || '') : '',
+  generated_kernel_path: IS_SOL ? (bestSolution?.eval?.candidate_path || bestSolution?.path || '') : (bestSolution?.code ? bestKernelPath() : ''),
+  best_candidate_id: IS_SOL ? (bestSolution?.eval?.artifact_binding?.candidate_id || bestSolution?.id || '') : '',
   artifact_binding_required: IS_SOL && Boolean(bestSolution?.eval?.artifact_binding?.verified),
   artifact_binding_path: IS_SOL ? (bestSolution?.eval?.artifact_binding?.binding_path || '') : '',
+  ...(IS_SOL && LANGUAGE === 'cute-dsl' ? {
+    canonical_metric: {name: 'speedup_vs_seed', value: bestSolution?.eval?.metric_value || 0},
+  } : {}),
   initial_candidates: solutionDb.filter(s => s.cycle === 0),
   initial_generation_result: {
     verified: solutionDb.some(s => s.eval?.is_valid),
@@ -1872,7 +1896,7 @@ return {
   },
   best_metric: bestMetric,
   best_solution_code: bestSolution?.code || '',
-  best_kernel_path: IS_SOL ? (bestSolution?.path || null) : (bestSolution?.code ? bestKernelPath() : null),
+  best_kernel_path: IS_SOL ? (bestSolution?.eval?.candidate_path || bestSolution?.path || null) : (bestSolution?.code ? bestKernelPath() : null),
   cycles_completed: cycleCount,
   termination_reason: terminationReason,
   checkpoint_path: CHECKPOINT_PATH,

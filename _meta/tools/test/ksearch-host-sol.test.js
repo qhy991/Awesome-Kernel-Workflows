@@ -38,7 +38,7 @@ function measured(latency, binding = true) {
     n_pass: 25, n_total: 25,
     candidate_path: '/tmp/ksearch-sol/ksearch_c0_a0.cu',
     candidate_sha256: 'a'.repeat(64),
-    artifact_binding: binding ? {verified: true,
+    artifact_binding: binding ? {verified: true, candidate_sha256: 'a'.repeat(64),
       binding_path: '/tmp/ksearch-sol/bindings/ksearch_c0_a0.json'} : null}
 }
 function evals(candidate) {

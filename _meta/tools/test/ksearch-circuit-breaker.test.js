@@ -35,14 +35,16 @@ test('ksearch: breaker increments on no global-best improvement and resets on im
 })
 
 test('ksearch: breaker stops the search early at the limit', () => {
-  assert.match(SOURCE, /if \(runStagnation >= RUN_STAGNATION_LIMIT\) \{[\s\S]*?break/,
+  assert.match(SOURCE, /const plannedStall = runStagnation >= RUN_STAGNATION_LIMIT/,
+    'the breaker must capture its decision before the checkpoint')
+  assert.match(SOURCE, /if \(plannedStall\) \{[\s\S]*?break/,
     'reaching RUN_STAGNATION_LIMIT must break out of the cycle loop (stop early)')
   assert.match(SOURCE, /Run-level stagnation: no global-best improvement for/,
     'the early stop must log an attributable reason')
 })
 
 test('ksearch: breaker uses no forbidden runtime APIs', () => {
-  const m = SOURCE.match(/#31a: Run-level circuit breaker[\s\S]*?cycleCount\+\+/)
+  const m = SOURCE.match(/#31a: Run-level circuit breaker[\s\S]*?const plannedStall = runStagnation >= RUN_STAGNATION_LIMIT/)
   assert.ok(m, 'breaker block must be locatable')
   assert.doesNotMatch(m[0], /Date\.now\(\)|Math\.random\(\)|new Date\(\)/,
     'the circuit breaker must not use forbidden runtime APIs')

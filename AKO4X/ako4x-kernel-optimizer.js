@@ -33,6 +33,10 @@ async function __solExecbenchEvaluate(ctx) {
     phase: ctx.phase || 'Evaluate',
     candidatePath: ctx.kernelSource,
     candidateSource: ctx.candidateSource,
+    candidateLanguage: ctx.candidateLanguage || '',
+    baselineSolutionPath: ctx.baselineSolutionPath || '',
+    baselineEvaluationPath: ctx.baselineEvaluationPath || '',
+    parentSolutionPath: ctx.parentSolutionPath || '',
     substrateDir: ctx.substrateDir,
     contractEnv: ctx.contractEnv,
     solutionOut: ctx.solutionOut,
@@ -46,6 +50,9 @@ async function __solExecbenchEvaluate(ctx) {
     ldLibraryPath: ctx.ldLibraryPath || '',
     envPrefix: ctx.envPrefix || '',
     definitionPath: ctx.definitionPath || '',
+    bindingOut: ctx.bindingPath || '',
+    bindingWorkflow: ctx.bindingWorkflow || '',
+    candidateId: ctx.candidateId || '',
     timeoutSeconds: ctx.timeoutSeconds || 0,
   }).then(__solGuardHarnessFault)
 }
@@ -91,7 +98,13 @@ const SOL_AVAILABLE = Boolean(SOL_CLI && SOL_TASK_DIR && SOL_SUBSTRATE_DIR)
 // through PYBIND11_MODULE.  Across tasks 001-003 that rejection accounted for
 // 112 wasted evaluations, all with the same message, and every workflow that hit
 // it lacked this sentence in its generation prompt.
-const SOL_CANDIDATE_CONTRACT = SOL_AVAILABLE ? `
+const SOL_CANDIDATE_CONTRACT = SOL_AVAILABLE && args.language === 'cute-dsl' ? `
+MANDATORY CuTe DSL candidate shape: emit complete Python source with a
+module-level run(...) entry point. Every workload must execute a CuTe-compiled
+kernel. Do not delegate GEMM to torch.matmul/mm/bmm/addmm/einsum, Python @,
+cuBLAS, cutlass.op.Gemm, or another library implementation. Keep the supplied
+seed's callable signature and optimize its CuTe launch/core parameters.
+The Host rejects delegated candidates before GPU evaluation.` : SOL_AVAILABLE ? `
 MANDATORY candidate shape: emit a COMPLETE, self-contained translation unit that
 compiles on its own. Read the seed kernel and keep its entry point and bindings
 intact - the same \`run(...)\` signature and the same
@@ -180,9 +193,9 @@ const ATTEMPT_PLAN = (args.attempt_plan && typeof args.attempt_plan === 'object'
 // KerSor emits the cumulative ids as `failed_strategy_ids`; the per-round
 // derivation stays as the fallback for a dispatch that predates that channel.
 const FAILED_STRATEGY_IDS = Array.isArray(args.failed_strategy_ids)
-  ? (args.failed_strategy_ids || []).filter(id => typeof id === 'string' && id)
+  ? args.failed_strategy_ids.filter(id => typeof id === 'string' && id)
   : ((ATTEMPT_EVIDENCE && Array.isArray(ATTEMPT_EVIDENCE.transfer_items))
-    ? (ATTEMPT_EVIDENCE.transfer_items || []).filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
+    ? ATTEMPT_EVIDENCE.transfer_items.filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
     : [])
 function __attemptBlock() {
   if (!ATTEMPT_EVIDENCE && !ATTEMPT_PLAN) return ''
@@ -547,6 +560,7 @@ let traps = []                 // cross-variant silent-bug patterns (→ TRAPS.m
 let bestScore = null
 let bestKernelCode = null
 let bestKernelPath = null  // AWK #59: absolute path to the current-best kernel file (authority); bestKernelCode is the compat/display string
+let bestHostBinding = null
 let bestVariantName = null
 let baselineScore = null
 let baselineKernelCode = null
@@ -806,8 +820,37 @@ if (PROFILING_DECISION.method === 'native_profiler' && !NCU_BINARY) {
 // Establish baseline (NCU profile if available, else benchmark)
 let baselineProfileSummary = ''
 let baselineLatency = null
+let cuteSeedMeasurementPath = null
 
-if (HARNESS_PATH || HARNESS_BUILD_CMD) {
+if (SOL_AVAILABLE && KERNEL_LANG === 'cute-dsl' &&
+    INTEGRATION_DECISION.method === 'sol_execbench_solution') {
+  const seed = await __solExecbenchEvaluate({
+    label: 'sol-cute-seed-baseline', phase: 'Setup',
+    candidateLanguage: 'cute-dsl',
+    substrateDir: SOL_SUBSTRATE_DIR,
+    kernelSource: `${EXP_DIR}/host_seed.py`,
+    baselineSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
+    contractEnv: `${SOL_SEED_DIR}/contract.env`,
+    solutionOut: `${EXP_DIR}/host_seed.solution.json`,
+    benchOut: `${EXP_DIR}/host_seed.bench.jsonl`,
+    solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+    seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+    ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+    definitionPath: SOL_DEFINITION_PATH,
+  })
+  const latency = seed && seed.candidate_latency_aggregate_ms
+  if (!seed || seed.compiled !== true || seed.correct !== true ||
+      seed.full_workload_set !== true || seed.output_contract_valid !== true ||
+      seed.measurement_valid !== true ||
+      typeof latency !== 'number' || !Number.isFinite(latency) || latency <= 0) {
+    throw new Error('Host could not establish a complete measured CuTe seed baseline')
+  }
+  baselineScore = latency
+  bestScore = latency
+  baselineLatency = latency
+  cuteSeedMeasurementPath = seed.result_path
+  baselineProfileSummary = `Host-measured CuTe seed: ${latency} ms; IKET profiling depends on target GPU support.`
+} else if (HARNESS_PATH || HARNESS_BUILD_CMD) {
   const ncuSetup = await agentRetry(() => agent(`Profile the baseline kernel with Nsight Compute (ncu).
 
 # Environment
@@ -1103,8 +1146,13 @@ Then append (this variant is round ${round + 1}, hypothesis "${plan.title}", sam
         __hostMeasured = await __solExecbenchEvaluate({
           label: `sol-eval-${iterLabel}`, phase: 'Iterate',
           substrateDir: SOL_SUBSTRATE_DIR,
-          kernelSource: `${EXP_DIR}/ako4x_${String(iterLabel).replace(/[^A-Za-z0-9_]/g, '_')}.cu`,
+          kernelSource: `${EXP_DIR}/ako4x_${String(iterLabel).replace(/[^A-Za-z0-9_]/g, '_')}${KERNEL_LANG === 'cute-dsl' ? '.py' : '.cu'}`,
           candidateSource: impl.code,
+          candidateLanguage: KERNEL_LANG === 'cute-dsl' ? 'cute-dsl' : '',
+          ...(KERNEL_LANG === 'cute-dsl' ? {
+            baselineEvaluationPath: cuteSeedMeasurementPath,
+            parentSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
+          } : {}),
           contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
           solutionOut: `${EXP_DIR}/ako4x_${String(iterLabel).replace(/[^A-Za-z0-9_]/g, '_')}.solution.json`,
           benchOut: `${EXP_DIR}/ako4x_${String(iterLabel).replace(/[^A-Za-z0-9_]/g, '_')}.bench.jsonl`,
@@ -1112,6 +1160,11 @@ Then append (this variant is round ${round + 1}, hypothesis "${plan.title}", sam
           seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
           ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
           definitionPath: SOL_DEFINITION_PATH,
+          ...(KERNEL_LANG === 'cute-dsl' ? {
+            bindingPath: `${EXP_DIR}/bindings/ako4x_${String(iterLabel).replace(/[^A-Za-z0-9_]/g, '_')}.json`,
+            bindingWorkflow: WORKFLOW_NAME,
+            candidateId: iterLabel,
+          } : {}),
         })
         if (__hostMeasured) {
           log(`[${iterLabel}] Host-measured: compiled=${__hostMeasured.compiled} `
@@ -1133,16 +1186,37 @@ above shows. Stay out of performance, as this stage instructs.` : ''
       const __benchBlock = __hostMeasured ? `
 
 # ALREADY MEASURED ON THE HOST - this is the performance verdict
-speedup_vs_baseline=${__hostMeasured.speedup} latency_ms=${__hostMeasured.latency_ms}
+speedup_vs_baseline=${KERNEL_LANG === 'cute-dsl' ? __hostMeasured.speedup_vs_seed : __hostMeasured.speedup} latency_ms=${__hostMeasured.latency_ms}
 workloads_passed=${__hostMeasured.n_pass}/${__hostMeasured.n_total}
 Report this rather than re-deriving it, and judge it against the hypothesis that
 was pre-committed above: did the predicted impact hold?` : ''
 
       // --- Smoke test (AKO4X: compile + correctness check, NOT performance verdict) ---
       const smokeCmd = SMOKE_TEST_CMD || (BENCHMARK_CMD ? `${BENCHMARK_CMD} --first 1` : '')
+      const cuteHost = KERNEL_LANG === 'cute-dsl' &&
+        INTEGRATION_DECISION.method === 'sol_execbench_solution'
+      if (cuteHost) {
+        const valid = __hostMeasured?.compiled === true && __hostMeasured?.correct === true &&
+          __hostMeasured?.full_workload_set === true &&
+          __hostMeasured?.output_contract_valid === true &&
+          __hostMeasured?.measurement_valid === true &&
+          __hostMeasured?.n_pass > 0 && __hostMeasured?.n_pass === __hostMeasured?.n_total &&
+          typeof __hostMeasured?.candidate_latency_aggregate_ms === 'number' &&
+          Number.isFinite(__hostMeasured.candidate_latency_aggregate_ms) &&
+          __hostMeasured.candidate_latency_aggregate_ms > 0 &&
+          __hostMeasured?.artifact_binding?.verified === true &&
+          __hostMeasured.artifact_binding.candidate_sha256 === __hostMeasured.candidate_sha256
+        if (!valid) {
+          roundIterations.push({iter: iterLabel, title: plan.title, score: null,
+            passed: '0/N', notes: 'Host CuTe candidate or binding invalid', expected: expectedNote})
+          deadEnds.push(`${plan.title}: Host CuTe candidate or binding invalid`)
+          continue
+        }
+        impl.variant_path = __hostMeasured.candidate_path
+      }
       let smokePassed = true
 
-      if (smokeCmd) {
+      if (smokeCmd && !cuteHost) {
         const smokeResult = await agentRetry(() => agent(`Run smoke test for this kernel variant. This is a COMPILE + CORRECTNESS check only — NOT a performance verdict.
 
 # Kernel Source (authoritative — Read the FULL kernel from this path; the snippet below is orientation only, AWK #61):
@@ -1193,7 +1267,13 @@ Return pass/fail with error details if failed.`, {
       }
 
       // --- Full bench (AKO4X: run in background, draft next hypothesis while it runs) ---
-      const benchResult = await agentRetry(() => agent(`Run the full benchmark for this kernel variant. This IS the performance verdict.
+      const benchResult = cuteHost ? {
+        score: __hostMeasured.candidate_latency_aggregate_ms,
+        latency_ms: __hostMeasured.candidate_latency_aggregate_ms,
+        speedup: baselineScore / __hostMeasured.candidate_latency_aggregate_ms,
+        passed_workloads: `${__hostMeasured.n_pass}/${__hostMeasured.n_total}`,
+        raw_output: 'Host-owned complete CuTe measurement',
+      } : await agentRetry(() => agent(`Run the full benchmark for this kernel variant. This IS the performance verdict.
 
 # Kernel Source (authoritative — Read the FULL kernel from this path; the snippet below is orientation only, AWK #61):
 ${impl.variant_path}
@@ -1355,6 +1435,7 @@ Return benchmark results.`, {
             }
             bestKernelCode = impl.code
             bestKernelPath = impl.variant_path  // AWK #59: path is authoritative; survives where the code string may truncate
+            if (cuteHost) bestHostBinding = __hostMeasured.artifact_binding
             bestScore = benchResult.score
             log(`[${iterLabel}] NEW ROUND BEST: ${__fmt(speedup, 2)}x`)
           }
@@ -1820,7 +1901,15 @@ return {
   input_mode: INPUT_MODE,
   problem_definition: PROBLEM_DEFINITION,
   problem_path: PROBLEM_PATH,
-  generated_kernel_path: generatedKernelPath,
+  generated_kernel_path: KERNEL_LANG === 'cute-dsl' &&
+    INTEGRATION_DECISION.method === 'sol_execbench_solution'
+    ? (bestHostBinding?.verified ? bestKernelPath : '') : generatedKernelPath,
+  ...(KERNEL_LANG === 'cute-dsl' && INTEGRATION_DECISION.method === 'sol_execbench_solution' ? {
+    artifact_binding_required: bestHostBinding?.verified === true,
+    artifact_binding_path: bestHostBinding?.binding_path || '',
+    best_candidate_id: bestHostBinding?.candidate_id || null,
+    canonical_metric: {name: 'speedup_vs_seed', value: bestHostBinding?.metric_value || 0},
+  } : {}),
   initial_candidates: initialCandidates,
   initial_generation_result: initialGenerationResult,
   baseline_score: baselineScore,

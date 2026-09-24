@@ -1,8 +1,10 @@
 'use strict'
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const path = require('node:path')
 const { capturePrompts } = require(path.resolve(__dirname, '..', 'print-workflow-prompts.js'))
+const runWorkflow = require(path.resolve(__dirname, '..', 'lib', 'run-workflow.js'))
 
 const WORKFLOW = path.resolve(__dirname, '..', '..', '..', 'KSearch/ksearch-kernel-optimization.js')
 
@@ -94,6 +96,7 @@ test('explicit CuTe DSL reaches generation as Python source with DSL guidance', 
   assert.match(generated.prompt, /cycle_0_a0\.py\b/)
   assert.match(generated.prompt, /Requested DSL: CuTe DSL/)
   assert.match(generated.prompt, /cutlass\.cute/)
+  assert.match(generated.prompt, /do not delegate GEMM to torch\.matmul/)
   assert.ok(!calls.some(c => c.label === 'load-driver'))
 })
 
@@ -106,6 +109,46 @@ test('CuTe DSL rejects CUDA C++ driver and incomplete Host SOL context', async (
     run({ language: 'cute-dsl', integration_pattern: 'sol_execbench_solution' }, minimalReturns),
     /sol_execbench_solution requires non-empty: sol_cli, sol_task_dir, sol_bench_config/,
   )
+})
+
+test('CuTe DSL binds a Host-measured Python candidate', async () => {
+  const source = fs.readFileSync(WORKFLOW, 'utf8')
+  const candidatePath = '/tmp/ksearch-guard/ksearch_c0_a0.py'
+  const candidateSha = 'a'.repeat(64)
+  const {result} = await runWorkflow(source, {
+    ...baseArgs, language: 'cute-dsl', integration_pattern: 'sol_execbench_solution',
+    sol_cli: '/tmp/sol', sol_task_dir: '/tmp/task', sol_bench_config: '/tmp/config',
+    sol_seed_dir: '/tmp/seed', sol_substrate_dir: '/tmp/substrate',
+  }, minimalReturns, {
+    'sol-seed-baseline': request => {
+      assert.equal(request.candidateLanguage, 'cute-dsl')
+      assert.equal(request.baselineSolutionPath, '/tmp/seed/seed.solution.json')
+      return {compiled: true, correct: true, full_workload_set: true,
+        output_contract_valid: true, measurement_valid: true,
+        candidate_latency_aggregate_ms: 0.02,
+        result_path: '/tmp/ksearch-guard/host_seed.bench.jsonl.result.json'}
+    },
+    'sol-eval-0-0': request => {
+      assert.equal(request.candidateLanguage, 'cute-dsl')
+      assert.equal(request.candidatePath, candidatePath)
+      assert.equal(request.bindingOut, '/tmp/ksearch-guard/bindings/ksearch_c0_a0.json')
+      assert.equal(request.baselineEvaluationPath, '/tmp/ksearch-guard/host_seed.bench.jsonl.result.json')
+      assert.equal(request.parentSolutionPath, '/tmp/seed/seed.solution.json')
+      return {
+        compiled: true, correct: true, full_workload_set: true,
+        output_contract_valid: true, measurement_valid: true,
+        n_pass: 1, n_total: 1, speedup: 1.2,
+        candidate_latency_aggregate_ms: 0.016,
+        candidate_path: candidatePath, candidate_sha256: candidateSha,
+        artifact_binding: {verified: true, candidate_id: 'cycle-0-a0',
+          candidate_sha256: candidateSha,
+          binding_path: '/tmp/ksearch-guard/bindings/ksearch_c0_a0.json'},
+      }
+    },
+  })
+  assert.equal(result.generated_kernel_path, candidatePath)
+  assert.equal(result.artifact_binding_required, true)
+  assert.equal(result.best_metric, 1.25)
 })
 
 test('§6.4: args.backend matches manifest backend_id -> ok', async () => {

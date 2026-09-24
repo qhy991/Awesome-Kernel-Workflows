@@ -15,6 +15,31 @@
 - CUDALLM-FSR 现在把传入的 Sol 参考源码作为 incumbent，由 Host 测量该 seed，只按完整 workload 上超过 seed 且与 Host 源码绑定的候选选优并返回。此前只读评测 agent 的相对框架参考实现分数不能证明超过继承源码。（`CUDALLM/cudallm-fsr-kernel-generation.js`、`_meta/tools/test/cudallm-host-sol.test.js`）
 
 - AccelOpt 和 KSearch 现在由 Host 测量传入的 Sol seed，按相对 seed 的延迟选优，并返回与 Host 验收绑定的准确源码。此前相对框架参考实现的分数或估计分数可能把更慢、未绑定的源码传入 WSR 后续 workflow。（`AccelOpt/accelopt-kernel-optimization.js`、`KSearch/ksearch-kernel-optimization.js` 及对应 Host 测试）
+- KSearch 与 AKO4X 的每个 CuTe 候选现在传递精确的 Host 实测输入父代，
+  并将绑定的种子相对指标与框架 reference 指标分别返回。此前内部种子相对
+  评分无法满足 KerSor 的严格跨 workflow 交接。
+  (`_substrate/embedded/sol_execbench_eval.js`、
+  `KSearch/ksearch-kernel-optimization.js`、
+  `AKO4X/ako4x-kernel-optimizer.js`、
+  `_meta/tools/test/ksearch-guard.test.js`、
+  `_meta/tools/test/ako4x-guard.test.js`)
+
+- 明确 KSearch 和 AKO4X 的 CuTe 候选契约。此前 AKO4X 要求 Python 候选保留
+  CUDA `PYBIND11_MODULE` 绑定，KSearch 则未明确禁止库 GEMM 代算；现在每个
+  workload 都必须执行 CuTe 编译内核。(`KSearch/ksearch-kernel-optimization.js`、
+  `AKO4X/ako4x-kernel-optimizer.js`)
+
+- KSearch 熔断回归测试现在匹配 checkpoint 安全停止：先记录熔断决定，
+  checkpoint 后再执行停止。(`_meta/tools/test/ksearch-circuit-breaker.test.js`)
+
+- CuTe DSL 的 Sol 候选现在由 Host 直接打包 Python 源码，不再交给仅支持 CUDA 的
+  packer。KSearch 与 AKO4X 由 Host 测量传入的 CuTe 种子、相对种子评价完整候选，
+  并返回精确实测源码及绑定。AKO4X 在此路径不再让只读 agent 执行跑分；manifest
+  声明其实际的 CuTe／Host 与非 Git fresh-process 契约。
+  (`_substrate/embedded/sol_execbench_eval.js`、
+  `KSearch/ksearch-kernel-optimization.js`、`AKO4X/ako4x-kernel-optimizer.js`、
+  `AKO4X/manifest.yaml`、`_meta/tools/test/ksearch-guard.test.js`、
+  `_meta/tools/test/ako4x-guard.test.js`)
 
 - CUDAAgent 现在由 Host 测量传入的 Sol 种子，按相对种子的增益给奖励、判断停止及
   晋升候选。此前比强种子更慢的候选也可能因快于框架 reference 而达到目标、在

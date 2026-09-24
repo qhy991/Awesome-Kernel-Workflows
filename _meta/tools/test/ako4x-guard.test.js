@@ -1,8 +1,10 @@
 'use strict'
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const path = require('node:path')
 const { capturePrompts } = require(path.resolve(__dirname, '..', 'print-workflow-prompts.js'))
+const runWorkflow = require(path.resolve(__dirname, '..', 'lib', 'run-workflow.js'))
 
 const WORKFLOW = path.resolve(__dirname, '..', '..', '..', 'AKO4X/ako4x-kernel-optimizer.js')
 
@@ -49,6 +51,49 @@ const minimalReturns = {
   'update-state-1': { ok: true },
   'final-report': { report_md: 'r' },
 }
+
+test('CuTe Sol candidates use Host seed and candidate scores without agent-run benchmarks', async () => {
+  const source = fs.readFileSync(WORKFLOW, 'utf8')
+  const candidatePath = '/tmp/ako4x-guard/ako4x_r1_iter1_vec.py'
+  const candidateSha = 'b'.repeat(64)
+  const {calls, result} = await runWorkflow(source, {
+    ...baseArgs, language: 'cute-dsl', integration_pattern: 'sol_execbench_solution',
+    benchmark_command: '', smoke_test_command: '',
+    sol_cli: '/tmp/sol', sol_task_dir: '/tmp/task', sol_bench_config: '/tmp/config',
+    sol_seed_dir: '/tmp/seed', sol_substrate_dir: '/tmp/substrate',
+  }, minimalReturns, {
+    'sol-cute-seed-baseline': request => {
+      assert.equal(request.candidateLanguage, 'cute-dsl')
+      return {compiled: true, correct: true, full_workload_set: true,
+        output_contract_valid: true, measurement_valid: true,
+        candidate_latency_aggregate_ms: 0.02,
+        result_path: '/tmp/ako4x-guard/host_seed.bench.jsonl.result.json'}
+    },
+    'sol-eval-r1-iter1-vec': request => {
+      assert.equal(request.candidateLanguage, 'cute-dsl')
+      assert.equal(request.candidatePath, candidatePath)
+      assert.equal(request.baselineEvaluationPath, '/tmp/ako4x-guard/host_seed.bench.jsonl.result.json')
+      assert.equal(request.parentSolutionPath, '/tmp/seed/seed.solution.json')
+      return {compiled: true, correct: true, full_workload_set: true,
+        output_contract_valid: true, measurement_valid: true,
+        n_pass: 1, n_total: 1, speedup: 1.2,
+        candidate_latency_aggregate_ms: 0.015,
+        candidate_path: candidatePath, candidate_sha256: candidateSha,
+        artifact_binding: {verified: true, candidate_id: 'r1-iter1-vec',
+          candidate_sha256: candidateSha,
+          binding_path: '/tmp/ako4x-guard/bindings/ako4x_r1_iter1_vec.json',
+          metric_value: 1.2},
+      }
+    },
+  })
+  assert.equal(result.generated_kernel_path, candidatePath)
+  assert.equal(result.artifact_binding_required, true)
+  assert.equal(result.overall_speedup, 0.02 / 0.015)
+  assert.equal(calls.some(call => /^bench-r1|^smoke-r1/.test(call.label)), false)
+  const implementation = calls.find(call => call.label === 'impl-0-vec-v0')
+  assert.match(implementation.prompt, /Every workload must execute a CuTe-compiled/)
+  assert.doesNotMatch(implementation.prompt, /PYBIND11_MODULE/)
+})
 
 async function run(extra, agentReturns) {
   return capturePrompts({
