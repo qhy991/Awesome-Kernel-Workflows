@@ -65,6 +65,7 @@ test('KSearch Sol retains the seed when a correct candidate is slower', async ()
   const {result} = await runWorkflow(source, args, agents, evals(measured(0.022)))
   assert.equal(result.generated_kernel_path, '')
   assert.equal(result.artifact_binding_required, false)
+  assert.equal(result.best_correct_cute_port, null)
 })
 
 test('KSearch Sol refuses a correct candidate without Host source binding', async () => {
@@ -82,4 +83,15 @@ test('KSearch CuTe DSL sends Python source to the Host and retains the CUDA incu
   const {result} = await runWorkflow(source, {...args, language: 'cute-dsl'}, agents, observed)
   assert.equal(result.artifact_binding_required, true)
   assert.equal(result.best_candidate_id, 'cycle-0-a0')
+})
+
+test('KSearch returns a correct slower CuTe port without promoting it', async () => {
+  const port = {...measured(0.022), candidate_path: '/tmp/ksearch-sol/ksearch_c0_a0.py'}
+  const {result} = await runWorkflow(source, {...args, language: 'cute-dsl'}, agents, evals(port))
+  assert.equal(result.generated_kernel_path, '')
+  assert.equal(result.artifact_binding_required, false)
+  assert.equal(result.best_correct_cute_port.source_path, '/tmp/ksearch-sol/ksearch_c0_a0.py')
+  assert.equal(result.best_correct_cute_port.candidate_id, 'cycle-0-a0')
+  assert.equal(result.best_correct_cute_port.promoted_to_incumbent, false)
+  assert.ok(result.best_correct_cute_port.seed_relative_metric < 1)
 })

@@ -47,6 +47,16 @@ function transform(src, block) {
   return { src: src.slice(0, insertAt) + '\n\n' + inlined + src.slice(insertAt), status: 'inserted' }
 }
 
+function refresh(src, block) {
+  const begin = src.indexOf(BEGIN)
+  if (begin === -1) return {src, status: 'no-sentinel'}
+  const end = src.indexOf(END, begin)
+  if (end === -1) return {src, status: 'malformed-sentinel'}
+  const updated = src.slice(0, begin) + BEGIN + '\n' + block + '\n' + END
+    + src.slice(end + END.length)
+  return {src: updated, status: updated === src ? 'already-current' : 'refreshed'}
+}
+
 function workflowFiles() {
   return fs.readdirSync(REPO).filter((d) => {
     const dir = path.join(REPO, d)
@@ -56,13 +66,14 @@ function workflowFiles() {
 
 function main() {
   const block = readBlock()
+  const refreshMode = process.argv.includes('--refresh')
   const files = process.argv.slice(2).filter((a) => !a.startsWith('-')).map((p) => path.resolve(p)).filter((f) => fs.existsSync(f))
   const targets = files.length ? files : workflowFiles()
   const counts = {}
   for (const f of targets) {
     const orig = fs.readFileSync(f, 'utf8')
     const rel = path.relative(REPO, f)
-    const r = transform(orig, block)
+    const r = refreshMode ? refresh(orig, block) : transform(orig, block)
     counts[r.status] = (counts[r.status] || 0) + 1
     if (r.src !== orig) {
       fs.writeFileSync(f, r.src)

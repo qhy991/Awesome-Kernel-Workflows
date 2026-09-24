@@ -4,8 +4,9 @@
 // bounds the *eval* step with EVAL_TIMEOUT_SEC (shell `timeout Ns`), but a
 // hung non-eval agent() turn (Generate stalled in_progress) had no wall-clock
 // cap and could stall the search indefinitely. Static-source assertion is
-// sufficient: the guard is a deterministic Promise.race(setTimeout) wrapper
-// around the Generate agentRetry call, and a timeout breaks the attempt loop
+// sufficient for call-site placement: the guard wraps each Generate agent()
+// activation inside agentRetry, so a retry receives its own complete timeout.
+// A timeout breaks the attempt loop
 // (treated like stagnation) so the search continues with the next cycle.
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
@@ -42,12 +43,14 @@ test('ksearch: withTurnTimeout uses Promise.race + setTimeout (no forbidden APIs
 test('ksearch: all three Generate doer-turn variants are wrapped with withTurnTimeout', () => {
   // The Generate if/else chain has three prompt variants (gen / debug / improve);
   // each must be wrapped so a hung turn cannot stall the attempt loop.
-  assert.match(SOURCE, /withTurnTimeout\(agentRetry\(\(\) => agent\(`You are an expert \$\{langToken\(LANGUAGE\)\} kernel developer\. Generate a high-performance kernel/,
+  assert.match(SOURCE, /agentRetry\(\(\) => withTurnTimeout\(agent\(`You are an expert \$\{langToken\(LANGUAGE\)\} kernel developer\. Generate a high-performance kernel/,
     'first-attempt (gen) Generate turn must be wrapped')
-  assert.match(SOURCE, /withTurnTimeout\(agentRetry\(\(\) => agent\(`You are an expert \$\{langToken\(LANGUAGE\)\} kernel developer\. The previous attempt has bugs/,
+  assert.match(SOURCE, /agentRetry\(\(\) => withTurnTimeout\(agent\(`You are an expert \$\{langToken\(LANGUAGE\)\} kernel developer\. The previous attempt has bugs/,
     'debug Generate turn must be wrapped')
-  assert.match(SOURCE, /withTurnTimeout\(agentRetry\(\(\) => agent\(`You are an expert \$\{langToken\(LANGUAGE\)\} kernel developer\. You have a working solution/,
+  assert.match(SOURCE, /agentRetry\(\(\) => withTurnTimeout\(agent\(`You are an expert \$\{langToken\(LANGUAGE\)\} kernel developer\. You have a working solution/,
     'improve Generate turn must be wrapped')
+  assert.doesNotMatch(SOURCE, /withTurnTimeout\(agentRetry\(/,
+    'one timer around all retries can abandon a newly started agent call')
 })
 
 test('ksearch: Generate chain translates a turn timeout into an early cycle exit', () => {

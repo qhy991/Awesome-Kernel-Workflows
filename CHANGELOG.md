@@ -10,9 +10,15 @@ for the versioning policy.
 
 ### Changed
 
+- KSearch exposes the best Host-bound, correct CuTe port as a separate optional authoring artifact even when it is slower than the inherited CUDA incumbent. The port is never an implicit operator promotion; a successor CuTe search can refine it while the CUDA floor remains authoritative. (`KSearch/ksearch-kernel-optimization.js`, `KSearch/manifest.yaml`, `_meta/tools/test/ksearch-host-sol.test.js`)
+
 - KSearch CuTe DSL candidates use the Host SOL evaluator with complete task context and package Python source through the supported PyTorch SolutionSpec transport. Missing Host evaluation is rejected. (`KSearch/ksearch-kernel-optimization.js`, `KSearch/README.md`, `_substrate/integration/tests/test_pack_sol_candidate.py`)
 
 ### Fixed
+
+- Stop generic `agentRetry` on a provider safeguard refusal instead of resubmitting the same generation request. The 008 KSearch run retried a refused Generate branch. The shared helper is refreshed in every workflow, with a regression for typed and legacy refusal errors. (`_meta/scaffolding/agent-retry.js`, `scripts/add-agent-retry-scaffolding.js`, `_meta/tools/test/agent-retry-safeguard.test.js`)
+
+- Drain a Host-bounded agent activation before a workflow timeout returns; KSearch now times each Generate activation inside its retry loop. Previously an outer `Promise.race` expired just after the first Host timeout, leaving a fresh retry active and failing 005/006 with `KERSOR_UNAWAITED_AGENT_CALL`. Refresh the shared timeout helper in all workflows and cover the drain and call placement. (`_meta/scaffolding/turn-timeout.js`, `scripts/patch-turn-timeout.js`, `KSearch/ksearch-kernel-optimization.js`, `CUDAAgent/cuda-agent-kernel-optimization.js`, `_meta/tools/test/turn-timeout-drain.test.js`, `_meta/tools/test/ksearch-turn-timeout-guard.test.js`)
 
 - CUDALLM-FSR now treats a supplied Sol reference source as its incumbent, measures that seed through the Host, and scores and returns only a faster, Host-bound full-workload candidate. Previously its read-only evaluation agent could report a framework-relative score that did not prove gain over the inherited source. (`CUDALLM/cudallm-fsr-kernel-generation.js`, `_meta/tools/test/cudallm-host-sol.test.js`)
 

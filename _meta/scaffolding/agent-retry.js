@@ -68,6 +68,14 @@ async function agentRetry(fn, opts) {
       if (result != null) return result
       // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
     } catch (e) {
+      // Policy refusals are terminal for this request. In particular, the
+      // provider's "safeguards flagged this message" response must never be
+      // sent again by the generic transient-failure retry path. The message
+      // check also protects direct/older Hosts that lack the typed code.
+      if (e && (e.code === 'KERSOR_PROVIDER_SAFEGUARD_REFUSAL'
+        || /safeguards? flagged (?:this|the) message|provider safeguard refusal/i.test(String(e.message || '')))) {
+        throw e
+      }
       lastError = e
     }
   }

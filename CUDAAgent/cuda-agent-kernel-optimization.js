@@ -240,6 +240,14 @@ async function agentRetry(fn, opts) {
       if (result != null) return result
       // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
     } catch (e) {
+      // Policy refusals are terminal for this request. In particular, the
+      // provider's "safeguards flagged this message" response must never be
+      // sent again by the generic transient-failure retry path. The message
+      // check also protects direct/older Hosts that lack the typed code.
+      if (e && (e.code === 'KERSOR_PROVIDER_SAFEGUARD_REFUSAL'
+        || /safeguards? flagged (?:this|the) message|provider safeguard refusal/i.test(String(e.message || '')))) {
+        throw e
+      }
       lastError = e
     }
   }
@@ -855,12 +863,23 @@ let convergenceStatus = null  // 'timeout' | 'stalled' when the loop exits early
 function withTurnTimeout(promise, label) {
   if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return promise
   let timer
+  let expired = false
   const guard = new Promise((_, reject) => {
     timer = setTimeout(
-      () => reject(new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)),
+      () => {
+        expired = true
+        reject(new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`))
+      },
       TURN_TIMEOUT_MS)
   })
-  return Promise.race([promise, guard]).finally(() => {
+  return Promise.race([promise, guard]).catch(async error => {
+    if (expired) {
+      // The Host owns cancellation. A Promise.race timeout alone leaves the
+      // activation live and makes workflow return fail as unawaited.
+      try { await promise } catch (_) { /* preserve the guard error */ }
+    }
+    throw error
+  }).finally(() => {
     if (typeof clearTimeout === 'function') clearTimeout(timer)
   })
 }

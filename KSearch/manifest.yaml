@@ -539,6 +539,10 @@ return_fields:
   type: object
   description: Final K-Search optimization report
   required: false
+- name: best_correct_cute_port
+  type: object
+  description: Optional Host-bound correct CuTe source for later authoring; it is not an incumbent unless promoted separately
+  required: false
 template:
   base: tree-exploration
   customizations:

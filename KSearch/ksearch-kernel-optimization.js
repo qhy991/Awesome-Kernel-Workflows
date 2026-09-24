@@ -225,6 +225,14 @@ async function agentRetry(fn, opts) {
       if (result != null) return result
       // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
     } catch (e) {
+      // Policy refusals are terminal for this request. In particular, the
+      // provider's "safeguards flagged this message" response must never be
+      // sent again by the generic transient-failure retry path. The message
+      // check also protects direct/older Hosts that lack the typed code.
+      if (e && (e.code === 'KERSOR_PROVIDER_SAFEGUARD_REFUSAL'
+        || /safeguards? flagged (?:this|the) message|provider safeguard refusal/i.test(String(e.message || '')))) {
+        throw e
+      }
       lastError = e
     }
   }
@@ -320,22 +328,33 @@ ${JSON.stringify(ctx.checkpoint)}
 // --- END inlined runtime-safe-point scaffolding ---
 
 // --- BEGIN inlined turn-timeout scaffolding (from _meta/scaffolding/turn-timeout.js) ---
-// Per-turn wall-clock watchdog (parity with CUDAAgent #12/#14). KSearch already
-// bounds the *eval* step with EVAL_TIMEOUT_SEC (shell `timeout Ns`), but a hung
-// non-eval agent() turn (propose/select/generate stalled in_progress) had no
-// wall-clock cap and could stall the search indefinitely. Wrapping the generate
-// doer turn bounds it; on expiry the attempt loop breaks (treated like
-// stagnation) and the search continues with the next cycle rather than hanging.
 const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn wall-clock cap
+
+/**
+ * Wrap a doer-turn promise with a wall-clock cap. On expiry the returned
+ * promise rejects with `turn-timeout: <label> exceeded Ns`. Degrades to a
+ * passthrough when the runtime has no timers or TURN_TIMEOUT_MS <= 0.
+ */
 function withTurnTimeout(promise, label) {
   if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return promise
   let timer
+  let expired = false
   const guard = new Promise((_, reject) => {
     timer = setTimeout(
-      () => reject(new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)),
+      () => {
+        expired = true
+        reject(new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`))
+      },
       TURN_TIMEOUT_MS)
   })
-  return Promise.race([promise, guard]).finally(() => {
+  return Promise.race([promise, guard]).catch(async error => {
+    if (expired) {
+      // A race does not cancel agent(). Drain this Host-bounded activation so
+      // no running call survives the workflow's return.
+      try { await promise } catch (_) { /* preserve the guard error */ }
+    }
+    throw error
+  }).finally(() => {
     if (typeof clearTimeout === 'function') clearTimeout(timer)
   })
 }
@@ -1108,7 +1127,7 @@ Then append:
       const diversityDirective = SEED_CANDIDATES > 1
         ? `\n\n# Parallel seed branch: ${attempt + 1}/${SEED_CANDIDATES}\nChoose a materially distinct implementation strategy from the other branches while preserving the selected world-model action.`
         : ''
-      return withTurnTimeout(agentRetry(() => agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. Generate a high-performance kernel implementing a SPECIFIC optimization action.
+      return agentRetry(() => withTurnTimeout(agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. Generate a high-performance kernel implementing a SPECIFIC optimization action.
 
 # Operation: ${OP_DESC} (${opType})
 # Target: ${TARGET_GPU}
@@ -1156,7 +1175,7 @@ Then append:
           },
           required: ['variant_path', 'code'],
         },
-      }), { retries: 5, allowNull: true }), `gen-${cycle}-${attempt}`)
+      }), `gen-${cycle}-${attempt}`), { retries: 5, allowNull: true })
   }
   const seedCandidates = await parallel(seedIndexes.map((seedAttempt) => () => generateSeedCandidate(seedAttempt)))
   log(`Generated ${seedCandidates.filter(Boolean).length}/${SEED_CANDIDATES} seed candidates with bounded parallel fan-out; evaluation remains serial.`)
@@ -1183,7 +1202,7 @@ Then append:
     } else if (!hasPassedInCycle) {
       // Attempts 2+, NO passing solution yet: DEBUG prompt
       // Uses currentRawCode (last attempt's code) as the buggy code to fix
-      genResult = await withTurnTimeout(agentRetry(() => agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. The previous attempt has bugs or fails correctness. Debug and fix it.
+      genResult = await agentRetry(() => withTurnTimeout(agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. The previous attempt has bugs or fails correctness. Debug and fix it.
 
 # Operation: ${OP_DESC} (${opType})
 # Target: ${TARGET_GPU}
@@ -1229,11 +1248,11 @@ Then append:
           },
           required: ['code'],
         },
-      }), { retries: 5, allowNull: true }), `debug-${cycle}-${attempt}`)
+      }), `debug-${cycle}-${attempt}`), { retries: 5, allowNull: true })
     } else {
       // Attempts 2+, HAVE a passing solution: IMPROVE prompt
       // Focus on performance, not correctness
-      genResult = await withTurnTimeout(agentRetry(() => agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. You have a working solution — improve its performance.
+      genResult = await agentRetry(() => withTurnTimeout(agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. You have a working solution — improve its performance.
 
 # Operation: ${OP_DESC} (${opType})
 # Target: ${TARGET_GPU}
@@ -1279,7 +1298,7 @@ Then append:
           },
           required: ['code'],
         },
-      }), { retries: 5, allowNull: true }), `improve-${cycle}-${attempt}`)
+      }), `improve-${cycle}-${attempt}`), { retries: 5, allowNull: true })
     }
     } catch (e) {
       log(`  Cycle ${cycle + 1} attempt ${attempt + 1}: turn watchdog tripped — ending cycle (${e && e.message ? e.message : e})`)
@@ -1825,6 +1844,12 @@ const topSolutions = solutionDb
   .filter(s => s.eval?.is_valid)
   .sort((a, b) => (b.eval.metric_value || 0) - (a.eval.metric_value || 0))
   .slice(0, 5)
+// A correct CuTe port can be useful authoring material even when the inherited
+// CUDA incumbent remains faster. Keep it separate from bestSolution so no
+// downstream promotion path mistakes the port for a new operator winner.
+const bestCorrectCutePort = IS_SOL && LANGUAGE === 'cute-dsl'
+  ? topSolutions.find(s => s.eval?.artifact_binding?.verified === true && s.eval?.host_candidate_path)
+  : null
 
 let finalReport = ''
 if (terminationReason !== 'cycle_limit') {
@@ -1897,6 +1922,13 @@ return {
   best_metric: bestMetric,
   best_solution_code: bestSolution?.code || '',
   best_kernel_path: IS_SOL ? (bestSolution?.eval?.candidate_path || bestSolution?.path || null) : (bestSolution?.code ? bestKernelPath() : null),
+  best_correct_cute_port: bestCorrectCutePort ? {
+    source_path: bestCorrectCutePort.eval.host_candidate_path,
+    candidate_id: bestCorrectCutePort.eval.candidate_id,
+    seed_relative_metric: bestCorrectCutePort.eval.metric_value,
+    artifact_binding_path: bestCorrectCutePort.eval.artifact_binding.binding_path,
+    promoted_to_incumbent: bestSolution?.eval?.candidate_id === bestCorrectCutePort.eval.candidate_id,
+  } : null,
   cycles_completed: cycleCount,
   termination_reason: terminationReason,
   checkpoint_path: CHECKPOINT_PATH,
