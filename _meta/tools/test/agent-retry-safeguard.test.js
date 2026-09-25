@@ -37,3 +37,14 @@ test('transient transport failure may still retry', async () => {
   assert.equal(calls, 2)
   assert.equal(result.ok, true)
 })
+
+test('observed-model mismatch is never resubmitted by agentRetry', async () => {
+  let calls = 0
+  const mismatch = Object.assign(new Error('observed model differs from pinned model'),
+    {code: 'KERSOR_CLAUDE_MODEL_IDENTITY_MISMATCH'})
+  await assert.rejects(agentRetry(async () => {
+    calls++
+    throw mismatch
+  }, {retries: 5, allowNull: true}), error => error === mismatch)
+  assert.equal(calls, 1)
+})

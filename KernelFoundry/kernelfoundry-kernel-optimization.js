@@ -222,11 +222,12 @@ async function agentRetry(fn, opts) {
       if (result != null) return result
       // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
     } catch (e) {
-      // Policy refusals are terminal for this request. In particular, the
-      // provider's "safeguards flagged this message" response must never be
-      // sent again by the generic transient-failure retry path. The message
-      // check also protects direct/older Hosts that lack the typed code.
+      // Provider refusals and model-identity mismatches are terminal for this
+      // request. Repeating a rejected prompt or paying for more calls on the
+      // wrong model cannot repair either condition. The message check also
+      // protects direct/older Hosts that lack the typed refusal code.
       if (e && (e.code === 'KERSOR_PROVIDER_SAFEGUARD_REFUSAL'
+        || e.code === 'KERSOR_CLAUDE_MODEL_IDENTITY_MISMATCH'
         || /safeguards? flagged (?:this|the) message|provider safeguard refusal/i.test(String(e.message || '')))) {
         throw e
       }
@@ -455,6 +456,7 @@ const OP_DESC = args.op_description || 'GPU kernel'
 
 // --- Optional Args ---
 const TARGET_LANG = args.language || 'cuda'
+const CUTE_SOL = TARGET_LANG === 'cute-dsl' && args.integration_pattern === 'sol_execbench_solution'
 const TARGET_HW = args.target_gpu || 'NVIDIA GPU'
 const TEST_CMD = args.test_command || ''
 const BENCH_CMD = args.benchmark_command || ''
@@ -502,7 +504,7 @@ const SOL_DEFINITION_PATH = args.sol_definition_path || ''
 const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || `${SUBSTRATE}/integration`
 
 const LEGACY_LANG_TOKEN = TARGET_LANG
-const LEGACY_FENCE_TOKEN = TARGET_LANG
+const LEGACY_FENCE_TOKEN = CUTE_SOL ? 'python' : TARGET_LANG
 const JSON_PASSTHROUGH = { type: 'object', additionalProperties: true }
 
 // --- BEGIN inlined backend-axis (driver) scaffolding (from _meta/scaffolding/backend-axis.js) ---
@@ -537,7 +539,7 @@ function fenceToken() {
 }
 function kernelPathForGeneration(gen) {
   const legacyExt = TARGET_LANG === 'cuda' ? '.cu'
-    : (TARGET_LANG === 'triton' || TARGET_LANG === 'python') ? '.py'
+    : (TARGET_LANG === 'triton' || TARGET_LANG === 'python' || CUTE_SOL) ? '.py'
     : `.${TARGET_LANG}`
   const ext = USE_DRIVER ? (DRIVER_SOURCE_EXT || legacyExt) : legacyExt
   return `${EXP_DIR}/gen_${gen}${ext}`
@@ -545,7 +547,7 @@ function kernelPathForGeneration(gen) {
 
 function bestKernelPath() {
   const ext = TARGET_LANG === 'cuda' ? 'cu'
-    : (TARGET_LANG === 'triton' || TARGET_LANG === 'python') ? 'py'
+    : (TARGET_LANG === 'triton' || TARGET_LANG === 'python' || CUTE_SOL) ? 'py'
     : TARGET_LANG
   return `${EXP_DIR}/best_kernel.${ext}`
 }
@@ -697,7 +699,8 @@ if (IS_SOL) {
   const seed = await __solExecbenchEvaluate({
     label: 'sol-seed-baseline', phase: 'Setup',
     substrateDir: SOL_SUBSTRATE_DIR,
-    kernelSource: `${EXP_DIR}/host_seed.cu`,
+    kernelSource: `${EXP_DIR}/host_seed.${CUTE_SOL ? 'py' : 'cu'}`,
+    candidateLanguage: CUTE_SOL ? 'cute-dsl' : '',
     baselineSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
     contractEnv: `${SOL_SEED_DIR}/contract.env`,
     solutionOut: `${EXP_DIR}/host_seed.solution.json`,
@@ -881,6 +884,7 @@ ${gradientHints ? `# Gradient Hints (from evolutionary history):\n${gradientHint
 6. Classify the produced candidate itself with integer d_mem, d_algo, d_sync coordinates in [0, 3]
 
 ${IS_SOL ? SOL_SOLUTION_CONTRACT : ''}
+${CUTE_SOL ? 'CuTe DSL contract: emit one complete Python module with from cutlass import cute, @cute.jit kernels, and a module-level run(...) matching the reference signature. Do not emit CUDA C++, Triton, pybind, torch.matmul, or a placeholder. Keep KernelFoundry variation and descriptor choices; the Host evaluates the full official workload.' : ''}
 
 Return the kernel code and its optimization strategy description.
 ${__attemptBlock()}${__experienceBlock()}
@@ -961,6 +965,7 @@ Return {"written":true,"path":"${candidatePath}"}.`, {
         substrateDir: SOL_SUBSTRATE_DIR,
         kernelSource: candidatePath,
         candidateSource: offspringCode,
+        candidateLanguage: CUTE_SOL ? 'cute-dsl' : '',
         baselineEvaluationPath: solSeedMeasurementPath,
         parentSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
         bindingOut: `${EXP_DIR}/bindings/gen_${generation}.json`, bindingWorkflow: WORKFLOW_NAME,

@@ -288,3 +288,45 @@ test('SYCL deferred-driver: args.backend=sycl with empty backend_dir -> §6.4 im
     },
   )
 })
+
+test('KernelFoundry CuTe SOL retains MAP-Elites evaluation and emits a bound Python candidate', async () => {
+  const source = fs.readFileSync(WORKFLOW, 'utf8')
+  const returns = {...minimalReturns,
+    'vary-0': {kernel_code: 'from cutlass import cute\n@cute.jit\ndef kernel(): pass\ndef run(*args): pass',
+      strategy_description: 'CuTe tiling', memory_pattern: 'coalesced',
+      algorithm_type: 'gemm', parallelism_level: 'warp', is_templated: false,
+      template_params: []}}
+  const binding = {verified: true, compiled: true, correct: true, speedup: 1.25,
+    binding_path: '/tmp/kf-guard/bindings/gen_0.json',
+    binding_sha256: 'a'.repeat(64), candidate_sha256: 'b'.repeat(64),
+    measurement_sha256: 'c'.repeat(64), task_sha256: 'd'.repeat(64),
+    task_fingerprint_kind: 'file_sha256', n_pass: 2, n_total: 2}
+  const {result} = await runWorkflow(source, {
+    ...baseArgs, language: 'cute-dsl', integration_pattern: 'sol_execbench_solution',
+    test_command: 'test {kernel_path}', benchmark_command: 'bench {kernel_path}',
+    sol_cli: '/tmp/sol', sol_task_dir: '/tmp/task', sol_bench_config: '/tmp/config',
+    sol_seed_dir: '/tmp/seed', sol_substrate_dir: '/tmp/substrate',
+  }, returns, {
+    'sol-seed-baseline': request => {
+      assert.equal(request.candidatePath, '/tmp/kf-guard/host_seed.py')
+      assert.equal(request.candidateLanguage, 'cute-dsl')
+      return {compiled: true, correct: true, full_workload_set: true,
+        output_contract_valid: true, measurement_valid: true,
+        candidate_latency_aggregate_ms: 0.02,
+        result_path: '/tmp/kf-guard/host_seed.result.json'}
+    },
+    'sol-eval-0': request => {
+      assert.equal(request.candidatePath, '/tmp/kf-guard/gen_0.py')
+      assert.equal(request.candidateLanguage, 'cute-dsl')
+      assert.match(request.candidateSource, /from cutlass import cute/)
+      return {compiled: true, correct: true, full_workload_set: true,
+        output_contract_valid: true, measurement_valid: true,
+        n_pass: 2, n_total: 2, candidate_latency_aggregate_ms: 0.016,
+        speedup: 9, speedup_vs_seed: 1.25,
+        artifact_binding: binding, candidate_path: '/tmp/kf-guard/gen_0.py'}
+    },
+  })
+  assert.equal(result.generated_kernel_path, '/tmp/kf-guard/gen_0.py')
+  assert.equal(result.artifact_binding_required, true)
+  assert.equal(result.best_speedup, 1.25)
+})

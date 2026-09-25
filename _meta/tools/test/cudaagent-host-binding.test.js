@@ -102,3 +102,30 @@ test('CUDAAgent Sol explores without a numeric target', async () => {
   assert.equal(result.seed_relative_speedup, 1.25)
   assert.equal(result.target_met, false)
 })
+
+test('CUDAAgent CuTe SOL optimizes a Python CuTe seed through the Host evaluator', async () => {
+  const cuteArgs = {...args, language: 'cute-dsl',
+    kernel_path: '/tmp/cudaagent-bound/kernel.py'}
+  const cutePath = '/tmp/cudaagent-bound/kernels/sol_t0.py'
+  const cuteAgents = {'impl-0': {
+    kernel_code: 'from cutlass import cute\n@cute.jit\ndef kernel(): pass\ndef run(*args): pass',
+    binding_code: '', model_new_code: '', implementation_notes: 'CuTe candidate',
+  }}
+  const {result} = await runWorkflow(source, cuteArgs, cuteAgents, {
+    'sol-seed-baseline': request => {
+      assert.equal(request.candidatePath, '/tmp/cudaagent-bound/host_seed.py')
+      assert.equal(request.candidateLanguage, 'cute-dsl')
+      return seedBaseline(request)
+    },
+    'sol-eval-0': request => {
+      assert.equal(request.candidatePath, cutePath)
+      assert.equal(request.candidateLanguage, 'cute-dsl')
+      assert.match(request.candidateSource, /from cutlass import cute/)
+      return {...measured({verified: true, candidate_sha256: candidateSha,
+        binding_path: bindingPath}), candidate_path: cutePath}
+    },
+  })
+  assert.equal(result.generated_kernel_path, cutePath)
+  assert.equal(result.seed_relative_speedup, 1.25)
+  assert.equal(result.artifact_binding_required, true)
+})

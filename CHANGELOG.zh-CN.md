@@ -8,11 +8,21 @@
 
 ### Changed
 
+- AccelOpt 的 CuTe SOL 适配现在在规划、评测、经验提取和报告中明确只使用 Host 实测延迟；Host 未返回候选结果时，不再让模型的静态估计进入候选池。manifest 说明此适配不采集 NCU 计数器；提供 profiler 时原 CUDA 路径仍可使用。(`AccelOpt/accelopt-kernel-optimization.js`、`AccelOpt/manifest.yaml`、`_meta/tools/test/accelopt-host-sol.test.js`)
+
+- CUDAAgent 新增可选的 CuTe DSL SOL Host 路径：迭代候选返回完整的 Python CuTe 模块，Host 按显式语言与源码绑定验收全部官方工作负载；原 CUDA 路径不变。(`CUDAAgent/cuda-agent-kernel-optimization.js`、`CUDAAgent/manifest.yaml`、`_meta/tools/test/cudaagent-host-binding.test.js`)
+
+- CUDALLM-FSR 在 SOL Host 路径支持 CuTe DSL，同时保留特征选择与实测强化：Python 候选和种子通过显式 CuTe 语言契约评测，不再要求 CUDA pybind。(`CUDALLM/cudallm-fsr-kernel-generation.js`、`CUDALLM/manifest.yaml`、`_meta/tools/test/cudallm-host-sol.test.js`)
+
+- KernelFoundry 在 SOL Host 路径支持 CuTe DSL Python 源码，保留 MAP-Elites 搜索机制，并将 `.py` 候选交给 Host 的 CuTe 全工作负载评测；CUDA 与独立运行路径不变。(`KernelFoundry/kernelfoundry-kernel-optimization.js`、`KernelFoundry/manifest.yaml`)
+
 - KSearch 将通过 Host 绑定与完整正确性验收的最佳 CuTe 移植源码单独作为可选创作材料返回，即使它慢于继承的 CUDA 实现；该源码不会自动晋升为算子最优，后继 CuTe 搜索可在保留 CUDA 性能底线的同时继续优化。(`KSearch/ksearch-kernel-optimization.js`、`KSearch/manifest.yaml`、`_meta/tools/test/ksearch-host-sol.test.js`)
 
 - KSearch CuTe DSL 候选在任务上下文完整时走 Host SOL 评测器，Python 源码通过受支持的 PyTorch SolutionSpec 打包；缺少 Host 评测器时拒绝派发。（`KSearch/ksearch-kernel-optimization.js`、`KSearch/README.md`、`_substrate/integration/tests/test_pack_sol_candidate.py`）
 
 ### Fixed
+
+- `agentRetry` 遇到 `KERSOR_CLAUDE_MODEL_IDENTITY_MISMATCH` 立即停止。错误模型上的重复调用无法修复模型消融证据，只会消耗预算；共用 helper 已同步到全部 workflow。(`_meta/scaffolding/agent-retry.js`、`scripts/add-agent-retry-scaffolding.js`、`_meta/tools/test/agent-retry-safeguard.test.js`)
 
 - provider safeguard 拒绝后，共用 `agentRetry` 不再重新提交同一生成请求。008 的 KSearch 曾重试被拒绝的 Generate 分支；修复已同步到各 workflow，并覆盖类型化与旧版错误。(`_meta/scaffolding/agent-retry.js`、`scripts/add-agent-retry-scaffolding.js`、`_meta/tools/test/agent-retry-safeguard.test.js`)
 

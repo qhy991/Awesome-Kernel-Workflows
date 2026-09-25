@@ -205,11 +205,12 @@ async function agentRetry(fn, opts) {
       if (result != null) return result
       // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
     } catch (e) {
-      // Policy refusals are terminal for this request. In particular, the
-      // provider's "safeguards flagged this message" response must never be
-      // sent again by the generic transient-failure retry path. The message
-      // check also protects direct/older Hosts that lack the typed code.
+      // Provider refusals and model-identity mismatches are terminal for this
+      // request. Repeating a rejected prompt or paying for more calls on the
+      // wrong model cannot repair either condition. The message check also
+      // protects direct/older Hosts that lack the typed refusal code.
       if (e && (e.code === 'KERSOR_PROVIDER_SAFEGUARD_REFUSAL'
+        || e.code === 'KERSOR_CLAUDE_MODEL_IDENTITY_MISMATCH'
         || /safeguards? flagged (?:this|the) message|provider safeguard refusal/i.test(String(e.message || '')))) {
         throw e
       }

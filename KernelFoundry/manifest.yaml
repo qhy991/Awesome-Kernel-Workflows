@@ -70,6 +70,7 @@ routing:
   languages:
   - cuda
   - triton
+  - cute-dsl # SOL Host path only; no standalone CuTe backend driver
   - sycl
   - ascendc
   - python_reference

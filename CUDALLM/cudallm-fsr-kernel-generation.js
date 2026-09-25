@@ -25,6 +25,7 @@ async function __solExecbenchEvaluate(ctx) {
     phase: ctx.phase || 'Evaluate',
     candidatePath: ctx.kernelSource,
     candidateSource: ctx.candidateSource,
+    candidateLanguage: ctx.candidateLanguage || '',
     baselineSolutionPath: ctx.baselineSolutionPath || '',
     substrateDir: ctx.substrateDir,
     contractEnv: ctx.contractEnv,
@@ -83,12 +84,14 @@ const SOL_ENV_PREFIX = args.sol_env_prefix || ''
 const SOL_DEFINITION_PATH = args.sol_definition_path || ''
 const SOL_SUBSTRATE_DIR = args.sol_substrate_dir || ''
 const SOL_AVAILABLE = Boolean(SOL_CLI && SOL_TASK_DIR && SOL_SUBSTRATE_DIR)
+const CUTE_SOL = SOL_AVAILABLE && args.language === 'cute-dsl' && args.integration_pattern === 'sol_execbench_solution'
 // pack_sol_candidate requires a CUDA/C++ candidate to expose run() through
 // PYBIND11_MODULE and rejects anything else with "has no PYBIND11_MODULE
 // binding".  Workflows that state this produce packable candidates; those that
 // only ask for "complete kernel code" comply by luck - stitchcuda packed on
 // attempt 1 and failed on attempt 2 under the same prompt.  Say it once here.
-const SOL_CANDIDATE_CONTRACT = SOL_AVAILABLE ? `
+const SOL_CANDIDATE_CONTRACT = CUTE_SOL ? `
+MANDATORY CuTe DSL candidate: emit one complete Python module with from cutlass import cute, @cute.jit kernel(s), and a module-level run(...) matching the frozen task reference. Preserve the input/output contract and execute the CuTe kernel for every workload. Do not emit CUDA C++, pybind, Triton, torch.matmul, a reference fallback, or placeholder code. The Host compiles, verifies, and measures the full official workload.` : SOL_AVAILABLE ? `
 MANDATORY candidate shape: emit a COMPLETE, self-contained translation unit that
 compiles on its own. Keep the seed kernel's entry point and bindings intact - the
 same \`run(...)\` signature and the same \`PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)\`
@@ -209,11 +212,12 @@ async function agentRetry(fn, opts) {
       if (result != null) return result
       // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
     } catch (e) {
-      // Policy refusals are terminal for this request. In particular, the
-      // provider's "safeguards flagged this message" response must never be
-      // sent again by the generic transient-failure retry path. The message
-      // check also protects direct/older Hosts that lack the typed code.
+      // Provider refusals and model-identity mismatches are terminal for this
+      // request. Repeating a rejected prompt or paying for more calls on the
+      // wrong model cannot repair either condition. The message check also
+      // protects direct/older Hosts that lack the typed refusal code.
       if (e && (e.code === 'KERSOR_PROVIDER_SAFEGUARD_REFUSAL'
+        || e.code === 'KERSOR_CLAUDE_MODEL_IDENTITY_MISMATCH'
         || /safeguards? flagged (?:this|the) message|provider safeguard refusal/i.test(String(e.message || '')))) {
         throw e
       }
@@ -405,18 +409,18 @@ const BACKEND_DIR = args.backend_dir || ''
 const SUBSTRATE = args.substrate_dir || '_substrate'
 const SH = args.driver_shell_prefix || ''
 const PY = args.substrate_command_prefix || ''
-const LEGACY_SETUP_LANG_TOKEN = 'CUDA'
-const LEGACY_CATALOG_LANG_TOKEN = 'CUDA'
-const LEGACY_TESTS_LANG_TOKEN = 'CUDA-LLM'
-const LEGACY_SELECT_LANG_TOKEN = 'CUDA'
-const LEGACY_GENERATE_LANG_TOKEN = 'CUDA'
-const LEGACY_EVAL_LANG_TOKEN = 'CUDA'
-const LEGACY_REINFORCE_LANG_TOKEN = 'CUDA'
+const LEGACY_SETUP_LANG_TOKEN = CUTE_SOL ? 'CuTe DSL' : 'CUDA'
+const LEGACY_CATALOG_LANG_TOKEN = CUTE_SOL ? 'CuTe DSL' : 'CUDA'
+const LEGACY_TESTS_LANG_TOKEN = CUTE_SOL ? 'CuTe DSL' : 'CUDA-LLM'
+const LEGACY_SELECT_LANG_TOKEN = CUTE_SOL ? 'CuTe DSL' : 'CUDA'
+const LEGACY_GENERATE_LANG_TOKEN = CUTE_SOL ? 'CuTe DSL' : 'CUDA'
+const LEGACY_EVAL_LANG_TOKEN = CUTE_SOL ? 'CuTe DSL' : 'CUDA'
+const LEGACY_REINFORCE_LANG_TOKEN = CUTE_SOL ? 'CuTe DSL' : 'CUDA'
 const LEGACY_REPORT_LANG_TOKEN = 'CUDA-LLM FSR'
-const LEGACY_SOURCE_EXT = '.cu'
+const LEGACY_SOURCE_EXT = CUTE_SOL ? '.py' : '.cu'
 const LEGACY_RESULT_EXT = '.json'
-const LEGACY_PURE_LANG_PHRASE = 'pure CUDA/C++ only'
-const LEGACY_FENCE_TOKEN = 'cuda'
+const LEGACY_PURE_LANG_PHRASE = CUTE_SOL ? 'pure CuTe DSL Python only' : 'pure CUDA/C++ only'
+const LEGACY_FENCE_TOKEN = CUTE_SOL ? 'python' : 'cuda'
 // L3 deferred (R2): triton driver has no `feature_catalog` idiom today; the
 // driver path falls back to LEGACY_TRITON_FEATURE_FALLBACK below. Tightening
 // is filed as a P5e/P5f L3 follow-up per P5c plan §5.2 B2 + §8 R2.
@@ -629,7 +633,8 @@ if (IS_SOL) {
   const seed = await __solExecbenchEvaluate({
     label: 'sol-seed-baseline', phase: 'Setup',
     substrateDir: SOL_SUBSTRATE_DIR,
-    kernelSource: `${EXP_DIR}/host_seed.cu`,
+    kernelSource: `${EXP_DIR}/host_seed.${CUTE_SOL ? 'py' : 'cu'}`,
+    candidateLanguage: CUTE_SOL ? 'cute-dsl' : '',
     baselineSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
     contractEnv: `${SOL_SEED_DIR}/contract.env`,
     solutionOut: `${EXP_DIR}/host_seed.solution.json`,
@@ -882,7 +887,7 @@ ${JSON.stringify(selection, null, 2)}
 \`\`\`
 
 # Hard constraints
-1. Return complete ${USE_DRIVER ? `${DRIVER_LANG_FENCE} source` : 'CUDA/C++ source'}, not a patch.
+1. Return complete ${USE_DRIVER ? `${DRIVER_LANG_FENCE} source` : (CUTE_SOL ? 'CuTe DSL Python source' : 'CUDA/C++ source')}, not a patch.
 2. Do not call PyTorch or reference implementation from generated kernel.
 3. Preserve input/output contract and tolerances.
 4. Implement selected features concretely; if a feature is skipped, explain why.
@@ -924,6 +929,7 @@ Then append:
         substrateDir: SOL_SUBSTRATE_DIR,
         kernelSource: cudallmCandidatePath(iteration, sample),
         candidateSource: generation.candidate_code,
+        candidateLanguage: CUTE_SOL ? 'cute-dsl' : '',
         bindingOut: `${EXP_DIR}/bindings/cudallm_${iteration}_${sample}.json`,
         bindingWorkflow: WORKFLOW_NAME,
         candidateId: `iter_${iteration}_sample_${sample}`,

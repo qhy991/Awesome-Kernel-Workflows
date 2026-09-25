@@ -23,6 +23,7 @@ async function __solExecbenchEvaluate(ctx) {
     phase: ctx.phase || 'Evaluate',
     candidatePath: ctx.kernelSource,
     candidateSource: ctx.candidateSource,
+    candidateLanguage: ctx.candidateLanguage || '',
     baselineSolutionPath: ctx.baselineSolutionPath || '',
     substrateDir: ctx.substrateDir,
     contractEnv: ctx.contractEnv,
@@ -194,11 +195,12 @@ async function agentRetry(fn, opts) {
       if (result != null) return result
       // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
     } catch (e) {
-      // Policy refusals are terminal for this request. In particular, the
-      // provider's "safeguards flagged this message" response must never be
-      // sent again by the generic transient-failure retry path. The message
-      // check also protects direct/older Hosts that lack the typed code.
+      // Provider refusals and model-identity mismatches are terminal for this
+      // request. Repeating a rejected prompt or paying for more calls on the
+      // wrong model cannot repair either condition. The message check also
+      // protects direct/older Hosts that lack the typed refusal code.
       if (e && (e.code === 'KERSOR_PROVIDER_SAFEGUARD_REFUSAL'
+        || e.code === 'KERSOR_CLAUDE_MODEL_IDENTITY_MISMATCH'
         || /safeguards? flagged (?:this|the) message|provider safeguard refusal/i.test(String(e.message || '')))) {
         throw e
       }
@@ -286,7 +288,7 @@ function withTurnTimeout(promise, label) {
 // Method metadata (eligibility moved to manifest routing.accepts; backend axis
 // consumed by resolveBackend()). Kept fields are still referenced below.
 const WORKFLOW_META = {
-  method_supported_backends: ['cuda', 'triton', 'metax'],
+  method_supported_backends: ['cuda', 'triton', 'metax', 'cute-dsl'],
   default_backend: 'cuda',
   requires_capability: { bottleneck_classes: [], metrics: ['dram_pct', 'sm_pct'] },
 }
@@ -373,7 +375,7 @@ let KERNEL_PATH = args.kernel_path || ''
 const PROBLEM_DEFINITION = args.problem_definition || ''
 const PROBLEM_PATH = args.problem_path || ''
 const INPUT_MODE = KERNEL_PATH ? 'optimize_existing' : 'generate_then_optimize'
-const OP_DESC = args.op_description || 'CUDA kernel'
+const OP_DESC = args.op_description || (args.language === 'cute-dsl' ? 'CuTe DSL kernel' : 'CUDA kernel')
 const ITERATIONS = args.iterations || 2
 const BREADTH = args.breadth || 3
 const SAMPLES_PER_PLAN = args.samples_per_plan || 2
@@ -395,6 +397,10 @@ if (!KERNEL_PATH && !PROBLEM_DEFINITION && !PROBLEM_PATH) {
 }
 
 const LANGUAGE = args.language || 'cuda'
+const CUTE_SOL = LANGUAGE === 'cute-dsl' && args.integration_pattern === 'sol_execbench_solution'
+if (CUTE_SOL && !KERNEL_PATH) {
+  throw new Error('AccelOpt CuTe SOL requires an inherited CuTe kernel_path; CUDA seed generation is not applicable')
+}
 const TARGET_GPU = args.target_gpu || 'unknown GPU'
 const SEED_CANDIDATES = args.seed_candidates || 3
 let generatedKernelPath = ''
@@ -469,6 +475,15 @@ let IDIOMS = {
   unsupported_methods: [],
 }
 
+if (CUTE_SOL) {
+  IDIOMS = { ...IDIOMS, lang_fence: 'python',
+    impl_requirements: 'Output one complete Python module with from cutlass import cute, @cute.jit kernels, and module-level run(...) matching the reference. Every workload must execute CuTe; no CUDA C++, Triton, pybind, torch.matmul, or placeholder.',
+    plan_angles: ['CuTe tile and MMA decomposition', 'coalesced CuTe tensor views', 'shared-memory staging and pipeline depth', 'launch-grid and warp specialization'],
+    read_metric_guide: 'Only complete official Host workload latency is measured in this CuTe SOL mode; NCU counters are unavailable. Do not invent stall, occupancy, SM, or DRAM percentages.',
+    source_ext: '.py',
+  }
+}
+
 // State
 let experienceMemory = []       // Full pool of learned patterns (grows unbounded)
 let lastIterNewPatterns = []    // Patterns discovered in the most recent Learn phase
@@ -539,6 +554,65 @@ function legacyIterProfile(iter, candidateBeam, bestResult, bestLatency, baselin
 
 Previous profile data for reference:
 ${baselineNcuProfile}`
+}
+
+function cuteIterEvidence(iter, candidateBeam, bestLatency, baselineLatency, priorEvidence) {
+  return `
+## Host full-workload latency (after iteration ${iter + 1})
+- Best source: ${candidateBeam[0].planTitle}
+- Latency: ${bestLatency}ms (${(baselineLatency / bestLatency).toFixed(2)}x vs the inherited CuTe seed)
+- Profiler counters: unavailable; no NCU or IKET attribution
+
+Prior measured evidence:
+${priorEvidence}`
+}
+
+function cuteEvaluatePrompt(variant, bestLatency) {
+  return `Evaluate this CuTe DSL Python module as a source-level hypothesis only.
+
+# Candidate: ${variant.id}; plan: ${variant.plan.title}
+# Current Host-measured latency: ${bestLatency}ms
+# Candidate source:
+\`\`\`python
+${variant.code.substring(0, 4000)}
+\`\`\`
+
+Check likely correctness, CuTe syntax, entrypoint run(...), and the intended transformation. Do not claim compilation, correctness, latency, speedup, NCU counters, or IKET counters from this inspection. The separate official Host evaluation decides those results. Return a qualitative assessment with estimated_speedup=1 and estimated_latency_ms omitted.`
+}
+
+function cuteLearnPrompt(pair) {
+  return `Analyze this measured slow-fast CuTe DSL pair for one reusable source-level optimization rule.
+
+# Slow source:
+\`\`\`python
+${pair.slow.substring(0, 2500)}
+\`\`\`
+# Fast source:
+\`\`\`python
+${pair.fast.substring(0, 2500)}
+\`\`\`
+# Official Host full-workload speedup: ${pair.speedup.toFixed(2)}x
+# Plan: ${pair.plan_title}
+
+The available evidence is the two sources and their Host latency. No profiler counters were collected. State a source-structure trigger and a rule. Do not infer a hardware bottleneck or invent NCU or IKET evidence. Return {title,source_trigger,rule,original_snippet,optimized_snippet,why,is_antipattern}.`
+}
+
+function cuteFinalReportPrompt(op, baselineLatency, bestLatency, beam, experience, evidence, source) {
+  return `Write a concise report for the CuTe DSL Host-latency adaptation of AccelOpt.
+
+Operation: ${op}
+Inherited CuTe seed latency: ${baselineLatency}ms
+Best Host full-workload latency: ${bestLatency}ms
+Measured speedup over CuTe seed: ${(baselineLatency / bestLatency).toFixed(2)}x
+Candidate beam: ${beam.length}; source-level experience rules: ${experience.length}
+Evidence: ${evidence}
+
+Best CuTe source:
+\`\`\`python
+${source.substring(0, 3000)}
+\`\`\`
+
+Describe the source changes and measured outcomes. Explicitly say no NCU or IKET counters were collected. Do not attribute the speedup to an unmeasured hardware bottleneck.`
 }
 
 function legacyFinalReportPrompt(OP_DESC, opType, baselineLatency, bestLatency, ITERATIONS, candidateBeam, experienceMemory, baselineNcuProfile, bestKernelCode) {
@@ -625,12 +699,12 @@ Then append (pair "${pair.plan_title}", a ${pair.type} example at ${pair.speedup
 }
 
 function legacySetupReadPrompt() {
-  return `Read the CUDA kernel file at: ${KERNEL_PATH}
+  return `Read the ${CUTE_SOL ? 'CuTe DSL Python' : 'CUDA'} kernel file at: ${KERNEL_PATH}
 
 Analyze it and return a JSON object with:
 - kernel_code: the full source code
 - op_type: operation type (e.g., "quantized_gemm", "attention", "rmsnorm", "softmax")
-- key_functions: list of key function names (especially __global__ kernels)
+- key_functions: list of key function names (especially ${CUTE_SOL ? '@cute.jit kernels and module-level run' : '__global__ kernels'})
 - current_approach: brief description of the implementation strategy
 - launch_config: if visible, the grid/block dimensions used
 - shared_memory_usage: whether and how shared memory is used
@@ -807,9 +881,9 @@ function buildExperienceSection(experienceMemory, lastIterNewPatterns, maxInProm
 }
 
 // Helper: format candidate beam info for planner prompt
-function buildBeamSection(candidateBeam, fence) {
+function buildBeamSection(candidateBeam, fence, evidenceLabel = 'NCU') {
   if (candidateBeam.length <= 1) return ''
-  return `\n\n# Candidate Beam (top-${candidateBeam.length} kernels from previous iterations)\n${candidateBeam.map((c, i) => `## Candidate ${i + 1}: "${c.planTitle}" — ${c.speedup.toFixed(2)}x, ${c.latency.toFixed(3)}ms\nNCU: ${c.ncuSummary || 'N/A'}\n\`\`\`${fence}\n${c.code.substring(0, 1500)}\n\`\`\``).join('\n\n')}`
+  return `\n\n# Candidate Beam (top-${candidateBeam.length} kernels from previous iterations)\n${candidateBeam.map((c, i) => `## Candidate ${i + 1}: "${c.planTitle}" — ${c.speedup.toFixed(2)}x, ${c.latency.toFixed(3)}ms\n${evidenceLabel}: ${c.ncuSummary || 'N/A'}\n\`\`\`${fence}\n${c.code.substring(0, 1500)}\n\`\`\``).join('\n\n')}`
 }
 
 // =============================================================================
@@ -1005,6 +1079,8 @@ if (INTEGRATION_DECISION.method === 'derive_adapter') {
 const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'standalone'
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
 const IS_SOL = INTEGRATION_DECISION.method === 'sol_execbench_solution'
+if (CUTE_SOL) PROFILING_DECISION = { method: 'static', confidence: 'hypothesized',
+  normalizer: null, profiler_name: null, rationale: 'CuTe SOL Host measures latency, not profiler counters' }
 // The embedded operator file we swap in place is the project-referenced KERNEL_PATH.
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
@@ -1090,6 +1166,9 @@ if (USE_DRIVER_STANDALONE) {
     _metrics: embMetrics,
     _coverage: [],
   }
+} else if (CUTE_SOL) {
+  ncuSetup = { latency_ms: null, bottleneck_diagnosis: 'Host latency only; profiler counters unavailable',
+    profile_summary: 'CuTe SOL mode: no NCU counters measured', profile_evidence: [], _metrics: {} }
 } else {
   ncuSetup = await agentRetry(() => agent(legacyNcuBaselinePrompt(baselineKernel), { model: MODEL.profile,
     label: 'ncu-baseline',
@@ -1099,11 +1178,13 @@ if (USE_DRIVER_STANDALONE) {
 }
 
 if (IS_SOL) {
+  if (!SOL_AVAILABLE) throw new Error('AccelOpt Sol requires complete Host evaluator configuration')
   if (typeof evaluate !== 'function') throw new Error('AccelOpt Sol requires Host evaluation')
   const seed = await __solExecbenchEvaluate({
     label: 'sol-seed-baseline', phase: 'Setup',
     substrateDir: SOL_SUBSTRATE_DIR,
-    kernelSource: `${EXP_DIR}/host_seed.cu`,
+    kernelSource: `${EXP_DIR}/host_seed.${CUTE_SOL ? 'py' : 'cu'}`,
+    candidateLanguage: CUTE_SOL ? 'cute-dsl' : '',
     baselineSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
     contractEnv: `${SOL_SEED_DIR}/contract.env`,
     solutionOut: `${EXP_DIR}/host_seed.solution.json`,
@@ -1159,7 +1240,9 @@ ${ncuSetup.bottleneck_diagnosis}
 ${(ncuSetup.ncu_rule_suggestions || []).map(s => `- ${s}`).join('\n') || 'N/A'}
 `
 }
-if (USE_DRIVER || IS_EMBEDDED) {
+if (CUTE_SOL) {
+  baselineNcuProfile = `Host full-workload seed latency: ${baselineLatency}ms. Profiler counters unavailable; no NCU or IKET attribution.`
+} else if (USE_DRIVER || IS_EMBEDDED) {
   const m = ncuSetup._metrics || {}
   const lines = []
   if (m.latency_ms != null) lines.push(`- Latency: ${m.latency_ms} ms`)
@@ -1198,11 +1281,22 @@ for (let iter = 0; iter < ITERATIONS; iter++) {
   const experienceSection = buildExperienceSection(experienceMemory, lastIterNewPatterns, MAX_EXPERIENCE_IN_PROMPT)
 
   // Candidate beam context for planner
-  const beamSection = buildBeamSection(candidateBeam, IDIOMS.lang_fence)
+  const beamSection = buildBeamSection(candidateBeam, IDIOMS.lang_fence,
+    CUTE_SOL ? 'Host evidence' : 'NCU')
 
   const planAngles = IDIOMS.plan_angles
 
-  const planPromptBase = USE_DRIVER
+  const planPromptBase = CUTE_SOL
+    ? `You are a CuTe DSL optimization expert. The Host measured the complete official workload, but no profiler counters are available. Propose one concrete source-level optimization from the correct inherited CuTe module.
+
+# Operation: ${OP_DESC} (${opType})
+# Current CuTe source:
+${bestKernelCode.substring(0, 4000)}
+# Measured latency: ${bestLatency} ms
+${beamSection}
+${experienceSection}
+# Requirements: preserve module-level run(...), execute CuTe kernels for every workload, cite only observed latency and source structure, and do not invent NCU or IKET metrics. Return one structural optimization plan.`
+    : USE_DRIVER
     ? `You are a ${BACKEND} kernel optimization expert. You have REAL ${IDIOMS.profiler_name || 'profiler'} profiling data for this kernel. Use it to generate ONE specific, evidence-based optimization plan.
 
 # Operation: ${OP_DESC} (${opType})
@@ -1260,7 +1354,20 @@ ${IDIOMS.read_metric_guide}
 5. Estimate expected speedup based on the NCU data (e.g., "NCU reports sectors/request=8.2; fixing to 4.0 should cut load time ~2x on those lines")
 6. If candidate beam shows multiple approaches, consider COMBINING strengths from different candidates`
 
-  const planSchema = USE_DRIVER
+  const planSchema = CUTE_SOL
+    ? {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          focus_area: { type: 'string' },
+          source_evidence: { type: 'string' },
+          plan: { type: 'string' },
+          expected_impact: { type: 'string' },
+          risk: { type: 'string' },
+        },
+        required: ['title', 'source_evidence', 'plan', 'expected_impact'],
+      }
+    : USE_DRIVER
     ? {
         type: 'object',
         properties: {
@@ -1308,8 +1415,8 @@ Then append (this is iteration ${iter}, planner ${i}):
   )
 
   const validPlans = plans.filter(Boolean)
-  const planEvidence = (p) => (p.profile_evidence ?? p.ncu_evidence)
-  log(`Plans: ${validPlans.map(p => `${p.title} (evidence: ${(p.ncu_evidence || '').substring(0, 50)}...)`).join(' | ')}`)
+  const planEvidence = (p) => (p.source_evidence ?? p.profile_evidence ?? p.ncu_evidence)
+  log(`Plans: ${validPlans.map(p => `${p.title} (evidence: ${String(planEvidence(p) || '').substring(0, 50)}...)`).join(' | ')}`)
 
   // ===========================================================================
   // Phase 3: Execute — Implement each plan
@@ -1320,7 +1427,14 @@ Then append (this is iteration ${iter}, planner ${i}):
     validPlans,
     (plan) => parallel(
       Array.from({length: SAMPLES_PER_PLAN}, (_, sampleIdx) => () =>
-        agentRetry(() => agent(USE_DRIVER
+        agentRetry(() => agent(CUTE_SOL
+          ? `Implement the AccelOpt plan as a complete CuTe DSL Python module.
+# Correct inherited CuTe source:
+${bestKernelCode.substring(0, 4000)}
+# Plan: ${plan.title}: ${plan.plan}
+${IDIOMS.impl_requirements}
+Keep the exact run(...) signature and full-workload semantics. Return the entire candidate source as code; no patch or estimated speedup.`
+          : USE_DRIVER
           ? `You are an expert ${BACKEND} kernel developer. Implement this profiler-informed optimization plan as a complete, compilable kernel.
 
 # Original Kernel:
@@ -1385,7 +1499,19 @@ Then append (iteration ${iter}, plan "${plan.title}", sample ${sampleIdx}):
   // ===========================================================================
   phase('Evaluate')
 
-  const evalSchema = USE_DRIVER
+  const evalSchema = CUTE_SOL
+    ? {
+        type: 'object',
+        properties: {
+          is_correct: { type: 'boolean' },
+          is_compilable: { type: 'boolean' },
+          estimated_speedup: { type: 'number' },
+          correctness_issues: { type: 'array', items: { type: 'string' } },
+          performance_analysis: { type: 'string' },
+        },
+        required: ['is_correct', 'is_compilable', 'estimated_speedup'],
+      }
+    : USE_DRIVER
     ? {
         type: 'object',
         properties: {
@@ -1421,7 +1547,9 @@ Then append (iteration ${iter}, plan "${plan.title}", sample ${sampleIdx}):
 
   const evaluations = await parallel(
     allVariants.map((variant, varIdx) => () =>
-      agentRetry(() => agent(USE_DRIVER
+      agentRetry(() => agent(CUTE_SOL
+        ? cuteEvaluatePrompt(variant, bestLatency)
+        : USE_DRIVER
         ? `You are a ${BACKEND} kernel evaluator. Evaluate this optimized kernel variant.
 
 # Variant: ${variant.id} — Plan: "${variant.plan.title}"
@@ -1530,14 +1658,23 @@ Then append (iteration ${iter}, variant ${variant.id}; status="done" if correct 
   // isolated candidate rather than mutating the host project, so it can run
   // concurrently.
   if (IS_SOL && SOL_AVAILABLE) {
+    // Static agent judgments are authoring hints. They must never become beam
+    // entries if the Host returns no complete measurement for a candidate.
+    for (const e of evaluations.filter(Boolean)) {
+      e.is_compilable = false
+      e.is_correct = false
+      e.estimated_speedup = 0
+      e.estimated_latency_ms = null
+    }
     const measured = await parallel(allVariants.map((variant, i) => async () => {
       if (!evaluations[i] || !(variant.code || '').trim()) return null
       const vid = String(variant.id).replace(/[^A-Za-z0-9_]/g, '_')
       const r = await __solExecbenchEvaluate({
         label: `sol-eval-${vid}`, phase: 'Evaluate',
         substrateDir: SOL_SUBSTRATE_DIR,
-        kernelSource: `${EXP_DIR}/accelopt_${vid}.cu`,
+        kernelSource: `${EXP_DIR}/accelopt_${vid}.${CUTE_SOL ? 'py' : 'cu'}`,
         candidateSource: variant.code,
+        candidateLanguage: CUTE_SOL ? 'cute-dsl' : '',
         bindingOut: `${EXP_DIR}/bindings/accelopt_${vid}.json`,
         bindingWorkflow: WORKFLOW_NAME,
         candidateId: String(variant.id),
@@ -1632,8 +1769,10 @@ Then append (iteration ${iter}, variant ${variant.id}; status="done" if correct 
 
     // Update NCU profile for next iteration
     const bestResult = dedupedResults.find(r => r.variant.code === candidateBeam[0].code)
-    if (bestResult && bestResult.evaluation.ncu_comparison) {
-      baselineNcuProfile = USE_DRIVER
+    if (CUTE_SOL || (bestResult && bestResult.evaluation.ncu_comparison)) {
+      baselineNcuProfile = CUTE_SOL
+        ? cuteIterEvidence(iter, candidateBeam, bestLatency, baselineLatency, baselineNcuProfile)
+        : USE_DRIVER
         ? `
 ## Profile Results (After Iteration ${iter + 1}, class=${bottleneckClass} — Best: "${candidateBeam[0].planTitle}")
 - Latency: ${bestLatency}ms (${(baselineLatency / bestLatency).toFixed(2)}x speedup vs original)
@@ -1709,7 +1848,21 @@ ${baselineNcuProfile}`
   }
 
   if (pairsToSummarize.length > 0) {
-    const learnSchema = USE_DRIVER
+    const learnSchema = CUTE_SOL
+      ? {
+          type: 'object',
+          properties: {
+            title: { type: 'string' },
+            source_trigger: { type: 'string' },
+            rule: { type: 'string' },
+            original_snippet: { type: 'string' },
+            optimized_snippet: { type: 'string' },
+            why: { type: 'string' },
+            is_antipattern: { type: 'boolean' },
+          },
+          required: ['title', 'source_trigger', 'rule', 'original_snippet', 'optimized_snippet', 'why'],
+        }
+      : USE_DRIVER
       ? {
           type: 'object',
           properties: {
@@ -1739,7 +1892,9 @@ ${baselineNcuProfile}`
         }
     const summaries = await parallel(
       pairsToSummarize.map((pair) => () =>
-        agentRetry(() => agent(USE_DRIVER
+        agentRetry(() => agent(CUTE_SOL
+          ? cuteLearnPrompt(pair)
+          : USE_DRIVER
           ? `You are a ${BACKEND} optimization expert with profiler expertise. Analyze this slow-fast kernel pair and extract a GENERAL, REUSABLE optimization insight.
 
 # Slow Kernel:
@@ -1799,7 +1954,9 @@ Then append (iteration ${iter}, pair "${pair.plan_title}", a ${pair.type} exampl
     // Format experience entries aligned with AccelOpt's summarizer output format
     lastIterNewPatterns = []
     for (const s of summaries.filter(Boolean)) {
-      const formatted = USE_DRIVER
+      const formatted = CUTE_SOL
+        ? `**${s.title}**\nSource trigger: ${s.source_trigger}\n${s.rule}\nOriginal CuTe source:\n\`\`\`python\n${s.original_snippet}\n\`\`\`\nOptimized CuTe source:\n\`\`\`python\n${s.optimized_snippet}\n\`\`\`\nWhy: ${s.why}\nEvidence: official Host latency; profiler counters unavailable`
+        : USE_DRIVER
         ? `**${s.title}**\nProfiler trigger: ${s.profile_trigger ?? s.ncu_trigger}\n${s.rule}\nOriginal code:\n\`\`\`${IDIOMS.lang_fence}\n${s.original_snippet}\n\`\`\`\nOptimized code:\n\`\`\`${IDIOMS.lang_fence}\n${s.optimized_snippet}\n\`\`\`\nWhy: ${s.why}`
         : `**${s.title}**\nNCU trigger: ${s.ncu_trigger}\n${s.rule}\nOriginal code:\n\`\`\`cuda\n${s.original_snippet}\n\`\`\`\nOptimized code:\n\`\`\`cuda\n${s.optimized_snippet}\n\`\`\`\nWhy: ${s.why}`
       experienceMemory.push(formatted)
@@ -1829,7 +1986,10 @@ Then append (iteration ${iter}, pair "${pair.plan_title}", a ${pair.type} exampl
 // =============================================================================
 // Final Report
 // =============================================================================
-const finalReport = await agentRetry(() => agent(USE_DRIVER
+const finalReport = await agentRetry(() => agent(CUTE_SOL
+  ? cuteFinalReportPrompt(OP_DESC, baselineLatency, bestLatency, candidateBeam,
+    experienceMemory, baselineNcuProfile, bestKernelCode)
+  : USE_DRIVER
   ? `Write a concise technical optimization report.
 
 # AccelOpt (${BACKEND} backend, profiler=${IDIOMS.profiler_name || 'none'})
@@ -1926,6 +2086,10 @@ return {
   experience_patterns_count: experienceMemory.length,
   experience_patterns: experienceMemory,
   best_kernel_code: IS_SOL ? (solBestHostCandidate?.code || '') : bestKernelCode,
+  ...(CUTE_SOL ? {
+    evidence_mode: 'host_full_workload_latency',
+    profiler_counters_available: false,
+  } : {}),
   ncu_baseline_profile: baselineNcuProfile,
   report: finalReport,
   ...(USE_DRIVER ? {

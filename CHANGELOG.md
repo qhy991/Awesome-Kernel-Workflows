@@ -10,11 +10,21 @@ for the versioning policy.
 
 ### Changed
 
+- AccelOpt's CuTe SOL adaptation now labels Host latency as its only measured feedback throughout planning, evaluation, learning, and reporting. It rejects an agent's static estimate when the Host has no candidate result. The manifest records that this adaptation does not collect NCU counters; the CUDA profiler path remains available when supplied. (`AccelOpt/accelopt-kernel-optimization.js`, `AccelOpt/manifest.yaml`, `_meta/tools/test/accelopt-host-sol.test.js`)
+
+- CUDAAgent has an optional CuTe DSL SOL Host path: its iterative candidate turns return complete Python CuTe modules, and the Host checks the full official workload with explicit language and source binding. The existing CUDA path is unchanged. (`CUDAAgent/cuda-agent-kernel-optimization.js`, `CUDAAgent/manifest.yaml`, `_meta/tools/test/cudaagent-host-binding.test.js`)
+
+- CUDALLM-FSR accepts CuTe DSL in the SOL Host path while keeping feature selection and measured reinforcement: Python candidates and seed baselines are evaluated with an explicit CuTe language contract and without CUDA pybind requirements. (`CUDALLM/cudallm-fsr-kernel-generation.js`, `CUDALLM/manifest.yaml`, `_meta/tools/test/cudallm-host-sol.test.js`)
+
+- KernelFoundry accepts CuTe DSL Python source in the SOL Host path, preserving its MAP-Elites search while routing `.py` candidates through the Host CuTe full-workload evaluator. CUDA and standalone paths remain unchanged. (`KernelFoundry/kernelfoundry-kernel-optimization.js`, `KernelFoundry/manifest.yaml`)
+
 - KSearch exposes the best Host-bound, correct CuTe port as a separate optional authoring artifact even when it is slower than the inherited CUDA incumbent. The port is never an implicit operator promotion; a successor CuTe search can refine it while the CUDA floor remains authoritative. (`KSearch/ksearch-kernel-optimization.js`, `KSearch/manifest.yaml`, `_meta/tools/test/ksearch-host-sol.test.js`)
 
 - KSearch CuTe DSL candidates use the Host SOL evaluator with complete task context and package Python source through the supported PyTorch SolutionSpec transport. Missing Host evaluation is rejected. (`KSearch/ksearch-kernel-optimization.js`, `KSearch/README.md`, `_substrate/integration/tests/test_pack_sol_candidate.py`)
 
 ### Fixed
+
+- Stop `agentRetry` immediately on `KERSOR_CLAUDE_MODEL_IDENTITY_MISMATCH`. Repeating a turn on the wrong observed model cannot repair a model-ablation result and would spend provider budget on invalid evidence. The canonical helper is refreshed in all workflows. (`_meta/scaffolding/agent-retry.js`, `scripts/add-agent-retry-scaffolding.js`, `_meta/tools/test/agent-retry-safeguard.test.js`)
 
 - Stop generic `agentRetry` on a provider safeguard refusal instead of resubmitting the same generation request. The 008 KSearch run retried a refused Generate branch. The shared helper is refreshed in every workflow, with a regression for typed and legacy refusal errors. (`_meta/scaffolding/agent-retry.js`, `scripts/add-agent-retry-scaffolding.js`, `_meta/tools/test/agent-retry-safeguard.test.js`)
 

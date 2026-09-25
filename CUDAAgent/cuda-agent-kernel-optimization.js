@@ -240,11 +240,12 @@ async function agentRetry(fn, opts) {
       if (result != null) return result
       // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
     } catch (e) {
-      // Policy refusals are terminal for this request. In particular, the
-      // provider's "safeguards flagged this message" response must never be
-      // sent again by the generic transient-failure retry path. The message
-      // check also protects direct/older Hosts that lack the typed code.
+      // Provider refusals and model-identity mismatches are terminal for this
+      // request. Repeating a rejected prompt or paying for more calls on the
+      // wrong model cannot repair either condition. The message check also
+      // protects direct/older Hosts that lack the typed refusal code.
       if (e && (e.code === 'KERSOR_PROVIDER_SAFEGUARD_REFUSAL'
+        || e.code === 'KERSOR_CLAUDE_MODEL_IDENTITY_MISMATCH'
         || /safeguards? flagged (?:this|the) message|provider safeguard refusal/i.test(String(e.message || '')))) {
         throw e
       }
@@ -507,6 +508,7 @@ const DEADLINE_EPOCH = Number(args.deadline_epoch || 0)
 const CHECKPOINT_PATH = `${EXP_DIR}/checkpoint.json`
 const ADAPTATION_SCOPE = 'inference_time_adaptation'
 const LANGUAGE = args.language || 'cuda'
+const CUTE_SOL = LANGUAGE === 'cute-dsl' && args.integration_pattern === 'sol_execbench_solution'
 const TARGET_GPU = args.target_gpu || 'unknown GPU'
 const SEED_CANDIDATES = args.seed_candidates || 3
 // Optional ncu binary/command. native_profiler needs a real profiler to run; when
@@ -576,7 +578,7 @@ let initialGenerationResult = null
 let history = []  // [{turn, action, outcome, speedup, error}]
 
 function bestKernelPath() {
-  return `${EXP_DIR}/best_kernel.cu`
+  return `${EXP_DIR}/best_kernel.${CUTE_SOL ? 'py' : 'cu'}`
 }
 
 // =============================================================================
@@ -736,7 +738,8 @@ if (IS_SOL) {
   const seed = await __solExecbenchEvaluate({
     label: 'sol-seed-baseline', phase: 'Setup',
     substrateDir: SOL_SUBSTRATE_DIR,
-    kernelSource: `${EXP_DIR}/host_seed.cu`,
+    kernelSource: `${EXP_DIR}/host_seed.${CUTE_SOL ? 'py' : 'cu'}`,
+    candidateLanguage: CUTE_SOL ? 'cute-dsl' : '',
     baselineSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
     contractEnv: `${EXP_DIR}/contract.env`,
     solutionOut: `${EXP_DIR}/host_seed.solution.json`,
@@ -921,7 +924,11 @@ for (currentAttempt = 0; currentAttempt < MAX_TURNS && !targetMet; currentAttemp
 
   let implResult
   try {
-  implResult = await withTurnTimeout(agentRetry(() => agent(`You are a CUDA kernel developer. Implement an optimized CUDA kernel for this PyTorch model.
+  implResult = await withTurnTimeout(agentRetry(() => agent(CUTE_SOL ? `You are adapting CUDAAgent's iterative plan-implement-verify loop to CuTe DSL. Implement one complete Python module from the inherited correct CuTe seed.
+# Operation: ${OP_DESC}
+# Optimization strategy: ${profileResult.optimization_strategy}
+# Current history: ${historyContext}
+# Requirements: use from cutlass import cute and @cute.jit, expose module-level run(...) with the exact reference signature, execute CuTe kernels for every workload, and return the full source in kernel_code. Do not use CUDA C++, Triton, pybind, torch.matmul, or a reference fallback. Return binding_code and model_new_code as empty strings; the Host packages and benchmarks the Python module. Do not invent performance numbers.` : `You are a CUDA kernel developer. Implement an optimized CUDA kernel for this PyTorch model.
 
 # Model to Optimize:
 \`\`\`python
@@ -1075,13 +1082,14 @@ Parse correctness (pass/fail) and latency STRICTLY from the test/benchmark comma
   let directSolResult = null
   if (IS_SOL) {
     const variantName = `sol_t${currentAttempt}`.replace(/[^A-Za-z0-9_]/g, '_')
-    const candidatePath = `${EXP_DIR}/kernels/${variantName}.cu`
+    const candidatePath = `${EXP_DIR}/kernels/${variantName}.${CUTE_SOL ? 'py' : 'cu'}`
     directSolResult = await __solExecbenchEvaluate({
       label: `sol-eval-${currentAttempt}`,
       phase: 'Verify',
       substrateDir: SOL_SUBSTRATE_DIR,
       kernelSource: candidatePath,
       candidateSource: [implResult.kernel_code, implResult.binding_code].filter(Boolean).join('\n'),
+      candidateLanguage: CUTE_SOL ? 'cute-dsl' : '',
       contractEnv: `${EXP_DIR}/contract.env`,
       solutionOut: `${EXP_DIR}/${variantName}.solution.json`,
       benchOut: `${EXP_DIR}/${variantName}.bench.jsonl`,
@@ -1355,7 +1363,7 @@ Then append, using the values you just measured (status="done" if correctness pa
     checkpoint: checkpointPayload,
     bestKernelPath: materializedBestPath,
     bestKernelCode,
-    bestLanguage: 'cuda',
+    bestLanguage: CUTE_SOL ? 'python' : 'cuda',
     materializeBest: bestChanged,
     label: `checkpoint-${currentAttempt}`,
     phase: 'Refine',

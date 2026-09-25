@@ -4,7 +4,7 @@ entrypoint: accelopt-kernel-optimization.js
 backend:
   portability: vendor_locked
   matrix_eligible: partial
-  intrinsic_to: NVIDIA NCU
+  intrinsic_to: NVIDIA NCU on the CUDA profiler path; Host latency on CuTe SOL
   method_supported_backends:
   - cuda
   - triton
@@ -48,6 +48,7 @@ routing:
   requires_harness: false
   languages:
   - cuda
+  - cute-dsl # SOL Host latency-guided adaptation; no NCU counter claim
   - metax
   method_category: iterative_self_improving
   role: optimizer
@@ -56,11 +57,14 @@ routing:
   - - kernel_path
     - problem_definition
     - problem_path
-  fidelity_boundary: faithful_cuda_ncu_adaptation
-  requires_ncu: true
+  # The CUDA path uses NCU when a runnable profiler contract is supplied. The
+  # CuTe SOL path uses only full-workload Host latency and source structure.
+  fidelity_boundary: idea_preserving_cute_host_latency_adaptation
+  requires_ncu: false
   optimization_phases:
   - backend_native
   integration_patterns:
   - standalone
   - embedded_dispatch
   - embedded_inplace
+  - sol_execbench_solution

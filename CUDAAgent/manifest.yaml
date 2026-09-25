@@ -64,6 +64,7 @@ routing:
   requires_harness: false
   languages:
   - cuda
+  - cute-dsl # SOL Host path only
   - metal
   - python_reference
   method_category: iterative_self_improving

@@ -378,6 +378,7 @@ routing:
   requires_harness: true
   languages:
   - cuda
+  - cute-dsl # SOL Host path only
   - ascendc
   - python_reference
   - metax

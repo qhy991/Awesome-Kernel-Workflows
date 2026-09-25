@@ -72,3 +72,28 @@ test('CUDALLM-FSR Sol refuses a correct unbound Host candidate', async () => {
   await assert.rejects(() => runWorkflow(source, args, agents, evals(measured(0.015, false))),
     /artifact binding missing/)
 })
+
+test('CUDALLM-FSR CuTe SOL sends Python source with explicit Host language', async () => {
+  const cuteArgs = {...args, language: 'cute-dsl', reference_code_path: '/tmp/seed/kernel.py'}
+  const cuteAgents = {...agents,
+    'generate-kernel-0-0': {candidate_code: 'from cutlass import cute\n@cute.jit\ndef kernel(): pass\ndef run(*args): pass',
+      implemented_feature_ids: ['tile']}}
+  const candidate = {...measured(0.015),
+    candidate_path: '/tmp/cudallm-sol/cudallm_iter_0_sample_0.py'}
+  const evaluations = {
+    'sol-seed-baseline': request => {
+      assert.equal(request.candidatePath, '/tmp/cudallm-sol/host_seed.py')
+      assert.equal(request.candidateLanguage, 'cute-dsl')
+      return seed
+    },
+    'sol-eval-0-0': request => {
+      assert.equal(request.candidatePath, candidate.candidate_path)
+      assert.equal(request.candidateLanguage, 'cute-dsl')
+      assert.match(request.candidateSource, /from cutlass import cute/)
+      return candidate
+    },
+  }
+  const {result} = await runWorkflow(source, cuteArgs, cuteAgents, evaluations)
+  assert.equal(result.generated_kernel_path, candidate.candidate_path)
+  assert.equal(result.artifact_binding_required, true)
+})

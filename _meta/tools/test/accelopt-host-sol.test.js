@@ -6,6 +6,7 @@ const path = require('node:path')
 const runWorkflow = require('../lib/run-workflow.js')
 
 const source = fs.readFileSync(path.resolve(__dirname, '../../..', 'AccelOpt/accelopt-kernel-optimization.js'), 'utf8')
+const manifest = fs.readFileSync(path.resolve(__dirname, '../../..', 'AccelOpt/manifest.yaml'), 'utf8')
 const args = {
   kernel_path: '/tmp/accelopt-sol/seed.cu', problem_path: '/tmp/task',
   exp_dir: '/tmp/accelopt-sol', iterations: 1, breadth: 1, samples_per_plan: 1,
@@ -66,4 +67,73 @@ test('AccelOpt Sol retains the supplied seed on a slower Host candidate', async 
 test('AccelOpt Sol refuses a correct measurement without source binding', async () => {
   await assert.rejects(() => runWorkflow(source, args, agents, evals(measured(0.015, false))),
     /artifact binding missing/)
+})
+
+test('AccelOpt CuTe SOL uses Host latency and explicit Python CuTe candidate transport', async () => {
+  assert.match(manifest, /fidelity_boundary: idea_preserving_cute_host_latency_adaptation/)
+  assert.match(manifest, /requires_ncu: false/)
+  assert.match(manifest, /  - sol_execbench_solution/)
+  const cuteArgs = {...args, language: 'cute-dsl', kernel_path: '/tmp/accelopt-sol/kernel.py'}
+  const cuteAgents = {...agents,
+    'read-baseline': {kernel_code: 'from cutlass import cute\ndef run(*args): pass',
+      op_type: 'gemm', key_functions: ['run'], current_approach: 'CuTe seed'},
+    'plan-0-0': {title: 'tile', source_evidence: 'source structure only',
+      plan: 'change CuTe tile', expected_impact: 'lower Host latency'},
+    'impl-0-tile-v0': {code: 'from cutlass import cute\n@cute.jit\ndef kernel(): pass\ndef run(*args): pass'},
+  }
+  const candidate = {...measured(0.015),
+    candidate_path: '/tmp/accelopt-sol/accelopt_plan_0_sample_0.py'}
+  const evaluations = {
+    'sol-seed-baseline': request => {
+      assert.equal(request.candidatePath, '/tmp/accelopt-sol/host_seed.py')
+      assert.equal(request.candidateLanguage, 'cute-dsl')
+      return seed
+    },
+    'sol-eval-plan_0_sample_0': request => {
+      assert.equal(request.candidatePath, candidate.candidate_path)
+      assert.equal(request.candidateLanguage, 'cute-dsl')
+      assert.match(request.candidateSource, /from cutlass import cute/)
+      return candidate
+    },
+  }
+  const {result, calls} = await runWorkflow(source, cuteArgs, cuteAgents, evaluations)
+  assert.equal(result.generated_kernel_path, candidate.candidate_path)
+  assert.equal(result.artifact_binding_required, true)
+  assert.match(result.ncu_baseline_profile, /Host full-workload seed latency/)
+  assert.doesNotMatch(result.ncu_baseline_profile, /SM Throughput|Top Stall Reason/)
+  const evaluate = calls.find(call => call.label === 'eval-plan_0_sample_0')
+  const learn = calls.find(call => call.label?.startsWith('learn-'))
+  const report = calls.find(call => call.label === 'final-report')
+  assert.match(evaluate.prompt, /CuTe DSL Python module/)
+  assert.doesNotMatch(evaluate.prompt, /NCU Evidence|NCU Metric Comparison/)
+  assert.match(learn.prompt, /No profiler counters were collected/)
+  assert.doesNotMatch(learn.prompt, /NCU Evidence|NCU Metric Comparison/)
+  assert.match(report.prompt, /CuTe DSL Host-latency adaptation/)
+  assert.doesNotMatch(report.prompt, /NCU-driven optimization journey/)
+  assert.ok(result.experience_patterns.every(pattern => !pattern.includes('NCU trigger:')))
+  assert.equal(result.evidence_mode, 'host_full_workload_latency')
+  assert.equal(result.profiler_counters_available, false)
+})
+
+test('AccelOpt CuTe SOL cannot promote a static estimate when Host returns no result', async () => {
+  const cuteArgs = {...args, language: 'cute-dsl', kernel_path: '/tmp/accelopt-sol/kernel.py'}
+  const agentsWithOptimisticEstimate = {...agents,
+    'eval-plan_0_sample_0': {is_correct: true, is_compilable: true,
+      estimated_speedup: 100, estimated_latency_ms: 0.0002},
+  }
+  const {result} = await runWorkflow(source, cuteArgs, agentsWithOptimisticEstimate, {
+    'sol-seed-baseline': seed,
+    'sol-eval-plan_0_sample_0': null,
+  })
+  assert.equal(result.generated_kernel_path, '')
+  assert.equal(result.best_kernel_code, '')
+  assert.equal(result.overall_speedup, 1)
+  assert.equal(result.experience_patterns_count, 0)
+  assert.equal(result.candidate_beam.map(item => item.plan_title).join(','), 'baseline')
+})
+
+test('AccelOpt CuTe SOL refuses a problem-only input instead of generating CUDA', async () => {
+  const problemOnly = {...args, kernel_path: '', problem_definition: 'GEMM', language: 'cute-dsl'}
+  await assert.rejects(() => runWorkflow(source, problemOnly, agents),
+    /requires an inherited CuTe kernel_path/)
 })
