@@ -26,6 +26,8 @@ The loop is:
 
 This is not model training. It is an agent-executable FSR loop suitable for Claude Code workflows.
 
+For `language: cute-dsl` with `integration_pattern: sol_execbench_solution`, candidates are complete Python CuTe modules checked against the official Host workload. Optional `deadline_epoch` and `termination_file` are observed after each completed feature-set sample. A cooperative stop keeps the current Host-bound best and skips the final report call. An in-progress sample may overrun the deadline, so callers must record actual wall time. Other CUDALLM-FSR routes reject these controls.
+
 ---
 
 ## Arguments

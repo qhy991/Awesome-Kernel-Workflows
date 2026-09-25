@@ -24,6 +24,8 @@
 7. 用 compile/correctness/speedup reward 更新 feature scores
 8. 输出最佳 kernel 和 feature reward table
 
+在 `language: cute-dsl` 且 `integration_pattern: sol_execbench_solution` 时，候选是由官方 Host 完整工作负载验收的 Python CuTe 模块。可选的 `deadline_epoch` 与 `termination_file` 在每个 feature-set 样本完成后检查；协作式停止保留 Host 绑定的当前最优源码并跳过最终报告。正在执行的样本可能超过截止时间，因此调用方必须记录实际墙钟时间。其他 CUDALLM-FSR 路径拒绝这些控制参数。
+
 这不是模型训练，而是适合 Claude Code Workflow 的 agent-executable FSR 循环。
 
 ---

@@ -97,3 +97,29 @@ test('CUDALLM-FSR CuTe SOL sends Python source with explicit Host language', asy
   assert.equal(result.generated_kernel_path, candidate.candidate_path)
   assert.equal(result.artifact_binding_required, true)
 })
+
+test('CUDALLM-FSR stops at a sample boundary with its Host-bound source intact', async () => {
+  const stoppingAgents = {...agents,
+    'generate-kernel-0-0': {candidate_code: 'from cutlass import cute\n@cute.jit\ndef kernel(): pass\ndef run(*args): pass',
+      implemented_feature_ids: ['tile']},
+    'checkpoint-0-0': {termination_requested: true, termination_reason: 'wall_clock_limit',
+      checkpoint_path: '/tmp/cudallm-sol/checkpoint.json'},
+  }
+  const candidate = {...measured(0.015),
+    candidate_path: '/tmp/cudallm-sol/cudallm_iter_0_sample_0.py'}
+  const {result, calls} = await runWorkflow(source, {
+    ...args, language: 'cute-dsl', reference_code_path: '/tmp/seed/kernel.py',
+    deadline_epoch: 123, termination_file: '/tmp/cudallm-sol/STOP',
+  }, stoppingAgents, evals(candidate))
+  assert.equal(result.termination_reason, 'wall_clock_limit')
+  assert.equal(result.samples_completed, 1)
+  assert.equal(result.generated_kernel_path, candidate.candidate_path)
+  assert.ok(calls.some(call => call.label === 'checkpoint-0-0' &&
+    call.prompt.includes('deadline epoch: 123')))
+  assert.ok(!calls.some(call => call.label === 'final-report'))
+})
+
+test('CUDALLM-FSR rejects a wall deadline on the CUDA path it cannot honor', async () => {
+  await assert.rejects(() => runWorkflow(source, {...args, deadline_epoch: 123}, agents),
+    /cooperative wall controls are supported only for CuTe SOL/)
+})

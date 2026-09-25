@@ -137,3 +137,32 @@ test('AccelOpt CuTe SOL refuses a problem-only input instead of generating CUDA'
   await assert.rejects(() => runWorkflow(source, problemOnly, agents),
     /requires an inherited CuTe kernel_path/)
 })
+
+test('AccelOpt stops at an iteration boundary and keeps the bound Host candidate', async () => {
+  const stoppingAgents = {...agents,
+    'read-baseline': {kernel_code: 'from cutlass import cute\ndef run(*args): pass',
+      op_type: 'gemm', key_functions: ['run'], current_approach: 'CuTe seed'},
+    'plan-0-0': {title: 'tile', source_evidence: 'source structure',
+      plan: 'change tile', expected_impact: 'lower Host latency'},
+    'impl-0-tile-v0': {code: 'from cutlass import cute\n@cute.jit\ndef kernel(): pass\ndef run(*args): pass'},
+    'checkpoint-1': {termination_requested: true, termination_reason: 'wall_clock_limit',
+      checkpoint_path: '/tmp/accelopt-sol/checkpoint.json'},
+  }
+  const candidate = {...measured(0.015),
+    candidate_path: '/tmp/accelopt-sol/accelopt_plan_0_sample_0.py'}
+  const {result, calls} = await runWorkflow(source, {
+    ...args, language: 'cute-dsl', kernel_path: '/tmp/accelopt-sol/kernel.py',
+    deadline_epoch: 123, termination_file: '/tmp/accelopt-sol/STOP',
+  }, stoppingAgents, evals(candidate))
+  assert.equal(result.termination_reason, 'wall_clock_limit')
+  assert.equal(result.iterations_completed, 1)
+  assert.equal(result.generated_kernel_path, candidate.candidate_path)
+  assert.ok(calls.some(call => call.label === 'checkpoint-1' &&
+    call.prompt.includes('deadline epoch: 123')))
+  assert.ok(!calls.some(call => call.label === 'final-report'))
+})
+
+test('AccelOpt rejects a wall deadline on the CUDA path it cannot honor', async () => {
+  await assert.rejects(() => runWorkflow(source, {...args, deadline_epoch: 123}, agents),
+    /cooperative wall controls are supported only for CuTe SOL/)
+})

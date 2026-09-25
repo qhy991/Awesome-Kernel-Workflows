@@ -265,6 +265,56 @@ function guard(obj, field, fallback) {
 }
 // --- END inlined agent-retry scaffolding ---
 
+// --- BEGIN inlined runtime-safe-point scaffolding (from _meta/scaffolding/runtime-safe-point.js) ---
+async function __workflowRuntimeSafePoint(ctx) {
+  const checkpointPath = ctx.checkpointPath || `${ctx.expDir}/checkpoint.json`
+  const materialize = ctx.materializeBest && ctx.bestKernelPath && ctx.bestKernelSourcePath
+    ? `Atomically copy the exact bytes from immutable candidate ${ctx.bestKernelSourcePath} to ${ctx.bestKernelPath}. ` +
+      `Use a small Python program: read the source as bytes, require its SHA-256 to equal ` +
+      `${ctx.bestKernelExpectedSha256 || '<missing-required-sha256>'}, write a temporary file in the destination directory, ` +
+      `fsync it, then os.replace it. Recompute the destination SHA-256 and fail if it differs. ` +
+      `Never regenerate, reformat, or reconstruct the source from a prompt.`
+    : ctx.materializeBest && ctx.bestKernelPath && ctx.bestKernelCode
+    ? `Atomically write this exact best source to ${ctx.bestKernelPath} using a temporary file in the same directory followed by rename:\n` +
+      `\`\`\`${ctx.bestLanguage || ''}\n${ctx.bestKernelCode}\n\`\`\``
+    : (ctx.bestKernelPath
+      ? `Preserve the existing best source at ${ctx.bestKernelPath}; do not rewrite it.`
+      : 'There is no verified best source yet; do not create a best-kernel file.')
+
+  return agentRetry(() => agent(`Workflow runtime safe point.
+
+1. ${materialize}
+2. Check cooperative termination:
+   - termination file: ${ctx.terminationFile || '<none>'}
+   - deadline epoch: ${ctx.deadlineEpoch || 0}
+   A non-empty termination file requests stop. If it contains JSON, use its
+   "reason"; otherwise use "supervisor_request". A positive deadline requests
+   stop when the current epoch from \`date +%s\` is at or beyond it.
+3. Start from this exact checkpoint object:
+${JSON.stringify(ctx.checkpoint)}
+   If step 2 requests stop, set termination_requested=true and set
+   termination_reason to the observed reason. Otherwise preserve the planned
+   termination fields. Atomically write the resulting JSON to ${checkpointPath}
+   using a temporary file in the same directory followed by os.replace/rename.
+   Do not change metric.name or metric.value.
+4. Return only the termination decision and checkpoint path.
+`, {
+    model: MODEL.mechanical,
+    label: ctx.label,
+    phase: ctx.phase,
+    schema: {
+      type: 'object',
+      properties: {
+        termination_requested: { type: 'boolean' },
+        termination_reason: { type: 'string' },
+        checkpoint_path: { type: 'string' },
+      },
+      required: ['termination_requested', 'checkpoint_path'],
+    },
+  }), { retries: 5 })
+}
+// --- END inlined runtime-safe-point scaffolding ---
+
 // --- BEGIN inlined turn-timeout scaffolding (from _meta/scaffolding/turn-timeout.js) ---
 const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn wall-clock cap
 
@@ -398,6 +448,15 @@ const SAMPLES_PER_FEATURE_SET = args.samples_per_feature_set || 2
 const RTOL = args.rtol ?? 0.01
 const ATOL = args.atol ?? 0.01
 const EXP_DIR = args.exp_dir || '/tmp/cudallm_fsr_exp'
+const TERMINATION_FILE = args.termination_file || ''
+const DEADLINE_EPOCH = Number(args.deadline_epoch || 0)
+const CHECKPOINT_PATH = `${EXP_DIR}/checkpoint.json`
+if (args.deadline_epoch != null && (!Number.isFinite(DEADLINE_EPOCH) || DEADLINE_EPOCH <= 0)) {
+  throw new Error('CUDALLM-FSR deadline_epoch must be a positive epoch')
+}
+if (!CUTE_SOL && (TERMINATION_FILE || DEADLINE_EPOCH > 0)) {
+  throw new Error('CUDALLM-FSR cooperative wall controls are supported only for CuTe SOL')
+}
 const DRIVER_PROBLEM_PATH = args.problem_json_path || `${EXP_DIR}/driver_problem.json`
 const PROFILE_SOURCE_PATH = args.profile_source_path || REFERENCE_CODE_PATH || ''
 const ADAPTATION_SCOPE = 'workflow_adaptation'
@@ -820,7 +879,9 @@ tests = testPlan.test_cases || []
 // =============================================================================
 // Main FSR Loop
 // =============================================================================
-for (let iteration = 0; iteration < ITERATIONS; iteration++) {
+let completedSamples = 0
+let supervisorTerminationReason = null
+search: for (let iteration = 0; iteration < ITERATIONS; iteration++) {
   for (let sample = 0; sample < SAMPLES_PER_FEATURE_SET; sample++) {
     log(`\n=== CUDA-LLM FSR iteration ${iteration + 1}/${ITERATIONS}, sample ${sample + 1}/${SAMPLES_PER_FEATURE_SET} ===`)
 
@@ -1194,6 +1255,32 @@ Then append:
     for (const score of reinforce.updated_scores || []) {
       if (score?.id) featureScores[score.id] = score
     }
+    completedSamples++
+    if (CUTE_SOL) {
+      const safePoint = await __workflowRuntimeSafePoint({
+        expDir: EXP_DIR, checkpointPath: CHECKPOINT_PATH,
+        terminationFile: TERMINATION_FILE, deadlineEpoch: DEADLINE_EPOCH,
+        checkpoint: {
+          schema_version: 1, workflow: WORKFLOW_NAME,
+          progress: {unit: 'sample', completed: completedSamples,
+                     requested: ITERATIONS * SAMPLES_PER_FEATURE_SET},
+          compiled: bestCandidate?.eval?.compiled === true,
+          correct: bestCandidate?.eval?.correct === true,
+          metric: {name: 'speedup_vs_seed',
+                   value: bestCandidate?.eval?.speedup || null},
+          best_kernel_path: bestCandidate?.path || null,
+          termination_requested: false, termination_reason: null,
+        },
+        bestKernelPath: bestCandidate?.path || null,
+        materializeBest: false,
+        label: `checkpoint-${iteration}-${sample}`, phase: 'Reinforce',
+      })
+      if (safePoint.termination_requested) {
+        supervisorTerminationReason = safePoint.termination_reason || 'supervisor_request'
+        log(`Cooperative stop after sample ${completedSamples}: ${supervisorTerminationReason}`)
+        break search
+      }
+    }
   }
 }
 
@@ -1202,7 +1289,9 @@ Then append:
 // =============================================================================
 phase('Report')
 
-const finalReport = await agentRetry(() => agent(`Write a concise CUDA-LLM FSR optimization report.
+const finalReport = supervisorTerminationReason
+  ? `Stopped after sample ${completedSamples}: ${supervisorTerminationReason}; measured best is retained.`
+  : await agentRetry(() => agent(`Write a concise CUDA-LLM FSR optimization report.
 
 # Task
 ${taskSpec.substring(0, 4000)}
@@ -1272,6 +1361,9 @@ return {
   reference_code_path: REFERENCE_CODE_PATH,
   target_gpu: TARGET_GPU,
   iterations: ITERATIONS,
+  iterations_completed: Math.ceil(completedSamples / SAMPLES_PER_FEATURE_SET),
+  samples_completed: completedSamples,
+  termination_reason: supervisorTerminationReason,
   feature_budget: FEATURE_BUDGET,
   samples_per_feature_set: SAMPLES_PER_FEATURE_SET,
   adaptation_scope: ADAPTATION_SCOPE,

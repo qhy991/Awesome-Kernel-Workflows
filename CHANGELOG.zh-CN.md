@@ -8,6 +8,8 @@
 
 ### Changed
 
+- AccelOpt 与 CUDALLM-FSR 的 CuTe SOL 路径现在在每个完整迭代／样本结束时通过统一安全点读取终止文件和截止时间、写检查点，并在收到停止请求后保留 Host 绑定的最优源码，不再额外消耗最终报告调用。manifest 声明控制参数；CUDALLM-FSR 也声明已有实现的 SOL 集成路由。原 CUDA 路径不变，为后继批次提供一致的实际墙钟预算门槛。(`AccelOpt/`、`CUDALLM/`、`_meta/tools/test/runtime-safe-point-guard.test.js`)
+
 - AccelOpt 的 CuTe SOL 适配现在在规划、评测、经验提取和报告中明确只使用 Host 实测延迟；Host 未返回候选结果时，不再让模型的静态估计进入候选池。manifest 说明此适配不采集 NCU 计数器；提供 profiler 时原 CUDA 路径仍可使用。(`AccelOpt/accelopt-kernel-optimization.js`、`AccelOpt/manifest.yaml`、`_meta/tools/test/accelopt-host-sol.test.js`)
 
 - CUDAAgent 新增可选的 CuTe DSL SOL Host 路径：迭代候选返回完整的 Python CuTe 模块，Host 按显式语言与源码绑定验收全部官方工作负载；原 CUDA 路径不变。(`CUDAAgent/cuda-agent-kernel-optimization.js`、`CUDAAgent/manifest.yaml`、`_meta/tools/test/cudaagent-host-binding.test.js`)

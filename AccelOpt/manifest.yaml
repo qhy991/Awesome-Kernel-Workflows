@@ -43,6 +43,9 @@ routing:
     - 'cuda-kernel-generation'
     constraints: []
   best_kernel_field: best_kernel_code
+  all_args:
+  - termination_file
+  - deadline_epoch
   topology: iterative
   seed_contract: hybrid
   requires_harness: false

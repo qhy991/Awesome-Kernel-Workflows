@@ -8,6 +8,8 @@ A self-improving CUDA kernel optimization workflow powered by Nsight Compute (NC
 
 With `language: cute-dsl` and `integration_pattern: sol_execbench_solution`, this workflow keeps the plan, execute, select, and experience loop, but uses the official Host's full-workload correctness and latency instead of NCU counters. It is an **idea-preserving adaptation**, not a profiler-faithful reproduction of AccelOpt. The Host evaluation and source binding own candidate promotion; a static agent estimate cannot enter the candidate beam. Reports and experience rules must identify their evidence as Host latency and source structure. CuTe candidates are complete Python modules with `run(...)` and compiled CuTe kernels. The inherited CUDA implementation remains a separate performance floor.
 
+In this CuTe SOL path, optional `deadline_epoch` and `termination_file` are checked at the end of each iteration. A stop preserves the current Host-bound result and skips the final report call. The deadline is cooperative and can overrun by the duration of an in-progress iteration; the caller must record actual wall time. These controls are rejected on other AccelOpt routes.
+
 ## Overview
 
 This workflow automates iterative GPU kernel optimization through evidence-based profiling rather than guesswork. It implements AccelOpt's core loop:

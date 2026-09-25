@@ -10,6 +10,8 @@ for the versioning policy.
 
 ### Changed
 
+- AccelOpt and CUDALLM-FSR CuTe SOL paths now check the canonical cooperative termination file and deadline after each complete iteration/sample, write a checkpoint, and return the Host-bound best without spending a final report turn on a requested stop. Their manifests declare the control args; CUDALLM-FSR also declares the SOL integration route it already implements. The existing CUDA path is unchanged. This enables a real matched wall-budget gate in a successor campaign. (`AccelOpt/`, `CUDALLM/`, `_meta/tools/test/runtime-safe-point-guard.test.js`)
+
 - AccelOpt's CuTe SOL adaptation now labels Host latency as its only measured feedback throughout planning, evaluation, learning, and reporting. It rejects an agent's static estimate when the Host has no candidate result. The manifest records that this adaptation does not collect NCU counters; the CUDA profiler path remains available when supplied. (`AccelOpt/accelopt-kernel-optimization.js`, `AccelOpt/manifest.yaml`, `_meta/tools/test/accelopt-host-sol.test.js`)
 
 - CUDAAgent has an optional CuTe DSL SOL Host path: its iterative candidate turns return complete Python CuTe modules, and the Host checks the full official workload with explicit language and source binding. The existing CUDA path is unchanged. (`CUDAAgent/cuda-agent-kernel-optimization.js`, `CUDAAgent/manifest.yaml`, `_meta/tools/test/cudaagent-host-binding.test.js`)

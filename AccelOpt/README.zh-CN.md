@@ -8,6 +8,8 @@
 
 设置 `language: cute-dsl` 和 `integration_pattern: sol_execbench_solution` 时，工作流保留规划、实现、选择和经验积累循环，但反馈来自官方 Host 的完整工作负载正确性与延迟，而非 NCU 计数器。这是**保留方法思想的适配**，不是 AccelOpt 的 profiler 高保真复现。只有 Host 验收并绑定源码的候选才能进入候选池；模型的静态估计不能晋升。报告与经验规则应标明证据仅为 Host 延迟和源码结构。CuTe 候选需为包含 `run(...)` 和已编译 CuTe 内核的完整 Python 模块；继承的 CUDA 实现保留为独立性能底线。
 
+此 CuTe SOL 路径可选传入 `deadline_epoch` 和 `termination_file`，在每轮结束的安全点检查。停止时保留当前 Host 绑定结果并跳过最终报告调用。截止时间是协作式的，正在执行的迭代可能使实际耗时超出截止时间；调用方须记录真实墙钟时间。其他 AccelOpt 路径会拒绝这些控制参数。
+
 ## 核心循环
 
 `Plan → Execute → Profile → Summarize → Accumulate Experience → Repeat`

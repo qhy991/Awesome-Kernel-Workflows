@@ -14,6 +14,8 @@ const WORKFLOWS = [
   'AdaExplore/adaexplore-kernel-optimization.js',
   'KernelAgent/kernelagent-triton-synthesis.js',
   'KernelFoundry/kernelfoundry-kernel-optimization.js',
+  'AccelOpt/accelopt-kernel-optimization.js',
+  'CUDALLM/cudallm-fsr-kernel-generation.js',
 ]
 
 for (const relative of WORKFLOWS) {
