@@ -55,6 +55,32 @@ test('transient transport failure may still retry', async () => {
   assert.equal(result.ok, true)
 })
 
+test('persistent transport fault receives at most one repeat', async () => {
+  for (const code of ['KERSOR_CLAUDE_TRANSPORT_FAULT',
+                       'KERSOR_CLAUDE_EXEC_FAILED', 'KERSOR_CLAUDE_TIMEOUT']) {
+    let calls = 0
+    const fault = Object.assign(new Error('API Error: 524'), {code})
+    await assert.rejects(agentRetry(async () => {
+      calls++
+      throw fault
+    }, {retries: 5}), error => error === fault)
+    assert.equal(calls, 2, code)
+  }
+})
+
+test('configuration and authorization failures are not repeated', async () => {
+  for (const code of ['KERSOR_CLAUDE_CONFIG_INVALID',
+                       'KERSOR_AUTHORIZATION_FAILED', 'KERSOR_PERMISSION_DENIED']) {
+    let calls = 0
+    const terminal = Object.assign(new Error('terminal provider setup error'), {code})
+    await assert.rejects(agentRetry(async () => {
+      calls++
+      throw terminal
+    }, {retries: 5}), error => error === terminal)
+    assert.equal(calls, 1, code)
+  }
+})
+
 test('observed-model mismatch is never resubmitted by agentRetry', async () => {
   let calls = 0
   const mismatch = Object.assign(new Error('observed model differs from pinned model'),

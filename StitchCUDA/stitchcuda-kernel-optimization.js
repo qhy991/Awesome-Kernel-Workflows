@@ -254,6 +254,7 @@ function __attemptBlock() {
 async function agentRetry(fn, opts) {
   const retries = (opts && opts.retries != null) ? opts.retries : 5
   let lastError = null
+  let transportFailures = 0
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const result = await fn()
@@ -266,8 +267,19 @@ async function agentRetry(fn, opts) {
       // protects direct/older Hosts that lack the typed refusal code.
       if (e && (e.code === 'KERSOR_PROVIDER_SAFEGUARD_REFUSAL'
         || e.code === 'KERSOR_CLAUDE_MODEL_IDENTITY_MISMATCH'
+        || e.code === 'KERSOR_CLAUDE_CONFIG_INVALID'
+        || e.code === 'KERSOR_AUTHORIZATION_FAILED'
+        || e.code === 'KERSOR_PERMISSION_DENIED'
         || /safeguards? flagged (?:this|the) message|provider safeguard refusal|(?:can't|cannot) help with this\.\s*Start a new session to continue/i.test(String(e.message || '')))) {
         throw e
+      }
+      // A persistent gateway/transport failure gets one repeat of this exact
+      // activation, regardless of the larger retry budget for null/429 turns.
+      if (e && (e.code === 'KERSOR_CLAUDE_TRANSPORT_FAULT'
+        || e.code === 'KERSOR_CLAUDE_EXEC_FAILED'
+        || e.code === 'KERSOR_CLAUDE_TIMEOUT')) {
+        transportFailures++
+        if (transportFailures > 1) throw e
       }
       lastError = e
     }
