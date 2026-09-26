@@ -24,6 +24,8 @@
 
 ### Fixed
 
+- Opus 5.5 网关的新拒绝措辞现在会立即终止该请求，不再重发；持续的 Claude 传输故障和超时最多重试一次，模型配置、认证与权限错误直接失败。此前被拒绝的 CUDALLM-FSR Setup 请求被重复提交，Cloudflare 524 的 FeatureCatalog 请求重试了六次。统一 helper 已同步到所有 workflow 和创作模板。(_meta/scaffolding/agent-retry.js、scripts/add-agent-retry-scaffolding.js、_meta/tools/test/agent-retry-safeguard.test.js)
+
 - `agentRetry` 遇到 `KERSOR_CLAUDE_MODEL_IDENTITY_MISMATCH` 立即停止。错误模型上的重复调用无法修复模型消融证据，只会消耗预算；共用 helper 已同步到全部 workflow。(`_meta/scaffolding/agent-retry.js`、`scripts/add-agent-retry-scaffolding.js`、`_meta/tools/test/agent-retry-safeguard.test.js`)
 
 - provider safeguard 拒绝后，共用 `agentRetry` 不再重新提交同一生成请求。008 的 KSearch 曾重试被拒绝的 Generate 分支；修复已同步到各 workflow，并覆盖类型化与旧版错误。(`_meta/scaffolding/agent-retry.js`、`scripts/add-agent-retry-scaffolding.js`、`_meta/tools/test/agent-retry-safeguard.test.js`)

@@ -26,6 +26,8 @@ for the versioning policy.
 
 ### Fixed
 
+- Stop Opus 5.5's new provider-refusal wording without resubmitting the rejected turn. Limit persistent Claude transport faults and timeouts to one retry, and fail immediately on model configuration, authentication, and permission errors. Previously a refused CUDALLM-FSR Setup request was repeated and a Cloudflare 524 FeatureCatalog request was retried six times. The canonical helper is refreshed in every workflow and authoring template. (_meta/scaffolding/agent-retry.js, scripts/add-agent-retry-scaffolding.js, _meta/tools/test/agent-retry-safeguard.test.js)
+
 - Stop `agentRetry` immediately on `KERSOR_CLAUDE_MODEL_IDENTITY_MISMATCH`. Repeating a turn on the wrong observed model cannot repair a model-ablation result and would spend provider budget on invalid evidence. The canonical helper is refreshed in all workflows. (`_meta/scaffolding/agent-retry.js`, `scripts/add-agent-retry-scaffolding.js`, `_meta/tools/test/agent-retry-safeguard.test.js`)
 
 - Stop generic `agentRetry` on a provider safeguard refusal instead of resubmitting the same generation request. The 008 KSearch run retried a refused Generate branch. The shared helper is refreshed in every workflow, with a regression for typed and legacy refusal errors. (`_meta/scaffolding/agent-retry.js`, `scripts/add-agent-retry-scaffolding.js`, `_meta/tools/test/agent-retry-safeguard.test.js`)
