@@ -133,7 +133,7 @@ async function agentRetry(fn, opts) {
       // protects direct/older Hosts that lack the typed refusal code.
       if (e && (e.code === 'KERSOR_PROVIDER_SAFEGUARD_REFUSAL'
         || e.code === 'KERSOR_CLAUDE_MODEL_IDENTITY_MISMATCH'
-        || /safeguards? flagged (?:this|the) message|provider safeguard refusal/i.test(String(e.message || '')))) {
+        || /safeguards? flagged (?:this|the) message|provider safeguard refusal|(?:can't|cannot) help with this\.\s*Start a new session to continue/i.test(String(e.message || '')))) {
         throw e
       }
       lastError = e

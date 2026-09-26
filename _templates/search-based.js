@@ -113,6 +113,15 @@ async function agentRetry(fn, opts) {
       if (result != null) return result
       // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
     } catch (e) {
+      // Provider refusals and model-identity mismatches are terminal for this
+      // request. Repeating a rejected prompt or paying for more calls on the
+      // wrong model cannot repair either condition. The message check also
+      // protects direct/older Hosts that lack the typed refusal code.
+      if (e && (e.code === 'KERSOR_PROVIDER_SAFEGUARD_REFUSAL'
+        || e.code === 'KERSOR_CLAUDE_MODEL_IDENTITY_MISMATCH'
+        || /safeguards? flagged (?:this|the) message|provider safeguard refusal|(?:can't|cannot) help with this\.\s*Start a new session to continue/i.test(String(e.message || '')))) {
+        throw e
+      }
       lastError = e
     }
   }

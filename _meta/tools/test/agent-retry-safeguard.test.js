@@ -5,6 +5,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
+const {listAllWorkflows} = require('../../../scripts/add-agent-retry-scaffolding.js')
 
 const root = path.resolve(__dirname, '..', '..', '..')
 const source = fs.readFileSync(path.join(root, '_meta/scaffolding/agent-retry.js'), 'utf8')
@@ -16,6 +17,7 @@ test('provider safeguard refusal is never resubmitted by agentRetry', async () =
   for (const [code, message] of [
     ['KERSOR_PROVIDER_SAFEGUARD_REFUSAL', 'provider rejected the request'],
     ['KERSOR_CLAUDE_EXEC_FAILED', "API Error: safeguards flagged this message"],
+    ['KERSOR_CLAUDE_EXEC_FAILED', "API Error: claude-opus-5-5 can't help with this. Start a new session to continue."],
   ]) {
     let calls = 0
     const refusal = Object.assign(new Error(message), {code})
@@ -24,6 +26,21 @@ test('provider safeguard refusal is never resubmitted by agentRetry', async () =
       throw refusal
     }, {retries: 5, allowNull: true}), error => error === refusal)
     assert.equal(calls, 1)
+  }
+})
+
+test('every workflow and authoring template carries the provider-refusal guard', () => {
+  const templates = ['_templates', '_meta/templates'].flatMap(dir =>
+    fs.readdirSync(path.join(root, dir))
+      .filter(name => name.endsWith('.js'))
+      .map(name => path.join(root, dir, name)))
+  const files = [...listAllWorkflows(), ...templates]
+  assert.ok(files.length >= 43)
+  for (const file of files) {
+    const body = fs.readFileSync(file, 'utf8')
+    assert.match(body,
+      /safeguards\? flagged .*provider safeguard refusal.*Start a new session to continue/,
+      path.relative(root, file))
   }
 })
 
