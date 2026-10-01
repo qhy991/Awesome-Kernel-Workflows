@@ -6,8 +6,6 @@
 
 ## [Unreleased]
 
-### Fixed
-
 - KernelBand 的 SOL 生成上下文保留完整选中源码和末尾 run/forward 绑定（`KernelBand/kernelband-kernel-optimization.js`）。
 
 - 修复 FACT 可选数组及异常计时选优；KernelFoundry 由 Host 绑定结果，KernelBand 使用 Host 基线/分数，避免有效成果丢失和分数虚高（FACT/、KernelFoundry/、KernelBand/、KernelSkill/、GemmPTX/、tests）。
@@ -16,6 +14,8 @@
 
 
 ### 新增（Added）
+
+- CUDA driver workflow 在配置 `KERSOR_GPUQ` 时将精确 launcher 和所选计数器交给 KerSor Host 的 `ncu-v1` 评测；独占租约与原始回执由 Host 持有（`Generalist/`、`KernelBand/`、`_substrate/profiling/README.md`）。
 
 - **Harness Engineering workflow。** 新增基于 arXiv:2607.17979 的冻结契约、
   profile 驱动优化循环。编译/正确性、可选深度验证与计时仍由调用方命令拥有；
@@ -31,6 +31,8 @@
   (`_substrate/verification/README.md`)
 
 ### 修复（Fixed）
+
+- CUDA NCU profiling 现在启动调用方的真实 workload，兼容旧长表和 B300 NCU 2026 宽表 CSV，区分计数器拒绝，并可输出独立标记的 Nsight Systems 降级结果；失败或空报告不再计入计数器实测证据（`_substrate/backends/cuda/profile.sh`、`_substrate/backends/_evidence_nvidia.py`、`_substrate/tests/test_driver_scripts.py`、`Generalist/`、`KernelBand/`、`AccelOpt/`、`_substrate/backends/REGISTRY.md`）。
 
 - FACT 直接传递已实现的 pattern，不再假定只读 agent 能写入 registry；
   改为每次结构化调用生成一个完整候选，保留原 composition 数量，避免

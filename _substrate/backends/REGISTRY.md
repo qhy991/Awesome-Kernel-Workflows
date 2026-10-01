@@ -20,13 +20,12 @@ Add a row when you start a driver. Move it to `stable` only after it passes L0--
 | metal | `metal/` | apple | experimental | (unassigned) |
 | generic | `generic/` | generic | stub | (unassigned) |
 
-> **Note (P3):** the `cuda` and `triton` `build.sh`/`run.sh`/`profile.sh` are
-> **GPU-untested** -- this repo runs on macOS where `nvcc`/`ncu`/`triton` are absent. What
-> IS verified on macOS: `validate_backend.py` (L0) for both dirs, and `to_evidence.py`
-> (the shared `_evidence_nvidia.py` NCU-to-canonical mapping, incl. `occupancy = warps / 100`
-> and `dram_pct = read + write`) via fake-tool PATH stubs. The `.sh` scripts have
-> arg-parsing, JSON-envelope, and exit-code coverage only. End-to-end compile/run/profile
-> is **deferred to the GPU/CI tier** (spec SS8.3, SS9.3).
+> **Evidence boundary:** CUDA `profile.sh` and the shared NCU parser were run on
+> one broker-owned B300-M3 vecadd workload on 2026-10-01; the preserved source,
+> broker receipt, CSV, and canonical metrics are under
+> `/mnt/b300-shared/home/qinhaiyan/experiments/kersor-ncu-b300m3-20261001/`.
+> This qualifies that profiler route only. CUDA `run.sh` still defers real GPU
+> execution, and Triton `build.sh`/`run.sh`/`profile.sh` remain GPU-unverified.
 
 **Status vocabulary:** `planned` (row reserved, no files yet) . `stub` . `experimental` .
 `stable` (L0--L3 conformant). `status` here is the registry lifecycle and is distinct from the
@@ -48,6 +47,28 @@ per-manifest `status` field, which only ranges over `stub | experimental | stabl
 | **Threshold profile** | `nvidia` |
 | **Status** | experimental |
 
+CUDA profiling requires a real workload launch. Pass the caller's executable
+and argv after `--`, or pass `--source <launcher.py>`; an executable artifact can
+launch itself. A compiled `.so` alone cannot be profiled. For example:
+
+```sh
+cuda/profile.sh --artifact candidate.so --problem problem.json \
+  --out profile.csv --ncu-binary /path/to/ncu \
+  --kernel-name 'regex:my_kernel' --launch-count 1 \
+  -- python3 verified_harness.py --candidate candidate.so --shape 128
+```
+
+`--metrics` can select a device-supported metric CSV for the question being
+tested. The script returns exit 3 without a runnable launcher and exit 4 when
+NCU fails or returns no kernel metric rows; neither result is measured profiler
+evidence. The current CUDA `run.sh` is still a deferred GPU implementation, so
+the caller's real harness remains necessary for correctness and timing.
+When counters are denied (`ERR_NVGPUCTRPERM`), the result has
+`error_code=counter_permission_denied`. An optional `--nsys-out timeline.sqlite`
+collects a separate timing trace under the same launch contract; the returned
+`profiler=nsys`, `format=nsys-sqlite`, and `degraded_from` keep it distinct from
+NCU hardware counters.
+
 ### Emitted metric names
 
 `to_evidence.py` delegates to the shared `_evidence_nvidia.py` mapper. Canonical metrics:
@@ -55,9 +76,9 @@ per-manifest `status` field, which only ranges over `stub | experimental | stabl
 | Canonical key | NCU counter source | Unit |
 |---|---|---|
 | `latency_ms` | `gpu__time_duration.sum` (ns / 1e6) | milliseconds |
-| `dram_pct` | `dram__bytes_read.sum.pct_of_peak_sustained_elapsed` + `dram__bytes_write.sum.pct_of_peak_sustained_elapsed` | 0--100 |
+| `dram_pct` | `dram__bytes_read.sum.pct_of_peak_sustained_elapsed` + `dram__bytes_write.sum.pct_of_peak_sustained_elapsed` | percent; sum can exceed 100 |
 | `sm_pct` | `sm__throughput.avg.pct_of_peak_sustained_elapsed` | 0--100 |
-| `occupancy` | `sm__warps_active.avg.pct_of_peak_sustained_elapsed` / 100 | 0--1 |
+| `occupancy` | `sm__warps_active.avg.pct_of_peak_sustained_active` / 100 | 0--1 |
 
 `backend_native` may include `l2_hit_pct`, `sectors_per_req`, and per-line stall data
 when `-lineinfo` is passed to `nvcc`.

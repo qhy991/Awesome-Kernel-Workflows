@@ -92,6 +92,28 @@ class TestSharedNvidiaMapper(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(CUDA, 'to_evidence.py')),
                         "cuda/to_evidence.py wrapper missing (Tasks 1-2)")
 
+    def test_wide_ncu_csv_with_preamble_and_unit_row(self):
+        wide = textwrap.dedent('''\
+            ==PROF== Connected to process 123
+            "ID","Kernel Name","gpu__time_duration.sum","sm__throughput.avg.pct_of_peak_sustained_elapsed","dram__bytes_read.sum.pct_of_peak_sustained_elapsed","dram__bytes_write.sum.pct_of_peak_sustained_elapsed","sm__warps_active.avg.pct_of_peak_sustained_active"
+            "","","ns","%","%","%","%"
+            "0","vecadd_kernel","6400","21.51","17.21","0","72.00"
+            "1","other_kernel","1000","99","99","99","99"
+        ''')
+        with tempfile.TemporaryDirectory() as td:
+            native = os.path.join(td, 'wide.csv')
+            with open(native, 'w') as fh:
+                fh.write(wide)
+            code, sout, serr = _run([sys.executable,
+                                     os.path.join(BACKENDS, '_evidence_nvidia.py'),
+                                     '--native', native, '--source-backend', 'cuda'])
+            self.assertEqual(code, 0, serr)
+            metrics = json.loads(sout)['metrics']
+            self.assertAlmostEqual(metrics['latency_ms'], 0.0064)
+            self.assertAlmostEqual(metrics['sm_pct'], 21.51)
+            self.assertAlmostEqual(metrics['dram_pct'], 17.21)
+            self.assertAlmostEqual(metrics['occupancy'], 0.72)
+
     def test_mapper_occupancy_is_warps_active_over_100(self):
         # The single most error-prone line: occupancy = warps_active_pct / 100 (0..1).
         with tempfile.TemporaryDirectory() as td:
@@ -263,12 +285,14 @@ class TestCudaProfile(unittest.TestCase):
     def test_profile_ok_with_fake_ncu_writes_csv_and_pointer(self):
         with tempfile.TemporaryDirectory() as td:
             _write_exec(os.path.join(td, 'ncu'), FAKE_NCU_CSV)
+            launcher = os.path.join(td, 'launch')
+            _write_exec(launcher, '#!/usr/bin/env bash\nexit 0\n')
             art = os.path.join(td, 'k.so')
             with open(art, 'w') as fh:
                 fh.write("")
             prob = self._problem(td); out = os.path.join(td, 'native.csv')
             code, sout, serr = _run([self.SCRIPT, '--artifact', art,
-                                     '--problem', prob, '--out', out], env=_path_env(td))
+                                     '--problem', prob, '--out', out, '--', launcher], env=_path_env(td))
             self.assertEqual(code, 0, msg=f"out={sout} err={serr}")
             p = _json_or_raw(sout)
             self.assertEqual(p.get('ok'), True, p)
@@ -285,13 +309,18 @@ class TestCudaProfile(unittest.TestCase):
             _write_exec(os.path.join(td, 'ncu'), textwrap.dedent(f'''\
                 #!/usr/bin/env bash
                 echo "$@" > "{rec}"
-                echo '"ID","Metric Name","Metric Value"' ; exit 0
+                echo '"ID","Kernel Name","Metric Name","Metric Value"'
+                echo '"0","my_kernel","gpu__time_duration.sum","123"'
+                exit 0
             '''))
+            launcher = os.path.join(td, 'launch')
+            _write_exec(launcher, '#!/usr/bin/env bash\nexit 0\n')
             art = os.path.join(td, 'k.so')
             with open(art, 'w') as fh:
                 fh.write("")
             prob = self._problem(td); out = os.path.join(td, 'n.csv')
-            _run([self.SCRIPT, '--artifact', art, '--problem', prob, '--out', out],
+            _run([self.SCRIPT, '--artifact', art, '--problem', prob, '--out', out,
+                  '--', launcher, '--shape', '128'],
                  env=_path_env(td))
             with open(rec) as fh:
                 argv = fh.read()
@@ -300,6 +329,58 @@ class TestCudaProfile(unittest.TestCase):
                       'dram__bytes_read.sum.pct_of_peak_sustained_elapsed',
                       'sm__warps_active.avg.pct_of_peak_sustained_active'):
                 self.assertIn(c, argv, f"profile.sh did not request {c}")
+            self.assertIn(f'{launcher} --shape 128', argv)
+
+    def test_shared_object_needs_a_real_launcher(self):
+        with tempfile.TemporaryDirectory() as td:
+            art = os.path.join(td, 'k.so')
+            with open(art, 'w') as fh:
+                fh.write('')
+            code, sout, _ = _run([self.SCRIPT, '--artifact', art,
+                                  '--problem', self._problem(td),
+                                  '--out', os.path.join(td, 'n.csv')])
+            self.assertEqual(code, 3)
+            self.assertIn('no runnable workload', _json_or_raw(sout)['error'])
+
+    def test_zero_exit_without_kernel_rows_is_not_a_profile(self):
+        with tempfile.TemporaryDirectory() as td:
+            _write_exec(os.path.join(td, 'ncu'),
+                        '#!/usr/bin/env bash\necho \'"ID","Kernel Name","Metric Name","Metric Value"\'\n')
+            art = os.path.join(td, 'k.bin')
+            _write_exec(art, '#!/usr/bin/env bash\nexit 0\n')
+            code, sout, _ = _run([self.SCRIPT, '--artifact', art,
+                                  '--problem', self._problem(td),
+                                  '--out', os.path.join(td, 'n.csv')], env=_path_env(td))
+            self.assertEqual(code, 4)
+            self.assertIn('no parseable kernel metrics', _json_or_raw(sout)['error'])
+
+    def test_counter_denial_is_distinct_and_can_degrade_to_nsys(self):
+        fixture_sqlite = os.path.join(FIXTURES, 'nsys', 'vector_add.sqlite')
+        with tempfile.TemporaryDirectory() as td:
+            _write_exec(os.path.join(td, 'ncu'),
+                        '#!/usr/bin/env bash\necho "==ERROR== ERR_NVGPUCTRPERM"\nexit 1\n')
+            _write_exec(os.path.join(td, 'nsys'), textwrap.dedent(f'''\
+                #!/usr/bin/env bash
+                base=""
+                while [ $# -gt 0 ]; do
+                  case "$1" in -o) base="$2"; shift 2 ;; *) shift ;; esac
+                done
+                cp "{fixture_sqlite}" "${{base}}.sqlite"
+            '''))
+            art = os.path.join(td, 'k.bin')
+            _write_exec(art, '#!/usr/bin/env bash\nexit 0\n')
+            common = [self.SCRIPT, '--artifact', art, '--problem', self._problem(td),
+                      '--out', os.path.join(td, 'n.csv')]
+            code, sout, _ = _run(common, env=_path_env(td))
+            self.assertEqual(code, 4)
+            self.assertEqual(_json_or_raw(sout)['error_code'], 'counter_permission_denied')
+            sqlite = os.path.join(td, 'timeline.sqlite')
+            code, sout, _ = _run(common + ['--nsys-out', sqlite], env=_path_env(td))
+            self.assertEqual(code, 0)
+            payload = _json_or_raw(sout)
+            self.assertEqual(payload['profiler'], 'nsys')
+            self.assertEqual(payload['degraded_from'], 'counter_permission_denied')
+            self.assertEqual(payload['native_profile'], sqlite)
 
     def test_profiler_absent_exit_4(self):
         with tempfile.TemporaryDirectory() as td:
@@ -311,8 +392,10 @@ class TestCudaProfile(unittest.TestCase):
             # bin dir — so neither ncu nor nsys resolve on macOS and GPU boxes.
             env = dict(os.environ)
             env['PATH'] = os.path.dirname(sys.executable) + os.pathsep + '/usr/bin' + os.pathsep + '/bin'
+            launcher = os.path.join(td, 'launch')
+            _write_exec(launcher, '#!/usr/bin/env bash\nexit 0\n')
             code, sout, serr = _run([self.SCRIPT, '--artifact', art,
-                                     '--problem', prob, '--out', out], env=env)
+                                     '--problem', prob, '--out', out, '--', launcher], env=env)
             self.assertEqual(code, 4, msg=f"out={sout} err={serr}")
             self.assertEqual(_json_or_raw(sout).get('ok'), False)
 

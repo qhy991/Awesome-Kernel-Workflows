@@ -10,6 +10,8 @@ for the versioning policy.
 
 ### Added
 
+- Let CUDA driver workflows hand an exact launcher and selected counters to KerSor's Host `ncu-v1` evaluator when `KERSOR_GPUQ` is configured; the Host owns the exclusive lease and raw receipts (`Generalist/`, `KernelBand/`, `_substrate/profiling/README.md`).
+
 - **Harness Engineering workflow.** Adds a frozen-contract, profile-backed
   optimization loop based on arXiv:2607.17979. Caller-owned commands remain
   authoritative for compile/correctness, optional deeper verification, and
@@ -27,6 +29,8 @@ for the versioning policy.
   (`_substrate/verification/README.md`)
 
 ### Fixed
+
+- Make CUDA NCU profiling launch the caller's actual workload; parse both legacy long and B300 NCU 2026 wide CSV, classify counter denial, and optionally emit a distinct Nsight Systems fallback. Failed or empty profiles stay out of measured counter evidence (`_substrate/backends/cuda/profile.sh`, `_substrate/backends/_evidence_nvidia.py`, `_substrate/tests/test_driver_scripts.py`, `Generalist/`, `KernelBand/`, `AccelOpt/`, `_substrate/backends/REGISTRY.md`).
 
 - Preserve the entire selected KernelBand source, including trailing run/forward bindings, in SOL generation context (`KernelBand/kernelband-kernel-optimization.js`).
 

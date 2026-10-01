@@ -11,10 +11,10 @@ ONE real mapping; cuda/to_evidence.py and triton/to_evidence.py are THIN wrapper
 sys.path-insert the backends dir, import this module, and call main() with their own
 source_backend id.
 
-ASSUMED NCU FORMAT (GPU tier must confirm): `ncu --csv --page raw` long format with, at
-minimum, columns "Kernel Name","Metric Name","Metric Value" (extra columns / column order
-ignored — read by name). First kernel's rows are used if several appear. Values may carry
-thousands separators / a trailing unit token; the leading float is parsed.
+NCU `--csv --page raw` has two observed layouts: long rows with "Kernel Name",
+"Metric Name", "Metric Value", and wide rows with metric names as columns plus a
+unit row. Both may follow `==PROF==` preamble lines. The first non-empty kernel's
+numeric metrics are used if several kernels appear.
 
 Canonical units emitted (every backend MUST honor):
   latency_ms = gpu__time_duration.sum (ns) / 1e6
@@ -68,41 +68,43 @@ def _parse_float(raw):
 
 
 def _parse_ncu_csv(text):
-    """Parse NCU long/raw CSV text into {metric_name: float} for the FIRST kernel seen.
-
-    Raises NativeParseError if the required columns are missing or no metric rows with a
-    parseable value exist. THE GPU TIER MUST CONFIRM the real ncu header; only this
-    function changes if it differs.
-    """
-    reader = csv.DictReader(io.StringIO(text))
-    if reader.fieldnames is None:
-        raise NativeParseError("empty native file (no header row)")
-    have = set(reader.fieldnames)
-    missing = {COL_KERNEL, COL_METRIC, COL_VALUE} - have
-    if missing:
-        raise NativeParseError(
-            f"native CSV missing required columns {sorted(missing)}; "
-            f"saw columns {reader.fieldnames}")
-
+    """Parse the first non-empty kernel from NCU long or wide raw CSV."""
+    rows = list(csv.reader(io.StringIO(text)))
+    header_index = next((i for i, row in enumerate(rows)
+                         if COL_KERNEL in row and
+                         ({COL_METRIC, COL_VALUE} <= set(row)
+                          or any(name.startswith("gpu__") for name in row))), None)
+    if header_index is None:
+        raise NativeParseError("native CSV missing an NCU kernel/metric header")
+    header = rows[header_index]
+    long_format = {COL_METRIC, COL_VALUE} <= set(header)
+    kernel_index = header.index(COL_KERNEL)
     first_kernel = None
     metrics = {}
-    for row in reader:
-        kernel = (row.get(COL_KERNEL) or "").strip()
-        # TODO: GPU tier confirm ncu never emits blank-kernel-name rows with parseable metric values
-        name = (row.get(COL_METRIC) or "").strip()
-        if not name:
+    for cells in rows[header_index + 1:]:
+        if len(cells) != len(header):
+            continue
+        kernel = cells[kernel_index].strip()
+        if not kernel:  # wide-format unit row, or an unscoped row
             continue
         if first_kernel is None:
             first_kernel = kernel
         elif kernel != first_kernel:
             continue  # only the first kernel's rows (deterministic; documented)
-        try:
-            metrics[name] = _parse_float(row.get(COL_VALUE))
-        except (ValueError, TypeError):
-            continue  # a non-numeric value row (e.g. a string metric) is simply skipped
+        if long_format:
+            pairs = [(cells[header.index(COL_METRIC)], cells[header.index(COL_VALUE)])]
+        else:
+            pairs = zip(header, cells)
+        for name, raw in pairs:
+            if not name or "__" not in name:
+                continue
+            try:
+                metrics[name] = _parse_float(raw)
+            except (ValueError, TypeError):
+                continue  # device attributes and non-numeric rows are not counters
 
     if not metrics:
-        raise NativeParseError("native CSV had a valid header but no parseable metric rows")
+        raise NativeParseError("native CSV had a kernel header but no parseable kernel metrics")
     return first_kernel, metrics
 
 

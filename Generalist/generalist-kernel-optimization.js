@@ -410,7 +410,8 @@ const PROBLEM_PATH = args.problem_path || ''
 const INPUT_MODE = KERNEL_PATH ? 'optimize_existing' : 'generate_then_optimize'
 const OP = args.op_description || 'kernel optimization'
 const EVAL_CMD = args.benchmark_command
-const NCU_CMD = args.ncu_command || ''
+const NCU_CMD = args.profile_command || args.ncu_command || ''
+const PROFILE_BINARY = args.profile_binary || ''
 const EXP_DIR = args.exp_dir || '.'
 const MEMORY_DB = args.memory_db || `${EXP_DIR}/memory.json`
 const ITERATIONS = args.iterations || 3
@@ -816,19 +817,14 @@ let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', no
   if (_pd && _pd.method) PROFILING_DECISION = _pd
 }
 
-// A-O1 closure (K-O2 ↔ profiling-strategist SSOT): the strategist probes `which ncu`
-// (binary present) and may pick native_profiler even when NCU hw counters are
-// admin-blocked. KerSor harness-preflight (K-O2) detects the block and STRIPS
-// ncu_command from dispatch-args. So if the strategist says native_profiler but no
-// ncu_command arrived (stripped by preflight, or never provided), downgrade to
-// perf_heuristic — the native path is unusable. This closes the loop without a
-// cross-repo host-probe contract: preflight's strip is the signal.
-if (PROFILING_DECISION.method === 'native_profiler' && !NCU_CMD) {
-  log(`profiling: strategist chose native_profiler but ncu_command is absent (stripped by ` +
-      `preflight because counters blocked, or not provided) -> downgrade to perf_heuristic`)
+// A binary probe does not prove counter access. Keep the native route only when
+// a caller-owned benchmark/launcher contract exists; profile.sh verifies the
+// actual runtime result. Preflight intentionally preserves profiler arguments.
+if (PROFILING_DECISION.method === 'native_profiler' && !NCU_CMD && !EVAL_CMD) {
+  log('profiling: no profile command or benchmark launcher -> perf_heuristic')
   PROFILING_DECISION = { method: 'perf_heuristic', confidence: 'inferred',
     normalizer: 'perf_to_evidence.py', profiler_name: 'test-harness-perf',
-    rationale: 'native_profiler selected but ncu_command absent (K-O2 strip / not provided) -> perf_heuristic' }
+    rationale: 'native_profiler selected without an executable workload contract' }
 }
 
 function nsysEnrichSuffix() {
@@ -865,20 +861,69 @@ async function runDriverMetricsEnvelope({ suffix, phaseName, kernelPath, artifac
     `${driverSh('run.sh', `--artifact ${artifactPath} --problem ${PROBLEM_PATH} --out ${artifactPath}.run.json`)}\n` +
     `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
     { model: MODEL.profile, label: `driver-run-${suffix}`, phase: phaseName, schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
-  const profileOut = await agentRetry(() => agent(
-    PROFILING_DECISION.method === 'native_profiler'
-      ? `${driverSh('profile.sh', `--artifact ${artifactPath} --problem ${PROBLEM_PATH} --out ${artifactPath}.run.json --out ${profilePath}`)}\n` +
-        `Return {ok, native_path}.`
-      : `Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'); do NOT run the native profiler. ` +
-        `Use driver-run-${suffix} throughput as the profiling source and return {ok:true, native_path:null, method:'${PROFILING_DECISION.method}', latency_ms:${(runOut && runOut.latency_ms) || 'null'}}.`,
-    { model: MODEL.profile, label: `driver-profile-${suffix}`, phase: phaseName, schema: JSON_PASSTHROUGH }), { retries: 5 })
+  const hostNcu = DRIVER_BACKEND_ID === 'cuda' && PROFILING_DECISION.method === 'native_profiler'
+    && typeof evaluate === 'function'
+  let profileOut
+  if (hostNcu) {
+    const brokerPath = process.env.KERSOR_GPUQ || ''
+    if (!brokerPath) {
+      profileOut = { ok: false, error: 'KERSOR_GPUQ is required for Host-owned NCU profiling' }
+    } else {
+      const plan = await agentRetry(() => agent(
+        `Read the caller-owned benchmark/profile contract and this kernel. Benchmark: ${EVAL_CMD || '(not provided)'}. ` +
+        `Profile command: ${NCU_CMD || '(not provided)'}. Return JSON only: ` +
+        `{launcher_argv:[executable,...args],metrics:null|string,kernel_name:null|string,launch_count:null|integer}. ` +
+        `The argv must run the same workload and include {artifact} as a literal placeholder for the candidate. ` +
+        `Choose only NCU metrics supported by this device and needed for the current bottleneck question; ` +
+        `leave metrics null for the collector defaults. Do not execute any command, invent a harness, or report measurements. ` +
+        `If the caller contract cannot launch this artifact, return {launcher_argv:[]}.`,
+        { model: MODEL.profile, label: `driver-profile-${suffix}`, phase: phaseName,
+          schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
+      profileOut = Array.isArray(plan?.launcher_argv) && plan.launcher_argv.length
+        ? await evaluate({
+            protocol: 'ncu-v1', label: `ncu-${suffix}`, phase: phaseName,
+            artifactPath, problemPath: PROBLEM_PATH,
+            profileScript: `${BACKEND_DIR}/profile.sh`,
+            normalizerScript: `${BACKEND_DIR}/to_evidence.py`,
+            outDir: `${EXP_DIR}/ncu-${suffix}`, brokerPath,
+            launcherArgv: plan.launcher_argv,
+            ncuBinary: PROFILE_BINARY || undefined,
+            metrics: plan.metrics || undefined,
+            kernelName: plan.kernel_name || undefined,
+            launchCount: plan.launch_count || undefined,
+          })
+        : { ok: false, error: 'missing_profile_launcher' }
+    }
+  } else {
+    profileOut = await agentRetry(() => agent(
+      PROFILING_DECISION.method === 'native_profiler'
+        ? `Profile the same candidate and workload as the benchmark. Caller benchmark: ${EVAL_CMD || '(not provided)'}. ` +
+          `Caller profile command: ${NCU_CMD || '(not provided)'}. ` +
+          `Use ${BACKEND_DIR}/profile.sh --artifact ${artifactPath} --problem ${PROBLEM_PATH} --out ${profilePath}` +
+          (DRIVER_BACKEND_ID === 'cuda' ? ` --nsys-out ${profilePath}.sqlite` +
+            (PROFILE_BINARY ? ` --ncu-binary ${PROFILE_BINARY}` : '') : '') +
+          ` -- <actual launcher argv>. ` +
+          `The argv must run this artifact at the benchmark shape; derive it only from the caller contract. ` +
+          `If no executable launcher can be bound, return {ok:false,native_profile:null,error:'missing_profile_launcher'}. ` +
+          `Return the script's stdout JSON verbatim; an exit 3/4 or missing kernel metrics is not a profile.`
+        : `Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'); do NOT run the native profiler. ` +
+          `Use driver-run-${suffix} throughput as the profiling source and return {ok:true, native_path:null, method:'${PROFILING_DECISION.method}', latency_ms:${(runOut && runOut.latency_ms) || 'null'}}.`,
+      { model: MODEL.profile, label: `driver-profile-${suffix}`, phase: phaseName,
+        schema: JSON_PASSTHROUGH }), { retries: 5 })
+  }
   let evidenceOut = null
-  if (PROFILING_DECISION.method === 'native_profiler') {
-    const nativePath = (profileOut && (profileOut.native_path || profileOut.native_profile)) || profilePath
+  if (hostNcu && profileOut?.ok === true) {
+    evidenceOut = profileOut
+  } else if (PROFILING_DECISION.method === 'native_profiler' && profileOut?.ok === true && (profileOut.native_profile || profileOut.native_path)) {
+    const nativePath = profileOut.native_profile || profileOut.native_path
     evidenceOut = await agentRetry(() => agent(
-      `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${nativePath}\`.\n` +
+      `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${nativePath}` +
+      (DRIVER_BACKEND_ID === 'cuda' && profileOut.format ? ` --format ${profileOut.format}` : '') + `\`.\n` +
       `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
       { model: MODEL.mechanical, label: `driver-to-evidence-${suffix}`, phase: phaseName, schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
+  } else if (PROFILING_DECISION.method === 'native_profiler') {
+    log(`profiling: no valid native profile for ${suffix}: ${profileOut?.error || 'missing native pointer'}`)
+    evidenceOut = { metrics: {}, coverage: [], profiler_available: false }
   } else if (PROFILING_DECISION.method === 'perf_heuristic') {
     const normalizer = PROFILING_DECISION.normalizer || 'perf_to_evidence.py'
     evidenceOut = await agentRetry(() => agent(
@@ -913,6 +958,8 @@ async function runDriverMetricsEnvelope({ suffix, phaseName, kernelPath, artifac
     compile_latency_ms: null,
     speedup: null,
     metrics: { latency_ms: latency == null ? null : Number(latency), ...metrics },
+    profile_available: PROFILING_DECISION.method === 'native_profiler' && profileOut?.profiler === 'ncu' && profileOut?.ok === true && evidenceOut?.ok === true,
+    timeline_available: profileOut?.profiler === 'nsys' && profileOut?.ok === true && evidenceOut?.ok === true,
   }
 }
 
@@ -1204,7 +1251,13 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
     actionable_hint: ({memory_bound: 'reduce DRAM traffic (tile for reuse, coalesce loads, shared memory)',
                       compute_bound: 'raise arithmetic intensity (tensor cores / SIMT-efficient ops, cut redundant work)',
                       latency_bound: 'raise occupancy / cut latency (larger blocks, fewer serial deps, pipeline)'})[bclass] || 're-examine the profile for the dominant cost and pick the next action',
-    evidence: NCU_CMD ? 'ncu' : 'benchmark', confidence: 'measured', source_round: iter,
+    evidence: metrics.profile_available === true ? 'ncu' :
+      (metrics.timeline_available === true || PROFILING_DECISION.method === 'perf_heuristic'
+        ? 'profile_heuristic' : 'llm_inferred'),
+    confidence: metrics.profile_available === true ? 'measured' :
+      (metrics.timeline_available === true || PROFILING_DECISION.method === 'perf_heuristic'
+        ? 'inferred' : 'hypothesized'),
+    source_round: iter,
   }
   const refute = await agentRetry(() => agent(
     `Adversarially REFUTE this attribution against the MEASURED profile ` +

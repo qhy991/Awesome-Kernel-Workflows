@@ -54,6 +54,16 @@ The workflow then runs the returned method deterministically:
 All paths emit the canonical metrics dict `diagnose.py` consumes; `confidence` is
 already stamped, so downstream evidence stays provenance-tagged.
 
+For KerSor Host runs on CUDA, set `KERSOR_GPUQ` to the site's broker executable.
+Generalist and KernelBand ask the agent only for an argv plan containing the
+literal `{artifact}` candidate placeholder and optional device-supported
+metrics. The Host `ncu-v1` evaluator obtains an exclusive broker lease, runs
+`cuda/profile.sh`, preserves the native output and broker receipt, then invokes
+`to_evidence.py`. A site with admin-only counters can supply a verified wrapper
+through `profile_binary` (Generalist) or `ncu_binary` (KernelBand); the wrapper
+must retain the broker's `CUDA_VISIBLE_DEVICES`. Without a broker or runnable
+launcher the native route returns missing evidence rather than model numbers.
+
 ## Files
 
 - `profiling_strategist.py` — selector + stamper (deterministic core + autonomy hook)
