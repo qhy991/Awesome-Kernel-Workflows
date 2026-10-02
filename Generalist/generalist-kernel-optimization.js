@@ -875,7 +875,10 @@ async function runDriverMetricsEnvelope({ suffix, phaseName, kernelPath, artifac
         `{launcher_argv:[executable,...args],metrics:null|string,kernel_name:null|string,launch_count:null|integer}. ` +
         `The argv must run the same workload and include {artifact} as a literal placeholder for the candidate. ` +
         `Choose only NCU metrics supported by this device and needed for the current bottleneck question; ` +
-        `leave metrics null for the collector defaults. Do not execute any command, invent a harness, or report measurements. ` +
+        `leave metrics null for the collector defaults. If Bash and KERSOR_NCU_COMMAND are available, you may use the injected ` +
+        `ncu-profiling skill to run diagnostic profiles before choosing this plan. Artifact: ${artifactPath}; task: ${PROBLEM_PATH}; ` +
+        `collector: ${BACKEND_DIR}/profile.sh; normalizer: ${BACKEND_DIR}/to_evidence.py; keep raw outputs under ${EXP_DIR}. ` +
+        `Without that runtime capability, return only the plan. Do not invent a harness or measurements; profiler latency is not a score. ` +
         `If the caller contract cannot launch this artifact, return {launcher_argv:[]}.`,
         { model: MODEL.profile, label: `driver-profile-${suffix}`, phase: phaseName,
           schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })

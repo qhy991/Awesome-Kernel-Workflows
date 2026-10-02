@@ -455,7 +455,11 @@ async function hostCudaProfile(buildOut, suffix, phaseName) {
     `Return JSON only: {launcher_argv:[executable,...args],metrics:null|string,kernel_name:null|string,launch_count:null|integer}. ` +
     `The argv must run the same workload and include {artifact} as a literal candidate placeholder. ` +
     `Choose device-supported counters for the bottleneck question, or leave metrics null for defaults. ` +
-    `Do not execute a command or invent a harness; return {launcher_argv:[]} if no exact launcher exists.`,
+    `If Bash and KERSOR_NCU_COMMAND are available, you may use the injected ncu-profiling skill for diagnostic profiles first. ` +
+    `Artifact: ${buildOut}; task: ${PROBLEM_PATH}; collector: ${BACKEND_DIR}/profile.sh; ` +
+    `normalizer: ${BACKEND_DIR}/to_evidence.py; keep raw outputs under ${EXP_DIR}. ` +
+    `Without that capability return only the plan. Do not invent a harness or measurements, and do not use profiler latency as a score; ` +
+    `return {launcher_argv:[]} if no exact launcher exists.`,
     { model: MODEL.profile, label: `driver-profile-${suffix}`, phase: phaseName,
       schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   if (!Array.isArray(plan?.launcher_argv) || !plan.launcher_argv.length) {

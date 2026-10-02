@@ -10,6 +10,8 @@ for the versioning policy.
 
 ### Added
 
+- Let Generalist and KernelBand inner profiler agents execute exploratory diagnostics through the runtime-provided agent NCU CLI when Bash is available, while preserving the Host collection and scoring path and the plan-only path for read-only activations (`Generalist/`, `KernelBand/`, `_substrate/profiling/README.md`).
+
 - Let CUDA driver workflows hand an exact launcher and selected counters to KerSor's Host `ncu-v1` evaluator when `KERSOR_GPUQ` is configured; the Host owns the exclusive lease and raw receipts (`Generalist/`, `KernelBand/`, `_substrate/profiling/README.md`).
 
 - **Harness Engineering workflow.** Adds a frozen-contract, profile-backed

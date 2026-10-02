@@ -15,6 +15,8 @@
 
 ### 新增（Added）
 
+- Generalist 与 KernelBand 内部 profiler agent 在拥有 Bash 时可使用 runtime 提供的 agent NCU CLI 自主采集探索性诊断，保留 Host 采集与评分路径及只读 activation 的计划返回路径（`Generalist/`、`KernelBand/`、`_substrate/profiling/README.md`）。
+
 - CUDA driver workflow 在配置 `KERSOR_GPUQ` 时将精确 launcher 和所选计数器交给 KerSor Host 的 `ncu-v1` 评测；独占租约与原始回执由 Host 持有（`Generalist/`、`KernelBand/`、`_substrate/profiling/README.md`）。
 
 - **Harness Engineering workflow。** 新增基于 arXiv:2607.17979 的冻结契约、
