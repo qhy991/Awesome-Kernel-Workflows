@@ -1005,8 +1005,12 @@ if (USE_DRIVER_STANDALONE) {
       ? `Profile the baseline kernel via the backend driver and normalize to canonical metrics.\n` +
         `Kernel: ${KERNEL_PATH}. Experiment dir: ${EXP_DIR}/baseline.\n` +
         `1. ` + driverSh('build.sh', `--source ${KERNEL_PATH} --out ${EXP_DIR}/baseline/artifact ${HARNESS_BUILD_CMD ? `--build-cmd "${HARNESS_BUILD_CMD}"` : ''}`) + `\n` +
-        `2. ` + driverSh('profile.sh', `--artifact ${EXP_DIR}/baseline/artifact --problem ${PROBLEM_PATH || PROBLEM_DEFINITION || KERNEL_PATH} --out ${EXP_DIR}/baseline/prof.native`) + `\n` +
-        `3. ` + driverPy('to_evidence.py', `--native ${EXP_DIR}/baseline/prof.native --format ${IDIOMS.profiler_format}`) + `\n` +
+        `2. Caller benchmark contract: ${BENCH_CMD || '(not provided)'}. Bind its actual executable launcher to the built artifact and same shape. ` +
+        `Run ${BACKEND_DIR}/profile.sh --artifact ${EXP_DIR}/baseline/artifact --problem ${PROBLEM_PATH || PROBLEM_DEFINITION || KERNEL_PATH} --out ${EXP_DIR}/baseline/prof.native` +
+        (BACKEND === 'cuda' ? ` --nsys-out ${EXP_DIR}/baseline/prof.native.sqlite` +
+          (NCU_BINARY ? ` --ncu-binary ${NCU_BINARY}` : '') : '') + ` -- <actual launcher argv>. ` +
+        `If no launcher can be bound, do not call profile.sh; return profiler_available:false.\n` +
+        `3. Only if profile.sh returns ok:true with native_profile, normalize that exact path using its returned format (ncu-csv or nsys-sqlite): ` + driverPy('to_evidence.py', `--native <returned_native_profile> --format <returned_format>`) + `\n` +
         `Return its stdout JSON verbatim: {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy,...}, coverage:[...], source_backend}. ` +
         `If the profiler exits 4 (unavailable), return {ok:true, metrics:{latency_ms:null,dram_pct:null,sm_pct:null,occupancy:null}, coverage:[], profiler_available:false}.`
       : `Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'); do NOT run ${IDIOMS.profiler_name || 'a native profiler'}. ` +

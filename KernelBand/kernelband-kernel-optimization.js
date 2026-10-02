@@ -451,6 +451,34 @@ let DRIVER_IMPL_REQUIREMENTS = ''
 let DRIVER_SOURCE_EXT = ''
 let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
 
+async function hostCudaProfile(buildOut, suffix, phaseName) {
+  const brokerPath = process.env.KERSOR_GPUQ || ''
+  if (!brokerPath) return { ok: false, error: 'KERSOR_GPUQ is required for Host-owned NCU profiling' }
+  const plan = await agentRetry(() => agent(
+    `Read the caller benchmark and this candidate. Benchmark: ${BENCHMARK_CMD || '(not provided)'}. ` +
+    `Return JSON only: {launcher_argv:[executable,...args],metrics:null|string,kernel_name:null|string,launch_count:null|integer}. ` +
+    `The argv must run the same workload and include {artifact} as a literal candidate placeholder. ` +
+    `Choose device-supported counters for the bottleneck question, or leave metrics null for defaults. ` +
+    `If Bash and KERSOR_NCU_COMMAND are available, you may use the injected ncu-profiling skill for diagnostic profiles first. ` +
+    `Artifact: ${buildOut}; task: ${PROBLEM_PATH}; collector: ${BACKEND_DIR}/profile.sh; ` +
+    `normalizer: ${BACKEND_DIR}/to_evidence.py; keep raw outputs under ${EXP_DIR}. ` +
+    `Without that capability return only the plan. Do not invent a harness or measurements, and do not use profiler latency as a score; ` +
+    `return {launcher_argv:[]} if no exact launcher exists.`,
+    { model: MODEL.profile, label: `driver-profile-${suffix}`, phase: phaseName,
+      schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
+  if (!Array.isArray(plan?.launcher_argv) || !plan.launcher_argv.length) {
+    return { ok: false, error: 'missing_profile_launcher' }
+  }
+  return evaluate({ protocol: 'ncu-v1', label: `ncu-${suffix}`, phase: phaseName,
+    artifactPath: buildOut, problemPath: PROBLEM_PATH,
+    profileScript: `${BACKEND_DIR}/profile.sh`,
+    normalizerScript: `${BACKEND_DIR}/to_evidence.py`,
+    outDir: `${EXP_DIR}/ncu-${suffix}`, brokerPath,
+    launcherArgv: plan.launcher_argv, ncuBinary: NCU_BINARY || undefined,
+    metrics: plan.metrics || undefined, kernelName: plan.kernel_name || undefined,
+    launchCount: plan.launch_count || undefined })
+}
+
 function langToken(legacy) {
   return USE_DRIVER ? DRIVER_LANG_FENCE : legacy
 }
@@ -708,14 +736,23 @@ if (USE_DRIVER_STANDALONE) {
     { model: MODEL.profile, label: 'driver-run-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   let evidenceOut
   if (PROFILING_DECISION.method === 'native_profiler') {
-    await agentRetry(() => agent(
-      `${driverSh('profile.sh', `--artifact ${buildOut} --problem ${PROBLEM_PATH} --out ${buildOut}.run.json --out ${profOut}`)}\n` +
-      `Return {ok, native_path}.`,
+    const hostNcu = DRIVER_BACKEND_ID === 'cuda' && typeof evaluate === 'function'
+    const profileOut = hostNcu ? await hostCudaProfile(buildOut, 'setup', 'Setup') : await agentRetry(() => agent(
+      `Profile the candidate at the caller benchmark shape: ${BENCHMARK_CMD || '(not provided)'}. ` +
+      `Run ${BACKEND_DIR}/profile.sh --artifact ${buildOut} --problem ${PROBLEM_PATH} --out ${profOut}` +
+      (DRIVER_BACKEND_ID === 'cuda' ? ` --nsys-out ${profOut}.sqlite` +
+        (NCU_BINARY ? ` --ncu-binary ${NCU_BINARY}` : '') : '') + ` -- <actual launcher argv>. ` +
+      `Bind the launcher to this artifact from the caller harness; do not invent one. ` +
+      `If no runnable launcher exists, return {ok:false,native_profile:null,error:'missing_profile_launcher'}. ` +
+      `Return the script stdout JSON verbatim; exit 3/4 is missing profile evidence.`,
       { model: MODEL.profile, label: 'driver-profile-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
-    evidenceOut = await agentRetry(() => agent(
-      `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
-      `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-      { model: MODEL.mechanical, label: 'driver-to-evidence-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
+    evidenceOut = hostNcu ? profileOut : profileOut?.ok && (profileOut.native_profile || profileOut.native_path)
+      ? await agentRetry(() => agent(
+          `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profileOut.native_profile || profileOut.native_path}` +
+          (DRIVER_BACKEND_ID === 'cuda' && profileOut.format ? ` --format ${profileOut.format}` : '') + `\`.\n` +
+          `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+          { model: MODEL.mechanical, label: 'driver-to-evidence-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
+      : { ok: false, metrics: {}, coverage: [], profiler_available: false }
   } else {
     evidenceOut = await agentRetry(() => agent(
       `Profiling-strategist chose method='${PROFILING_DECISION.method}' (confidence='${PROFILING_DECISION.confidence}'); do NOT run a native profiler (profile.sh). ` +
@@ -1170,14 +1207,23 @@ Then append, using the values you just measured (status="done" if it compiled AN
       { model: MODEL.profile, label: `driver-run-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
     let evidenceOut
     if (PROFILING_DECISION.method === 'native_profiler') {
-      await agentRetry(() => agent(
-        `${driverSh('profile.sh', `--artifact ${buildOut} --problem ${PROBLEM_PATH} --out ${buildOut}.run.json --out ${profOut}`)}\n` +
-        `Return {ok, native_path}.`,
+      const hostNcu = DRIVER_BACKEND_ID === 'cuda' && typeof evaluate === 'function'
+      const profileOut = hostNcu ? await hostCudaProfile(buildOut, suffix, 'Evaluate') : await agentRetry(() => agent(
+        `Profile the candidate at the caller benchmark shape: ${BENCHMARK_CMD || '(not provided)'}. ` +
+        `Run ${BACKEND_DIR}/profile.sh --artifact ${buildOut} --problem ${PROBLEM_PATH} --out ${profOut}` +
+        (DRIVER_BACKEND_ID === 'cuda' ? ` --nsys-out ${profOut}.sqlite` +
+          (NCU_BINARY ? ` --ncu-binary ${NCU_BINARY}` : '') : '') + ` -- <actual launcher argv>. ` +
+        `Bind the launcher to this artifact from the caller harness; do not invent one. ` +
+        `If no runnable launcher exists, return {ok:false,native_profile:null,error:'missing_profile_launcher'}. ` +
+        `Return the script stdout JSON verbatim; exit 3/4 is missing profile evidence.`,
         { model: MODEL.profile, label: `driver-profile-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
-      evidenceOut = await agentRetry(() => agent(
-        `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profOut}\`.\n` +
-        `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
-        { model: MODEL.mechanical, label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
+      evidenceOut = hostNcu ? profileOut : profileOut?.ok && (profileOut.native_profile || profileOut.native_path)
+        ? await agentRetry(() => agent(
+            `Run exactly: \`${PY ? PY + ' ' : ''}${BACKEND_DIR}/to_evidence.py --native ${profileOut.native_profile || profileOut.native_path}` +
+            (DRIVER_BACKEND_ID === 'cuda' && profileOut.format ? ` --format ${profileOut.format}` : '') + `\`.\n` +
+            `Return stdout JSON verbatim {ok, metrics:{latency_ms,dram_pct,sm_pct,occupancy}, coverage, source_backend}.`,
+            { model: MODEL.mechanical, label: `driver-to-evidence-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
+        : { ok: false, metrics: {}, coverage: [], profiler_available: false }
     } else {
       // Profiling-strategist chose method='${PROFILING_DECISION.method}'; do NOT run the native profiler.
       // run.sh already produced throughput above; normalize it when method='perf_heuristic'.

@@ -23,6 +23,10 @@
 
 ### 新增（Added）
 
+- Generalist 与 KernelBand 内部 profiler agent 在拥有 Bash 时可使用 runtime 提供的 agent NCU CLI 自主采集探索性诊断，保留 Host 采集与评分路径及只读 activation 的计划返回路径（`Generalist/`、`KernelBand/`、`_substrate/profiling/README.md`）。
+
+- CUDA driver workflow 在配置 `KERSOR_GPUQ` 时将精确 launcher 和所选计数器交给 KerSor Host 的 `ncu-v1` 评测；独占租约与原始回执由 Host 持有（`Generalist/`、`KernelBand/`、`_substrate/profiling/README.md`）。
+
 - **Harness Engineering workflow。** 新增基于 arXiv:2607.17979 的冻结契约、
   profile 驱动优化循环。编译/正确性、可选深度验证与计时仍由调用方命令拥有；
   候选只写入 `exp_dir`，只有正确且严格更快才晋升，并保留原始产物。
@@ -37,6 +41,10 @@
   (`_substrate/verification/README.md`)
 
 ### 修复（Fixed）
+
+- 修复 KernelBand 路由元数据：把 integration patterns 放回 `routing` 并声明已实现的 SOL-ExecBench solution 路径，避免 selector 在 dispatch 前错误拒绝 FlashInfer-Bench 任务（`KernelBand/manifest.yaml`）。
+
+- CUDA NCU profiling 现在启动调用方的真实 workload，兼容旧长表和 B300 NCU 2026 宽表 CSV，区分计数器拒绝，并可输出独立标记的 Nsight Systems 降级结果；失败或空报告不再计入计数器实测证据（`_substrate/backends/cuda/profile.sh`、`_substrate/backends/_evidence_nvidia.py`、`_substrate/tests/test_driver_scripts.py`、`Generalist/`、`KernelBand/`、`AccelOpt/`、`_substrate/backends/REGISTRY.md`）。
 
 - FACT 直接传递已实现的 pattern，不再假定只读 agent 能写入 registry；
   改为每次结构化调用生成一个完整候选，保留原 composition 数量，避免

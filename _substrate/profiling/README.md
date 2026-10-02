@@ -54,6 +54,16 @@ The workflow then runs the returned method deterministically:
 All paths emit the canonical metrics dict `diagnose.py` consumes; `confidence` is
 already stamped, so downstream evidence stays provenance-tagged.
 
+For KerSor Host runs on CUDA, set `KERSOR_GPUQ` to the site's broker executable.
+Generalist and KernelBand ask the agent for an argv plan containing the
+literal `{artifact}` candidate placeholder and optional device-supported
+metrics. The Host `ncu-v1` evaluator obtains an exclusive broker lease, runs
+`cuda/profile.sh`, preserves the native output and broker receipt, then invokes
+`to_evidence.py`. A site with admin-only counters can supply a verified wrapper
+through `profile_binary` (Generalist) or `ncu_binary` (KernelBand); the wrapper
+must retain the broker's `CUDA_VISIBLE_DEVICES`. Without a broker or runnable
+launcher the native route returns missing evidence rather than model numbers.
+
 ## Files
 
 - `profiling_strategist.py` — selector + stamper (deterministic core + autonomy hook)
@@ -68,3 +78,14 @@ stamps literal Nsight Compute as `evidence="ncu"` and every other native hw
 profiler (rocprof/msprof/vtune/metal-capture) as `evidence="native_profiler"`,
 so provenance is honest rather than借用 the ncu tag. `profiler_name` carries the
 true tool in both cases.
+
+## Inner-agent diagnostics
+
+A Bash-enabled runtime may expose `KERSOR_NCU_COMMAND` and inject the focused
+`ncu-profiling` skill. An inner profiler can call that CLI itself, choose its
+launcher/counters/kernel selector, and inspect real counters before returning
+a plan. Generalist and KernelBand explicitly permit this in their CUDA driver
+profiler prompts. Read-only activations still return plans for Host evaluation.
+The CLI uses the same exclusive GPU broker and collector as `ncu-v1`; retain
+its native CSV and receipt. These workspace diagnostics do not replace the
+Host's accepted score or the no-profiler performance evaluator.
