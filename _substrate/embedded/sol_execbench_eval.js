@@ -80,6 +80,10 @@ async function __solExecbenchEvaluate(ctx) {
     phase: ctx.phase || 'Evaluate',
     candidatePath: ctx.kernelSource,
     candidateSource: ctx.candidateSource,
+    candidateLanguage: ctx.candidateLanguage || '',
+    baselineSolutionPath: ctx.baselineSolutionPath || '',
+    baselineEvaluationPath: ctx.baselineEvaluationPath || '',
+    parentSolutionPath: ctx.parentSolutionPath || '',
     substrateDir: ctx.substrateDir,
     contractEnv: ctx.contractEnv,
     solutionOut: ctx.solutionOut,
@@ -93,8 +97,26 @@ async function __solExecbenchEvaluate(ctx) {
     ldLibraryPath: ctx.ldLibraryPath || '',
     envPrefix: ctx.envPrefix || '',
     definitionPath: ctx.definitionPath || '',
+    bindingOut: ctx.bindingOut || ctx.bindingPath || '',
+    bindingWorkflow: ctx.bindingWorkflow || '',
+    candidateId: ctx.candidateId || '',
     timeoutSeconds: ctx.timeoutSeconds || 0,
-  })
+  }).then(__solGuardHarnessFault)
+}
+
+// A harness refusal occurs before a candidate is built. Preserve that boundary
+// instead of spending a solver refine turn on a nonexistent compile failure.
+function __solGuardHarnessFault(result) {
+  const HARNESS_FAULTS = ['invalid_request', 'infrastructure_error']
+  if (result && HARNESS_FAULTS.includes(result.failure_code)) {
+    const detail = result.stderr || result.stdout || ''
+    throw new Error(
+      `sol-execbench harness fault (${result.failure_code}) at stage `
+      + `${result.stage || 'unknown'}: ${String(detail).slice(0, 400)} `
+      + '- this is a harness or wiring fault, not a candidate compile error',
+    )
+  }
+  return result
 }
 // <<< SOL_INLINE_END >>>
 

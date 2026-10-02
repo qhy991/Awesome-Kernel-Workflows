@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 整合 WSR 的 Host 父实现与候选源码绑定、CuTe 资格修复，同时保留 main 的可执行工具、显式集成选择、真实启动 profiling、当前重试 helper 与独立计分归属。
+
 ### Fixed
 
 - 全部 24 个含 integration strategist 的 workflow 直接采用显式集成选择（包括 embedded_inplace），避免重复分类 activation，并删除无用的 preferred-method/manifest 推导。入口回归实际执行四种路由选择，替代对历史 if 语句写法的断言（workflow 入口、`_meta/tools/test/explicit-integration.test.js`、SOL 路由测试）。
@@ -14,6 +18,43 @@
 - 修复 CUDA profiling 实际运行空 Python 程序的问题：NCU 与 NSYS 共用指定 launcher 契约；NCU 拒绝不可运行的候选及空报告（`_substrate/backends/cuda/profile.sh`、`_substrate/tests/test_driver_scripts.py`）。
 - KernelSkill 嵌入式写入保留完整源码，缺失计数器不再要求填零；明确指定的集成方式直接采用，省去额外分类 activation（`KernelSkill/kernelskill-kernel-optimization.js`、`_meta/tools/test/workflow-effectiveness-host.test.js`）。
 
+- KSearch 与 AKO4X 的每个 CuTe 候选现在传递精确的 Host 实测输入父代，
+  并将绑定的种子相对指标与框架 reference 指标分别返回。此前内部种子相对
+  评分无法满足 KerSor 的严格跨 workflow 交接。
+  (`_substrate/embedded/sol_execbench_eval.js`、
+  `KSearch/ksearch-kernel-optimization.js`、
+  `AKO4X/ako4x-kernel-optimizer.js`、
+  `_meta/tools/test/ksearch-guard.test.js`、
+  `_meta/tools/test/ako4x-guard.test.js`)
+
+- 明确 KSearch 和 AKO4X 的 CuTe 候选契约。此前 AKO4X 要求 Python 候选保留
+  CUDA `PYBIND11_MODULE` 绑定，KSearch 则未明确禁止库 GEMM 代算；现在每个
+  workload 都必须执行 CuTe 编译内核。(`KSearch/ksearch-kernel-optimization.js`、
+  `AKO4X/ako4x-kernel-optimizer.js`)
+
+- KSearch 熔断回归测试现在匹配 checkpoint 安全停止：先记录熔断决定，
+  checkpoint 后再执行停止。(`_meta/tools/test/ksearch-circuit-breaker.test.js`)
+
+- CuTe DSL 的 Sol 候选现在由 Host 直接打包 Python 源码，不再交给仅支持 CUDA 的
+  packer。KSearch 与 AKO4X 由 Host 测量传入的 CuTe 种子、相对种子评价完整候选，
+  并返回精确实测源码及绑定。AKO4X 在此路径不再让只读 agent 执行跑分；manifest
+  声明其实际的 CuTe／Host 与非 Git fresh-process 契约。
+  (`_substrate/embedded/sol_execbench_eval.js`、
+  `KSearch/ksearch-kernel-optimization.js`、`AKO4X/ako4x-kernel-optimizer.js`、
+  `AKO4X/manifest.yaml`、`_meta/tools/test/ksearch-guard.test.js`、
+  `_meta/tools/test/ako4x-guard.test.js`)
+
+- CUDAAgent 现在由 Host 测量传入的 Sol 种子，按相对种子的增益给奖励、判断停止及
+  晋升候选。此前比强种子更慢的候选也可能因快于框架 reference 而达到目标、在
+  A→B 运行中替换种子；现在回退时保留输入源码，reference 相对指标另行标注。
+  (`CUDAAgent/cuda-agent-kernel-optimization.js`、
+  `_meta/tools/test/cudaagent-host-binding.test.js`)
+
+- Generalist 现在由 Host 测量传入的 Sol 强种子及候选，以种子为基准评分，并晋升精确实测源码。此前只读 anti-cheat agent 无法执行 substrate 命令，即使 Host 有四项完整正确测量，仍把全部候选判为无效并只返回基线。共用 Sol helper 同时传递完整 solution 基线请求、统一识别 harness 拒绝，并同步九个 workflow 的内联副本。(`Generalist/generalist-kernel-optimization.js`、`_substrate/embedded/sol_execbench_eval.js`、九个 Sol workflow 入口、`_meta/tools/test/generalist-host-sol.test.js`)
+
+- 将 CUDAAgent 的产物绑定请求完整传入共用 Sol 评测器。此前正确的 Host 测量会丢失这些字段，返回无绑定的空最优源码，还可能误报达到加速目标。现在正确实测候选缺少 Host 绑定时会明确失败。(`_substrate/embedded/sol_execbench_eval.js`、`CUDAAgent/cuda-agent-kernel-optimization.js`、`_meta/tools/lib/run-workflow.js`、`_meta/tools/test/cudaagent-host-binding.test.js`)
+- CUDAAgent 的 Sol 候选现在绑定确定性 Host 评测，并返回被测量的精确源码用于合格交接；只有 agent 报告正确、却没有匹配 Host 绑定的候选不再成为最优候选。(`CUDAAgent/cuda-agent-kernel-optimization.js`, `_meta/tools/lib/run-workflow.js`, `_meta/tools/test/cudaagent-host-binding.test.js`)
+- KernelFoundry 的实测结果返回 Host 绑定的精确候选源码路径；可选的 checkpoint 副本缺失时，此前会让已经通过全 workload 测量的第二步交接被阻断。(`KernelFoundry/kernelfoundry-kernel-optimization.js`, `_meta/tools/lib/run-workflow.js`, `_meta/tools/test/kernelfoundry-guard.test.js`)
 - KernelBand 的 SOL 生成上下文保留完整选中源码和末尾 run/forward 绑定（`KernelBand/kernelband-kernel-optimization.js`）。
 
 - 修复 FACT 可选数组及异常计时选优；KernelFoundry 由 Host 绑定结果，KernelBand 使用 Host 基线/分数，避免有效成果丢失和分数虚高（FACT/、KernelFoundry/、KernelBand/、KernelSkill/、GemmPTX/、tests）。
@@ -26,6 +67,10 @@
 - Generalist 与 KernelBand 内部 profiler agent 在拥有 Bash 时可使用 runtime 提供的 agent NCU CLI 自主采集探索性诊断，保留 Host 采集与评分路径及只读 activation 的计划返回路径（`Generalist/`、`KernelBand/`、`_substrate/profiling/README.md`）。
 
 - CUDA driver workflow 在配置 `KERSOR_GPUQ` 时将精确 launcher 和所选计数器交给 KerSor Host 的 `ncu-v1` 评测；独占租约与原始回执由 Host 持有（`Generalist/`、`KernelBand/`、`_substrate/profiling/README.md`）。
+- KSearch 将 CuTe DSL 声明为可选择的 Python 源码语言，并把语法约束传入种子生成、
+  调试和改进提示词；遇到 CUDA C++ 驱动或尚未验证的 SOL-ExecBench 打包路径时明确
+  拒绝，避免离线派发误用 `.cu`／`nvcc` 契约。（`KSearch/manifest.yaml`、
+  `KSearch/ksearch-kernel-optimization.js`、`_meta/tools/test/ksearch-guard.test.js`）
 
 - **Harness Engineering workflow。** 新增基于 arXiv:2607.17979 的冻结契约、
   profile 驱动优化循环。编译/正确性、可选深度验证与计时仍由调用方命令拥有；

@@ -428,7 +428,7 @@ args:
   - name: language
     type: string
     default: '''triton'''
-    description: Kernel implementation language (triton | cuda | python)
+    description: Kernel implementation language (triton | cuda | cute-dsl | python_reference). CuTe DSL uses Python source and caller-owned correctness/benchmark commands until a CuTe driver is qualified.
     example: triton
   - name: target_gpu
     type: string
@@ -567,6 +567,7 @@ routing:
   languages:
   - cuda
   - triton
+  - cute-dsl
   - ascendc
   - python_reference
   - metax

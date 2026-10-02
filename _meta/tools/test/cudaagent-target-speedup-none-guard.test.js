@@ -33,6 +33,6 @@ test('cudaagent: every numeric TARGET_SPEEDUP site is guarded against null', () 
 })
 
 test('cudaagent: target-met check skips when TARGET_SPEEDUP is null (explore = no target)', () => {
-  assert.match(SOURCE, /if \(TARGET_SPEEDUP !== null && verifyResult\.correct && \(verifyResult\.speedup_vs_compile \|\| 0\) >= TARGET_SPEEDUP\)/,
+  assert.match(SOURCE, /if \(TARGET_SPEEDUP !== null && verifyResult\.correct && boundSourceReady &&\s+\(!IS_SOL \|\| candidateGain > 1\) && candidateGain >= TARGET_SPEEDUP\)/,
     'target-met check must be gated on TARGET_SPEEDUP !== null so explore mode (null) never sets targetMet')
 })

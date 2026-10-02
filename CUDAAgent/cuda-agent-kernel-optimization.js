@@ -69,6 +69,10 @@ async function __solExecbenchEvaluate(ctx) {
     phase: ctx.phase || 'Evaluate',
     candidatePath: ctx.kernelSource,
     candidateSource: ctx.candidateSource,
+    candidateLanguage: ctx.candidateLanguage || '',
+    baselineSolutionPath: ctx.baselineSolutionPath || '',
+    baselineEvaluationPath: ctx.baselineEvaluationPath || '',
+    parentSolutionPath: ctx.parentSolutionPath || '',
     substrateDir: ctx.substrateDir,
     contractEnv: ctx.contractEnv,
     solutionOut: ctx.solutionOut,
@@ -82,18 +86,15 @@ async function __solExecbenchEvaluate(ctx) {
     ldLibraryPath: ctx.ldLibraryPath || '',
     envPrefix: ctx.envPrefix || '',
     definitionPath: ctx.definitionPath || '',
+    bindingOut: ctx.bindingOut || ctx.bindingPath || '',
+    bindingWorkflow: ctx.bindingWorkflow || '',
+    candidateId: ctx.candidateId || '',
     timeoutSeconds: ctx.timeoutSeconds || 0,
   }).then(__solGuardHarnessFault)
 }
 
-// A `compiled: false` from the evaluator does not always mean the candidate is
-// bad.  `invalid_request` and `infrastructure_error` are the harness refusing or
-// failing before the candidate was ever built, and callers that map any
-// non-success onto compile_error burn refine turns and a stagnation budget on a
-// misconfiguration.  Observed: a candidate staged outside the evaluation roots
-// was rejected at preflight, reported three times as `compile_error`, and the run
-// stopped at the stagnation limit having never compiled anything.  Surface a
-// harness fault as a harness fault and stop, because retrying cannot fix it.
+// A harness refusal occurs before a candidate is built. Preserve that boundary
+// instead of spending a solver refine turn on a nonexistent compile failure.
 function __solGuardHarnessFault(result) {
   const HARNESS_FAULTS = ['invalid_request', 'infrastructure_error']
   if (result && HARNESS_FAULTS.includes(result.failure_code)) {
@@ -554,9 +555,13 @@ let bestKernelCode = ''
 let bestBindingCode = ''
 let bestModelNew = ''
 let bestSpeedup = 0
+let bestSolSeedRelative = 1
+let solSeedLatencyMs = null
 let bestCompiled = false
 let bestCorrect = false
 let bestCandidateId = ''
+let bestArtifactBinding = null
+let bestBoundSourcePath = ''
 let checkpointedBestId = ''
 let currentAttempt = 0
 let turnsCompleted = 0
@@ -712,6 +717,28 @@ if (IS_SOL) {
     ['sol_substrate_dir', SOL_SUBSTRATE_DIR],
   ].filter(([, value]) => !value).map(([name]) => name)
   if (missing.length) throw new Error(`sol_execbench_solution requires non-empty: ${missing.join(', ')}`)
+  const seed = await __solExecbenchEvaluate({
+    label: 'sol-seed-baseline', phase: 'Setup',
+    substrateDir: SOL_SUBSTRATE_DIR,
+    kernelSource: `${EXP_DIR}/host_seed.cu`,
+    baselineSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
+    contractEnv: `${EXP_DIR}/contract.env`,
+    solutionOut: `${EXP_DIR}/host_seed.solution.json`,
+    benchOut: `${EXP_DIR}/host_seed.bench.jsonl`,
+    solCli: SOL_CLI, taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG,
+    seedDir: SOL_SEED_DIR, cudaVisibleDevices: SOL_CVD,
+    ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
+    definitionPath: SOL_DEFINITION_PATH,
+  })
+  const latency = seed && seed.candidate_latency_aggregate_ms
+  if (!seed || seed.compiled !== true || seed.correct !== true ||
+      seed.full_workload_set !== true || seed.output_contract_valid !== true ||
+      seed.measurement_valid !== true ||
+      typeof latency !== 'number' || !Number.isFinite(latency) || latency <= 0) {
+    throw new Error('Host could not establish a complete measured Sol seed baseline')
+  }
+  solSeedLatencyMs = latency
+  log(`Host Sol seed baseline latency: ${solSeedLatencyMs} ms`)
 }
 // embedded_inplace mutates the project file in place; back it up ONCE so every
 // candidate restores to a pristine original and the exit net can too.
@@ -1040,7 +1067,15 @@ Parse correctness (pass/fail) and latency STRICTLY from the test/benchmark comma
       ldLibraryPath: SOL_LD_LIBRARY_PATH,
       envPrefix: SOL_ENV_PREFIX,
       definitionPath: SOL_DEFINITION_PATH,
+      bindingPath: `${EXP_DIR}/bindings/${variantName}.json`,
+      bindingWorkflow: WORKFLOW_NAME,
+      candidateId: `attempt-${currentAttempt}`,
     })
+    if (directSolResult?.correct && directSolResult?.measurement_valid &&
+        directSolResult?.full_workload_set &&
+        directSolResult?.artifact_binding?.verified !== true) {
+      throw new Error('Host artifact binding missing for a correct measured Sol candidate')
+    }
     const plan = __solExecbenchEvalPlan({
       substrateDir: SOL_SUBSTRATE_DIR,
       kernelSource: candidatePath,
@@ -1065,14 +1100,22 @@ The parse step prints one line "SPEEDUP=<aggregate> REDUCTION=<contract reductio
 
   let verifyResult
   try {
+  const hostLatency = directSolResult && directSolResult.candidate_latency_aggregate_ms
+  const hostValid = Boolean(directSolResult && directSolResult.compiled === true &&
+    directSolResult.correct === true && directSolResult.full_workload_set === true &&
+    directSolResult.output_contract_valid === true && directSolResult.measurement_valid === true &&
+    typeof hostLatency === 'number' && Number.isFinite(hostLatency) && hostLatency > 0)
+  const solSeedGain = hostValid ? solSeedLatencyMs / hostLatency : 0
   verifyResult = directSolResult
     ? {
         ...directSolResult,
         speedup_vs_eager: directSolResult.speedup,
         speedup_vs_compile: directSolResult.speedup,
-        reward: !directSolResult.compiled || !directSolResult.correct
+        speedup_vs_seed: solSeedGain,
+        reward: !hostValid
           ? -1
-          : directSolResult.speedup > 1.05 ? 3 : 1,
+          : TARGET_SPEEDUP !== null && solSeedGain > 1 && solSeedGain >= TARGET_SPEEDUP
+            ? 3 : solSeedGain > 1 ? 1 : 0,
         compile_error: directSolResult.compiled ? '' : (directSolResult.stderr || directSolResult.failure_code || ''),
         correctness_error: directSolResult.correct ? '' : (directSolResult.stderr || directSolResult.failure_code || ''),
       }
@@ -1170,35 +1213,48 @@ Then append, using the values you just measured (status="done" if correctness pa
     outcome = 'incorrect'
     error = verifyResult.correctness_error || ''
   } else {
-    outcome = `correct (${verifyResult.speedup_vs_compile?.toFixed(2) || '?'}x vs compile)`
+    outcome = IS_SOL
+      ? `correct (${verifyResult.speedup_vs_seed?.toFixed(2) || '?'}x vs supplied seed)`
+      : `correct (${verifyResult.speedup_vs_compile?.toFixed(2) || '?'}x vs compile)`
   }
 
   history.push({
     turn: currentAttempt,
     action: implResult.implementation_notes?.substring(0, 50) || 'kernel implementation',
     outcome: outcome,
-    speedup: verifyResult.speedup_vs_compile || 0,
+    speedup: IS_SOL ? verifyResult.speedup_vs_seed || 0 : verifyResult.speedup_vs_compile || 0,
     error: error,
     reward: verifyResult.reward,
   })
 
   // Update best
-  const prevBest = bestSpeedup
-  if (verifyResult.correct && (verifyResult.speedup_vs_compile || 0) > bestSpeedup) {
+  const prevBest = IS_SOL ? bestSolSeedRelative : bestSpeedup
+  const boundSourceReady = !IS_SOL || (
+    directSolResult?.artifact_binding?.verified === true &&
+    directSolResult.artifact_binding.candidate_sha256 === directSolResult.candidate_sha256
+  )
+  const candidateGain = IS_SOL ? verifyResult.speedup_vs_seed || 0 : verifyResult.speedup_vs_compile || 0
+  if (verifyResult.correct && boundSourceReady && candidateGain > prevBest) {
     bestKernelCode = implResult.kernel_code
     bestBindingCode = implResult.binding_code
     bestModelNew = implResult.model_new_code
     bestSpeedup = verifyResult.speedup_vs_compile || 0
+    if (IS_SOL) bestSolSeedRelative = candidateGain
     bestCompiled = verifyResult.compiled === true
     bestCorrect = verifyResult.correct === true
     bestCandidateId = `attempt-${currentAttempt}`
-    log(`  NEW BEST: ${bestSpeedup.toFixed(2)}x vs compile (reward=${verifyResult.reward})`)
+    if (IS_SOL) {
+      bestArtifactBinding = directSolResult.artifact_binding
+      bestBoundSourcePath = directSolResult.candidate_path
+    }
+    log(`  NEW BEST: ${(IS_SOL ? bestSolSeedRelative : bestSpeedup).toFixed(2)}x vs ${IS_SOL ? 'seed' : 'compile'} (reward=${verifyResult.reward})`)
   }
 
   // Check if target met (#41: skip when TARGET_SPEEDUP is null — explore mode has no numeric target)
-  if (TARGET_SPEEDUP !== null && verifyResult.correct && (verifyResult.speedup_vs_compile || 0) >= TARGET_SPEEDUP) {
+  if (TARGET_SPEEDUP !== null && verifyResult.correct && boundSourceReady &&
+      (!IS_SOL || candidateGain > 1) && candidateGain >= TARGET_SPEEDUP) {
     targetMet = true
-    log(`  TARGET MET: ${verifyResult.speedup_vs_compile?.toFixed(2)}x ≥ ${TARGET_SPEEDUP}x`)
+    log(`  TARGET MET: ${candidateGain.toFixed(2)}x ≥ ${TARGET_SPEEDUP}x`)
   } else {
     // ===========================================================================
     // Phase 5: Refine — Diagnose and plan fix
@@ -1214,11 +1270,12 @@ Then append, using the values you just measured (status="done" if correctness pa
   // Stop early instead of burning the full MAX_TURNS when the loop stops improving
   // (stagnant) or stops producing any correct measured result (dry).
   if (!targetMet) {
-    const improvement = (bestSpeedup - prevBest) / Math.max(prevBest, 1e-9)
+    const currentBest = IS_SOL ? bestSolSeedRelative : bestSpeedup
+    const improvement = (currentBest - prevBest) / Math.max(prevBest, 1e-9)
     stagnantRounds = improvement < STAGNATION_EPS ? stagnantRounds + 1 : 0
-    const producedMeasured = verifyResult.correct && (verifyResult.speedup_vs_compile || 0) > 0
+    const producedMeasured = verifyResult.correct && candidateGain > 0
     dryRounds = producedMeasured ? 0 : dryRounds + 1
-    log(`  Turn ${currentAttempt + 1}: best ${bestSpeedup.toFixed(2)}x | stagnant ${stagnantRounds}/${STAGNATION_LIMIT} | dry ${dryRounds}/${DRY_LIMIT}`)
+    log(`  Turn ${currentAttempt + 1}: best ${currentBest.toFixed(2)}x | stagnant ${stagnantRounds}/${STAGNATION_LIMIT} | dry ${dryRounds}/${DRY_LIMIT}`)
     if (stagnantRounds >= STAGNATION_LIMIT) {
       log(`  stagnation limit (${STAGNATION_LIMIT}) reached — stopping (stalled)`)
       convergenceStatus = 'stalled'
@@ -1250,10 +1307,10 @@ Then append, using the values you just measured (status="done" if correctness pa
     compiled: bestCompiled,
     correct: bestCorrect,
     metric: {
-      name: 'speedup_vs_compile',
-      value: bestSpeedup,
+      name: IS_SOL ? 'speedup_vs_seed' : 'speedup_vs_compile',
+      value: IS_SOL ? bestSolSeedRelative : bestSpeedup,
     },
-    baseline_metric: compileTime,
+    baseline_metric: IS_SOL ? solSeedLatencyMs : compileTime,
     best_candidate_id: bestCandidateId || null,
     best_kernel_path: materializedBestPath,
     result_path: null,
@@ -1307,7 +1364,7 @@ let finalReport = ''
 if (terminationReason !== 'turn_limit') {
   finalReport = `CUDAAgent stopped at a turn safe point: ${terminationReason}. ` +
     `Completed ${turnsCompleted}/${MAX_TURNS} turns; best verified speedup ` +
-    `${bestSpeedup.toFixed(6)}x versus the compile baseline.`
+    `${(IS_SOL ? bestSolSeedRelative : bestSpeedup).toFixed(6)}x versus the ${IS_SOL ? 'supplied seed' : 'compile baseline'}.`
 } else {
   finalReport = await agentRetry(() => agent(`Write a concise optimization report.
 
@@ -1315,8 +1372,9 @@ if (terminationReason !== 'turn_limit') {
 - Adaptation scope: ${ADAPTATION_SCOPE}
 - Operation: ${OP_DESC}
 ${IS_SOL
-    ? `- Baseline: owned by the SOL evaluation contract
-- Best official aggregate speedup: ${bestSpeedup.toFixed(2)}x`
+    ? `- Supplied seed: Host-measured at ${solSeedLatencyMs} ms
+- Best gain over supplied seed: ${bestSolSeedRelative.toFixed(2)}x
+- Best speedup over framework reference: ${bestSpeedup.toFixed(2)}x`
     : `- Baseline eager: ${eagerTime}ms
 - Baseline compile: ${compileTime}ms
 - Best kernel time: ${compileTime / (bestSpeedup || 1)}ms
@@ -1356,13 +1414,24 @@ return {
   input_mode: INPUT_MODE,
   problem_definition: PROBLEM_DEFINITION,
   problem_path: PROBLEM_PATH,
-  generated_kernel_path: bestKernelCode ? bestKernelPath() : generatedKernelPath,
+  generated_kernel_path: IS_SOL
+    ? (bestArtifactBinding?.verified ? bestBoundSourcePath : '')
+    : (bestKernelCode ? bestKernelPath() : generatedKernelPath),
+  ...(IS_SOL ? {
+    artifact_binding_required: bestArtifactBinding?.verified === true,
+    artifact_binding_path: bestArtifactBinding?.binding_path || '',
+    best_candidate_id: bestCandidateId,
+    canonical_metric: { name: 'speedup', value: bestSpeedup },
+    seed_relative_speedup: bestSolSeedRelative,
+    seed_baseline_latency_ms: solSeedLatencyMs,
+  } : {}),
   initial_candidates: initialCandidates,
   initial_generation_result: initialGenerationResult,
   operation: OP_DESC,
   eager_time_ms: eagerTime,
   compile_time_ms: compileTime,
   best_speedup_vs_compile: bestSpeedup,
+  best_speedup_vs_seed: IS_SOL ? bestSolSeedRelative : null,
   best_speedup_vs_eager: IS_SOL ? null : eagerTime / (compileTime / (bestSpeedup || 1)),
   target_met: targetMet,
   convergence_status,
@@ -1374,8 +1443,9 @@ return {
   max_turns: MAX_TURNS,
   reward_history: history.map(h => h.reward),
   adaptation_scope: ADAPTATION_SCOPE,
-  best_kernel_code: bestKernelCode,
-  best_kernel_path: bestKernelCode ? bestKernelPath() : null,
+  best_kernel_code: IS_SOL && !bestArtifactBinding ? MODEL_PATH : bestKernelCode,
+  best_kernel_path: IS_SOL && bestArtifactBinding?.verified
+    ? bestBoundSourcePath : (IS_SOL ? MODEL_PATH : (bestKernelCode ? bestKernelPath() : null)),
   best_binding_code: bestBindingCode,
   best_model_new: bestModelNew,
   report: finalReport,

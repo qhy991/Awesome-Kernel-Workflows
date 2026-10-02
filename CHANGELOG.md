@@ -8,11 +8,78 @@ for the versioning policy.
 
 ## [Unreleased]
 
+### Changed
+
+- Merge the WSR Host-bound parent/candidate lineage and CuTe qualification fixes with main executable workflow tools, explicit integration selection, and real-launch profiling; preserve the current retry helper and independent score ownership.
+
+### Fixed
+
+- Forward each CuTe candidate's exact Host-measured input parent to KSearch
+  and AKO4X, and return the bound seed-relative metric separately from the
+  framework-reference metric. Previously internal seed-relative scores could
+  not satisfy KerSor's strict cross-workflow handoff.
+  (`_substrate/embedded/sol_execbench_eval.js`,
+  `KSearch/ksearch-kernel-optimization.js`,
+  `AKO4X/ako4x-kernel-optimizer.js`,
+  `_meta/tools/test/ksearch-guard.test.js`,
+  `_meta/tools/test/ako4x-guard.test.js`)
+
+- Clarify the CuTe candidate contract in KSearch and AKO4X. AKO4X previously
+  told Python candidates to preserve a CUDA `PYBIND11_MODULE` block, while
+  KSearch left library GEMM delegation ambiguous; both now require a real
+  CuTe-compiled path for every workload. (`KSearch/ksearch-kernel-optimization.js`,
+  `AKO4X/ako4x-kernel-optimizer.js`)
+
+- Keep KSearch's circuit-breaker regression aligned with the checkpoint-safe
+  stop: the decision is captured before the checkpoint and applied afterward.
+  (`_meta/tools/test/ksearch-circuit-breaker.test.js`)
+
+- CuTe DSL Sol candidates now pass their Python source to the Host instead of
+  the CUDA-only packer. KSearch and AKO4X measure the supplied CuTe seed on the
+  Host, score complete candidates against it, and return the exact measured
+  source and binding. AKO4X no longer asks a read-only agent to execute its
+  benchmark in this path; its manifest admits the actual CuTe/Host and
+  fresh-process contracts. (`_substrate/embedded/sol_execbench_eval.js`,
+  `KSearch/ksearch-kernel-optimization.js`, `AKO4X/ako4x-kernel-optimizer.js`,
+  `AKO4X/manifest.yaml`, `_meta/tools/test/ksearch-guard.test.js`,
+  `_meta/tools/test/ako4x-guard.test.js`)
+
+- CUDAAgent now measures the supplied Sol seed through the Host and uses
+  seed-relative gain to reward, stop, and promote candidates. Previously a
+  candidate slower than a strong seed could meet a target measured against the
+  framework reference and replace that seed in an A→B run. Regressions now
+  retain the input source while the reference-relative metric remains labelled
+  separately. (`CUDAAgent/cuda-agent-kernel-optimization.js`,
+  `_meta/tools/test/cudaagent-host-binding.test.js`)
+
+- Generalist now measures its supplied Sol seed and candidates through the Host,
+  scores candidates against that seed, and promotes the exact measured source.
+  Previously its read-only anti-cheat agent could not run substrate commands, so
+  even four correct full-workload Host results produced zero valid attempts and a
+  baseline-only return. The shared Sol helper now forwards full-solution baseline
+  requests and consistently rejects harness refusals; its inlined copies are
+  synchronized. (`Generalist/generalist-kernel-optimization.js`,
+  `_substrate/embedded/sol_execbench_eval.js`, the nine Sol workflow entrypoints,
+  `_meta/tools/test/generalist-host-sol.test.js`)
+
+- Forward CUDAAgent's artifact-binding request through the shared Sol evaluator
+  helper. A correct Host measurement previously lost these fields, returned an
+  unbound empty best source, and could falsely report its speedup target as met.
+  CUDAAgent now fails clearly if a correct measured candidate has no Host binding.
+  (`_substrate/embedded/sol_execbench_eval.js`, `CUDAAgent/cuda-agent-kernel-optimization.js`,
+  `_meta/tools/lib/run-workflow.js`, `_meta/tools/test/cudaagent-host-binding.test.js`)
+
 ### Added
 
 - Let Generalist and KernelBand inner profiler agents execute exploratory diagnostics through the runtime-provided agent NCU CLI when Bash is available, while preserving the Host collection and scoring path and the plan-only path for read-only activations (`Generalist/`, `KernelBand/`, `_substrate/profiling/README.md`).
 
 - Let CUDA driver workflows hand an exact launcher and selected counters to KerSor's Host `ncu-v1` evaluator when `KERSOR_GPUQ` is configured; the Host owns the exclusive lease and raw receipts (`Generalist/`, `KernelBand/`, `_substrate/profiling/README.md`).
+- Let KSearch declare CuTe DSL as a selectable Python-source language and carry
+  its syntax requirement into seed, debug, and improve prompts. Explicitly
+  reject the CUDA C++ driver and unqualified SOL-ExecBench packaging for this
+  DSL, so offline routing cannot silently use a `.cu`/`nvcc` contract.
+  (`KSearch/manifest.yaml`, `KSearch/ksearch-kernel-optimization.js`,
+  `_meta/tools/test/ksearch-guard.test.js`)
 
 - **Harness Engineering workflow.** Adds a frozen-contract, profile-backed
   optimization loop based on arXiv:2607.17979. Caller-owned commands remain
@@ -41,6 +108,8 @@ for the versioning policy.
 
 - Make CUDA NCU profiling launch the caller's actual workload; parse both legacy long and B300 NCU 2026 wide CSV, classify counter denial, and optionally emit a distinct Nsight Systems fallback. Failed or empty profiles stay out of measured counter evidence (`_substrate/backends/cuda/profile.sh`, `_substrate/backends/_evidence_nvidia.py`, `_substrate/tests/test_driver_scripts.py`, `Generalist/`, `KernelBand/`, `AccelOpt/`, `_substrate/backends/REGISTRY.md`).
 
+- Bind CUDAAgent's Sol candidate to the deterministic Host evaluation and return that exact measured source for a qualified handoff. A correct agent report without a matching Host binding no longer becomes the selected best candidate. (`CUDAAgent/cuda-agent-kernel-optimization.js`, `_meta/tools/lib/run-workflow.js`, `_meta/tools/test/cudaagent-host-binding.test.js`)
+- Return KernelFoundry's exact Host-bound candidate path for measured results; its optional checkpoint copy could be absent, which blocked a qualified second-workflow handoff despite a correct full-workload measurement. (`KernelFoundry/kernelfoundry-kernel-optimization.js`, `_meta/tools/lib/run-workflow.js`, `_meta/tools/test/kernelfoundry-guard.test.js`)
 - Preserve the entire selected KernelBand source, including trailing run/forward bindings, in SOL generation context (`KernelBand/kernelband-kernel-optimization.js`).
 
 - Fix optional FACT arrays and reject invalid timing in selection; bind KernelFoundry results on the Host and use Host baseline/score in KernelBand so valid results are neither discarded nor inflated (FACT/, KernelFoundry/, KernelBand/, KernelSkill/, GemmPTX/, tests).
