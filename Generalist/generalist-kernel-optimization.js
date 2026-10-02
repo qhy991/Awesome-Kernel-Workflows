@@ -263,6 +263,10 @@ async function agentRetry(fn, opts) {
       if (result != null) return result
       // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
     } catch (e) {
+      // Retrying cannot grant permission, repair a contract, replenish a
+      // budget, or undo cancellation. Preserve the original Host diagnostic.
+      if (e && (e.retryable === false || e.name === 'AbortError'
+        || /(?:PERMISSION|CONFIG_INVALID|REQUEST_INVALID|UNSUPPORTED|DISABLED|BUDGET|QUOTA|AUTH|FILESYSTEM_SANDBOX|WORKFLOW_INTERRUPTED|ABORT_ERR)/.test(String(e.code || '')))) throw e
       lastError = e
     }
   }
@@ -706,14 +710,14 @@ const verifiedInsights = []       // P1.4 — verified typed insights for the La
 //   (2) mechanical agent runs the python with that fixed CLI; stdout is parroted
 //       AND the resulting integ_cache.json is read as authoritative.
 let INTEGRATION_DECISION = {
-  method: INTEGRATION_PATTERN === 'sol_execbench_solution' ? 'sol_execbench_solution' : 'standalone',
+  method: INTEGRATION_PATTERN,
   build_fidelity: INTEGRATION_PATTERN === 'sol_execbench_solution' ? 'production' : 'isolated',
   reversible: true,
 }
-{
+if (!args.integration_pattern) {
   const probe = integrationHostProbeJson()
   const rootCli = PROJECT_ROOT ? ` --project-root "${PROJECT_ROOT}"` : ''
-  const preferredCli = INTEGRATION_PATTERN === 'sol_execbench_solution' ? ' --preferred-method sol_execbench_solution' : ''
+
   const decisionPath = `${EXP_DIR}/integration_decision.json`
   const cachePath = `${EXP_DIR}/integ_cache.json`
 
@@ -749,20 +753,14 @@ let INTEGRATION_DECISION = {
   if (PY) {
     const _integ = await agentRetry(() => agent(
       `Run exactly: \`${PY} ${SUBSTRATE}/integration/integration_strategist.py resolve ` +
-      `--kernel "${KERNEL_PATH}"${rootCli} --can-standalone ${canStandalone}${preferredCli} ` +
+      `--kernel "${KERNEL_PATH}"${rootCli} --can-standalone ${canStandalone} ` +
       `--host-probe '${probe}' --cache ${cachePath} --trajectory ${EXP_DIR}/genome.jsonl ` +
       `> ${decisionPath}\`. ` +
       `Then run exactly: \`cat ${decisionPath}\` and return its stdout JSON verbatim. ` +
       `Do not modify, summarize, or invent any field.`,
       { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
-    // A caller that declared `integration_pattern` has already made this decision;
-  // re-deciding it from an unvalidated model reply is how an explicit instruction
-  // gets silently discarded.  Measured on B300: KDA was given
-  // integration_pattern=sol_execbench_solution, ran the strategist anyway, adopted
-  // the reply and logged `integration method = null`, which switched off the
-  // deterministic sol-execbench path for the whole run.  Adopt only when the caller
-  // said nothing, and only a method from the known set.
-  if (!args.integration_pattern && _integ && ['standalone', 'embedded_inplace', 'embedded_dispatch', 'sol_execbench_solution', 'derive_adapter'].includes(_integ.method)) {
+    // Preserve an explicit integration choice; adopt only a supported discovery.
+  if (_integ && ['standalone', 'embedded_inplace', 'embedded_dispatch', 'sol_execbench_solution', 'derive_adapter'].includes(_integ.method)) {
     INTEGRATION_DECISION = _integ
   }
   } else {

@@ -111,6 +111,34 @@ test('expect: throws attributable error on null / missing required field', () =>
   assert.strictEqual(expect({ code: 'x' }, 'code', 'impl'), 'x')
 })
 
+test('agentRetry: permanent Host failures preserve the first failure without another call', async () => {
+  const { agentRetry } = loadHelper()
+  for (const detail of [
+    {code: 'KERSOR_PERMISSION_DENIED'},
+    {code: 'KERSOR_CLAUDE_CONFIG_INVALID'},
+    {code: 'KERSOR_WORKFLOW_INTERRUPTED'},
+    {retryable: false},
+    {name: 'AbortError'},
+  ]) {
+    const failure = Object.assign(new Error('cannot proceed'), detail)
+    let calls = 0
+    await assert.rejects(agentRetry(async () => { calls++; throw failure }, {allowNull: true}),
+      error => error === failure)
+    assert.equal(calls, 1)
+  }
+})
+
+test('agentRetry: a transient provider failure still permits recovery', async () => {
+  const { agentRetry } = loadHelper()
+  let calls = 0
+  const result = await agentRetry(async () => {
+    if (++calls === 1) throw Object.assign(new Error('rate limited'), {code: 'RATE_LIMITED'})
+    return {ok: true}
+  })
+  assert.deepEqual(result, {ok: true})
+  assert.equal(calls, 2)
+})
+
 test('guard: returns fallback on null / missing optional field', () => {
   const { guard } = loadHelper()
   assert.deepStrictEqual(guard(null, 'techniques', []), [])

@@ -223,6 +223,10 @@ async function agentRetry(fn, opts) {
       if (result != null) return result
       // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
     } catch (e) {
+      // Retrying cannot grant permission, repair a contract, replenish a
+      // budget, or undo cancellation. Preserve the original Host diagnostic.
+      if (e && (e.retryable === false || e.name === 'AbortError'
+        || /(?:PERMISSION|CONFIG_INVALID|REQUEST_INVALID|UNSUPPORTED|DISABLED|BUDGET|QUOTA|AUTH|FILESYSTEM_SANDBOX|WORKFLOW_INTERRUPTED|ABORT_ERR)/.test(String(e.code || '')))) throw e
       lastError = e
     }
   }
@@ -634,29 +638,23 @@ if (USE_DRIVER) {
 // Lets KernelFoundry handle inference-engine embedded operators (e.g. llama.cpp .cuh)
 // not just standalone kernels. Default standalone => legacy path byte-identical.
 let INTEGRATION_DECISION = {
-  method: INTEGRATION_PATTERN === 'sol_execbench_solution' ? 'sol_execbench_solution' : 'standalone',
+  method: INTEGRATION_PATTERN,
   build_fidelity: INTEGRATION_PATTERN === 'sol_execbench_solution' ? 'production' : 'isolated',
   reversible: true,
 }
-if (INTEGRATION_PATTERN !== 'sol_execbench_solution') {
+if (!args.integration_pattern) {
   const _probe = JSON.stringify({ compiler: true, project_build: !!PROJECT_BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true, sol_execbench_cli: !!SOL_CLI })
-  const _preferred = INTEGRATION_PATTERN === 'sol_execbench_solution' ? ' --preferred-method sol_execbench_solution' : ''
+
   const _integ = await agentRetry(() => agent(
     `${KERNEL_PATH ? `Read ${KERNEL_PATH}; ` : 'Read the operator spec; '}` +
     `classify can_compile_standalone as exactly one of yes|no|uncertain ` +
     `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
     substrateInstruction('integration/integration_strategist.py',
-      `resolve --kernel "${KERNEL_PATH || EXP_DIR + '/operator.spec'}" --can-standalone <yes|no|uncertain>${_preferred} --host-probe '${_probe}' --cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
+      `resolve --kernel "${KERNEL_PATH || EXP_DIR + '/operator.spec'}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' --cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
     ` Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
     { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
-  // A caller that declared `integration_pattern` has already made this decision;
-  // re-deciding it from an unvalidated model reply is how an explicit instruction
-  // gets silently discarded.  Measured on B300: KDA was given
-  // integration_pattern=sol_execbench_solution, ran the strategist anyway, adopted
-  // the reply and logged `integration method = null`, which switched off the
-  // deterministic sol-execbench path for the whole run.  Adopt only when the caller
-  // said nothing, and only a method from the known set.
-  if (!args.integration_pattern && _integ && ['standalone', 'embedded_inplace', 'embedded_dispatch', 'sol_execbench_solution', 'derive_adapter'].includes(_integ.method)) {
+  // Preserve an explicit integration choice; adopt only a supported discovery.
+  if (_integ && ['standalone', 'embedded_inplace', 'embedded_dispatch', 'sol_execbench_solution', 'derive_adapter'].includes(_integ.method)) {
     INTEGRATION_DECISION = _integ
   }
 }

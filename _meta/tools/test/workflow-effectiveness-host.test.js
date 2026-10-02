@@ -51,6 +51,7 @@ test('KernelSkill rejects model-owned 1.0/999 scores, measures final edit, and l
       if (o.label.startsWith('plan-')) return { method_name: 'thread_coarsening', plan: 'source hypothesis', rationale: 'test' }
       if (o.label.startsWith('optimize-')) return { code: 'improved-final' }
       if (o.label.startsWith('gate-') || o.label.startsWith('seed-eval-') || o.label === 'eager-baseline') throw new Error('unmeasured agent path used')
+      if (o.label === 'integration-strategist') throw Object.assign(new Error('explicit integration must not be reclassified'), {retryable: false})
     },
   })
   assert.equal(output.best_speedup, .4)
@@ -60,6 +61,31 @@ test('KernelSkill rejects model-owned 1.0/999 scores, measures final edit, and l
   assert.equal(output.optimize_memory[0].speedup_after, .4)
   assert.equal(output.optimize_memory[0].outcome, 'improved')
   assert.ok(prompts.some(p => p.prompt.includes('Metrics are unknown, not zero')))
+  const review = prompts.find(p => p.label === 'review-0').prompt
+  assert.match(review, /Omit unmeasured metric fields/)
+  assert.doesNotMatch(review, /set unmeasured metric fields to 0/)
+})
+
+test('KernelSkill explicit embedded integration keeps complete candidate source during materialization', async () => {
+  const source = '// complete candidate\n' + 'x'.repeat(7000) + '\nPYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {}'
+  let materialization
+  await run('KernelSkill/kernelskill-kernel-optimization.js', {
+    evaluate: undefined,
+    agent: (prompt, options) => {
+      const label = options.label || ''
+      if (label === 'integration-strategist') throw Object.assign(new Error('already selected'), {retryable: false})
+      if (label === 'read-reference') return {reference_code: 'def run(x): return x', op_type: 'gemm'}
+      if (label === 'eager-baseline') return {baseline_latency_ms: 2, baseline_available: true}
+      if (/^seed-\d+$/.test(label)) return {code: source}
+      if (label.startsWith('seed-eval-')) return {is_compilable: true, is_correct: true, speedup: 1, latency_ms: 2}
+      if (label.startsWith('review-')) return {is_compilable: true, is_correct: true, speedup: 1, latency_ms: 2}
+      if (label.startsWith('embedded-materialize-')) { materialization = prompt; return {ok: true} }
+      if (label.startsWith('embedded-inplace-')) return {latency_ms: 2, compiled: true, correct: true}
+      if (label.startsWith('optimize-')) return {code: source}
+    },
+  }, {integration_pattern: 'embedded_inplace', sol_cli: '', kernel_path: '/exp/seed.cu', seed_candidates: 1})
+  assert.ok(materialization, 'explicit embedded branch was not executed')
+  assert.ok(materialization.includes(source), 'candidate lost bytes during materialization')
 })
 
 test('GemmPTX measures baseline and instruction gate before the profile turn; model score cannot win', async () => {

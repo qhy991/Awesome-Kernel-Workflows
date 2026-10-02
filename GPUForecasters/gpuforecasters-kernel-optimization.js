@@ -220,6 +220,10 @@ async function agentRetry(fn, opts) {
       if (result != null) return result
       // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
     } catch (e) {
+      // Retrying cannot grant permission, repair a contract, replenish a
+      // budget, or undo cancellation. Preserve the original Host diagnostic.
+      if (e && (e.retryable === false || e.name === 'AbortError'
+        || /(?:PERMISSION|CONFIG_INVALID|REQUEST_INVALID|UNSUPPORTED|DISABLED|BUDGET|QUOTA|AUTH|FILESYSTEM_SANDBOX|WORKFLOW_INTERRUPTED|ABORT_ERR)/.test(String(e.code || '')))) throw e
       lastError = e
     }
   }
@@ -560,19 +564,10 @@ async function main() {
   }
   log(`Profiling method: ${PROFILING_DECISION.method} (confidence=${PROFILING_DECISION.confidence})`)
 
-  // --- integration-strategist: DECIDE standalone vs embedded_* at runtime. This
-  // REPLACES the static `EMBEDDED` (from args.integration_pattern) as the authority
-  // for which eval path runs: the strategist classifies whether the kernel can
-  // compile as a single TU and routes accordingly. GPUForecasters has no backend
-  // driver, so standalone runs its native {kernel_path}/{result_path} evidence
-  // loop, IS_EMBEDDED runs project-native register/build/test/benchmark.
-  // Backward compat: seed the strategist's can-standalone probe from the existing
-  // static EMBEDDED arg so legacy `integration_pattern=embedded*` callers still
-  // route to the embedded path when the strategist is unavailable or uncertain.
-  // Additive: when method==='standalone' the path below is byte-identical to before.
-  // See _substrate/integration/README.md and _substrate/integration/ROLLOUT.md.
-  let INTEGRATION_DECISION = { method: EMBEDDED ? 'embedded_dispatch' : 'standalone', build_fidelity: 'isolated', reversible: true }
-  if (KERNEL_PATH) {
+  // Use the task-discovered integration directly. Legacy discovery is needed
+  // only when the caller has not selected a method.
+  let INTEGRATION_DECISION = { method: INTEGRATION_PATTERN, build_fidelity: 'isolated', reversible: true }
+  if (KERNEL_PATH && !args.integration_pattern) {
     const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
     const _integ = await agentRetry(() => agent(
       `Read ${KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
@@ -582,14 +577,8 @@ async function main() {
         `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
       ` Return its stdout JSON verbatim {method, build_fidelity, reversible, eval_mechanism, rationale}.`,
       { model: MODEL.mechanical, label: 'integration-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
-    // A caller that declared `integration_pattern` has already made this decision;
-  // re-deciding it from an unvalidated model reply is how an explicit instruction
-  // gets silently discarded.  Measured on B300: KDA was given
-  // integration_pattern=sol_execbench_solution, ran the strategist anyway, adopted
-  // the reply and logged `integration method = null`, which switched off the
-  // deterministic sol-execbench path for the whole run.  Adopt only when the caller
-  // said nothing, and only a method from the known set.
-  if (!args.integration_pattern && _integ && ['standalone', 'embedded_inplace', 'embedded_dispatch', 'sol_execbench_solution', 'derive_adapter'].includes(_integ.method)) {
+    // Preserve an explicit integration choice; adopt only a supported discovery.
+  if (_integ && ['standalone', 'embedded_inplace', 'embedded_dispatch', 'sol_execbench_solution', 'derive_adapter'].includes(_integ.method)) {
     INTEGRATION_DECISION = _integ
   }
   }

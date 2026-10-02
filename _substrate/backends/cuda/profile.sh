@@ -42,16 +42,27 @@ done
 [ -f "$ARTIFACT" ] || die3 "artifact not found: $ARTIFACT"
 [ -f "$PROBLEM" ]  || die3 "problem not found: $PROBLEM"
 
+resolve_launcher() {
+  if [ -n "$SOURCE" ] && [ -f "$SOURCE" ]; then
+    RUN_CMD=(python3 "$SOURCE")
+  elif [ -x "$ARTIFACT" ]; then
+    RUN_CMD=("$ARTIFACT")
+  else
+    die4 "$1 requires runnable --source launcher or executable --artifact" "$1"
+  fi
+}
+
 # --- NCU path (hardware counters; preferred) --------------------------------
 if command -v ncu >/dev/null 2>&1; then
+  resolve_launcher ncu
   METRICS="gpu__time_duration.sum,sm__throughput.avg.pct_of_peak_sustained_elapsed,dram__bytes_read.sum.pct_of_peak_sustained_elapsed,dram__bytes_write.sum.pct_of_peak_sustained_elapsed,sm__warps_active.avg.pct_of_peak_sustained_active"
   STDERR_FILE="$(mktemp)"
   ncu --csv --page raw --metrics "$METRICS" --target-processes all \
-      python3 -c "pass" >"$OUT" 2>"$STDERR_FILE"
+      "${RUN_CMD[@]}" >"$OUT" 2>"$STDERR_FILE"
   RC=$?
   [ -s "$STDERR_FILE" ] && cat "$STDERR_FILE" 1>&2
   rm -f "$STDERR_FILE"
-  if [ "$RC" -ne 0 ]; then
+  if [ "$RC" -ne 0 ] || [ ! -s "$OUT" ]; then
     emit "{\"ok\":false,\"profiler\":\"ncu\",\"native_profile\":null,\"error\":\"ncu failed (exit $RC); no profile produced\"}"
     exit 4
   fi
@@ -71,13 +82,7 @@ case "$OUT" in
   *) die3 "nsys fallback requires --out to end with .sqlite" "nsys" ;;
 esac
 
-if [ -n "$SOURCE" ] && [ -f "$SOURCE" ]; then
-  RUN_CMD=(python3 "$SOURCE")
-elif [ -x "$ARTIFACT" ]; then
-  RUN_CMD=("$ARTIFACT")
-else
-  die4 "nsys fallback requires runnable --source launcher or executable --artifact" "nsys"
-fi
+resolve_launcher nsys
 
 STDERR_FILE="$(mktemp)"
 nsys profile --trace=cuda --export=sqlite --force-overwrite=true -o "$BASE" "${RUN_CMD[@]}" >"$STDERR_FILE" 2>&1

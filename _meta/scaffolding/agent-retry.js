@@ -68,6 +68,10 @@ async function agentRetry(fn, opts) {
       if (result != null) return result
       // null = agent skipped mid-run OR terminal subagent failure (e.g. transient 429) — retry.
     } catch (e) {
+      // Retrying cannot grant permission, repair a contract, replenish a
+      // budget, or undo cancellation. Preserve the original Host diagnostic.
+      if (e && (e.retryable === false || e.name === 'AbortError'
+        || /(?:PERMISSION|CONFIG_INVALID|REQUEST_INVALID|UNSUPPORTED|DISABLED|BUDGET|QUOTA|AUTH|FILESYSTEM_SANDBOX|WORKFLOW_INTERRUPTED|ABORT_ERR)/.test(String(e.code || '')))) throw e
       lastError = e
     }
   }

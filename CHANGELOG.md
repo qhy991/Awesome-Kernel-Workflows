@@ -28,6 +28,12 @@ for the versioning policy.
 
 ### Fixed
 
+- Use an explicit integration choice directly in all 24 strategist-enabled workflows, including embedded_inplace; avoid redundant classification activations and remove dead preferred-method/manifest derivations. Execute all four routing choices in entrypoint regressions instead of asserting one historical if-statement spelling (workflow entrypoints, `_meta/tools/test/explicit-integration.test.js`, SOL routing tests).
+
+- Stop retrying permanent Host permission/configuration, cancellation, budget and authentication failures; preserve transient recovery in the canonical helper and 35 regenerated workflow copies (`_meta/scaffolding/agent-retry.js`, workflow entrypoints, `_meta/tools/test/agent-retry-null-safety.test.js`).
+- Fix CUDA profiling of an empty Python program: NCU and NSYS now use the same declared launcher contract; NCU rejects non-runnable candidates and empty reports (`_substrate/backends/cuda/profile.sh`, `_substrate/tests/test_driver_scripts.py`).
+- Keep complete KernelSkill source through embedded materialization, omit missing counters instead of requesting zero, and consume explicit integration choices without an extra classification activation (`KernelSkill/kernelskill-kernel-optimization.js`, `_meta/tools/test/workflow-effectiveness-host.test.js`).
+
 - Preserve the entire selected KernelBand source, including trailing run/forward bindings, in SOL generation context (`KernelBand/kernelband-kernel-optimization.js`).
 
 - Fix optional FACT arrays and reject invalid timing in selection; bind KernelFoundry results on the Host and use Host baseline/score in KernelBand so valid results are neither discarded nor inflated (FACT/, KernelFoundry/, KernelBand/, KernelSkill/, GemmPTX/, tests).

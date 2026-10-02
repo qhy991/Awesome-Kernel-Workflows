@@ -8,6 +8,12 @@
 
 ### Fixed
 
+- 全部 24 个含 integration strategist 的 workflow 直接采用显式集成选择（包括 embedded_inplace），避免重复分类 activation，并删除无用的 preferred-method/manifest 推导。入口回归实际执行四种路由选择，替代对历史 if 语句写法的断言（workflow 入口、`_meta/tools/test/explicit-integration.test.js`、SOL 路由测试）。
+
+- 永久 Host 权限/配置、取消、预算及认证错误立即停止重试，同时保留临时故障恢复；修改规范 helper 并重新生成 35 个 workflow 副本（`_meta/scaffolding/agent-retry.js`、workflow 入口、`_meta/tools/test/agent-retry-null-safety.test.js`）。
+- 修复 CUDA profiling 实际运行空 Python 程序的问题：NCU 与 NSYS 共用指定 launcher 契约；NCU 拒绝不可运行的候选及空报告（`_substrate/backends/cuda/profile.sh`、`_substrate/tests/test_driver_scripts.py`）。
+- KernelSkill 嵌入式写入保留完整源码，缺失计数器不再要求填零；明确指定的集成方式直接采用，省去额外分类 activation（`KernelSkill/kernelskill-kernel-optimization.js`、`_meta/tools/test/workflow-effectiveness-host.test.js`）。
+
 - KernelBand 的 SOL 生成上下文保留完整选中源码和末尾 run/forward 绑定（`KernelBand/kernelband-kernel-optimization.js`）。
 
 - 修复 FACT 可选数组及异常计时选优；KernelFoundry 由 Host 绑定结果，KernelBand 使用 Host 基线/分数，避免有效成果丢失和分数虚高（FACT/、KernelFoundry/、KernelBand/、KernelSkill/、GemmPTX/、tests）。

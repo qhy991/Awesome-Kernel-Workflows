@@ -263,9 +263,8 @@ class TestCudaProfile(unittest.TestCase):
     def test_profile_ok_with_fake_ncu_writes_csv_and_pointer(self):
         with tempfile.TemporaryDirectory() as td:
             _write_exec(os.path.join(td, 'ncu'), FAKE_NCU_CSV)
-            art = os.path.join(td, 'k.so')
-            with open(art, 'w') as fh:
-                fh.write("")
+            art = os.path.join(td, 'k.bin')
+            _write_exec(art, '#!/usr/bin/env bash\nexit 0\n')
             prob = self._problem(td); out = os.path.join(td, 'native.csv')
             code, sout, serr = _run([self.SCRIPT, '--artifact', art,
                                      '--problem', prob, '--out', out], env=_path_env(td))
@@ -287,9 +286,8 @@ class TestCudaProfile(unittest.TestCase):
                 echo "$@" > "{rec}"
                 echo '"ID","Metric Name","Metric Value"' ; exit 0
             '''))
-            art = os.path.join(td, 'k.so')
-            with open(art, 'w') as fh:
-                fh.write("")
+            art = os.path.join(td, 'k.bin')
+            _write_exec(art, '#!/usr/bin/env bash\nexit 0\n')
             prob = self._problem(td); out = os.path.join(td, 'n.csv')
             _run([self.SCRIPT, '--artifact', art, '--problem', prob, '--out', out],
                  env=_path_env(td))
@@ -300,6 +298,53 @@ class TestCudaProfile(unittest.TestCase):
                       'dram__bytes_read.sum.pct_of_peak_sustained_elapsed',
                       'sm__warps_active.avg.pct_of_peak_sustained_active'):
                 self.assertIn(c, argv, f"profile.sh did not request {c}")
+
+    def test_ncu_executes_the_requested_candidate_or_launcher(self):
+        for source_launcher in (False, True):
+            with self.subTest(source_launcher=source_launcher), tempfile.TemporaryDirectory() as td:
+                marker = os.path.join(td, 'candidate-executed')
+                _write_exec(os.path.join(td, 'ncu'), textwrap.dedent('''\
+                    #!/usr/bin/env bash
+                    while [ $# -gt 0 ]; do
+                      case "$1" in
+                        --csv) shift ;;
+                        --page|--metrics|--target-processes) shift 2 ;;
+                        *) break ;;
+                      esac
+                    done
+                    "$@" >&2 || exit $?
+                    echo '"ID","Kernel Name","Metric Name","Metric Unit","Metric Value"'
+                    echo '"0","candidate","gpu__time_duration.sum","ns","1000"'
+                '''))
+                artifact = os.path.join(td, 'candidate with spaces.bin')
+                _write_exec(artifact, '#!/usr/bin/env bash\nexit 19\n' if source_launcher
+                            else f'#!/usr/bin/env bash\ntouch "{marker}"\n')
+                argv = [self.SCRIPT, '--artifact', artifact, '--problem', self._problem(td),
+                        '--out', os.path.join(td, 'profile.csv')]
+                if source_launcher:
+                    launcher = os.path.join(td, 'launch candidate.py')
+                    with open(launcher, 'w') as fh:
+                        fh.write(f'from pathlib import Path\nPath({marker!r}).touch()\n')
+                    argv += ['--source', launcher]
+                code, stdout, stderr = _run(argv, env=_path_env(td))
+                self.assertEqual(code, 0, (stdout, stderr))
+                self.assertTrue(os.path.isfile(marker), 'profiler never executed the candidate')
+                self.assertTrue(_json_or_raw(stdout)['ok'])
+
+    def test_ncu_rejects_nonrunnable_candidate_and_empty_report(self):
+        for runnable in (False, True):
+            with self.subTest(runnable=runnable), tempfile.TemporaryDirectory() as td:
+                _write_exec(os.path.join(td, 'ncu'), '#!/usr/bin/env bash\nexit 0\n')
+                artifact = os.path.join(td, 'candidate.bin')
+                with open(artifact, 'w') as fh:
+                    fh.write('#!/usr/bin/env bash\nexit 0\n')
+                if runnable:
+                    os.chmod(artifact, 0o755)
+                code, stdout, _ = _run([self.SCRIPT, '--artifact', artifact,
+                                       '--problem', self._problem(td),
+                                       '--out', os.path.join(td, 'profile.csv')], env=_path_env(td))
+                self.assertEqual(code, 4, stdout)
+                self.assertFalse(_json_or_raw(stdout)['ok'])
 
     def test_profiler_absent_exit_4(self):
         with tempfile.TemporaryDirectory() as td:

@@ -35,10 +35,8 @@ test('sol-execbench opt-in pool includes the KerSor core five, KDA, and KernelBl
     assert.match(source, /function __solExecbenchEvalPlan/)
     assert.match(source, /sol_execbench_solution/)
     assert.match(source, /sol_execbench_cli: !!SOL_CLI/)
-    assert.match(source, /--preferred-method sol_execbench_solution/)
     assert.match(source, /envPrefix: SOL_ENV_PREFIX/)
     assert.match(source, /definitionPath: SOL_DEFINITION_PATH/)
-    assert.match(source, /INTEGRATION_PATTERN === 'sol_execbench_solution' \? 'sol_execbench_solution' : 'standalone'|INTEGRATION_PATTERN === 'sol_execbench_solution'\s*\?\s*'sol_execbench_solution'/)
     assert.match(source, /sol_execbench_solution requires non-empty/)
   }
 })
@@ -54,7 +52,7 @@ test('new sol workflows declare the runtime evaluation arguments', () => {
   }
 })
 
-test('KerSor core five delegate SOL execution to the Host and skip deterministic routing turns', () => {
+test('KerSor core five delegate SOL execution to the Host', () => {
   for (const [dir, file] of [
     ['CUDAAgent', 'cuda-agent-kernel-optimization.js'],
     ['KSearch', 'ksearch-kernel-optimization.js'],
@@ -64,11 +62,8 @@ test('KerSor core five delegate SOL execution to the Host and skip deterministic
   ]) {
     const source = read(path.join(dir, file))
     assert.match(source, /await __solExecbenchEvaluate\(/, `${dir} does not call the Host evaluator`)
-    assert.match(
-      source,
-      /let INTEGRATION_DECISION = \{[\s\S]*?if \(INTEGRATION_PATTERN !== 'sol_execbench_solution'\)/,
-      `${dir} still asks a model to resolve an explicit SOL integration mode`,
-    )
+    // explicit-integration.test.js executes each entrypoint and proves that
+    // explicit SOL (and other methods) causes zero routing activations.
   }
 })
 
