@@ -34,6 +34,8 @@
 
 ### 修复（Fixed）
 
+- 修复 KernelBand 路由元数据：把 integration patterns 放回 `routing` 并声明已实现的 SOL-ExecBench solution 路径，避免 selector 在 dispatch 前错误拒绝 FlashInfer-Bench 任务（`KernelBand/manifest.yaml`）。
+
 - CUDA NCU profiling 现在启动调用方的真实 workload，兼容旧长表和 B300 NCU 2026 宽表 CSV，区分计数器拒绝，并可输出独立标记的 Nsight Systems 降级结果；失败或空报告不再计入计数器实测证据（`_substrate/backends/cuda/profile.sh`、`_substrate/backends/_evidence_nvidia.py`、`_substrate/tests/test_driver_scripts.py`、`Generalist/`、`KernelBand/`、`AccelOpt/`、`_substrate/backends/REGISTRY.md`）。
 
 - FACT 直接传递已实现的 pattern，不再假定只读 agent 能写入 registry；
