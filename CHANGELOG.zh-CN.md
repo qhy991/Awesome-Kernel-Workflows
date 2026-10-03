@@ -12,6 +12,8 @@
 
 ### Fixed
 
+- 在 agent 将候选安装到测试固定源码路径前保留独立 seed 快照，避免候选池初始条目指向已被覆盖的实现（`KernelBand/kernelband-kernel-optimization.js`）。
+
 - 原生 KernelBand agent 可通过 Bash 运行任务测试并交回原始结果 JSON 与路径；完整候选通过文件交接，缺失实测不更新 reward，按 seed 延迟计算收益，无需 Host evaluate()（`KernelBand/kernelband-kernel-optimization.js`、`KernelBand/README.md` 与原生任务回归）。
 
 - Host 路径下的 KernelBand 改用文件交接候选，并在测量前通过现有命令执行器读取完整源码。

@@ -14,6 +14,8 @@ for the versioning policy.
 
 ### Fixed
 
+- Preserve the task seed in a separate source snapshot before agents install candidates into fixed harness paths; pool entries retain their measured source (`KernelBand/kernelband-kernel-optimization.js`).
+
 - Let native KernelBand agents run task-owned tests through Bash and return raw result JSON and paths; preserve full candidates in files, reject missing timing evidence, and derive seed-relative rewards without requiring Host evaluate() (`KernelBand/kernelband-kernel-optimization.js`, `KernelBand/README.md`, native task regression).
 
 - Hand off Host-backed KernelBand candidates as files and read their complete

@@ -31,9 +31,18 @@ async function run({missingBaseline = false, invalidCandidate = false, wrongPath
     phase: x => phases.push(x), log() {}, budget() {}, JSON, Math, Promise,
     agent: async (prompt, options) => {
       calls.push({prompt, ...options})
-      if (options.label === 'setup') return missingBaseline ? {} : measure(seed, 'baseline')
+      if (options.label === 'setup') {
+        if (missingBaseline) return {}
+        fs.copyFileSync(seed, path.join(root, 'kernelband_seed.py'))
+        return measure(seed, 'baseline')
+      }
       if (options.label === 'generate-t1-tiling') {
         fs.writeFileSync(candidate, '# ' + 'x'.repeat(140000) + '\ndef run():\n    return 20000 * 19999 // 2\n')
+        assert.match(prompt, /Read the complete source from .*kernelband_seed\.py/)
+        // A task with a fixed test source installs the candidate at the original path.
+        // The pool's seed must still refer to the unchanged snapshot.
+        fs.copyFileSync(candidate, seed)
+        assert.notEqual(fs.readFileSync(seed, 'utf8'), fs.readFileSync(path.join(root, 'kernelband_seed.py'), 'utf8'))
         return {candidate_path: wrongPath ? seed : candidate}
       }
       if (options.label === 'eval-t1') {

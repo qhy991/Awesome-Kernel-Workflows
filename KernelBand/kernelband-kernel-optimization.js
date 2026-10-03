@@ -615,10 +615,11 @@ if (INPUT_MODE === 'generate_then_optimize') {
   KERNEL_PATH = await resolveInitialKernelFromProblem()
 }
 
+const taskSeedSourcePath = `${EXP_DIR}/kernelband_seed${/\.[^/.]+$/.exec(KERNEL_PATH)?.[0] || '.cu'}`
 const setupResult = await agentRetry(() => agent(`You are setting up a KernelBand optimization session.
 
 # Task
-${TASK_TEST ? TASK_TEST_INSTRUCTIONS + '\n' : ''}1. Read the kernel file: ${KERNEL_PATH}
+${TASK_TEST ? TASK_TEST_INSTRUCTIONS + '\nBefore testing or editing, preserve the complete initial source at ' + taskSeedSourcePath + '. Keep that snapshot unchanged; later tests may install candidates at the original source path.\n' : ''}1. Read the kernel file: ${KERNEL_PATH}
 2. Create experiment directory: mkdir -p ${EXP_DIR}/{candidates,profiles,logs}
 3. Record profiling evidence artifacts:
    - feature_vector_result_path: ${FEATURE_VECTOR_RESULT_PATH}
@@ -823,7 +824,7 @@ const initialFeatures = setupResult?.behavioral_features || { normalized_time: 1
 candidatePool.push({
   id: 0,
   code: initialCode,
-  source_path: HOST_SOL ? hostBaseline.candidate_path : TASK_TEST ? KERNEL_PATH : '',
+  source_path: HOST_SOL ? hostBaseline.candidate_path : TASK_TEST ? taskSeedSourcePath : '',
   latency: baselineLatency,
   speedup: 1.0,
   features: initialFeatures,
