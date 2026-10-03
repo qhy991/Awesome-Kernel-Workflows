@@ -833,6 +833,10 @@ candidatePool.push({
   source_strategy: 'initial',
 })
 
+// A measured initial implementation is already a valid incumbent.
+// A slower candidate or missing evaluation must not replace it.
+if (FILE_CANDIDATES) bestKernel = {...candidatePool[0]}
+
 clusters = [{ id: 0, centroid_features: initialFeatures, centroid_hw: hwSignature, members: [0] }]
 
 log(`Setup: baseline ${baselineLatency}μs on ${GPU_TARGET} | ${STRATEGIES.length} strategies | K=${NUM_CLUSTERS} clusters | T=${ITERATIONS} iters`)

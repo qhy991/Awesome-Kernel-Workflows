@@ -8,7 +8,7 @@ const vm = require('node:vm')
 const {execFileSync} = require('node:child_process')
 const source = fs.readFileSync(path.resolve(__dirname, '../../../KernelBand/kernelband-kernel-optimization.js'), 'utf8')
 
-async function run({missingBaseline = false, invalidCandidate = false, wrongPath = false, missingTurn = false, taskOnly = false, nodeHost = false} = {}) {
+async function run({regression = false, missingBaseline = false, invalidCandidate = false, wrongPath = false, missingTurn = false, taskOnly = false, nodeHost = false} = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kernelband-native-task-'))
   const seed = path.join(root, 'seed.py'), candidate = path.join(root, 'kernelband_iter_1.py')
   const verifier = path.join(root, 'verify.py')
@@ -48,6 +48,11 @@ async function run({missingBaseline = false, invalidCandidate = false, wrongPath
       if (options.label === 'eval-t1') {
         if (missingTurn) return null
         const result = measure(candidate, 'candidate')
+        if (regression) {
+          const raw = JSON.parse(result.test_result_json)
+          raw.latency_ms = JSON.parse(tests[0].raw).latency_ms * 2
+          result.test_result_json = JSON.stringify(raw)
+        }
         if (invalidCandidate) result.test_result_json = '{}'
         // Model-reported values must not override the actual test output.
         return {...result, compiled: true, correct: true, latency_us: 1e9, speedup: 1e9}
@@ -105,4 +110,11 @@ test('task.md alone selects task tests in both native and Node runtimes', async 
     assert.equal(result.candidate_pool_size, 2)
     assert.equal(result.best_latency_us, JSON.parse(tests[1].raw).latency_ms * 1000)
   }
+})
+
+// The altered timing is a deterministic negative control, not a performance claim.
+test('task testing retains its measured initial implementation when a candidate regresses', async () => {
+  const {result, tests} = await run({regression: true})
+  assert.equal(result.best_latency_us, JSON.parse(tests[0].raw).latency_ms * 1000)
+  assert.match(result.generated_kernel_path, /kernelband_seed\.py$/)
 })
