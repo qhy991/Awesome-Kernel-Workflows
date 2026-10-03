@@ -1,5 +1,7 @@
 # Changelog
 
+- Fix AccelOpt Sol ranking to use one complete official seed measurement and Host-bound seed-relative candidate feedback; NCU is diagnostic only, missing/partial results cannot retain estimates, and beam gains do not compound. Generate its Host helper from the shared substrate.
+
 All notable changes to Awesome-Kernel-Workflows are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this

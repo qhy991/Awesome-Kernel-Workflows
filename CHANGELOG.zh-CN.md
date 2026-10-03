@@ -1,5 +1,7 @@
 # 更新日志（中文）
 
+- 修复 AccelOpt Sol 排名口径：使用一次完整官方seed测量与Host绑定的seed相对候选反馈；NCU只作诊断，缺失/partial结果不得保留估算，beam增益不重复累乘。Host helper统一从共享substrate生成。
+
 本文件记录 Awesome-Kernel-Workflows 的重要变更。格式遵循
 [Keep a Changelog](https://keepachangelog.com/),版本号遵循
 [语义化版本(SemVer)](https://semver.org/)。版本策略见 `AGENTS.md`。
