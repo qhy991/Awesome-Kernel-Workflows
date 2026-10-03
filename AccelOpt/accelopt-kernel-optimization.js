@@ -107,6 +107,42 @@ function __solGuardHarnessFault(result) {
   }
   return result
 }
+// Deterministic measurement authority for native SOL consumers. Agent replies
+// may explain evidence but cannot supply correctness, workload coverage or score.
+function __solHostFeedback(host, explanation = {}) {
+  const latency = host?.candidate_latency_aggregate_ms
+  const valid = host?.compiled === true && host?.correct === true
+    && host?.measurement_valid === true && host?.full_workload_set === true
+    && host?.output_contract_valid === true && host?.artifact_binding?.verified === true
+    && Number.isInteger(host?.n_total) && host.n_total > 0 && host.n_pass === host.n_total
+    && Number.isFinite(latency) && latency > 0
+    && Number.isFinite(host?.speedup_vs_seed) && host.speedup_vs_seed > 0
+  return {
+    compiled: host?.compiled === true, correct: valid,
+    full_workload_set: host?.full_workload_set === true,
+    measurement_valid: host?.measurement_valid === true,
+    output_contract_valid: host?.output_contract_valid === true,
+    speedup: valid ? host.speedup_vs_seed : 0,
+    latency_ms: valid ? latency : null,
+    passed_tests: Number.isInteger(host?.n_pass) ? host.n_pass : null,
+    total_tests: Number.isInteger(host?.n_total) ? host.n_total : null,
+    source_binding: valid ? host.artifact_binding : null,
+    reference_speedup: Number.isFinite(host?.speedup) ? host.speedup : null,
+    explanation: {error_message: explanation?.error_message || '',
+      reward_hacking_flags: explanation?.reward_hacking_flags || []},
+    measurement_owner: 'Host',
+  }
+}
+async function __solOfficialSeedBaseline(ctx) {
+  const seed = await __solExecbenchEvaluate(ctx)
+  const latency = seed?.candidate_latency_aggregate_ms
+  if (seed?.compiled !== true || seed?.correct !== true
+      || seed?.full_workload_set !== true || seed?.measurement_valid !== true
+      || seed?.output_contract_valid !== true || !Number.isFinite(latency) || latency <= 0) {
+    throw new Error('Host could not establish a complete official Sol seed baseline')
+  }
+  return seed
+}
 // --- END sol-execbench-eval substrate ---
 
 
@@ -1131,7 +1167,7 @@ if (USE_DRIVER_STANDALONE) {
 let solSeedMeasurement = null
 let bestCandidateBinding = null
 if (SOL_AVAILABLE) {
-  solSeedMeasurement = await __solExecbenchEvaluate({
+  solSeedMeasurement = await __solOfficialSeedBaseline({
     label: 'sol-seed-baseline', phase: 'Setup',
     substrateDir: SOL_SUBSTRATE_DIR, kernelSource: `${EXP_DIR}/host_seed.cu`,
     baselineSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
@@ -1142,14 +1178,7 @@ if (SOL_AVAILABLE) {
     ldLibraryPath: SOL_LD_LIBRARY_PATH, envPrefix: SOL_ENV_PREFIX,
     definitionPath: SOL_DEFINITION_PATH,
   })
-  const seedLatency = solSeedMeasurement?.candidate_latency_aggregate_ms
-  if (solSeedMeasurement?.compiled !== true || solSeedMeasurement?.correct !== true
-      || solSeedMeasurement?.full_workload_set !== true
-      || solSeedMeasurement?.measurement_valid !== true
-      || solSeedMeasurement?.output_contract_valid !== true
-      || !Number.isFinite(seedLatency) || seedLatency <= 0) {
-    throw new Error('Host could not establish a complete official Sol seed baseline')
-  }
+
 }
 baselineLatency = SOL_AVAILABLE ? solSeedMeasurement.candidate_latency_aggregate_ms : ncuSetup.latency_ms
 bestLatency = baselineLatency
@@ -1588,17 +1617,13 @@ Then append (iteration ${iter}, variant ${variant.id}; status="done" if correct 
     for (const m of measured.filter(Boolean)) {
       const e = evaluations[m.i]
       const r = m.r
-      const valid = r?.compiled === true && r?.correct === true
-        && r?.measurement_valid === true && r?.full_workload_set === true
-        && r?.output_contract_valid === true && r?.artifact_binding?.verified === true
-        && Number.isFinite(r?.candidate_latency_aggregate_ms) && r.candidate_latency_aggregate_ms > 0
-        && Number.isFinite(r?.speedup_vs_seed) && r.speedup_vs_seed > 0
-      // Missing/partial results revoke agent estimates, never leave them ranked.
-      e.is_compilable = r?.compiled === true
-      e.is_correct = valid
-      e.estimated_speedup = valid ? r.speedup_vs_seed : 0
-      e.estimated_latency_ms = valid ? r.candidate_latency_aggregate_ms : null
-      e.host_source_binding = valid ? r.artifact_binding : null
+      const feedback = __solHostFeedback(r, e)
+      const valid = feedback.correct
+      e.is_compilable = feedback.compiled
+      e.is_correct = feedback.correct
+      e.estimated_speedup = feedback.speedup
+      e.estimated_latency_ms = feedback.latency_ms
+      e.host_source_binding = feedback.source_binding
       e.performance_analysis = `host-measured Sol: valid=${valid} seed_speedup=${r?.speedup_vs_seed ?? 'missing'} reference_speedup=${r?.speedup ?? 'missing'}`
       log(`Host-measured ${allVariants[m.i].id}: valid=${valid} seed_speedup=${e.estimated_speedup}`)
     }

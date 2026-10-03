@@ -1,5 +1,7 @@
 # Changelog
 
+- Make CUDALLM SOL measurements authoritative over contradictory agent evaluation replies, with strict full-workload validity, source binding and official seed-relative scores. Share the canonical Host feedback and seed-baseline helpers with AccelOpt; preserve the native FSR loop.
+
 - Fix AccelOpt Sol ranking to use one complete official seed measurement and Host-bound seed-relative candidate feedback; NCU is diagnostic only, missing/partial results cannot retain estimates, and beam gains do not compound. Generate its Host helper from the shared substrate.
 
 All notable changes to Awesome-Kernel-Workflows are documented in this file.

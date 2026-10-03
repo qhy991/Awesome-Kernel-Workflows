@@ -118,6 +118,42 @@ function __solGuardHarnessFault(result) {
   }
   return result
 }
+// Deterministic measurement authority for native SOL consumers. Agent replies
+// may explain evidence but cannot supply correctness, workload coverage or score.
+function __solHostFeedback(host, explanation = {}) {
+  const latency = host?.candidate_latency_aggregate_ms
+  const valid = host?.compiled === true && host?.correct === true
+    && host?.measurement_valid === true && host?.full_workload_set === true
+    && host?.output_contract_valid === true && host?.artifact_binding?.verified === true
+    && Number.isInteger(host?.n_total) && host.n_total > 0 && host.n_pass === host.n_total
+    && Number.isFinite(latency) && latency > 0
+    && Number.isFinite(host?.speedup_vs_seed) && host.speedup_vs_seed > 0
+  return {
+    compiled: host?.compiled === true, correct: valid,
+    full_workload_set: host?.full_workload_set === true,
+    measurement_valid: host?.measurement_valid === true,
+    output_contract_valid: host?.output_contract_valid === true,
+    speedup: valid ? host.speedup_vs_seed : 0,
+    latency_ms: valid ? latency : null,
+    passed_tests: Number.isInteger(host?.n_pass) ? host.n_pass : null,
+    total_tests: Number.isInteger(host?.n_total) ? host.n_total : null,
+    source_binding: valid ? host.artifact_binding : null,
+    reference_speedup: Number.isFinite(host?.speedup) ? host.speedup : null,
+    explanation: {error_message: explanation?.error_message || '',
+      reward_hacking_flags: explanation?.reward_hacking_flags || []},
+    measurement_owner: 'Host',
+  }
+}
+async function __solOfficialSeedBaseline(ctx) {
+  const seed = await __solExecbenchEvaluate(ctx)
+  const latency = seed?.candidate_latency_aggregate_ms
+  if (seed?.compiled !== true || seed?.correct !== true
+      || seed?.full_workload_set !== true || seed?.measurement_valid !== true
+      || seed?.output_contract_valid !== true || !Number.isFinite(latency) || latency <= 0) {
+    throw new Error('Host could not establish a complete official Sol seed baseline')
+  }
+  return seed
+}
 // <<< SOL_INLINE_END >>>
 
-export { SOL_SOLUTION_CONTRACT, __solExecbenchEvalPlan, __solExecbenchEvaluate }
+export { SOL_SOLUTION_CONTRACT, __solExecbenchEvalPlan, __solExecbenchEvaluate, __solHostFeedback, __solOfficialSeedBaseline }

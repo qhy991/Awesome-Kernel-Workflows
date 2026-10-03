@@ -13,6 +13,52 @@ export const meta = {
     { title: 'Report', detail: 'Return best kernel, feature reward table, failures, and next feature sets' },
   ],
 }
+// --- BEGIN sol-execbench-eval substrate (auto-inlined by scripts/patch-sol-execbench-eval.js) ---
+const SOL_SOLUTION_CONTRACT = [
+  'SOL-EXECBENCH SOLUTION CONTRACT (this task is evaluated by the sol-execbench CLI):',
+  '',
+  'You are authoring a kernel that will be packaged into a solution.json and run by',
+  'the sol-execbench harness, which compiles it internally. Therefore:',
+  '',
+  '1. Emit a COMPLETE candidate with the task entry point run(...). CUDA C++',
+  '   requires a torch PYBIND11_MODULE binding; Python/Triton requires a',
+  '   module-level def run(...). Do NOT write a standalone main()/CLI harness.',
+  '2. Match the task reference signature exactly (same argument order/dtypes).',
+  '3. Do NOT package, compile, or benchmark yourself — the workflow + substrate',
+  '   handle pack -> sol-execbench -> parse. Return only the runnable source.',
+].join('\n')
+
+function __solQ(s) { return `"${String(s).replace(/"/g, '\\"')}"` }
+
+function __solExecbenchEvalPlan(ctx) {
+  const substrateDir = ctx.substrateDir            // abs path to _substrate/integration
+  const kernelSource = ctx.kernelSource            // path to candidate kernel on disk
+  const contractEnv = ctx.contractEnv              // path to session contract.env
+  const solutionOut = ctx.solutionOut              // where to write solution.json
+  const benchOut = ctx.benchOut                    // where sol-execbench writes bench.jsonl
+  const normalizedOut = ctx.normalizedOut || ''    // optional canonical measurement JSON
+  const solCli = ctx.solCli                        // e.g. /abs/sol-execbench/.venv/bin/sol-execbench
+  const taskDir = ctx.taskDir                      // FlashInfer-Bench/<task> dir
+  const benchConfig = ctx.benchConfig              // --config path
+  const seedDir = ctx.seedDir                      // cd target for the run
+  const cvd = ctx.cudaVisibleDevices || '0'
+  const ld = ctx.ldLibraryPath ? `LD_LIBRARY_PATH=${__solQ(ctx.ldLibraryPath)}:$LD_LIBRARY_PATH ` : ''
+  const env = ctx.envPrefix ? `${String(ctx.envPrefix).trim()} ` : ''
+  const definition = ctx.definitionPath ? ` --definition ${__solQ(ctx.definitionPath)}` : ''
+
+  const pack = `rm -f -- ${__solQ(solutionOut)} && python3 ${__solQ(substrateDir + '/pack_sol_candidate.py')} --kernel ${__solQ(kernelSource)} --contract ${__solQ(contractEnv)} --out ${__solQ(solutionOut)}`
+  const clearRunOutputs = [benchOut, normalizedOut].filter(Boolean).map(__solQ).join(' ')
+  const run = `rm -f -- ${clearRunOutputs} && test -s ${__solQ(solutionOut)} && cd ${__solQ(seedDir)} && ${env}${ld}CUDA_VISIBLE_DEVICES=${cvd} ${__solQ(solCli)} ${__solQ(taskDir)}${definition} --solution ${__solQ(solutionOut)} --config ${__solQ(benchConfig)} -o ${__solQ(benchOut)}`
+  const parse = `test -s ${__solQ(benchOut)} && python3 ${__solQ(substrateDir + '/parse_sol_bench.py')} ${__solQ(benchOut)} --contract ${__solQ(contractEnv)}${normalizedOut ? ` --out ${__solQ(normalizedOut)}` : ''}`
+
+  return {
+    pack,
+    run,
+    parse,
+    order: ['pack', 'run', 'parse'],
+    cleanupInvariant: 'solution.json + bench.jsonl are per-candidate scratch files in the run dir; each stage clears its own stale outputs and requires the preceding artifact. No project source is mutated (non-mutating method).',
+  }
+}
 
 async function __solExecbenchEvaluate(ctx) {
   // Claude's legacy Workflow host does not yet expose this optional primitive.
@@ -25,6 +71,10 @@ async function __solExecbenchEvaluate(ctx) {
     phase: ctx.phase || 'Evaluate',
     candidatePath: ctx.kernelSource,
     candidateSource: ctx.candidateSource,
+    candidateLanguage: ctx.candidateLanguage || '',
+    baselineSolutionPath: ctx.baselineSolutionPath || '',
+    baselineEvaluationPath: ctx.baselineEvaluationPath || '',
+    parentSolutionPath: ctx.parentSolutionPath || '',
     substrateDir: ctx.substrateDir,
     contractEnv: ctx.contractEnv,
     solutionOut: ctx.solutionOut,
@@ -38,18 +88,15 @@ async function __solExecbenchEvaluate(ctx) {
     ldLibraryPath: ctx.ldLibraryPath || '',
     envPrefix: ctx.envPrefix || '',
     definitionPath: ctx.definitionPath || '',
+    bindingOut: ctx.bindingOut || ctx.bindingPath || '',
+    bindingWorkflow: ctx.bindingWorkflow || '',
+    candidateId: ctx.candidateId || '',
     timeoutSeconds: ctx.timeoutSeconds || 0,
   }).then(__solGuardHarnessFault)
 }
 
-// A `compiled: false` from the evaluator does not always mean the candidate is
-// bad.  `invalid_request` and `infrastructure_error` are the harness refusing or
-// failing before the candidate was ever built, and callers that map any
-// non-success onto compile_error burn refine turns and a stagnation budget on a
-// misconfiguration.  Observed: a candidate staged outside the evaluation roots
-// was rejected at preflight, reported three times as `compile_error`, and the run
-// stopped at the stagnation limit having never compiled anything.  Surface a
-// harness fault as a harness fault and stop, because retrying cannot fix it.
+// A harness refusal occurs before a candidate is built. Preserve that boundary
+// instead of spending a solver refine turn on a nonexistent compile failure.
 function __solGuardHarnessFault(result) {
   const HARNESS_FAULTS = ['invalid_request', 'infrastructure_error']
   if (result && HARNESS_FAULTS.includes(result.failure_code)) {
@@ -62,6 +109,44 @@ function __solGuardHarnessFault(result) {
   }
   return result
 }
+// Deterministic measurement authority for native SOL consumers. Agent replies
+// may explain evidence but cannot supply correctness, workload coverage or score.
+function __solHostFeedback(host, explanation = {}) {
+  const latency = host?.candidate_latency_aggregate_ms
+  const valid = host?.compiled === true && host?.correct === true
+    && host?.measurement_valid === true && host?.full_workload_set === true
+    && host?.output_contract_valid === true && host?.artifact_binding?.verified === true
+    && Number.isInteger(host?.n_total) && host.n_total > 0 && host.n_pass === host.n_total
+    && Number.isFinite(latency) && latency > 0
+    && Number.isFinite(host?.speedup_vs_seed) && host.speedup_vs_seed > 0
+  return {
+    compiled: host?.compiled === true, correct: valid,
+    full_workload_set: host?.full_workload_set === true,
+    measurement_valid: host?.measurement_valid === true,
+    output_contract_valid: host?.output_contract_valid === true,
+    speedup: valid ? host.speedup_vs_seed : 0,
+    latency_ms: valid ? latency : null,
+    passed_tests: Number.isInteger(host?.n_pass) ? host.n_pass : null,
+    total_tests: Number.isInteger(host?.n_total) ? host.n_total : null,
+    source_binding: valid ? host.artifact_binding : null,
+    reference_speedup: Number.isFinite(host?.speedup) ? host.speedup : null,
+    explanation: {error_message: explanation?.error_message || '',
+      reward_hacking_flags: explanation?.reward_hacking_flags || []},
+    measurement_owner: 'Host',
+  }
+}
+async function __solOfficialSeedBaseline(ctx) {
+  const seed = await __solExecbenchEvaluate(ctx)
+  const latency = seed?.candidate_latency_aggregate_ms
+  if (seed?.compiled !== true || seed?.correct !== true
+      || seed?.full_workload_set !== true || seed?.measurement_valid !== true
+      || seed?.output_contract_valid !== true || !Number.isFinite(latency) || latency <= 0) {
+    throw new Error('Host could not establish a complete official Sol seed baseline')
+  }
+  return seed
+}
+// --- END sol-execbench-eval substrate ---
+
 
 // --- sol-execbench wiring (Host-owned PACK/RUN/PARSE; no LLM turn) -----------
 // These 15 workflows declared only the standalone path, so their benchmark was a
@@ -656,6 +741,19 @@ Then append:
 taskSpec = PROBLEM_DEFINITION || setup.problem_definition || ''
 referenceCode = setup.reference_code || ''
 
+let solSeedMeasurement = null
+if (SOL_AVAILABLE) {
+  solSeedMeasurement = await __solOfficialSeedBaseline({
+    label: 'sol-seed-baseline', phase: 'Setup', substrateDir: SOL_SUBSTRATE_DIR,
+    kernelSource: `${EXP_DIR}/host_seed.cu`, baselineSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
+    contractEnv: `${SOL_SEED_DIR}/contract.env`, solutionOut: `${EXP_DIR}/host_seed.solution.json`,
+    benchOut: `${EXP_DIR}/host_seed.bench.jsonl`, solCli: SOL_CLI,
+    taskDir: SOL_TASK_DIR, benchConfig: SOL_BENCH_CONFIG, seedDir: SOL_SEED_DIR,
+    cudaVisibleDevices: SOL_CVD, ldLibraryPath: SOL_LD_LIBRARY_PATH,
+    envPrefix: SOL_ENV_PREFIX, definitionPath: SOL_DEFINITION_PATH,
+  })
+}
+
 // =============================================================================
 // Phase 2: FeatureCatalog
 // =============================================================================
@@ -874,6 +972,10 @@ Then append:
         substrateDir: SOL_SUBSTRATE_DIR,
         kernelSource: cudallmCandidatePath(iteration, sample),
         candidateSource: generation.candidate_code,
+        baselineEvaluationPath: `${EXP_DIR}/host_seed.bench.jsonl.result.json`,
+        parentSolutionPath: `${SOL_SEED_DIR}/seed.solution.json`,
+        bindingOut: `${EXP_DIR}/cudallm_iter_${iteration}_sample_${sample}.binding.json`,
+        bindingWorkflow: WORKFLOW_NAME, candidateId: `iter_${iteration}_sample_${sample}`,
         contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
         solutionOut: `${EXP_DIR}/cudallm_iter_${iteration}_sample_${sample}.solution.json`,
         benchOut: `${EXP_DIR}/cudallm_iter_${iteration}_sample_${sample}.bench.jsonl`,
@@ -951,10 +1053,11 @@ Then append, using the values you just measured (status="done" only if compiled 
 
     const candidate = {
       id: `iter_${iteration}_sample_${sample}`,
+      path: cudallmCandidatePath(iteration, sample),
       selected_feature_ids: selection.selected_feature_ids || [],
       implemented_feature_ids: generation.implemented_feature_ids || [],
       code: generation.candidate_code || '',
-      eval: evaluation,
+      eval: SOL_AVAILABLE ? __solHostFeedback(__hostMeasured, evaluation) : evaluation,
     }
 
     if (USE_DRIVER_STANDALONE) {
@@ -1194,6 +1297,9 @@ return {
   best_speedup: bestCandidate?.eval?.speedup || 0,
   best_latency_ms: bestCandidate?.eval?.latency_ms || null,
   best_kernel_code: bestCandidate?.code || '',
+  best_candidate_binding: bestCandidate?.eval?.source_binding || null,
+  seed_measurement: solSeedMeasurement,
+  performance_domain: SOL_AVAILABLE ? 'official_full_workload_seed_relative' : 'legacy',
   best_candidate_id: bestCandidate?.id || '',
   feature_scores: featureScores,
   candidates: candidates.map(c => ({
