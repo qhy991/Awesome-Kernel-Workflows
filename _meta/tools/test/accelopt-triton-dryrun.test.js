@@ -35,7 +35,7 @@ const agentReturns = {
   'diagnose-baseline': { bottleneck_class: 'memory_bound', evidence: ['dram 50% high'] },
   'plan-0-0': { title: 't', focus_area: 'memory', profile_evidence: 'dram high', plan: 'p', expected_impact: '2x' },
   'impl-0-t-v0': { code: '@triton.jit\ndef k_opt():\n    pass', implementation_notes: 'n' },
-  'eval-plan_0_sample_0': { is_correct: true, is_compilable: true, estimated_latency_ms: 0.94, estimated_speedup: 1.06, profile_comparison: 'c', bottleneck_addressed: true, new_bottleneck: 'none', performance_analysis: 'pa' },
+  'eval-iter_0_plan_0_sample_0': { is_correct: true, is_compilable: true, estimated_latency_ms: 0.94, estimated_speedup: 1.06, profile_comparison: 'c', bottleneck_addressed: true, new_bottleneck: 'none', performance_analysis: 'pa' },
   'learn-t': { title: 'rule', profile_trigger: 'dram high', rule: 'tile', original_snippet: 'a', optimized_snippet: 'b', why: 'reuse' },
   'assemble-evidence': { valid: true, normalized: {} },
 }
@@ -56,7 +56,7 @@ test('triton dry-run: a Setup load-driver step is present and cats the .json dri
 test('triton dry-run: Evaluate and Learn prompts DO render (agentReturns unlocked the loop)', async () => {
   const caps = await tritonPrompts()
   const labels = caps.map(c => c.label)
-  assert.ok(labels.includes('eval-plan_0_sample_0'), 'Evaluate prompt must render')
+  assert.ok(labels.includes('eval-iter_0_plan_0_sample_0'), 'Evaluate prompt must render')
   assert.ok(labels.includes('learn-t'), 'Learn prompt must render')
 })
 

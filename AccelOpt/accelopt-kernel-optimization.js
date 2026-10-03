@@ -1429,7 +1429,7 @@ Then append (iteration ${iter}, plan "${plan.title}", sample ${sampleIdx}):
           plan: validPlans[planIdx],
           planIdx: planIdx,
           code: impl.code,
-          id: `plan_${planIdx}_sample_${sIdx}`,
+          id: `iter_${iter}_plan_${planIdx}_sample_${sIdx}`,
         })
       }
     }

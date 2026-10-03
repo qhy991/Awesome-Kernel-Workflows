@@ -1,5 +1,7 @@
 # 更新日志（中文）
 
+- AccelOpt候选身份包含iteration，确保候选、solution、benchmark及binding证据跨轮不覆盖；原生两轮回放验证较慢后轮不破坏前轮最佳源码与绑定。
+
 - CUDALLM SOL测量以Host为确定性权威，评价agent不能覆盖完整正确性、覆盖率、源码绑定及官方seed相对评分；与AccelOpt共享canonical反馈及seed基线helper，保留原生FSR循环。
 
 - 修复 AccelOpt Sol 排名口径：使用一次完整官方seed测量与Host绑定的seed相对候选反馈；NCU只作诊断，缺失/partial结果不得保留估算，beam增益不重复累乘。Host helper统一从共享substrate生成。

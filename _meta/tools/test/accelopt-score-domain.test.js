@@ -6,8 +6,8 @@ const valid=(lat,ratio)=>({compiled:true,correct:true,measurement_valid:true,ful
 async function replay(ncu,candidate=valid(.018,.020/.018),iterations=1){
  const agents={'read-baseline':{kernel_code:'SEED',op_type:'gemm',key_functions:['run']},'ncu-baseline':{latency_ms:ncu,ncu_available:true,bottleneck_diagnosis:'fixture',profile_summary:'diagnostic fixture'}};
  const evals={'sol-seed-baseline':{...valid(.020,1),candidate_role:'baseline'}};
- for(let i=0;i<iterations;i++){agents[`plan-${i}-0`]={title:'p',plan:'fixture',ncu_evidence:'fixture',expected_impact:'fixture'}; agents[`impl-${i}-p-v0`]={code:i?'CANDIDATE2':'CANDIDATE'};agents[`eval-plan_0_sample_0`]={is_compilable:true,is_correct:true,estimated_speedup:99,estimated_latency_ms:.0001};}
- evals['sol-eval-plan_0_sample_0']=candidate;
+ for(let i=0;i<iterations;i++){agents[`plan-${i}-0`]={title:'p',plan:'fixture',ncu_evidence:'fixture',expected_impact:'fixture'}; agents[`impl-${i}-p-v0`]={code:i?'CANDIDATE2':'CANDIDATE'};agents[`eval-iter_${i}_plan_0_sample_0`]={is_compilable:true,is_correct:true,estimated_speedup:99,estimated_latency_ms:.0001};}
+ for(let i=0;i<iterations;i++)evals[`sol-eval-iter_${i}_plan_0_sample_0`]=candidate;
  return (await run(source,{...args,iterations},agents,evals)).result;
 }
 test('NCU diagnostic latency cannot change selection or measured baseline',async()=>{const a=await replay(.012),b=await replay(.030);assert.equal(a.best_kernel_code,'CANDIDATE');assert.equal(b.best_kernel_code,a.best_kernel_code);assert.equal(a.baseline_latency_ms,.020);assert.equal(a.overall_speedup,.020/.018);});
