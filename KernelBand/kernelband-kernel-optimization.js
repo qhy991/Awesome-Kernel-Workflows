@@ -793,6 +793,7 @@ const initialFeatures = setupResult?.behavioral_features || { normalized_time: 1
 candidatePool.push({
   id: 0,
   code: initialCode,
+  source_path: HOST_SOL ? hostBaseline.candidate_path : '',
   latency: baselineLatency,
   speedup: 1.0,
   features: initialFeatures,
@@ -1008,6 +1009,8 @@ Then append (this is bandit iteration ${t}):
 
   log(`Select: cluster=${selectedCluster}, strategy=${selectedStrategy}, kernel=${selectedKernel.id} (UCB=${__fmt(bestUCB, 3)})`)
 
+  const generatedSourcePath = `${EXP_DIR}/kernelband_iter_${t}.cu`
+
   // ===========================================================================
   // Code Generation: LLM applies strategy to kernel (Section 3.1)
   // ===========================================================================
@@ -1062,7 +1065,7 @@ ${selectedStrategy === 'access_layout' ? `ACCESS & LAYOUT: Optimize memory layou
 - This (cluster, strategy) pair has been tried ${banditStats[`${selectedCluster}_${selectedStrategy}`]?.count || 0} times
 - Average reward so far: ${(banditStats[`${selectedCluster}_${selectedStrategy}`]?.mean_reward || 0).toFixed(3)}
 
-Return the optimized kernel code.
+${HOST_SOL ? `Write the complete candidate to ${generatedSourcePath}. Read the selected source from ${selectedKernel.source_path || KERNEL_PATH} if its code is absent above. Return candidate_path with that exact path and a concise change description. Keep the complete source in the file; do not put it in StructuredOutput.` : 'Return the optimized kernel code.'}
 
 ${SOL_CANDIDATE_CONTRACT}
 
@@ -1077,14 +1080,29 @@ Then append (this is bandit iteration ${t}; the arm pulled is strategy ${selecte
       type: 'object',
       properties: {
         optimized_kernel: { type: 'string' },
+        ...(HOST_SOL ? { candidate_path: { type: 'string', enum: [generatedSourcePath] } } : {}),
         changes_description: { type: 'string' },
         expected_improvement: { type: 'string' },
       },
-      required: ['optimized_kernel'],
+      required: HOST_SOL ? ['candidate_path'] : ['optimized_kernel'],
     },
   }), { retries: 5, allowNull: true })
 
-  const generatedCode = generateResult?.optimized_kernel || ''
+  let generatedCode = generateResult?.optimized_kernel || ''
+  if (HOST_SOL && generateResult?.candidate_path) {
+    if (generateResult.candidate_path !== generatedSourcePath) {
+      throw new Error('KernelBand candidate_path must match the assigned iteration source path')
+    }
+    const source = await evaluate({
+      protocol: 'command-v1', label: `read-candidate-t${t}`, phase: 'Generate',
+      argv: ['cat', generatedSourcePath], cwd: EXP_DIR,
+      filesystem_policy: 'read-only', timeout_seconds: 30,
+    })
+    if (!source?.passed || typeof source.stdout !== 'string' || !source.stdout.trim()) {
+      throw new Error(`KernelBand could not read the complete candidate at ${generatedSourcePath}`)
+    }
+    generatedCode = source.stdout
+  }
 
   // ===========================================================================
   // Evaluation: Compile, verify, benchmark (Section 3.1, Algorithm 1 line 19)
@@ -1101,7 +1119,7 @@ Then append (this is bandit iteration ${t}; the arm pulled is strategy ${selecte
     __hostMeasured = await __solExecbenchEvaluate({
       label: `sol-eval-t${t}`, phase: 'Evaluate',
       substrateDir: SOL_SUBSTRATE_DIR,
-      kernelSource: `${EXP_DIR}/kernelband_iter_${t}.cu`,
+      kernelSource: generatedSourcePath,
       candidateSource: generatedCode,
       contractEnv: `${SOL_SEED_DIR || '.'}/contract.env`,
       solutionOut: `${EXP_DIR}/kernelband_iter_${t}.solution.json`,
@@ -1340,6 +1358,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
     candidatePool.push({
       id: newId,
       code: generatedCode,
+      source_path: HOST_SOL ? generatedSourcePath : '',
       latency: newLatency,
       speedup: newSpeedup,
       features,
@@ -1350,7 +1369,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
 
     // Update best
     if (newLatency < bestKernel.latency) {
-      bestKernel = { code: generatedCode, latency: newLatency, speedup: newSpeedup }
+      bestKernel = { code: generatedCode, source_path: HOST_SOL ? generatedSourcePath : '', latency: newLatency, speedup: newSpeedup }
       log(`  NEW BEST: ${__fmt(newLatency, 1)}μs (${__fmt(bestKernel.speedup, 2)}x) via ${selectedStrategy}`)
     }
   }
@@ -1445,7 +1464,7 @@ return {
   input_mode: INPUT_MODE,
   problem_definition: PROBLEM_DEFINITION,
   problem_path: PROBLEM_PATH,
-  generated_kernel_path: generatedKernelPath,
+  generated_kernel_path: HOST_SOL ? (bestKernel.source_path || KERNEL_PATH) : generatedKernelPath,
   initial_candidates: initialCandidates,
   initial_generation_result: initialGenerationResult,
   target_gpu: GPU_TARGET,

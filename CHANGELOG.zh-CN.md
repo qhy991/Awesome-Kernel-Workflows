@@ -12,6 +12,11 @@
 
 ### Fixed
 
+- Host 路径下的 KernelBand 改用文件交接候选，并在测量前通过现有命令执行器读取完整源码。
+  大型 CUDA 候选此前会在 StructuredOutput 中发生 JSON 解析失败，并反复尝试压缩源码。
+  向 KerSor 返回实际测量的最优源码路径。
+  (`KernelBand/kernelband-kernel-optimization.js`)
+
 - 全部 24 个含 integration strategist 的 workflow 直接采用显式集成选择（包括 embedded_inplace），避免重复分类 activation，并删除无用的 preferred-method/manifest 推导。入口回归实际执行四种路由选择，替代对历史 if 语句写法的断言（workflow 入口、`_meta/tools/test/explicit-integration.test.js`、SOL 路由测试）。
 
 - 永久 Host 权限/配置、取消、预算及认证错误立即停止重试，同时保留临时故障恢复；修改规范 helper 并重新生成 35 个 workflow 副本（`_meta/scaffolding/agent-retry.js`、workflow 入口、`_meta/tools/test/agent-retry-null-safety.test.js`）。

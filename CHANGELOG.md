@@ -14,6 +14,12 @@ for the versioning policy.
 
 ### Fixed
 
+- Hand off Host-backed KernelBand candidates as files and read their complete
+  source with the existing command evaluator before measurement. Large CUDA
+  candidates previously failed StructuredOutput JSON parsing and spent retries
+  shrinking source. Return the measured best source path to KerSor.
+  (`KernelBand/kernelband-kernel-optimization.js`)
+
 - Forward each CuTe candidate's exact Host-measured input parent to KSearch
   and AKO4X, and return the bound seed-relative metric separately from the
   framework-reference metric. Previously internal seed-relative scores could
