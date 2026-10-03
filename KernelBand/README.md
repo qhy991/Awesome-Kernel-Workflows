@@ -102,6 +102,33 @@ Workflow({name: 'kernelband-kernel-optimization', args: {
 }})
 ```
 
+## Task-owned testing in native and Node runtimes
+
+A task can provide `AGENTS.md`, `task.md`, source files and its existing tests.
+Pass the task document as `problem_path`, the seed source as `kernel_path`,
+and a private `exp_dir`. Compile, benchmark and profiling commands can be
+read from that document. Native Claude agents need Bash execution authority.
+The task must describe the complete workload, correctness checks, timing
+boundary and broker requirements. No benchmark adapter is required.
+
+For this ordinary task path, agents write complete candidates to files, execute
+the task test program, and return its result file path and verbatim JSON.
+The result must contain `correct` and, on success, a positive `latency_ms` or
+`latency_us`. Keep raw logs and broker receipts. Optional `n_pass`/`n_total`
+must describe the complete task workload. The bandit derives seed-relative
+speedup and reward from those results; missing evidence does not update it.
+
+This path runs without `evaluate()`. A Node Host can use the same task path;
+existing Host SOL and backend-driver paths remain available. Search feedback
+relayed by an agent is provisional: verify the final commit independently with
+frozen original tests before accepting a performance claim. A CPU execution
+canary proves the handoff and feedback path, not GPU correctness or speedup.
+
+任务可直接提供 `AGENTS.md`、`task.md`、源码和已有测试，使用 `problem_path`
+指向任务文档。Agent 在 Bash 中自行运行测试，完整候选通过文件交接，返回实际
+结果文件路径与原始 JSON；缺少实测不更新 bandit。Node 和原生 Claude 均可使用
+此路径，无需 `evaluate()` 或新 benchmark adapter。最终候选仍由冻结测试独立验收。
+
 ## Parameters
 
 | Parameter | Default | Description |

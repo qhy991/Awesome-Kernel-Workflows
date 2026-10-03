@@ -564,6 +564,29 @@ for (let i = 0; i < NUM_CLUSTERS; i++) {
 // =============================================================================
 // Phase 1: Setup — Parse kernel, identify hardware, establish baseline
 // =============================================================================
+// Native agents execute the task's existing test command through Bash. The
+// workflow consumes its JSON, while final acceptance remains external.
+const TASK_TEST = !(SOL_AVAILABLE && typeof evaluate === 'function') && !USE_DRIVER
+  && (/(?:^|\/)(?:task|TASK)\.md$/.test(PROBLEM_PATH)
+    || (typeof evaluate !== 'function' && !!BENCHMARK_CMD))
+  && !String(args.integration_pattern || '').startsWith('embedded_')
+function taskTestResult(output) {
+  let result
+  try { result = JSON.parse(output?.test_result_json || '') } catch { return null }
+  if (!output?.test_result_path || typeof result?.correct !== 'boolean'
+      || (result.correct && result.compiled === false)) return null
+  if (['infrastructure_error', 'invalid_request'].includes(result.failure_code)
+      || result.failure_class === 'infrastructure_or_incomplete_evidence'
+      || result.failure_class === 'invalid_request' || result.measurement_valid === false) return null
+  if (result.n_total != null && result.correct
+      && (result.n_total <= 0 || result.n_pass !== result.n_total)) return null
+  const latency = result.latency_us ?? (result.latency_ms == null ? null : result.latency_ms * 1000)
+  if (result.correct && (!Number.isFinite(latency) || latency <= 0)) return null
+  return {compiled: result.compiled ?? result.correct, correct: result.correct,
+    latency_us: result.correct ? latency : null, test_result_path: output.test_result_path}
+}
+const TASK_TEST_INSTRUCTIONS = `Read AGENTS.md and task.md (or TASK.md) in the task workspace, plus the caller's problem_path if supplied. Use the task's complete correctness and timing contract. Run the task's test program with Bash and await its terminal result; retain stdout, stderr, result JSON and broker receipts. Use the task's GPU broker for device work. Return test_result_path and test_result_json copied verbatim from the actual test result file. Do not replace a failed command with a predicted latency. If a command contains {kernel_path} or {result_path}, substitute the assigned candidate and output paths. If it uses fixed source paths, install the complete candidate there according to the task before testing.`
+
 phase('Setup')
 
 if (USE_DRIVER) {
@@ -595,7 +618,7 @@ if (INPUT_MODE === 'generate_then_optimize') {
 const setupResult = await agentRetry(() => agent(`You are setting up a KernelBand optimization session.
 
 # Task
-1. Read the kernel file: ${KERNEL_PATH}
+${TASK_TEST ? TASK_TEST_INSTRUCTIONS + '\n' : ''}1. Read the kernel file: ${KERNEL_PATH}
 2. Create experiment directory: mkdir -p ${EXP_DIR}/{candidates,profiles,logs}
 3. Record profiling evidence artifacts:
    - feature_vector_result_path: ${FEATURE_VECTOR_RESULT_PATH}
@@ -603,8 +626,8 @@ const setupResult = await agentRetry(() => agent(`You are setting up a KernelBan
    - evidence_mode: ${EVIDENCE_MODE}
    If evidence_mode is conservative_missing_evidence, do not claim strict KernelBand execution; mark phi, masks, and rewards as estimates.
 4. Establish baseline performance:
-   ${COMPILE_CMD ? `Compile: ${COMPILE_CMD}` : '(no compile_command provided; perform static compileability review only)'}
-   ${BENCHMARK_CMD ? `Benchmark: ${BENCHMARK_CMD}` : '(no benchmark_command provided; do not invent one)'}
+   ${COMPILE_CMD ? `Compile: ${COMPILE_CMD}` : TASK_TEST ? '(discover and run the compile/test entry from task.md)' : '(no compile_command provided; perform static compileability review only)'}
+   ${BENCHMARK_CMD ? `Benchmark: ${BENCHMARK_CMD}` : TASK_TEST ? '(discover and run the benchmark entry from task.md)' : '(no benchmark_command provided; do not invent one)'}
 5. Run initial profiling to get hardware signature:
    ${NCU_CMD ? `Profile: ${NCU_CMD}` : NCU_BINARY ? `Use the user-provided ncu_binary (${NCU_BINARY}) only with the user-provided benchmark/harness contract.` : '(no ncu_command/ncu_binary provided; mark hardware signature as missing evidence)'}
    Extract: DRAM throughput %, L2 throughput %, SM throughput %
@@ -632,6 +655,7 @@ Then append:
     type: 'object',
     properties: {
       kernel_code: { type: 'string' },
+      ...(TASK_TEST ? {test_result_path: {type: 'string'}, test_result_json: {type: 'string'}} : {}),
       baseline_latency_us: { type: 'number' },
       hardware_signature: {
         type: 'object',
@@ -654,7 +678,7 @@ Then append:
       },
       platform_info: { type: 'string' },
     },
-    required: ['baseline_latency_us'],
+    required: TASK_TEST ? ['test_result_path', 'test_result_json'] : ['baseline_latency_us'],
   },
 }), { retries: 5, allowNull: true })
 
@@ -785,7 +809,13 @@ const hostBaseline = HOST_SOL ? await __solExecbenchEvaluate({
 if (HOST_SOL && (!hostBaseline?.correct || hostBaseline.measurement_valid === false)) {
   return { success: false, reason: 'baseline_unverified', baseline: hostBaseline }
 }
-baselineLatency = HOST_SOL ? hostBaseline.latency_ms * 1000 : setupResult?.baseline_latency_us || 1000
+const taskBaseline = TASK_TEST ? taskTestResult(setupResult) : null
+if (TASK_TEST && !taskBaseline?.correct) {
+  return {success: false, reason: 'baseline_unverified', baseline: taskBaseline}
+}
+baselineLatency = HOST_SOL ? hostBaseline.latency_ms * 1000
+  : TASK_TEST ? taskBaseline.latency_us : setupResult?.baseline_latency_us || 1000
+const FILE_CANDIDATES = HOST_SOL || TASK_TEST
 const initialCode = setupResult?.kernel_code || ''
 const hwSignature = setupResult?.hardware_signature || { dram_throughput_pct: 50, l2_throughput_pct: 50, sm_throughput_pct: 50 }
 const initialFeatures = setupResult?.behavioral_features || { normalized_time: 1.0, registers_per_thread: 32, shared_mem_bytes: 0, block_dimension: 256, occupancy: 0.5 }
@@ -793,7 +823,7 @@ const initialFeatures = setupResult?.behavioral_features || { normalized_time: 1
 candidatePool.push({
   id: 0,
   code: initialCode,
-  source_path: HOST_SOL ? hostBaseline.candidate_path : '',
+  source_path: HOST_SOL ? hostBaseline.candidate_path : TASK_TEST ? KERNEL_PATH : '',
   latency: baselineLatency,
   speedup: 1.0,
   features: initialFeatures,
@@ -905,7 +935,7 @@ Then append (this is bandit iteration ${t}):
 # Clusters:
 ${clusters.map(c => {
   const rep = candidatePool.find(p => p.id === (c.members[0] || 0))
-  return `Cluster ${c.id}: representative kernel ${rep ? rep.id : 'N/A'}`
+  return `Cluster ${c.id}: representative kernel ${rep ? rep.id : 'N/A'}${rep?.source_path ? ', source=' + rep.source_path : ''}`
 }).join('\n')}
 
 # Profiling Contract:
@@ -1009,7 +1039,8 @@ Then append (this is bandit iteration ${t}):
 
   log(`Select: cluster=${selectedCluster}, strategy=${selectedStrategy}, kernel=${selectedKernel.id} (UCB=${__fmt(bestUCB, 3)})`)
 
-  const generatedSourcePath = `${EXP_DIR}/kernelband_iter_${t}.cu`
+  const taskSourceExt = /\.[^/.]+$/.exec(KERNEL_PATH)?.[0] || '.cu'
+  const generatedSourcePath = `${EXP_DIR}/kernelband_iter_${t}${TASK_TEST ? taskSourceExt : '.cu'}`
 
   // ===========================================================================
   // Code Generation: LLM applies strategy to kernel (Section 3.1)
@@ -1024,7 +1055,7 @@ Then append (this is bandit iteration ${t}):
 
 # Source Kernel (ID ${selectedKernel.id}, current speedup: ${__fmt(selectedKernel.speedup, 2)}x):
 \`\`\`${fenceToken()}
-${HOST_SOL ? (selectedKernel.code || '') : (selectedKernel.code || '').substring(0, 6000)}
+${FILE_CANDIDATES ? 'Read the complete source from ' + (selectedKernel.source_path || KERNEL_PATH) : (selectedKernel.code || '').substring(0, 6000)}
 \`\`\`
 
 # Strategy: ${selectedStrategy}
@@ -1065,7 +1096,7 @@ ${selectedStrategy === 'access_layout' ? `ACCESS & LAYOUT: Optimize memory layou
 - This (cluster, strategy) pair has been tried ${banditStats[`${selectedCluster}_${selectedStrategy}`]?.count || 0} times
 - Average reward so far: ${(banditStats[`${selectedCluster}_${selectedStrategy}`]?.mean_reward || 0).toFixed(3)}
 
-${HOST_SOL ? `Write the complete candidate to ${generatedSourcePath}. Read the selected source from ${selectedKernel.source_path || KERNEL_PATH} if its code is absent above. Return candidate_path with that exact path and a concise change description. Keep the complete source in the file; do not put it in StructuredOutput.` : 'Return the optimized kernel code.'}
+${FILE_CANDIDATES ? `Write the complete candidate to ${generatedSourcePath}. Read the selected source from ${selectedKernel.source_path || KERNEL_PATH} if its code is absent above. Return candidate_path with that exact path and a concise change description. Keep the complete source in the file; do not put it in StructuredOutput.` : 'Return the optimized kernel code.'}
 
 ${SOL_CANDIDATE_CONTRACT}
 
@@ -1080,28 +1111,30 @@ Then append (this is bandit iteration ${t}; the arm pulled is strategy ${selecte
       type: 'object',
       properties: {
         optimized_kernel: { type: 'string' },
-        ...(HOST_SOL ? { candidate_path: { type: 'string', enum: [generatedSourcePath] } } : {}),
+        ...(FILE_CANDIDATES ? { candidate_path: { type: 'string', enum: [generatedSourcePath] } } : {}),
         changes_description: { type: 'string' },
         expected_improvement: { type: 'string' },
       },
-      required: HOST_SOL ? ['candidate_path'] : ['optimized_kernel'],
+      required: FILE_CANDIDATES ? ['candidate_path'] : ['optimized_kernel'],
     },
   }), { retries: 5, allowNull: true })
 
   let generatedCode = generateResult?.optimized_kernel || ''
-  if (HOST_SOL && generateResult?.candidate_path) {
+  if (FILE_CANDIDATES && generateResult?.candidate_path) {
     if (generateResult.candidate_path !== generatedSourcePath) {
       throw new Error('KernelBand candidate_path must match the assigned iteration source path')
     }
-    const source = await evaluate({
-      protocol: 'command-v1', label: `read-candidate-t${t}`, phase: 'Generate',
-      argv: ['cat', generatedSourcePath], cwd: EXP_DIR,
-      filesystem_policy: 'read-only', timeout_seconds: 30,
-    })
-    if (!source?.passed || typeof source.stdout !== 'string' || !source.stdout.trim()) {
-      throw new Error(`KernelBand could not read the complete candidate at ${generatedSourcePath}`)
+    if (HOST_SOL) {
+      const source = await evaluate({
+        protocol: 'command-v1', label: `read-candidate-t${t}`, phase: 'Generate',
+        argv: ['cat', generatedSourcePath], cwd: EXP_DIR,
+        filesystem_policy: 'read-only', timeout_seconds: 30,
+      })
+      if (!source?.passed || typeof source.stdout !== 'string' || !source.stdout.trim()) {
+        throw new Error(`KernelBand could not read the complete candidate at ${generatedSourcePath}`)
+      }
+      generatedCode = source.stdout
     }
-    generatedCode = source.stdout
   }
 
   // ===========================================================================
@@ -1109,11 +1142,8 @@ Then append (this is bandit iteration ${t}; the arm pulled is strategy ${selecte
   // ===========================================================================
   phase('Evaluate')
 
-  // compiled / correct / latency_us from this turn become the bandit's reward, so
-  // the strategy KernelBand learns to prefer is only as real as these numbers.
-  // The prompt asks the agent to compile, run torch.allclose over 10+ shapes and
-  // benchmark; a read-only activation has no execution tool and can do none of
-  // it. Measure on the Host so the bandit updates on measurements.
+  // Existing Host measurement remains available. Native task agents use the
+  // same task-owned test program through Bash and retain its result artifact.
   let __hostMeasured = null
   if (SOL_AVAILABLE && generatedCode.trim()) {
     __hostMeasured = await __solExecbenchEvaluate({
@@ -1151,15 +1181,15 @@ what the strategy intended.` : ''
 
 # Generated Kernel:
 \`\`\`${fenceToken()}
-${generatedCode.substring(0, 6000)}
+${FILE_CANDIDATES ? 'Read the complete candidate from ' + generatedSourcePath : generatedCode.substring(0, 6000)}
 \`\`\`
 
-# Evaluation Steps (Two-stage verification from Section 4.1):
+${TASK_TEST ? TASK_TEST_INSTRUCTIONS + '\nCandidate: ' + generatedSourcePath + '\nResult path: ' + EXP_DIR + '/kernelband_iter_' + t + '.test.json\n\n' : ''}# Evaluation Steps (Two-stage verification from Section 4.1):
 1. **Call Accuracy**: Compile and run — check for runtime errors
    ${COMPILE_CMD || '(compile the generated kernel)'}
 2. **Execution Accuracy**: Verify numerical equivalence via torch.allclose
-   Compare outputs against reference (CPU ATen) across 10+ input shapes
-3. **Performance Measurement**: Benchmark across dominant input shapes
+   ${TASK_TEST ? 'Follow the task correctness contract; use its complete workload set' : 'Compare outputs against reference (CPU ATen) across 10+ input shapes'}
+3. **Performance Measurement**: ${TASK_TEST ? 'Benchmark the task workload and timing boundary' : 'Benchmark across dominant input shapes'}
    ${BENCHMARK_CMD || '(run the performance benchmark)'}
    Report latency in microseconds
 4. **Feature Extraction**: Extract behavioral features φ(k'):
@@ -1184,6 +1214,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
       properties: {
         compiled: { type: 'boolean' },
         correct: { type: 'boolean' },
+        ...(TASK_TEST ? {test_result_path: {type: 'string'}, test_result_json: {type: 'string'}} : {}),
         latency_us: { type: 'number' },
         speedup: { type: 'number' },
         behavioral_features: {
@@ -1206,7 +1237,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
         },
         error_details: { type: 'string' },
       },
-      required: ['compiled', 'correct'],
+      required: TASK_TEST ? ['test_result_path', 'test_result_json'] : ['compiled', 'correct'],
     },
   }), { retries: 5, allowNull: true })
 
@@ -1314,6 +1345,14 @@ Then append, using the values you just measured (status="done" if it compiled AN
   // ===========================================================================
   phase('Update')
 
+  if (TASK_TEST) {
+    const measured = generateResult?.candidate_path ? taskTestResult(evalResult) : null
+    if (!measured) {
+      iterationLog.push({t, failure_code: 'measurement_invalid', reward: null})
+      continue
+    }
+    Object.assign(evalResult, measured, {speedup: measured.correct ? baselineLatency / measured.latency_us : 0})
+  }
   if (HOST_SOL && __hostMeasured?.measurement_valid === false) {
     iterationLog.push({ t, failure_code: 'measurement_invalid', reward: null })
     continue
@@ -1358,7 +1397,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
     candidatePool.push({
       id: newId,
       code: generatedCode,
-      source_path: HOST_SOL ? generatedSourcePath : '',
+      source_path: FILE_CANDIDATES ? generatedSourcePath : '',
       latency: newLatency,
       speedup: newSpeedup,
       features,
@@ -1369,7 +1408,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
 
     // Update best
     if (newLatency < bestKernel.latency) {
-      bestKernel = { code: generatedCode, source_path: HOST_SOL ? generatedSourcePath : '', latency: newLatency, speedup: newSpeedup }
+      bestKernel = { code: generatedCode, source_path: FILE_CANDIDATES ? generatedSourcePath : '', latency: newLatency, speedup: newSpeedup }
       log(`  NEW BEST: ${__fmt(newLatency, 1)}μs (${__fmt(bestKernel.speedup, 2)}x) via ${selectedStrategy}`)
     }
   }
@@ -1381,6 +1420,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
     kernel_id: selectedKernel.id,
     compiled,
     correct,
+    ...(TASK_TEST ? {test_result_path: evalResult.test_result_path} : {}),
     reward: __fmt(reward, 4),
     latency: newLatency,
     speedup: compiled && correct ? newSpeedup.toFixed(2) : '0',
@@ -1464,7 +1504,7 @@ return {
   input_mode: INPUT_MODE,
   problem_definition: PROBLEM_DEFINITION,
   problem_path: PROBLEM_PATH,
-  generated_kernel_path: HOST_SOL ? (bestKernel.source_path || KERNEL_PATH) : generatedKernelPath,
+  generated_kernel_path: FILE_CANDIDATES ? (bestKernel.source_path || KERNEL_PATH) : generatedKernelPath,
   initial_candidates: initialCandidates,
   initial_generation_result: initialGenerationResult,
   target_gpu: GPU_TARGET,

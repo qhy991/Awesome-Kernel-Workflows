@@ -12,6 +12,8 @@
 
 ### Fixed
 
+- 原生 KernelBand agent 可通过 Bash 运行任务测试并交回原始结果 JSON 与路径；完整候选通过文件交接，缺失实测不更新 reward，按 seed 延迟计算收益，无需 Host evaluate()（`KernelBand/kernelband-kernel-optimization.js`、`KernelBand/README.md` 与原生任务回归）。
+
 - Host 路径下的 KernelBand 改用文件交接候选，并在测量前通过现有命令执行器读取完整源码。
   大型 CUDA 候选此前会在 StructuredOutput 中发生 JSON 解析失败，并反复尝试压缩源码。
   向 KerSor 返回实际测量的最优源码路径。

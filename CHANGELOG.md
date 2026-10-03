@@ -14,6 +14,8 @@ for the versioning policy.
 
 ### Fixed
 
+- Let native KernelBand agents run task-owned tests through Bash and return raw result JSON and paths; preserve full candidates in files, reject missing timing evidence, and derive seed-relative rewards without requiring Host evaluate() (`KernelBand/kernelband-kernel-optimization.js`, `KernelBand/README.md`, native task regression).
+
 - Hand off Host-backed KernelBand candidates as files and read their complete
   source with the existing command evaluator before measurement. Large CUDA
   candidates previously failed StructuredOutput JSON parsing and spent retries
