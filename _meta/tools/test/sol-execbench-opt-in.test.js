@@ -69,7 +69,9 @@ test('KerSor core five delegate SOL execution to the Host', () => {
 
 test('CUDAAgent does not profile an explicit SOL baseline through an LLM worker', () => {
   const source = read('CUDAAgent/cuda-agent-kernel-optimization.js')
-  assert.match(source, /const profileResult = IS_SOL\s*\? \{[\s\S]*?: await agentRetry\(\(\) => agent\(`/)
+  // SOL retains the contract-owned baseline. A separate native task-result
+  // route may profile its own tested artifact without changing SOL behavior.
+  assert.match(source, /const profileResult = IS_SOL\s*\? \{[\s\S]*?: args\.task_result_command\s*\? await agentRetry\(\(\)\s*=>\s*agent\(`/)
   assert.match(source, /eager_time_ms: null,[\s\S]*compile_time_ms: null/)
-  assert.match(source, /best_speedup_vs_eager: IS_SOL \? null/)
+  assert.match(source, /best_speedup_vs_eager: IS_SOL \|\| args\.task_result_command \? null/)
 })

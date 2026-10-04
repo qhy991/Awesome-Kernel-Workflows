@@ -424,3 +424,7 @@ Workflow({name: 'accelopt-kernel-optimization', args: {
 
 - [AccelOpt: A Self-Improving LLM Agentic System for AI Accelerator Kernel Optimization](https://arxiv.org/abs/2511.15915) (MLSys 2026)
 - [Adaptive Self-improvement LLM Agentic System for ML Library Development](https://proceedings.mlr.press/v267/zhang25at.html) (ICML 2025)
+
+### Native task self-test qualification
+
+Optional `task_result_command` and `task_workload_count` enable the frozen-task Python/CuTe path. Snapshot explicitly selected files, execute full official tests through the broker, and reduce matching raw task/terminal receipts. Only complete correct measured results may score; NCU is diagnostic. Preserve finite native topology/defaults. CUDAAgent/AccelOpt compare to their independently generated initial implementation; KernelFoundry/KSearch/CUDALLM report official-reference scores. Return the tested snapshot rather than rewritten display code. Audit native agent JSON relays against raw files and independent final acceptance; they are not process-Host evaluate receipts or formal-ablation authority.

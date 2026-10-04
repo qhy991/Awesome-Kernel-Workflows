@@ -12,6 +12,64 @@ export const meta = {
     { title: 'Report', detail: 'Final optimization report with search trajectory' },
   ],
 }
+// --- BEGIN inlined task-result scaffolding (from _meta/scaffolding/task-result.js) ---
+// Native task-result compatibility: task command is the measurement authority.
+function __taskHold(reason) {
+  const error = new Error('TASK_RESULT_HOLD: ' + reason)
+  error.code = 'TASK_RESULT_HOLD'
+  error.retryable = false
+  error.outcome_state = 'unknown'
+  throw error
+}
+function __taskResult(output, expectedPath, expectedCount) {
+  let result
+  try {
+    const raw = output?.test_result_json
+    result = typeof raw === 'string' ? JSON.parse(raw)
+      : raw && typeof raw === 'object' && !Array.isArray(raw) ? JSON.parse(JSON.stringify(raw))
+      : __taskHold('missing/malformed raw task result')
+  } catch { return __taskHold('missing/malformed raw task result') }
+  if (output?.test_result_path !== expectedPath || result?.test_result_path !== expectedPath || result?.contract_version !== 'kersor-task-result-v1') return __taskHold('task result contract/path mismatch')
+  if (output.model_observation === 'unknown' || result.model_observation === 'unknown' || result.outcome_state === 'unknown' || (result.failure_origin && result.failure_origin !== 'candidate')) return __taskHold('infrastructure, evidence, or model observation unknown')
+  const valid = result.compiled === true && result.correct === true
+    && result.full_workload_set === true && result.measurement_valid === true
+    && result.source_binding?.verified === true && result.n_pass === result.n_total
+    && Number.isInteger(result.n_total) && result.n_total === expectedCount
+    && /^[0-9a-f]{64}$/i.test(result.source_binding?.source_sha256 || '')
+    && result.candidate_path === expectedPath + '.artifact/candidate.py'
+    && result.n_total > 0 && Number.isFinite(result.candidate_latency_aggregate_ms)
+    && result.candidate_latency_aggregate_ms > 0 && Number.isFinite(result.speedup_vs_reference)
+    && result.speedup_vs_reference > 0
+  const candidateFailure = result.outcome_state === 'candidate_failure' && result.failure_origin === 'candidate'
+    && result.full_workload_set === true && result.n_total === expectedCount
+    && Number.isInteger(result.n_pass) && result.n_pass >= 0 && result.n_pass < expectedCount
+    && result.source_binding?.verified === true
+    && /^[0-9a-f]{64}$/i.test(result.source_binding?.source_sha256 || '')
+    && result.candidate_path === expectedPath + '.artifact/candidate.py'
+  if (!valid && !candidateFailure) return __taskHold('incomplete workload/measurement/source proof')
+  return {is_valid:valid, measurement_valid:valid, compiled:result.compiled, correct:valid,
+    metric_value:valid ? result.speedup_vs_reference : 0,
+    speedup:valid ? result.speedup_vs_reference : 0,
+    latency_ms:valid ? result.candidate_latency_aggregate_ms : null,
+    n_pass:result.n_pass, n_total:result.n_total,
+    pass_rate:String(result.n_pass)+'/'+String(result.n_total),
+    source_binding:result.source_binding, host_candidate_path:result.candidate_path, test_result_path:output.test_result_path,
+    outcome_state:valid ? 'passed' : 'candidate_failure', error_log:valid ? '' : 'explicit candidate failure'}
+}
+
+async function __nativeTaskEvaluate(ctx) {
+  let output
+  try { output = await agentRetry(() => agent(`Use the explicitly declared candidate file at ${ctx.candidatePath}. If it is absent, write the COMPLETE returned source below to that exact path. Never rewrite an existing declared file or select another directory entry.
+${ctx.candidateSource || ''}
+Run the trusted task command once: ${ctx.command.replaceAll('{kernel_path}', ctx.candidatePath).replaceAll('{result_path}', ctx.resultPath)}
+Wait for its terminal result and read ${ctx.resultPath}. Return test_result_path and test_result_json copied verbatim from that file. No estimates or rewritten source in this reply.`, {
+    label:ctx.label, phase:'Evaluate',
+    schema:{type:'object', properties:{test_result_path:{type:'string'},test_result_json:{type:'string'}}, required:['test_result_path','test_result_json']},
+  }), {retries:0}) } catch (error) { return __taskHold('agent/transport result unavailable: ' + (error?.message || String(error))) }
+  return __taskResult(output, ctx.resultPath, ctx.workloadCount)
+    || __taskHold('missing task result')
+}
+// --- END inlined task-result scaffolding ---
 // --- BEGIN sol-execbench-eval substrate (auto-inlined by scripts/patch-sol-execbench-eval.js) ---
 const SOL_SOLUTION_CONTRACT = [
   'SOL-EXECBENCH SOLUTION CONTRACT (this task is evaluated by the sol-execbench CLI):',
@@ -107,6 +165,42 @@ function __solGuardHarnessFault(result) {
     )
   }
   return result
+}
+// Deterministic measurement authority for native SOL consumers. Agent replies
+// may explain evidence but cannot supply correctness, workload coverage or score.
+function __solHostFeedback(host, explanation = {}) {
+  const latency = host?.candidate_latency_aggregate_ms
+  const valid = host?.compiled === true && host?.correct === true
+    && host?.measurement_valid === true && host?.full_workload_set === true
+    && host?.output_contract_valid === true && host?.artifact_binding?.verified === true
+    && Number.isInteger(host?.n_total) && host.n_total > 0 && host.n_pass === host.n_total
+    && Number.isFinite(latency) && latency > 0
+    && Number.isFinite(host?.speedup_vs_seed) && host.speedup_vs_seed > 0
+  return {
+    compiled: host?.compiled === true, correct: valid,
+    full_workload_set: host?.full_workload_set === true,
+    measurement_valid: host?.measurement_valid === true,
+    output_contract_valid: host?.output_contract_valid === true,
+    speedup: valid ? host.speedup_vs_seed : 0,
+    latency_ms: valid ? latency : null,
+    passed_tests: Number.isInteger(host?.n_pass) ? host.n_pass : null,
+    total_tests: Number.isInteger(host?.n_total) ? host.n_total : null,
+    source_binding: valid ? host.artifact_binding : null,
+    reference_speedup: Number.isFinite(host?.speedup) ? host.speedup : null,
+    explanation: {error_message: explanation?.error_message || '',
+      reward_hacking_flags: explanation?.reward_hacking_flags || []},
+    measurement_owner: 'Host',
+  }
+}
+async function __solOfficialSeedBaseline(ctx) {
+  const seed = await __solExecbenchEvaluate(ctx)
+  const latency = seed?.candidate_latency_aggregate_ms
+  if (seed?.compiled !== true || seed?.correct !== true
+      || seed?.full_workload_set !== true || seed?.measurement_valid !== true
+      || seed?.output_contract_valid !== true || !Number.isFinite(latency) || latency <= 0) {
+    throw new Error('Host could not establish a complete official Sol seed baseline')
+  }
+  return seed
 }
 // --- END sol-execbench-eval substrate ---
 
@@ -628,7 +722,10 @@ const opType = setupResult.op_type
 // SOL carries its honest reference latency in every official workload row, so a
 // separate LLM baseline turn cannot add evidence. Other integrations retain the
 // legacy baseline characterization path.
-const baselineEval = INTEGRATION_PATTERN === 'sol_execbench_solution'
+const baselineEval = args.task_result_command
+  ? {baseline_metric:1, baseline_latency_ms:null, eval_passed:false,
+     performance_profile:'official reference denominator only; no historical seed', bottleneck_analysis:'await measured candidate'}
+  : INTEGRATION_PATTERN === 'sol_execbench_solution'
   ? {
       baseline_metric: 1.0,
       baseline_latency_ms: 0,
@@ -815,7 +912,7 @@ if (USE_DRIVER_STANDALONE) {
 }
 
 baselineMetric = baselineEval.baseline_metric || 1.0
-bestMetric = baselineMetric
+bestMetric = args.task_result_command ? null : baselineMetric
 log(`Baseline: metric=${baselineMetric}, latency=${baselineEval.baseline_latency_ms || 'N/A'}ms`)
 log(`Bottleneck: ${baselineEval.bottleneck_analysis || 'unknown'}`)
 
@@ -1298,7 +1395,9 @@ Then append:
     // =========================================================================
     phase('Evaluate')
 
-    const evalResult = IS_SOL
+    const evalResult = args.task_result_command
+      ? await __nativeTaskEvaluate({candidatePath:genResult.variant_path || `${EXP_DIR}/task_cycle_${cycle}_a${attempt}.py`,candidateSource:genResult.code,resultPath:`${EXP_DIR}/task_cycle_${cycle}_a${attempt}.json`,command:args.task_result_command,workloadCount:args.task_workload_count,label:`task-eval-${cycle}-${attempt}`})
+      : IS_SOL
       ? await (async () => {
         const variant = `ksearch_c${cycle}_a${attempt}`.replace(/[^A-Za-z0-9_]/g, '_')
         const candidatePath = `${EXP_DIR}/${variant}${LANGUAGE === 'cuda' ? '.cu' : '.py'}`
@@ -1747,7 +1846,7 @@ Then append:
   }
   cycleCount = cycle + 1
   const plannedStall = runStagnation >= RUN_STAGNATION_LIMIT
-  const cuteHostBest = IS_SOL && LANGUAGE === 'cute-dsl' &&
+  const cuteHostBest = (Boolean(args.task_result_command) && bestSolution?.eval?.is_valid === true) || IS_SOL && LANGUAGE === 'cute-dsl' &&
     bestSolution?.eval?.artifact_binding?.verified === true
   const materializedBestPath = cuteHostBest ? bestSolution.eval.host_candidate_path
     : (bestSolution?.code ? bestKernelPath() : null)
@@ -1884,7 +1983,7 @@ return {
   problem_definition: PROBLEM_DEFINITION,
   problem_path: KERNEL_SPEC_PATH,
   kernel_path: BASELINE_CODE_PATH,
-  generated_kernel_path: IS_SOL && LANGUAGE === 'cute-dsl'
+  generated_kernel_path: args.task_result_command ? (bestSolution?.eval?.host_candidate_path || '') : IS_SOL && LANGUAGE === 'cute-dsl'
     ? (bestSolution?.eval?.host_candidate_path || '')
     : (bestSolution?.code ? bestKernelPath() : ''),
   ...(IS_SOL && LANGUAGE === 'cute-dsl' ? {
@@ -1899,8 +1998,9 @@ return {
     selected_candidate_id: bestSolution?.id || '',
   },
   best_metric: bestMetric,
-  best_solution_code: bestSolution?.code || '',
-  best_kernel_path: IS_SOL && LANGUAGE === 'cute-dsl'
+  best_solution_code: args.task_result_command ? '' : (bestSolution?.code || ''),
+  ...(args.task_result_command ? {canonical_metric:{name:'speedup_vs_reference',value:bestMetric}, source_binding:bestSolution?.eval?.source_binding || null, task_result_path:bestSolution?.eval?.test_result_path || null} : {}),
+  best_kernel_path: args.task_result_command ? (bestSolution?.eval?.host_candidate_path || null) : IS_SOL && LANGUAGE === 'cute-dsl'
     ? (bestSolution?.eval?.host_candidate_path || null)
     : (bestSolution?.code ? bestKernelPath() : null),
   cycles_completed: cycleCount,
