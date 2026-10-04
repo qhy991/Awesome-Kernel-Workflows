@@ -165,3 +165,7 @@ Workflow({name: 'cuda-agent-kernel-optimization', args: {
 
 - [CUDA Agent](https://arxiv.org/abs/2602.24286) — Dai, Wu, Yu 等 (ByteDance Seed / Tsinghua AIR, 2026)
 - [项目主页](https://cuda-agent.github.io/)
+
+### Native task self-test qualification
+
+Optional `task_result_command` and `task_workload_count` enable the frozen-task Python/CuTe path. Snapshot explicitly selected files, execute full official tests through the broker, and reduce matching raw task/terminal receipts. Only complete correct measured results may score; NCU is diagnostic. Preserve finite native topology/defaults. CUDAAgent/AccelOpt compare to their independently generated initial implementation; KernelFoundry/KSearch/CUDALLM report official-reference scores. Return the tested snapshot rather than rewritten display code. Audit native agent JSON relays against raw files and independent final acceptance; they are not process-Host evaluate receipts or formal-ablation authority.

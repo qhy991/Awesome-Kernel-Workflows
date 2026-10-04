@@ -1,6 +1,6 @@
 schema_version: '1.1'
 name: cudaagent-kernel-optimization
-entrypoint: cudaagent-kernel-optimization.js
+entrypoint: cuda-agent-kernel-optimization.js
 backend:
   portability: vendor_locked
   matrix_eligible: partial
@@ -32,7 +32,7 @@ workflow:
     feedback. Follows the CUDA Agent skill-based workflow: profile baseline → identify
     bottlenecks → implement kernel + bindings → compile → verify correctness → measure
     speedup → refine until target met.'
-  output_filename: cudaagent-kernel-optimization.js
+  output_filename: cuda-agent-kernel-optimization.js
   directory: CUDAAgent/
 routing:
   accepts:
@@ -96,3 +96,13 @@ routing:
   # depths) are NOT consumed — they do not transfer. Informational metadata only.
   consumes:
   - algorithmic_priors
+
+args:
+  required: []
+  optional:
+  - name: task_result_command
+    type: string
+    description: Optional native full-task command with {kernel_path}/{result_path}; writes kersor-task-result-v1 JSON and an explicit frozen artifact. Final acceptance remains independent.
+  - name: task_workload_count
+    type: number
+    description: Exact frozen full workload count required by the task-result gate.

@@ -13,6 +13,43 @@ export const meta = {
     { title: 'Report', detail: 'Return best kernel, feature reward table, failures, and next feature sets' },
   ],
 }
+// --- BEGIN inlined task-result scaffolding (from _meta/scaffolding/task-result.js) ---
+// Native task-result compatibility: task command is the measurement authority.
+function __taskResult(output, expectedPath, expectedCount) {
+  let result
+  try { result = JSON.parse(output?.test_result_json || '') } catch { return null }
+  if (output?.test_result_path !== expectedPath || result?.test_result_path !== expectedPath || result?.contract_version !== 'kersor-task-result-v1') return null
+  const valid = result.compiled === true && result.correct === true
+    && result.full_workload_set === true && result.measurement_valid === true
+    && result.source_binding?.verified === true && result.n_pass === result.n_total
+    && Number.isInteger(result.n_total) && result.n_total === expectedCount
+    && /^[0-9a-f]{64}$/i.test(result.source_binding?.source_sha256 || '')
+    && result.candidate_path === expectedPath + '.artifact/candidate.py'
+    && result.n_total > 0 && Number.isFinite(result.candidate_latency_aggregate_ms)
+    && result.candidate_latency_aggregate_ms > 0 && Number.isFinite(result.speedup_vs_reference)
+    && result.speedup_vs_reference > 0
+  return {is_valid:valid, measurement_valid:valid, compiled:result.compiled, correct:valid,
+    metric_value:valid ? result.speedup_vs_reference : 0,
+    speedup:valid ? result.speedup_vs_reference : 0,
+    latency_ms:valid ? result.candidate_latency_aggregate_ms : null,
+    n_pass:result.n_pass, n_total:result.n_total,
+    pass_rate:String(result.n_pass)+'/'+String(result.n_total),
+    source_binding:result.source_binding, host_candidate_path:result.candidate_path, test_result_path:output.test_result_path,
+    error_log:valid ? '' : 'task correctness/measurement/binding gate failed'}
+}
+
+async function __nativeTaskEvaluate(ctx) {
+  const output = await agentRetry(() => agent(`Use the explicitly declared candidate file at ${ctx.candidatePath}. If it is absent, write the COMPLETE returned source below to that exact path. Never rewrite an existing declared file or select another directory entry.
+${ctx.candidateSource || ''}
+Run the trusted task command once: ${ctx.command.replaceAll('{kernel_path}', ctx.candidatePath).replaceAll('{result_path}', ctx.resultPath)}
+Wait for its terminal result and read ${ctx.resultPath}. Return test_result_path and test_result_json copied verbatim from that file. No estimates or rewritten source in this reply.`, {
+    label:ctx.label, phase:'Evaluate',
+    schema:{type:'object', properties:{test_result_path:{type:'string'},test_result_json:{type:'string'}}, required:['test_result_path','test_result_json']},
+  }), {retries:0})
+  return __taskResult(output, ctx.resultPath, ctx.workloadCount)
+    || {is_valid:false,measurement_valid:false,compiled:false,correct:false,metric_value:0,speedup:0,latency_ms:null,error_log:'missing task result'}
+}
+// --- END inlined task-result scaffolding ---
 // --- BEGIN sol-execbench-eval substrate (auto-inlined by scripts/patch-sol-execbench-eval.js) ---
 const SOL_SOLUTION_CONTRACT = [
   'SOL-EXECBENCH SOLUTION CONTRACT (this task is evaluated by the sol-execbench CLI):',
@@ -549,16 +586,17 @@ let DRIVER_BACKEND_ID = RESOLVED_BACKEND || ''
 let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
 
 function langToken(legacy) {
-  return USE_DRIVER ? DRIVER_LANG_FENCE : legacy
+  return args.task_result_command ? (args.language || legacy) : (USE_DRIVER ? DRIVER_LANG_FENCE : legacy)
 }
 function pureLangPhrase() {
+  if (args.task_result_command) return `pure ${args.language || 'CuTe DSL'} Python only`
   return USE_DRIVER ? `pure ${DRIVER_LANG_FENCE} only` : LEGACY_PURE_LANG_PHRASE
 }
 function fenceToken() {
   return USE_DRIVER ? DRIVER_LANG_FENCE : LEGACY_FENCE_TOKEN
 }
 function cudallmCandidatePath(iter, sample) {
-  const ext = USE_DRIVER ? DRIVER_SOURCE_EXT : LEGACY_SOURCE_EXT
+  const ext = args.task_result_command ? '.py' : (USE_DRIVER ? DRIVER_SOURCE_EXT : LEGACY_SOURCE_EXT)
   return `${EXP_DIR}/cudallm_iter_${iter}_sample_${sample}${ext}`
 }
 function cudallmResultPath(iter, sample) {
@@ -930,7 +968,8 @@ ${JSON.stringify(selection, null, 2)}
 \`\`\`
 
 # Hard constraints
-1. Return complete ${USE_DRIVER ? `${DRIVER_LANG_FENCE} source` : 'CUDA/C++ source'}, not a patch.
+1. Return complete ${args.task_result_command ? (args.language + ' Python source') : (USE_DRIVER ? `${DRIVER_LANG_FENCE} source` : 'CUDA/C++ source')}, not a patch.
+${args.task_result_command ? `Write the COMPLETE source to ${cudallmCandidatePath(iteration,sample)} and return variant_path. The file is authoritative; candidate_code is display only. Preserve the frozen task Python run entry point and use CuTe DSL when requested.` : ''}
 2. Do not call PyTorch or reference implementation from generated kernel.
 3. Preserve input/output contract and tolerances.
 4. Implement selected features concretely; if a feature is skipped, explain why.
@@ -950,6 +989,7 @@ Then append:
         type: 'object',
         properties: {
           candidate_code: { type: 'string' },
+          variant_path: { type: 'string' },
           implemented_feature_ids: { type: 'array', items: { type: 'string' } },
           skipped_feature_ids: { type: 'array', items: { type: 'string' } },
           implementation_notes: { type: 'string' },
@@ -965,6 +1005,8 @@ Then append:
     // but still leaves the candidate unmeasured: a read-only activation has no
     // execution tool, so "materialize the kernel and run it" cannot happen.
     // Measure on the Host first and hand the agent the evidence it was asked for.
+    const __taskMeasured = args.task_result_command
+      ? await __nativeTaskEvaluate({candidatePath:generation.variant_path || cudallmCandidatePath(iteration,sample),candidateSource:generation.candidate_code,resultPath:cudallmResultPath(iteration,sample),command:args.task_result_command,workloadCount:args.task_workload_count,label:`task-eval-${iteration}-${sample}`}) : null
     let __hostMeasured = null
     if (SOL_AVAILABLE && (generation.candidate_code || '').trim()) {
       __hostMeasured = await __solExecbenchEvaluate({
@@ -1000,7 +1042,12 @@ ${__hostMeasured.failure_code ? `failure_code=${__hostMeasured.failure_code}` : 
 Rule 3 does not apply: the evidence exists. Report these numbers and base the
 reward on them. Still report any reward-hacking signs you see in the code.` : ''
 
-    const evaluation = await agentRetry(() => agent(`Evaluate this ${langToken(LEGACY_EVAL_LANG_TOKEN)} candidate with compile, correctness, and latency evidence.
+    const evaluation = args.task_result_command
+      ? await agentRetry(() => agent(`Interpret this already-executed task result: ${JSON.stringify(__taskMeasured)}. Do not run another benchmark, edit the artifact, or report replacement numeric measurements. Explain failure/diagnostics and any reward-hacking signs.`, {
+        label:`evaluate-${iteration}-${sample}`,phase:'Evaluate',
+        schema:{type:'object',properties:{error_message:{type:'string'},reward_hacking_flags:{type:'array',items:{type:'string'}}},required:['error_message','reward_hacking_flags']},
+      }),{retries:0})
+      : await agentRetry(() => agent(`Evaluate this ${langToken(LEGACY_EVAL_LANG_TOKEN)} candidate with compile, correctness, and latency evidence.
 
 # Candidate code
 \`\`\`${fenceToken()}
@@ -1053,11 +1100,11 @@ Then append, using the values you just measured (status="done" only if compiled 
 
     const candidate = {
       id: `iter_${iteration}_sample_${sample}`,
-      path: cudallmCandidatePath(iteration, sample),
+      path: args.task_result_command ? (__taskMeasured.host_candidate_path || '') : cudallmCandidatePath(iteration, sample),
       selected_feature_ids: selection.selected_feature_ids || [],
       implemented_feature_ids: generation.implemented_feature_ids || [],
       code: generation.candidate_code || '',
-      eval: SOL_AVAILABLE ? __solHostFeedback(__hostMeasured, evaluation) : evaluation,
+      eval: args.task_result_command ? {...__taskMeasured,passed_tests:__taskMeasured.n_pass,total_tests:__taskMeasured.n_total,explanation:evaluation.error_message || '',reward_hacking_flags:evaluation.reward_hacking_flags || []} : (SOL_AVAILABLE ? __solHostFeedback(__hostMeasured, evaluation) : evaluation),
     }
 
     if (USE_DRIVER_STANDALONE) {
@@ -1296,10 +1343,11 @@ return {
   adaptation_scope: ADAPTATION_SCOPE,
   best_speedup: bestCandidate?.eval?.speedup || 0,
   best_latency_ms: bestCandidate?.eval?.latency_ms || null,
-  best_kernel_code: bestCandidate?.code || '',
+  best_kernel_code: args.task_result_command ? '' : (bestCandidate?.code || ''),
+  ...(args.task_result_command ? {canonical_metric:{name:'speedup_vs_reference',value:bestCandidate?.eval?.speedup || 0},task_result_path:bestCandidate?.eval?.test_result_path || null} : {}),
   best_candidate_binding: bestCandidate?.eval?.source_binding || null,
   seed_measurement: solSeedMeasurement,
-  performance_domain: SOL_AVAILABLE ? 'official_full_workload_seed_relative' : 'legacy',
+  performance_domain: args.task_result_command ? 'official_full_workload_reference_relative' : (SOL_AVAILABLE ? 'official_full_workload_seed_relative' : 'legacy'),
   best_candidate_id: bestCandidate?.id || '',
   feature_scores: featureScores,
   candidates: candidates.map(c => ({

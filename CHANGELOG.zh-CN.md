@@ -14,6 +14,10 @@
 
 ### Fixed
 
+- 为 CUDAAgent、AccelOpt、CUDALLM 和 KernelFoundry 添加可选共享 native 任务结果分支，保留有限拓扑及明确实测源码交付；区分本轮自行生成初始实现/reference 评分并修正 CUDAAgent manifest 文件名。Native JSON 传输仍须核对原始文件及独立终验。
+
+### Fixed
+
 - 将 native 任务自测绑定到明确选择的不可变 artifact 及完整 broker/task 原始记录；可选 KSearch 分支保持原生树搜索及 official reference 评分，拒绝缺失结果，返回实测 artifact 而不重写源码。
 
 ### Added

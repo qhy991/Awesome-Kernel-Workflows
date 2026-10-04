@@ -11,6 +11,43 @@ export const meta = {
     { title: 'Report', detail: 'Final performance comparison and optimization summary' },
   ],
 }
+// --- BEGIN inlined task-result scaffolding (from _meta/scaffolding/task-result.js) ---
+// Native task-result compatibility: task command is the measurement authority.
+function __taskResult(output, expectedPath, expectedCount) {
+  let result
+  try { result = JSON.parse(output?.test_result_json || '') } catch { return null }
+  if (output?.test_result_path !== expectedPath || result?.test_result_path !== expectedPath || result?.contract_version !== 'kersor-task-result-v1') return null
+  const valid = result.compiled === true && result.correct === true
+    && result.full_workload_set === true && result.measurement_valid === true
+    && result.source_binding?.verified === true && result.n_pass === result.n_total
+    && Number.isInteger(result.n_total) && result.n_total === expectedCount
+    && /^[0-9a-f]{64}$/i.test(result.source_binding?.source_sha256 || '')
+    && result.candidate_path === expectedPath + '.artifact/candidate.py'
+    && result.n_total > 0 && Number.isFinite(result.candidate_latency_aggregate_ms)
+    && result.candidate_latency_aggregate_ms > 0 && Number.isFinite(result.speedup_vs_reference)
+    && result.speedup_vs_reference > 0
+  return {is_valid:valid, measurement_valid:valid, compiled:result.compiled, correct:valid,
+    metric_value:valid ? result.speedup_vs_reference : 0,
+    speedup:valid ? result.speedup_vs_reference : 0,
+    latency_ms:valid ? result.candidate_latency_aggregate_ms : null,
+    n_pass:result.n_pass, n_total:result.n_total,
+    pass_rate:String(result.n_pass)+'/'+String(result.n_total),
+    source_binding:result.source_binding, host_candidate_path:result.candidate_path, test_result_path:output.test_result_path,
+    error_log:valid ? '' : 'task correctness/measurement/binding gate failed'}
+}
+
+async function __nativeTaskEvaluate(ctx) {
+  const output = await agentRetry(() => agent(`Use the explicitly declared candidate file at ${ctx.candidatePath}. If it is absent, write the COMPLETE returned source below to that exact path. Never rewrite an existing declared file or select another directory entry.
+${ctx.candidateSource || ''}
+Run the trusted task command once: ${ctx.command.replaceAll('{kernel_path}', ctx.candidatePath).replaceAll('{result_path}', ctx.resultPath)}
+Wait for its terminal result and read ${ctx.resultPath}. Return test_result_path and test_result_json copied verbatim from that file. No estimates or rewritten source in this reply.`, {
+    label:ctx.label, phase:'Evaluate',
+    schema:{type:'object', properties:{test_result_path:{type:'string'},test_result_json:{type:'string'}}, required:['test_result_path','test_result_json']},
+  }), {retries:0})
+  return __taskResult(output, ctx.resultPath, ctx.workloadCount)
+    || {is_valid:false,measurement_valid:false,compiled:false,correct:false,metric_value:0,speedup:0,latency_ms:null,error_log:'missing task result'}
+}
+// --- END inlined task-result scaffolding ---
 // --- BEGIN sol-execbench-eval substrate (auto-inlined by scripts/patch-sol-execbench-eval.js) ---
 const SOL_SOLUTION_CONTRACT = [
   'SOL-EXECBENCH SOLUTION CONTRACT (this task is evaluated by the sol-execbench CLI):',
@@ -603,6 +640,8 @@ let currentAttempt = 0
 let turnsCompleted = 0
 let terminationReason = 'turn_limit'
 let generatedKernelPath = ''
+let taskInitialMeasurement = null
+let taskBestReferenceSpeedup = null
 let initialCandidates = []
 let initialGenerationResult = null
 let history = []  // [{turn, action, outcome, speedup, error}]
@@ -617,7 +656,7 @@ function bestKernelPath() {
 phase('Setup')
 
 if (INPUT_MODE === 'generate_then_optimize') {
-  const generated = await agentRetry(() => agent(`No kernel_path was provided. Generate and verify an initial PyTorch model plus CUDA kernel scaffold before CUDAAgent optimization.
+  const generated = await agentRetry(() => agent(args.task_result_command ? `Generate ${SEED_CANDIDATES} complete independent ${LANGUAGE} Python implementations from frozen specification ${PROBLEM_PATH}; no historical seed. Preserve the task run ABI and all official workloads/tolerances. Write source i to ${EXP_DIR}/generated/initial_<index>.py. For every index0..${SEED_CANDIDATES-1}, run exactly once serially: ${args.task_result_command.replaceAll('{kernel_path}',EXP_DIR+'/generated/initial_<index>.py').replaceAll('{result_path}',EXP_DIR+'/generated/initial_<index>.json')}. Await terminal and read each JSON. Return initial_candidates containing verbatim test_result_path/test_result_json for all candidates including failures. generated_kernel_path and initial_generation_result are compatibility fields; selection is deterministic from full evidence.` : `No kernel_path was provided. Generate and verify an initial PyTorch model plus CUDA kernel scaffold before CUDAAgent optimization.
 
 # Problem Input
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
@@ -649,6 +688,15 @@ Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run
   initialCandidates = generated.initial_candidates || []
   initialGenerationResult = generated.initial_generation_result || { verified: false }
   generatedKernelPath = generated.generated_kernel_path || ''
+  if (args.task_result_command) {
+    const measured=initialCandidates.map((c,i)=>__taskResult(c, `${EXP_DIR}/generated/initial_${i}.json`,args.task_workload_count)).filter(c=>c?.is_valid)
+    measured.sort((a,b)=>a.latency_ms-b.latency_ms);taskInitialMeasurement=measured[0] || null
+    if (!taskInitialMeasurement) throw new Error('No generated initial task candidate passed complete official evidence')
+    generatedKernelPath=taskInitialMeasurement.host_candidate_path
+    initialGenerationResult={verified:true,task_result_path:taskInitialMeasurement.test_result_path,source_binding:taskInitialMeasurement.source_binding}
+    bestBoundSourcePath=generatedKernelPath;bestArtifactBinding=taskInitialMeasurement.source_binding
+    bestCompiled=true;bestCorrect=true;bestSpeedup=1;taskBestReferenceSpeedup=taskInitialMeasurement.speedup
+  }
   if (!generatedKernelPath) throw new Error('Generation mode did not produce generated_kernel_path')
   if ((VERIFY_CMD || PROFILE_CMD) && initialGenerationResult.verified === false) throw new Error('No generated seed passed verification evidence')
   MODEL_PATH = generatedKernelPath
@@ -798,7 +846,9 @@ if (PROFILING_DECISION.method === 'native_profiler' && !NCU_CMD) {
 // =============================================================================
 phase('Profile')
 
-const profileResult = IS_SOL
+const profileResult = args.task_result_command
+  ? await agentRetry(()=>agent(`Diagnose the already-correct task artifact ${MODEL_PATH}. Read task.md and ncu-report-skill; when a runnable profiler request can be bound to that exact artifact, use the caller command ${NCU_CMD || PROFILE_CMD || '(missing)'}, allowedGpuIds=[6,7], requireNcu=true and broker exclusive. Preserve and read the actual report and terminal receipts. If unavailable, explain missing evidence. Do not benchmark again or invent eager/torch.compile timings; task timing is already measured and NCU is diagnostic only. Return bottlenecks, optimization_strategy, fusion_plan and report provenance.`, {label:'profile-baseline',phase:'Profile',model:MODEL.profile,schema:{type:'object',properties:{bottlenecks:{type:'array',items:{type:'string'}},optimization_strategy:{type:'string'},fusion_plan:{type:'string'},report_path:{type:'string'}},required:['bottlenecks','optimization_strategy']}}),{retries:0})
+  : IS_SOL
   ? {
       eager_time_ms: null,
       compile_time_ms: null,
@@ -859,8 +909,8 @@ Then append:
   },
 }), { retries: 5 })
 
-eagerTime = IS_SOL ? null : (profileResult.eager_time_ms || 1.0)
-compileTime = IS_SOL ? null : (profileResult.compile_time_ms || 1.0)
+eagerTime = args.task_result_command ? null : IS_SOL ? null : (profileResult.eager_time_ms || 1.0)
+compileTime = args.task_result_command ? null : IS_SOL ? null : (profileResult.compile_time_ms || 1.0)
 
 log(IS_SOL
   ? `Baseline: owned by the SOL evaluation contract | Bottlenecks: ${profileResult.bottlenecks.join(', ')}`
@@ -930,7 +980,7 @@ for (currentAttempt = 0; currentAttempt < MAX_TURNS && !targetMet; currentAttemp
 
   let implResult
   try {
-  implResult = await withTurnTimeout(agentRetry(() => agent(`You are a CUDA kernel developer. Implement an optimized CUDA kernel for this PyTorch model.
+  implResult = await withTurnTimeout(agentRetry(() => agent(args.task_result_command ? `Implement the CUDAAgent optimization strategy ${profileResult.optimization_strategy} in complete ${LANGUAGE} Python source. Read the FULL current tested artifact ${bestBoundSourcePath}; preserve exact frozen task signature and correctness. Prior feedback: ${JSON.stringify(history.slice(-3))}. Write the COMPLETE new source to ${EXP_DIR}/task_attempt_${currentAttempt}.py and return variant_path plus kernel_code (display only), implementation_notes. Do not modify the incumbent or benchmark; serial task verification follows. Read all3 task skills for genuine diagnostics.` : `You are a CUDA kernel developer. Implement an optimized CUDA kernel for this PyTorch model.
 
 # Model to Optimize:
 \`\`\`python
@@ -996,11 +1046,12 @@ Then append (this is optimization attempt ${currentAttempt}):
       type: 'object',
       properties: {
         kernel_code: { type: 'string' },
+        variant_path: { type: 'string' },
         binding_code: { type: 'string' },
         model_new_code: { type: 'string' },
         implementation_notes: { type: 'string' },
       },
-      required: ['kernel_code', 'binding_code', 'model_new_code'],
+      required: args.task_result_command ? ['kernel_code','variant_path'] : ['kernel_code', 'binding_code', 'model_new_code'],
     },
   // The host broker timeout is intentionally TURN_TIMEOUT_MS-5s. Retrying here
   // would launch a second Codex process in that five-second window; the outer
@@ -1155,6 +1206,12 @@ The parse step prints one line "SPEEDUP=<aggregate> REDUCTION=<contract reductio
         compile_error: directSolResult.compiled ? '' : (directSolResult.stderr || directSolResult.failure_code || ''),
         correctness_error: directSolResult.correct ? '' : (directSolResult.stderr || directSolResult.failure_code || ''),
       }
+    : args.task_result_command
+    ? await (async()=>{
+      const measured=await __nativeTaskEvaluate({candidatePath:implResult.variant_path || `${EXP_DIR}/task_attempt_${currentAttempt}.py`,candidateSource:implResult.kernel_code,resultPath:`${EXP_DIR}/task_attempt_${currentAttempt}.json`,command:args.task_result_command,workloadCount:args.task_workload_count,label:`task-verify-${currentAttempt}`})
+      const gain=measured.is_valid ? taskInitialMeasurement.latency_ms/measured.latency_ms : 0
+      return {...measured,kernel_time_ms:measured.latency_ms,speedup_vs_generated_initial:gain,speedup_vs_reference:measured.speedup,speedup_vs_compile:null,speedup_vs_eager:null,reward:!measured.is_valid ? -1 : TARGET_SPEEDUP !== null && gain>1 && gain>=TARGET_SPEEDUP ? 3 : gain>1 ? 1 : 0}
+    })()
     : await withTurnTimeout(agentRetry(() => agent(`You are a CUDA kernel validator. Compile, verify, and benchmark this kernel implementation.${embeddedEvalBlock}${solEvalBlock}
 
 # Kernel Code (kernel.cu):
@@ -1258,7 +1315,7 @@ Then append, using the values you just measured (status="done" if correctness pa
     turn: currentAttempt,
     action: implResult.implementation_notes?.substring(0, 50) || 'kernel implementation',
     outcome: outcome,
-    speedup: IS_SOL ? verifyResult.speedup_vs_seed || 0 : verifyResult.speedup_vs_compile || 0,
+    speedup: args.task_result_command ? verifyResult.speedup_vs_generated_initial || 0 : (IS_SOL ? verifyResult.speedup_vs_seed || 0 : verifyResult.speedup_vs_compile || 0),
     error: error,
     reward: verifyResult.reward,
   })
@@ -1269,16 +1326,19 @@ Then append, using the values you just measured (status="done" if correctness pa
     directSolResult?.artifact_binding?.verified === true &&
     directSolResult.artifact_binding.candidate_sha256 === directSolResult.candidate_sha256
   )
-  const candidateGain = IS_SOL ? verifyResult.speedup_vs_seed || 0 : verifyResult.speedup_vs_compile || 0
+  const candidateGain = args.task_result_command ? verifyResult.speedup_vs_generated_initial || 0 : IS_SOL ? verifyResult.speedup_vs_seed || 0 : verifyResult.speedup_vs_compile || 0
   if (verifyResult.correct && boundSourceReady && candidateGain > prevBest) {
     bestKernelCode = implResult.kernel_code
     bestBindingCode = implResult.binding_code
     bestModelNew = implResult.model_new_code
-    bestSpeedup = verifyResult.speedup_vs_compile || 0
+    bestSpeedup = args.task_result_command ? candidateGain : verifyResult.speedup_vs_compile || 0
     if (IS_SOL) bestSolSeedRelative = candidateGain
     bestCompiled = verifyResult.compiled === true
     bestCorrect = verifyResult.correct === true
     bestCandidateId = `attempt-${currentAttempt}`
+    if (args.task_result_command) {
+      bestArtifactBinding=verifyResult.source_binding;bestBoundSourcePath=verifyResult.host_candidate_path;taskBestReferenceSpeedup=verifyResult.speedup_vs_reference
+    }
     if (IS_SOL) {
       bestArtifactBinding = directSolResult.artifact_binding
       bestBoundSourcePath = directSolResult.candidate_path
@@ -1328,8 +1388,8 @@ Then append, using the values you just measured (status="done" if correctness pa
   const plannedReason = targetMet
     ? 'speedup_target_reached'
     : (convergenceStatus === 'stalled' ? 'stalled' : null)
-  const materializedBestPath = bestKernelCode ? bestKernelPath() : null
-  const bestChanged = Boolean(bestKernelCode && bestCandidateId !== checkpointedBestId)
+  const materializedBestPath = args.task_result_command ? bestBoundSourcePath : (bestKernelCode ? bestKernelPath() : null)
+  const bestChanged = Boolean(!args.task_result_command && bestKernelCode && bestCandidateId !== checkpointedBestId)
   const checkpointPayload = {
     schema_version: 1,
     workflow: WORKFLOW_NAME,
@@ -1450,7 +1510,7 @@ return {
   input_mode: INPUT_MODE,
   problem_definition: PROBLEM_DEFINITION,
   problem_path: PROBLEM_PATH,
-  generated_kernel_path: IS_SOL
+  generated_kernel_path: args.task_result_command ? bestBoundSourcePath : IS_SOL
     ? (bestArtifactBinding?.verified ? bestBoundSourcePath : '')
     : (bestKernelCode ? bestKernelPath() : generatedKernelPath),
   ...(IS_SOL ? {
@@ -1466,9 +1526,10 @@ return {
   operation: OP_DESC,
   eager_time_ms: eagerTime,
   compile_time_ms: compileTime,
-  best_speedup_vs_compile: bestSpeedup,
+  best_speedup_vs_compile: args.task_result_command ? null : bestSpeedup,
+  ...(args.task_result_command ? {canonical_metric:{name:'speedup_vs_generated_initial',value:bestSpeedup},speedup_vs_reference:taskBestReferenceSpeedup,initial_measurement:taskInitialMeasurement,source_binding:bestArtifactBinding,performance_domain:'official_full_workload_generated_initial_relative'} : {}),
   best_speedup_vs_seed: IS_SOL ? bestSolSeedRelative : null,
-  best_speedup_vs_eager: IS_SOL ? null : eagerTime / (compileTime / (bestSpeedup || 1)),
+  best_speedup_vs_eager: args.task_result_command ? null : IS_SOL ? null : eagerTime / (compileTime / (bestSpeedup || 1)),
   target_met: targetMet,
   convergence_status,
   termination_reason: terminationReason,
@@ -1479,8 +1540,8 @@ return {
   max_turns: MAX_TURNS,
   reward_history: history.map(h => h.reward),
   adaptation_scope: ADAPTATION_SCOPE,
-  best_kernel_code: IS_SOL && !bestArtifactBinding ? MODEL_PATH : bestKernelCode,
-  best_kernel_path: IS_SOL && bestArtifactBinding?.verified
+  best_kernel_code: args.task_result_command ? '' : IS_SOL && !bestArtifactBinding ? MODEL_PATH : bestKernelCode,
+  best_kernel_path: args.task_result_command ? bestBoundSourcePath : IS_SOL && bestArtifactBinding?.verified
     ? bestBoundSourcePath : (IS_SOL ? MODEL_PATH : (bestKernelCode ? bestKernelPath() : null)),
   best_binding_code: bestBindingCode,
   best_model_new: bestModelNew,

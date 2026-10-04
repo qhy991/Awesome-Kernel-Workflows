@@ -16,6 +16,10 @@ for the versioning policy.
 
 ### Fixed
 
+- Add optional shared native task-result branches for CUDAAgent, AccelOpt, CUDALLM and KernelFoundry, retaining finite topology and explicitly measured source delivery; distinguish generated-initial/reference scores and fix CUDAAgent manifest filename. Native JSON transport still requires raw-file and independent acceptance audits.
+
+### Fixed
+
 - Bind native task self-tests to immutable explicitly selected artifacts and complete broker/task traces; opt-in KSearch keeps original tree search and official reference scoring, rejects incomplete results, and returns the tested artifact instead of rewriting source.
 
 ### Added

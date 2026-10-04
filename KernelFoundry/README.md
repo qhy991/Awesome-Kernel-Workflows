@@ -145,3 +145,7 @@ Workflow({name: 'kernelfoundry-kernel-optimization', args: {
 ### 2026-09-21 follow-up
 
 On the SOL path, immutable candidate/measurement/task bindings are written and hashed by the Host evaluator. Read-only agents no longer create bindings or overwrite verified scores.
+
+### Native task self-test qualification
+
+Optional `task_result_command` and `task_workload_count` enable the frozen-task Python/CuTe path. Snapshot explicitly selected files, execute full official tests through the broker, and reduce matching raw task/terminal receipts. Only complete correct measured results may score; NCU is diagnostic. Preserve finite native topology/defaults. CUDAAgent/AccelOpt compare to their independently generated initial implementation; KernelFoundry/KSearch/CUDALLM report official-reference scores. Return the tested snapshot rather than rewritten display code. Audit native agent JSON relays against raw files and independent final acceptance; they are not process-Host evaluate receipts or formal-ablation authority.
