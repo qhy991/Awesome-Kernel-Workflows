@@ -42,11 +42,11 @@ test('ksearch: withTurnTimeout uses Promise.race + setTimeout (no forbidden APIs
 test('ksearch: all three Generate doer-turn variants are wrapped with withTurnTimeout', () => {
   // The Generate if/else chain has three prompt variants (gen / debug / improve);
   // each must be wrapped so a hung turn cannot stall the attempt loop.
-  assert.match(SOURCE, /withTurnTimeout\(agentRetry\(\(\) => agent\(`You are an expert \$\{langToken\(LANGUAGE\)\} kernel developer\. Generate a high-performance kernel/,
+  assert.match(SOURCE, /withTurnTimeout\(agentRetry\(\(\) => agent\(`\$\{__taskContractBlock\(\)\}You are an expert \$\{langToken\(LANGUAGE\)\} kernel developer\. Generate a high-performance kernel/,
     'first-attempt (gen) Generate turn must be wrapped')
-  assert.match(SOURCE, /withTurnTimeout\(agentRetry\(\(\) => agent\(`You are an expert \$\{langToken\(LANGUAGE\)\} kernel developer\. The previous attempt has bugs/,
+  assert.match(SOURCE, /withTurnTimeout\(agentRetry\(\(\) => agent\(`\$\{__taskContractBlock\(\)\}You are an expert \$\{langToken\(LANGUAGE\)\} kernel developer\. The previous attempt has bugs/,
     'debug Generate turn must be wrapped')
-  assert.match(SOURCE, /withTurnTimeout\(agentRetry\(\(\) => agent\(`You are an expert \$\{langToken\(LANGUAGE\)\} kernel developer\. You have a working solution/,
+  assert.match(SOURCE, /withTurnTimeout\(agentRetry\(\(\) => agent\(`\$\{__taskContractBlock\(\)\}You are an expert \$\{langToken\(LANGUAGE\)\} kernel developer\. You have a working solution/,
     'improve Generate turn must be wrapped')
 })
 

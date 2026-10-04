@@ -136,6 +136,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -172,7 +183,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -399,13 +410,13 @@ phase('Setup')
 
 const setupResults = await parallel([
   // Agent 1: Generate initial kernel + roofline classification
-  () => agentRetry(() => agent(`You are the cuPilot Kernel Generator + Roofline Prophet.
+  () => agentRetry(() => agent(`${__taskContractBlock()}You are the cuPilot Kernel Generator + Roofline Prophet.
 
 # Task:
 1. Read the kernel specification:
 ${KERNEL_PATH ? `Read from: ${KERNEL_PATH}` : ''}
 ${PROBLEM_PATH ? `Read problem file: ${PROBLEM_PATH}` : ''}
-${PROBLEM_DEFINITION ? `\`\`\`python\n${PROBLEM_DEFINITION.substring(0, 3000)}\n\`\`\`` : `Operation: ${OP_DESC}`}
+${PROBLEM_DEFINITION ? `\`\`\`python\n${PROBLEM_DEFINITION}\n\`\`\`` : `Operation: ${OP_DESC}`}
 - language: ${LANGUAGE}
 - target_gpu: ${GPU_TARGET}
 - seed_candidates: ${SEED_CANDIDATES}
@@ -460,7 +471,7 @@ Then append:
   }), { retries: 5 }),
 
   // Agent 2: Initialize strategy pool (RAG from historical data)
-  () => agentRetry(() => agent(`You are the cuPilot Strategy Pool Initializer (Section 4.4).
+  () => agentRetry(() => agent(`${__taskContractBlock()}You are the cuPilot Strategy Pool Initializer (Section 4.4).
 
 # Task:
 Generate an initial strategy pool for kernel optimization. Each strategy is a concise, reusable optimization technique description.
@@ -552,8 +563,8 @@ log(`Guidance: ${kernelSetup?.roofline_guidance?.substring(0, 100)}...`)
 let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
 {
   const _pd = await agentRetry(() => agent(
-    `Classify the kernel under optimization. Source: ` +
-    (KERNEL_PATH ? `read ${KERNEL_PATH}` : `operation "${OP_DESC}"${PROBLEM_DEFINITION ? ` / spec:\n${PROBLEM_DEFINITION.substring(0, 1500)}` : ''}`) + `.\n` +
+    `${__taskContractBlock()}Classify the kernel under optimization. Source: ` +
+    (KERNEL_PATH ? `read ${KERNEL_PATH}` : `operation "${OP_DESC}"${PROBLEM_DEFINITION ? ` / spec:\n${PROBLEM_DEFINITION}` : ''}`) + `.\n` +
     `Pick op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
     substrateInstruction('profiling/profiling_strategist.py',
       `resolve --backend-manifest ${BACKEND_MANIFEST} --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
@@ -580,7 +591,7 @@ let INTEGRATION_DECISION = {
 if (KERNEL_PATH && !args.integration_pattern) {
   const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
   const _integ = await agentRetry(() => agent(
-    `Read ${KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+    `${__taskContractBlock()}Read ${KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
     `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
     substrateInstruction('integration/integration_strategist.py',
       `resolve --kernel "${KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
@@ -600,7 +611,7 @@ const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGR
 // The embedded operator file we swap in place is the project-referenced KERNEL_PATH.
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 // A-O1 closure: native_profiler chosen but no project-native profiler is reachable
@@ -630,7 +641,7 @@ for (epoch = 0; epoch < EPOCHS; epoch++) {
     const parent1 = sortedPop[0]
     const parent2 = sortedPop[Math.min(1, sortedPop.length - 1)]
 
-    const strategizeResult = await agentRetry(() => agent(`You are the cuPilot SCE Manager (Section 4.2).
+    const strategizeResult = await agentRetry(() => agent(`${__taskContractBlock()}You are the cuPilot SCE Manager (Section 4.2).
 Perform STRATEGY-LEVEL crossover and generate new optimization strategies.
 
 # Roofline Classification: ${rooflineClass}
@@ -694,13 +705,13 @@ Then append (this is epoch ${epoch}, generation ${generation}):
 
     const translatedKernels = await parallel(
       newStrategies.slice(0, 5).map((strat, idx) => () =>
-        agentRetry(() => agent(`You are the cuPilot Strategy Translator (Section 4.1).
+        agentRetry(() => agent(`${__taskContractBlock()}You are the cuPilot Strategy Translator (Section 4.1).
 ${SOL_CANDIDATE_CONTRACT}
 Apply this optimization strategy to produce an optimized CUDA kernel.
 
 # Base Kernel:
 \`\`\`cuda
-${bestKernel.code.substring(0, 4000)}
+${bestKernel.code}
 \`\`\`
 
 # Strategy to Apply:
@@ -785,17 +796,17 @@ compiled=${__hostMeasured.compiled} correct=${__hostMeasured.correct}
 speedup=${__hostMeasured.speedup} latency_ms=${__hostMeasured.latency_ms}
 workloads_passed=${__hostMeasured.n_pass}/${__hostMeasured.n_total}
 ${__hostMeasured.failure_code ? `failure_code=${__hostMeasured.failure_code}` : ''}
-${__hostMeasured.stderr ? `build/run output:\n${String(__hostMeasured.stderr).substring(0, 2000)}` : ''}
+${__hostMeasured.stderr ? `build/run output:\n${String(__hostMeasured.stderr)}` : ''}
 Steps 1-3 already ran against the real toolchain. Report these numbers rather
 than re-deriving them, and spend the revision on the output above: if it did not
 compile, fix what the compiler actually said; if it is slower, explain why.` : ''
 
-        return agentRetry(() => agent(`You are the cuPilot Kernel Revisor (Section 4.1, Figure 2 right side).
+        return agentRetry(() => agent(`${__taskContractBlock()}You are the cuPilot Kernel Revisor (Section 4.1, Figure 2 right side).
 Validate and refine this kernel through the revision loop.
 
 # Kernel to Revise:
 \`\`\`cuda
-${(tk.kernel_code || '').substring(0, 4000)}
+${(tk.kernel_code || '')}
 \`\`\`
 
 # Strategy Applied: ${newStrategies[idx]?.strategy || 'unknown'}
@@ -878,8 +889,8 @@ Then append, using the values you just measured (status="done" if compiled AND c
         const kPath = `${EXP_DIR}/variants/${suffix}/kernel.cu`
         const variant = `cupilot_${suffix}`.replace(/[^A-Za-z0-9_]/g, '_')
         // Materialize the candidate source so the embedded eval can apply/register it.
-        await agentRetry(() => agent(`Write the candidate kernel source to ${kPath} (mkdir -p its dir first).\n\n` +
-          `\`\`\`cuda\n${(r.kernel_code || '').substring(0, 6000)}\n\`\`\`\n` +
+        await agentRetry(() => agent(`${__taskContractBlock()}Write the candidate kernel source to ${kPath} (mkdir -p its dir first).\n\n` +
+          `\`\`\`cuda\n${(r.kernel_code || '')}\n\`\`\`\n` +
           `Return {ok:true, path:"${kPath}"}.`,
           { model: MODEL.mechanical, label: `embedded-materialize-${suffix}`, phase: 'Revise', schema: JSON_PASSTHROUGH }), { retries: 5 })
         let embLatency = 0, embMetrics = {}, embBclass = 'unknown', embCompiled = false, embCorrect = false
@@ -984,7 +995,7 @@ Then append, using the values you just measured (status="done" if compiled AND c
 // =============================================================================
 phase('Report')
 
-const finalReport = await agentRetry(() => agent(`Write a concise technical report on cuPilot evolutionary optimization.
+const finalReport = await agentRetry(() => agent(`${__taskContractBlock()}Write a concise technical report on cuPilot evolutionary optimization.
 
 # cuPilot Results
 - Operation: ${OP_DESC}
@@ -1003,11 +1014,11 @@ ${bestKernel.strategy}
 
 # Best Kernel Code:
 \`\`\`cuda
-${bestKernel.code.substring(0, 3000)}
+${bestKernel.code}
 \`\`\`
 
 # Top strategies in final population:
-${population.slice(0, 5).map((p, i) => `${i + 1}. ${p.strategy.substring(0, 80)} (${p.speedup.toFixed(2)}x)`).join('\n')}
+${population.slice(0, 5).map((p, i) => `${i + 1}. ${p.strategy} (${p.speedup.toFixed(2)}x)`).join('\n')}
 
 Write:
 1. Evolutionary trajectory: how strategies evolved across generations
@@ -1027,7 +1038,7 @@ Then append, using the final best result:
 
 // embedded_inplace exit safety net: unconditionally restore the pristine operator file.
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 

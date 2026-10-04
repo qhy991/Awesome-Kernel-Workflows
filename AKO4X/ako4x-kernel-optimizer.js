@@ -169,6 +169,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -205,7 +216,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -498,7 +509,7 @@ const EST_PER_ROUND = args.est_tokens_per_round || 60000
 async function resolveInitialKernelFromProblem({ language, compileCommand, testCommand, benchmarkCommand }) {
   if (INPUT_MODE !== 'generate_then_optimize') return ''
 
-  const generated = await agentRetry(() => agent(`No kernel_path was provided. Generate and verify an initial kernel before starting the AKO4X optimization loop.
+  const generated = await agentRetry(() => agent(`${__taskContractBlock()}No kernel_path was provided. Generate and verify an initial kernel before starting the AKO4X optimization loop.
 
 # Problem Input
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
@@ -638,7 +649,7 @@ phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agentRetry(() => agent(
-    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `${__taskContractBlock()}Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
@@ -665,7 +676,7 @@ if (INPUT_MODE === 'generate_then_optimize') {
   })
 }
 
-const setupResult = await agentRetry(() => agent(`Read the kernel file at: ${KERNEL_PATH}
+const setupResult = await agentRetry(() => agent(`${__taskContractBlock()}Read the kernel file at: ${KERNEL_PATH}
 
 Analyze it and return a JSON object with:
 - kernel_code: the full source code
@@ -722,7 +733,7 @@ bestKernelPath = KERNEL_PATH || null  // AWK #59: if optimizing an existing kern
 log(`Kernel: ${setupResult.op_type} (${detectedLang}) | Functions: ${(setupResult.key_functions || []).join(', ')}`)
 
 // Create workspace
-await agentRetry(() => agent(`Create the optimization workspace:
+await agentRetry(() => agent(`${__taskContractBlock()}Create the optimization workspace:
 
 \`\`\`bash
 mkdir -p ${EXP_DIR}/{variants,round-logs,failed-rounds,profile-artifacts}
@@ -767,7 +778,7 @@ Execute these commands.`, {
 let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
 if (USE_DRIVER) {
   const _pd = await agentRetry(() => agent(
-    `Read ${KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
+    `${__taskContractBlock()}Read ${KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
     `run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${BACKEND_DIR}/manifest.json --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.\n` +
     `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
     { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
@@ -787,7 +798,7 @@ if (!args.integration_pattern) {
 
   const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
   const _integ = await agentRetry(() => agent(
-    `Read ${KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+    `${__taskContractBlock()}Read ${KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
     `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
     `--kernel "${KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
@@ -807,7 +818,7 @@ const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'sta
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 // A-O1 closure: native_profiler but ncu unavailable → perf_heuristic
@@ -851,7 +862,7 @@ if (SOL_AVAILABLE && KERNEL_LANG === 'cute-dsl' &&
   cuteSeedMeasurementPath = seed.result_path
   baselineProfileSummary = `Host-measured CuTe seed: ${latency} ms; IKET profiling depends on target GPU support.`
 } else if (HARNESS_PATH || HARNESS_BUILD_CMD) {
-  const ncuSetup = await agentRetry(() => agent(`Profile the baseline kernel with Nsight Compute (ncu).
+  const ncuSetup = await agentRetry(() => agent(`${__taskContractBlock()}Profile the baseline kernel with Nsight Compute (ncu).
 
 # Environment
 - NCU binary: ${NCU_BINARY || '(not provided)'}
@@ -864,7 +875,7 @@ if (SOL_AVAILABLE && KERNEL_LANG === 'cute-dsl' &&
 
 # Kernel Source:
 \`\`\`${fenceLang}
-${baselineKernelCode.substring(0, 4000)}
+${baselineKernelCode}
 \`\`\`
 
 # Instructions
@@ -907,7 +918,7 @@ Return structured profile results.`, { model: MODEL.profile,
 - Profiler Rules: ${(ncuSetup.ncu_rule_suggestions || []).map(s => `- ${s}`).join('\n') || 'N/A'}`
   log(`Baseline: ${baselineLatency}ms | ${ncuSetup.bottleneck_diagnosis}`)
 } else if (BENCHMARK_CMD) {
-  const benchResult = await agentRetry(() => agent(`Run benchmark to establish baseline.
+  const benchResult = await agentRetry(() => agent(`${__taskContractBlock()}Run benchmark to establish baseline.
 
 # Command: ${BENCHMARK_CMD}
 # Kernel: ${KERNEL_PATH}
@@ -989,7 +1000,7 @@ for (let round = 0; round < ROUNDS; round++) {
 
 # Current Best Kernel:
 \`\`\`${fenceLang}
-${bestKernelCode.substring(0, 4000)}
+${bestKernelCode}
 \`\`\`
 
 ${baselineProfileSummary ? `# NATIVE PROFILING DATA (REAL MEASURED DATA):\n${baselineProfileSummary}` : '# No native profile data. Use static code analysis.'}
@@ -1015,7 +1026,7 @@ ${benchMethodology}
 
   const plans = await parallel(
     Array.from({length: BREADTH}, (_, i) => () =>
-      agentRetry(() => agent(`${planPromptBase}\n\nYou are planner #${i + 1}/${BREADTH}. Focus on a DIFFERENT angle than other planners.
+      agentRetry(() => agent(`${__taskContractBlock()}${planPromptBase}\n\nYou are planner #${i + 1}/${BREADTH}. Focus on a DIFFERENT angle than other planners.
 
 Optimization levers (pick ONE):
 - Memory access: coalescing, vectorization, prefetch, cache efficiency
@@ -1060,12 +1071,12 @@ Optimization levers (pick ONE):
     const impls = await parallel(
       Array.from({length: SAMPLES_PER_HYPOTHESIS}, (_, si) => () => {
         const variantPath = ako4xCandidatePath(round, plan, si)
-        return agentRetry(() => agent(`Implement this optimization hypothesis as a complete, working kernel.
+        return agentRetry(() => agent(`${__taskContractBlock()}Implement this optimization hypothesis as a complete, working kernel.
 ${SOL_CANDIDATE_CONTRACT}
 
 # Original Kernel:
 \`\`\`${fenceLang}
-${bestKernelCode.substring(0, 4000)}
+${bestKernelCode}
 \`\`\`
 ${bestKernelPath ? `\n# Full parent kernel (read for complete context — the snippet above is orientation only): ${bestKernelPath}` : ''}
 
@@ -1179,7 +1190,7 @@ Then append (this variant is round ${round + 1}, hypothesis "${plan.title}", sam
 compiled=${__hostMeasured.compiled} correct=${__hostMeasured.correct}
 workloads_passed=${__hostMeasured.n_pass}/${__hostMeasured.n_total}
 ${__hostMeasured.failure_code ? `failure_code=${__hostMeasured.failure_code}` : ''}
-${__hostMeasured.stderr ? `compiler/run output:\n${String(__hostMeasured.stderr).substring(0, 2000)}` : ''}
+${__hostMeasured.stderr ? `compiler/run output:\n${String(__hostMeasured.stderr)}` : ''}
 Do not re-derive the verdict. Report it, and if it failed, say what the output
 above shows. Stay out of performance, as this stage instructs.` : ''
       // Performance half - kept separate, as this workflow keeps it separate.
@@ -1217,14 +1228,14 @@ was pre-committed above: did the predicted impact hold?` : ''
       let smokePassed = true
 
       if (smokeCmd && !cuteHost) {
-        const smokeResult = await agentRetry(() => agent(`Run smoke test for this kernel variant. This is a COMPILE + CORRECTNESS check only — NOT a performance verdict.
+        const smokeResult = await agentRetry(() => agent(`${__taskContractBlock()}Run smoke test for this kernel variant. This is a COMPILE + CORRECTNESS check only — NOT a performance verdict.
 
 # Kernel Source (authoritative — Read the FULL kernel from this path; the snippet below is orientation only, AWK #61):
 ${impl.variant_path}
 
 # Kernel Code (orientation snippet):
 \`\`\`${fenceLang}
-${String(impl.code ?? '').substring(0, 4000)}
+${String(impl.code ?? '')}
 \`\`\`
 
 # Smoke Test Command: ${smokeCmd}${__smokeBlock}
@@ -1273,14 +1284,14 @@ Return pass/fail with error details if failed.`, {
         speedup: baselineScore / __hostMeasured.candidate_latency_aggregate_ms,
         passed_workloads: `${__hostMeasured.n_pass}/${__hostMeasured.n_total}`,
         raw_output: 'Host-owned complete CuTe measurement',
-      } : await agentRetry(() => agent(`Run the full benchmark for this kernel variant. This IS the performance verdict.
+      } : await agentRetry(() => agent(`${__taskContractBlock()}Run the full benchmark for this kernel variant. This IS the performance verdict.
 
 # Kernel Source (authoritative — Read the FULL kernel from this path; the snippet below is orientation only, AWK #61):
 ${impl.variant_path}
 
 # Kernel Code (orientation snippet):
 \`\`\`${fenceLang}
-${String(impl.code ?? '').substring(0, 4000)}
+${String(impl.code ?? '')}
 \`\`\`
 
 # Benchmark Command: ${BENCHMARK_CMD || 'static analysis only'}
@@ -1448,7 +1459,7 @@ Return benchmark results.`, {
   }
 
   // Write ITERATIONS.md for this round
-  await agentRetry(() => agent(`Write the iteration log for this round.
+  await agentRetry(() => agent(`${__taskContractBlock()}Write the iteration log for this round.
 
 # Round: ${round + 1}
 # Iterations:
@@ -1487,7 +1498,7 @@ Execute this step.`, {
 
   if (roundBest) {
     // --- Pre-archive Gate 1: Silent-skip detection ---
-    const silentSkipCheck = await agentRetry(() => agent(`Check this kernel variant for silent-skip patterns.
+    const silentSkipCheck = await agentRetry(() => agent(`${__taskContractBlock()}Check this kernel variant for silent-skip patterns.
 
 # Variant: ${roundBest.iterLabel}
 # Score: ${roundBest.score} (${__fmt(roundBest.speedup, 2)}x vs baseline)
@@ -1496,7 +1507,7 @@ Execute this step.`, {
 
 # Kernel Code (excerpt):
 \`\`\`${fenceLang}
-${String(roundBest.code ?? '').substring(0, 3000)}
+${String(roundBest.code ?? '')}
 \`\`\`
 
 # Check for silent-skip patterns:
@@ -1524,11 +1535,11 @@ Return verdict: is this a legitimate improvement or suspicious?`, {
     }), { retries: 5 })
 
     // --- Pre-archive Gate 2: Library-delegation check ---
-    const libDelegationCheck = await agentRetry(() => agent(`Check this kernel for library delegation (calling pre-built kernel libraries instead of writing own code).
+    const libDelegationCheck = await agentRetry(() => agent(`${__taskContractBlock()}Check this kernel for library delegation (calling pre-built kernel libraries instead of writing own code).
 
 # Kernel Code:
 \`\`\`${fenceLang}
-${String(roundBest.code ?? '').substring(0, 5000)}
+${String(roundBest.code ?? '')}
 \`\`\`
 
 # BANNED (must NOT appear as the core compute):
@@ -1573,7 +1584,7 @@ Return verdict.`, {
       // Archive variant with 5-section header (AKO4X lessons-convention.md)
       const variantName = `iter-${round + 1}-${String(roundBest.plan.title ?? '').substring(0, 30).replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}`
 
-      await agentRetry(() => agent(`Archive this kernel variant with a 5-section AKO4X header.
+      await agentRetry(() => agent(`${__taskContractBlock()}Archive this kernel variant with a 5-section AKO4X header.
 
 # Variant: ${variantName}
 # Score: ${roundBest.score} (${__fmt(roundBest.speedup, 2)}x vs baseline)
@@ -1587,7 +1598,7 @@ ${roundBest.variant_path}
 
 # Kernel Code (orientation snippet):
 \`\`\`${fenceLang}
-${String(roundBest.code ?? '').substring(0, 5000)}
+${String(roundBest.code ?? '')}
 \`\`\`
 
 # Instructions:
@@ -1654,7 +1665,7 @@ Then append (this is the archived round-best variant; speedup is the measured ${
       // Update TRAPS.md if new silent-skip pattern found
       if (silentSkipCheck.concerns && silentSkipCheck.concerns.length > 0) {
         traps.push(...silentSkipCheck.concerns)
-        await agentRetry(() => agent(`Update ${EXP_DIR}/TRAPS.md with new silent-skip patterns discovered this round.
+        await agentRetry(() => agent(`${__taskContractBlock()}Update ${EXP_DIR}/TRAPS.md with new silent-skip patterns discovered this round.
 
 # New patterns to add:
 ${(silentSkipCheck.concerns || []).map((c, i) => `${i + 1}. ${c}`).join('\n')}
@@ -1700,7 +1711,7 @@ Execute this step.`, {
   // Archive failed rounds (AKO4X MASTER.md step 9)
   const failedIters = roundIterations.filter(it => it.score === null || (it.speedup && it.speedup < 1.0))
   if (failedIters.length > 0) {
-    await agentRetry(() => agent(`Archive failed iterations for forensic value.
+    await agentRetry(() => agent(`${__taskContractBlock()}Archive failed iterations for forensic value.
 
 # Failed iterations this round:
 ${failedIters.map(it => `- ${it.iter}: ${it.title} — ${it.notes}`).join('\n')}
@@ -1735,7 +1746,7 @@ Execute this step.`, {
   phase('Retrospect')
 
   if (MODE === 3 && roundBest) {
-    const retrospective = await agentRetry(() => agent(`You have completed Phase-1 optimization. Now do a HARNESS RETROSPECTIVE — only based on actual evidence from this session.
+    const retrospective = await agentRetry(() => agent(`${__taskContractBlock()}You have completed Phase-1 optimization. Now do a HARNESS RETROSPECTIVE — only based on actual evidence from this session.
 
 # Session Summary:
 - Round: ${round + 1}
@@ -1793,7 +1804,7 @@ Execute this step.`, {
   }
 
   // Update state
-  await agentRetry(() => agent(`Update ${EXP_DIR}/state.json:
+  await agentRetry(() => agent(`${__taskContractBlock()}Update ${EXP_DIR}/state.json:
 \`\`\`json
 {
   "round": ${round + 1},
@@ -1845,7 +1856,7 @@ Execute.`, {
 // =============================================================================
 phase('Report')
 
-const finalReport = await agentRetry(() => agent(`Write a comprehensive optimization report.
+const finalReport = await agentRetry(() => agent(`${__taskContractBlock()}Write a comprehensive optimization report.
 
 # AKO4X Kernel Optimization — Final Report
 
@@ -1871,10 +1882,10 @@ ${traps.map((t, i) => `${i + 1}. ${t}`).join('\n')}
 
 ## Final Kernel:
 \`\`\`${fenceLang}
-${bestKernelCode.substring(0, 3000)}
+${bestKernelCode}
 \`\`\`
 
-${baselineProfileSummary ? `## Initial Native Profile Diagnosis:\n${baselineProfileSummary.substring(0, 800)}` : ''}
+${baselineProfileSummary ? `## Initial Native Profile Diagnosis:\n${baselineProfileSummary}` : ''}
 
 Write a report covering:
 1. Optimization journey (what was tried, what worked, what didn't)
@@ -1889,7 +1900,7 @@ Write a report covering:
 
 // embedded_inplace exit safety net: unconditionally restore pristine original.
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 

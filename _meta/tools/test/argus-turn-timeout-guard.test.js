@@ -44,9 +44,9 @@ test('argus: eval-bearing doer turns are wrapped with withTurnTimeout', () => {
   // The stall risk in ARGUS is the Validator/Lowering/baseline-eval turns that
   // run build+test+bench behind the agent — the same failure mode CUDAAgent's
   // Implement/Verify watchdog bounds. Assert those turns are wrapped.
-  assert.match(SOURCE, /withTurnTimeout\(agentRetry\(\(\) => agent\(`You are a GPU kernel validator\. Run the baseline kernel/,
+  assert.match(SOURCE, /withTurnTimeout\(agentRetry\(\(\) => agent\(`\$\{__taskContractBlock\(\)\}You are a GPU kernel validator\. Run the baseline kernel/,
     'baseline-eval turn must be wrapped with withTurnTimeout')
-  assert.match(SOURCE, /withTurnTimeout\(agentRetry\(\(\) => agent\(`You are the ARGUS Validator Agent/,
+  assert.match(SOURCE, /withTurnTimeout\(agentRetry\(\(\) => agent\(`\$\{__taskContractBlock\(\)\}You are the ARGUS Validator Agent/,
     'Validator turn must be wrapped with withTurnTimeout')
   assert.match(SOURCE, /'baseline-eval'\)/,
     "baseline-eval wrap must pass the 'baseline-eval' label")

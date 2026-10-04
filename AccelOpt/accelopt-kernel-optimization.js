@@ -134,6 +134,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -170,7 +181,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -468,7 +479,7 @@ function legacyEvaluatePrompt(variant, bestLatency, ncuSetup) {
 
 # Kernel Code:
 \`\`\`cuda
-${variant.code.substring(0, 4000)}
+${variant.code}
 \`\`\`
 
 # Baseline Performance:
@@ -534,7 +545,7 @@ function legacyFinalReportPrompt(OP_DESC, opType, baselineLatency, bestLatency, 
 - Experience Patterns: ${experienceMemory.length}
 
 # Initial NCU Diagnosis:
-${baselineNcuProfile.substring(0, 1000)}
+${baselineNcuProfile}
 
 # Final Candidate Beam:
 ${candidateBeam.map((c, i) => `${i + 1}. "${c.planTitle}" — ${c.speedup.toFixed(2)}x (${c.latency.toFixed(3)}ms)`).join('\n')}
@@ -544,7 +555,7 @@ ${experienceMemory.map((e, i) => `${i + 1}. ${e}`).join('\n\n')}
 
 # Final Kernel:
 \`\`\`cuda
-${bestKernelCode.substring(0, 3000)}
+${bestKernelCode}
 \`\`\`
 
 Write:
@@ -561,12 +572,12 @@ function legacyLearnPrompt(pair) {
 
 # Slow Kernel:
 \`\`\`cuda
-${pair.slow.substring(0, 2500)}
+${pair.slow}
 \`\`\`
 
 # Fast Kernel:
 \`\`\`cuda
-${pair.fast.substring(0, 2500)}
+${pair.fast}
 \`\`\`
 
 # Speedup: ${pair.speedup.toFixed(2)}x
@@ -743,7 +754,7 @@ function legacyExecutePrompt(bestKernelCode, plan, sampleIdx, SAMPLES_PER_PLAN) 
 
 # Original Kernel:
 \`\`\`cuda
-${bestKernelCode.substring(0, 4000)}
+${bestKernelCode}
 \`\`\`
 
 # Optimization Plan: "${plan.title}"
@@ -789,7 +800,7 @@ function buildExperienceSection(experienceMemory, lastIterNewPatterns, maxInProm
 // Helper: format candidate beam info for planner prompt
 function buildBeamSection(candidateBeam, fence) {
   if (candidateBeam.length <= 1) return ''
-  return `\n\n# Candidate Beam (top-${candidateBeam.length} kernels from previous iterations)\n${candidateBeam.map((c, i) => `## Candidate ${i + 1}: "${c.planTitle}" — ${c.speedup.toFixed(2)}x, ${c.latency.toFixed(3)}ms\nNCU: ${c.ncuSummary || 'N/A'}\n\`\`\`${fence}\n${c.code.substring(0, 1500)}\n\`\`\``).join('\n\n')}`
+  return `\n\n# Candidate Beam (top-${candidateBeam.length} kernels from previous iterations)\n${candidateBeam.map((c, i) => `## Candidate ${i + 1}: "${c.planTitle}" — ${c.speedup.toFixed(2)}x, ${c.latency.toFixed(3)}ms\nNCU: ${c.ncuSummary || 'N/A'}\n\`\`\`${fence}\n${c.code}\n\`\`\``).join('\n\n')}`
 }
 
 // =============================================================================
@@ -799,7 +810,7 @@ phase('Setup')
 
 if (USE_DRIVER) {
   const driver = await agentRetry(() => agent(
-    `Load the backend driver for backend="${BACKEND}".\n` +
+    `${__taskContractBlock()}Load the backend driver for backend="${BACKEND}".\n` +
     `1. Run exactly: \`cat ${DRIVER_DIR}/manifest${DRIVER_EXT}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${DRIVER_DIR}/idioms${DRIVER_EXT}\` and parse JSON.\n` +
     `If either is missing, return {present:false, reason:"no driver for backend ${BACKEND}"}.\n` +
@@ -874,7 +885,7 @@ function legacyNcuBaselinePrompt(baselineKernel) {
 
 # Kernel Source:
 \`\`\`cuda
-${baselineKernel.substring(0, 4000)}
+${baselineKernel}
 \`\`\`
 
 # Instructions
@@ -938,7 +949,7 @@ const LEGACY_NCU_BASELINE_SCHEMA = {
 let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
 if (USE_DRIVER) {
   const _pd = await agentRetry(() => agent(
-    `Read ${KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
+    `${__taskContractBlock()}Read ${KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
     substrateInstruction('profiling/profiling_strategist.py',
       `resolve --backend-manifest ${DRIVER_DIR}/manifest${DRIVER_EXT} --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
     ` Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
@@ -962,7 +973,7 @@ if (!args.integration_pattern) {
 
   const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
   const _integ = await agentRetry(() => agent(
-    `Read ${KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+    `${__taskContractBlock()}Read ${KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
     `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
     `--kernel "${KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
@@ -983,7 +994,7 @@ const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGR
 // The embedded operator file we swap in place is the project-referenced KERNEL_PATH.
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 // A-O1 closure: native_profiler chosen but ncu unavailable, OR the embedded path has no
@@ -1024,7 +1035,7 @@ if (USE_DRIVER_STANDALONE) {
 
   const metrics = profileResult.metrics || {}
   const diag = await agentRetry(() => agent(
-    `Write these metrics to ${EXP_DIR}/baseline/metrics.json:\n${JSON.stringify(metrics)}\n` +
+    `${__taskContractBlock()}Write these metrics to ${EXP_DIR}/baseline/metrics.json:\n${JSON.stringify(metrics)}\n` +
     `${substrateInstruction('diagnose.py', `--metrics ${EXP_DIR}/baseline/metrics.json`)} Return stdout JSON verbatim {bottleneck_class, evidence}.`,
     { model: MODEL.mechanical, label: 'diagnose-baseline', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
   bottleneckClass = diag.bottleneck_class || 'unknown'
@@ -1050,7 +1061,7 @@ if (USE_DRIVER_STANDALONE) {
   // build/test/benchmark it as-is; for embedded_dispatch the unmodified project build is
   // the baseline. perf_heuristic only (no native profiler reachable). ---
   const embBaseline = await agentRetry(() => agent(
-    `EMBEDDED BASELINE EVAL. Project operator file: ${KERNEL_PATH}` +
+    `${__taskContractBlock()}EMBEDDED BASELINE EVAL. Project operator file: ${KERNEL_PATH}` +
     (ORIGINAL_BACKUP ? ` | pristine backup: ${ORIGINAL_BACKUP}` : '') + `\n` +
     `Run IN ORDER (the operator on disk is the pristine baseline — do NOT modify it):\n` +
     `1. Build: ${BUILD_CMD || '(not provided)'}\n2. Test: ${TEST_CMD || '(not provided)'}\n3. Benchmark: ${PROJECT_BENCH_CMD || TEST_CMD || '(not provided)'}\n` +
@@ -1163,7 +1174,7 @@ for (let iter = 0; iter < ITERATIONS; iter++) {
 
 # Current Best Implementation:
 \`\`\`${IDIOMS.lang_fence}
-${bestKernelCode.substring(0, 4000)}
+${bestKernelCode}
 \`\`\`
 
 # PROFILING DATA (THIS IS REAL MEASURED DATA — base your plan on this):
@@ -1191,7 +1202,7 @@ ${IDIOMS.read_metric_guide}
 
 # Current Best Implementation:
 \`\`\`cuda
-${bestKernelCode.substring(0, 4000)}
+${bestKernelCode}
 \`\`\`
 
 # NCU PROFILING DATA (THIS IS REAL MEASURED DATA — base your plan on this):
@@ -1245,7 +1256,7 @@ ${IDIOMS.read_metric_guide}
 
   const plans = await parallel(
     Array.from({length: BREADTH}, (_, i) => () =>
-      agentRetry(() => agent(`${planPromptBase}\n\n# YOUR FOCUS AREA: ${planAngles[i % planAngles.length]}\nYou are planner #${i + 1}/${BREADTH}. Focus on: ${planAngles[i % planAngles.length]}.
+      agentRetry(() => agent(`${__taskContractBlock()}${planPromptBase}\n\n# YOUR FOCUS AREA: ${planAngles[i % planAngles.length]}\nYou are planner #${i + 1}/${BREADTH}. Focus on: ${planAngles[i % planAngles.length]}.
 ${__attemptBlock()}${__experienceBlock()}
 # Recent genome trajectory (read BEFORE planning)
 Run \`tail -20 ${EXP_DIR}/genome.jsonl 2>/dev/null\` to see prior attempts this session (every Plan/Execute/Evaluate/Learn step has self-reported here). Use it to: (a) avoid retrying any technique already attempted with a regression or null speedup, (b) spot multi-round patterns the per-iteration experience summary may have lost. If the file is empty or missing, ignore this and proceed with the inputs above.
@@ -1279,7 +1290,7 @@ Then append (this is iteration ${iter}, planner ${i}):
 
 # Original Kernel:
 \`\`\`${IDIOMS.lang_fence}
-${bestKernelCode.substring(0, 4000)}
+${bestKernelCode}
 \`\`\`
 
 # Optimization Plan: "${plan.title}"
@@ -1383,7 +1394,7 @@ Then append (iteration ${iter}, plan "${plan.title}", sample ${sampleIdx}):
 
 # Kernel Code:
 \`\`\`${IDIOMS.lang_fence}
-${variant.code.substring(0, 4000)}
+${variant.code}
 \`\`\`
 
 # Baseline Performance:
@@ -1438,8 +1449,8 @@ Then append (iteration ${iter}, variant ${variant.id}; status="done" if correct 
       const kPath = `${EXP_DIR}/variants/iter${iter}/${variant.id}/kernel${IDIOMS.source_ext || '.cu'}`
       const variantTag = `accelopt_${iter}_${variant.id}`.replace(/[^A-Za-z0-9_]/g, '_')
       // Materialize the candidate source so the embedded eval can apply/register it.
-      await agentRetry(() => agent(`Write the candidate kernel source to ${kPath} (mkdir -p its dir first).\n\n` +
-        `\`\`\`${IDIOMS.lang_fence}\n${(variant.code || '').substring(0, 6000)}\n\`\`\`\n` +
+      await agentRetry(() => agent(`${__taskContractBlock()}Write the candidate kernel source to ${kPath} (mkdir -p its dir first).\n\n` +
+        `\`\`\`${IDIOMS.lang_fence}\n${(variant.code || '')}\n\`\`\`\n` +
         `Return {ok:true, path:"${kPath}"}.`,
         { model: MODEL.mechanical, label: `embedded-materialize-${variant.id}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
       let embResult = null
@@ -1680,12 +1691,12 @@ ${baselineNcuProfile}`
 
 # Slow Kernel:
 \`\`\`${IDIOMS.lang_fence}
-${pair.slow.substring(0, 2500)}
+${pair.slow}
 \`\`\`
 
 # Fast Kernel:
 \`\`\`${IDIOMS.lang_fence}
-${pair.fast.substring(0, 2500)}
+${pair.fast}
 \`\`\`
 
 # Speedup: ${pair.speedup.toFixed(2)}x
@@ -1779,7 +1790,7 @@ const finalReport = await agentRetry(() => agent(USE_DRIVER
 - Bottleneck class: ${bottleneckClass}
 
 # Initial Profile Diagnosis:
-${baselineNcuProfile.substring(0, 1000)}
+${baselineNcuProfile}
 
 # Final Candidate Beam:
 ${candidateBeam.map((c, i) => `${i + 1}. "${c.planTitle}" — ${c.speedup.toFixed(2)}x (${c.latency.toFixed(3)}ms)`).join('\n')}
@@ -1789,7 +1800,7 @@ ${experienceMemory.map((e, i) => `${i + 1}. ${e}`).join('\n\n')}
 
 # Final Kernel:
 \`\`\`${IDIOMS.lang_fence}
-${bestKernelCode.substring(0, 3000)}
+${bestKernelCode}
 \`\`\`
 
 Write:
@@ -1815,7 +1826,7 @@ if (USE_DRIVER) {
     actionable_hint: 'apply this learning when generating / improving the next candidate',
   }))
   const built = await agentRetry(() => agent(
-    `Build a Layer-A evidence envelope for this AccelOpt run, then validate it.\n` +
+    `${__taskContractBlock()}Build a Layer-A evidence envelope for this AccelOpt run, then validate it.\n` +
     `1. ${substrateInstruction('evidence_schema.py', 'template')} to get the envelope shape.\n` +
     `2. Fill it: attempt_id="accelopt-${BACKEND}", backend="${BACKEND}", ` +
     `compiled=true, correct=true, speedup=${(baselineLatency / bestLatency)}, ` +
@@ -1836,7 +1847,7 @@ if (USE_DRIVER) {
 // The per-variant inplace eval always restores, but this is the belt-and-braces final
 // restore in case a run aborted mid-eval (inplace-no-restore bug-class).
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Iterate', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 

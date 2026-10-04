@@ -73,6 +73,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -109,7 +120,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -301,7 +312,7 @@ if (USE_DRIVER && !MKB_ROOT && !EVAL_CMD_TEMPLATE) {
 // Setup: read the reference (kernel_path or problem definition) + substrate manifest.
 const setupResult = await agentRetry(
   () => agent(
-    `Read the reference for this AscendC task and return its operation signature.
+    `${__taskContractBlock()}Read the reference for this AscendC task and return its operation signature.
 ${KERNEL_PATH ? `Reference kernel: ${KERNEL_PATH}\nRead it and summarize what it computes.` : 'No kernel_path — use the problem definition below.'}
 Problem definition: ${PROBLEM_DEFINITION || `(see problem_path: ${PROBLEM_PATH || '(none)'})`}
 op_description: ${OP}
@@ -489,7 +500,7 @@ const convergence = bestSpeedup >= TARGET ? 'converged' : (stagnantRounds >= STA
 
 await agentRetry(
   () => agent(
-    `Write a final AscendC optimization report for ${opInfo.op_name} on ${TARGET_GPU}.
+    `${__taskContractBlock()}Write a final AscendC optimization report for ${opInfo.op_name} on ${TARGET_GPU}.
 Best speedup: ${bestSpeedup.toFixed(3)}x | Status: ${convergence}
 Best kernel: ${bestPath || '(none)'}
 All candidates: ${JSON.stringify(candidates.slice(0, 8).map(c => ({ id: c.id, speedup: c.speedup, compiled: c.compiled, correct: c.correct })))}

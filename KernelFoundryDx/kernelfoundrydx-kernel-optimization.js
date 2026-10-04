@@ -70,6 +70,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -106,7 +117,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -475,7 +486,7 @@ phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agentRetry(() => agent(
-    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `${__taskContractBlock()}Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
@@ -496,7 +507,7 @@ if (USE_DRIVER) {
   log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
 }
 
-const setup = await agentRetry(() => agent(`Read the PyTorch reference task file at: ${TASK_PATH || '(not provided)'}
+const setup = await agentRetry(() => agent(`${__taskContractBlock()}Read the PyTorch reference task file at: ${TASK_PATH || '(not provided)'}
 If problem_definition is provided, use it as the authoritative task description:
 ${PROBLEM_DEFINITION || '(not provided)'}
 
@@ -532,7 +543,7 @@ const opType = setup.op_type
 log(`Task: ${opType} | chain: ${(setup.op_chain || []).join(' -> ')}`)
 
 // Establish eager baseline + seed the experience/hint library (from NVIDIA best practices)
-const baseline = await agentRetry(() => agent(`You are setting up a ${langToken(LEGACY_SETUP_LANG_TOKEN)} kernel optimization run for a PyTorch reference task.
+const baseline = await agentRetry(() => agent(`${__taskContractBlock()}You are setting up a ${langToken(LEGACY_SETUP_LANG_TOKEN)} kernel optimization run for a PyTorch reference task.
 
 # Operation: ${OP_DESC} (${opType})
 # Op chain: ${(setup.op_chain || []).join(' -> ')}
@@ -604,7 +615,7 @@ log(`Baseline: ${baselineLatency}ms | seeded ${hintLibrary.length} hints`)
 let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
 if (USE_DRIVER) {
   const _pd = await agentRetry(() => agent(
-    `Classify the task's op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large) from: op_type="${opType}", op_chain=[${(setup.op_chain || []).join(', ')}], input_shapes="${setup.input_shapes || 'n/a'}". Then ` +
+    `${__taskContractBlock()}Classify the task's op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large) from: op_type="${opType}", op_chain=[${(setup.op_chain || []).join(', ')}], input_shapes="${setup.input_shapes || 'n/a'}". Then ` +
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${driverPath('manifest.json')} --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.\n` +
     `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
     { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
@@ -627,7 +638,7 @@ if (!args.integration_pattern) {
   const _kernelFile = TASK_PATH || '(not provided)'
   const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
   const _integ = await agentRetry(() => agent(
-    `Read ${_kernelFile}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+    `${__taskContractBlock()}Read ${_kernelFile}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
     `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
     `--kernel "${_kernelFile}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
@@ -648,7 +659,7 @@ const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGR
 // The embedded operator file we swap in place is the project-referenced TASK_PATH.
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${TASK_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Byte-exact backup: run \`cp -a "${TASK_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 // A-O1 closure: native_profiler chosen but no project-native profiler is reachable
@@ -666,7 +677,7 @@ phase('Init')
 
 const seeds = await parallel(
   Array.from({ length: SEED_CANDIDATES }, (_, i) => () =>
-    agentRetry(() => agent(`You are an EXPERT GPU-programming model specializing in PyTorch -> ${langToken(LEGACY_SEED_LANG_TOKEN)} translation. Produce a CORRECT initial ${langToken(LEGACY_SEED_LANG_TOKEN)} kernel for this task. Correctness is the ONLY goal here — not speed.
+    agentRetry(() => agent(`${__taskContractBlock()}You are an EXPERT GPU-programming model specializing in PyTorch -> ${langToken(LEGACY_SEED_LANG_TOKEN)} translation. Produce a CORRECT initial ${langToken(LEGACY_SEED_LANG_TOKEN)} kernel for this task. Correctness is the ONLY goal here — not speed.
 
 # Operation: ${OP_DESC} (${opType})
 # Op chain: ${(setup.op_chain || []).join(' -> ')}
@@ -675,7 +686,7 @@ const seeds = await parallel(
 
 # PyTorch reference:
 \`\`\`python
-${taskText.substring(0, 4000)}
+${taskText}
 \`\`\`
 
 # RAG few-shots (retrieval-augmented initialization):
@@ -716,13 +727,13 @@ log(`Generated ${seedCandidates.length} expert seeds`)
 // Anti-cheating validation of seeds (prompt-level + LLM validator)
 const validatedSeeds = await parallel(
   seedCandidates.map((s, i) => () =>
-    agentRetry(() => agent(`You are an anti-cheating validator for ${langToken(LEGACY_VALIDATE_LANG_TOKEN)} kernels. Determine whether this generated kernel does GENUINE kernel-level work or CHEATS (e.g. calls torch ops to do the math, returns precomputed/reference values, or omits the real computation).
+    agentRetry(() => agent(`${__taskContractBlock()}You are an anti-cheating validator for ${langToken(LEGACY_VALIDATE_LANG_TOKEN)} kernels. Determine whether this generated kernel does GENUINE kernel-level work or CHEATS (e.g. calls torch ops to do the math, returns precomputed/reference values, or omits the real computation).
 
 # Reference op chain: ${(setup.op_chain || []).join(' -> ')}
 
 # Candidate kernel:
 \`\`\`python
-${s.code.substring(0, 4000)}
+${s.code}
 \`\`\`
 
 # Checks:
@@ -826,7 +837,7 @@ for (let iter = 0; iter < ITERATIONS; iter++) {
         `  - gen ${k}: ${a.correct ? 'correct' : 'INCORRECT'}, ${a.speedup ? a.speedup.toFixed(2) + 'x' : 'n/a'}${a.diagnosis ? ', ' + (a.diagnosis.limiter || a.diagnosis.failure_mode || '') : ''}`
       ).join('\n') || '  (no history yet)'
 
-      return agentRetry(() => agent(`You are the OPTIMIZER model evolving a ${langToken(LEGACY_MUTATE_LANG_TOKEN)} kernel. You belong to a role-specialized evolutionary island.
+      return agentRetry(() => agent(`${__taskContractBlock()}You are the OPTIMIZER model evolving a ${langToken(LEGACY_MUTATE_LANG_TOKEN)} kernel. You belong to a role-specialized evolutionary island.
 
 # ISLAND ROLE: ${island.role.name}
 ${island.role.focus}
@@ -837,7 +848,7 @@ ${island.role.focus}
 
 # Parent kernel (your starting point — produce a MUTATION/improvement of this):
 ${parentPath ? `\n# Full parent kernel (Read for complete context — the snippet below is orientation only, AWK #60 fix 4/#61): ${parentPath}\n` : ''}\`\`\`python
-${parentCode.substring(0, 4000)}
+${parentCode}
 \`\`\`
 
 ${parentDiag ? `# Diagnosis of the parent:\n- ${parent.correct === false ? 'INCORRECT: ' + (parentDiag.failure_mode || 'unknown failure') : 'limiter: ' + (parentDiag.limiter || 'unknown')}\n- ${parentDiag.rationale || ''}` : '# Parent has not been diagnosed yet.'}
@@ -898,7 +909,7 @@ Then append:
       const referenced = directiveWords.some(w => summary.includes(w))
       if (!referenced) {
         log(`[iter ${iter + 1}] REJECTED directive-pinned island ${islands[islIdx].role.name}: change_summary does not reference the mandatory directive (AWK #60).`)
-        islands[islIdx].archive.push({ correct: false, speedup: null, diagnosis: { failure_mode: 'directive_ignored', rationale: `change_summary did not reference: ${MANDATORY_DIRECTIVE.substring(0, 80)}` } })
+        islands[islIdx].archive.push({ correct: false, speedup: null, diagnosis: { failure_mode: 'directive_ignored', rationale: `change_summary did not reference: ${MANDATORY_DIRECTIVE}` } })
         continue
       }
     }
@@ -907,7 +918,7 @@ Then append:
 
   const evals = await parallel(
     variants.map((v) => () =>
-      agentRetry(() => agent(`You are a ${langToken(LEGACY_EVAL_LANG_TOKEN)} kernel evaluator. Compile and run this candidate on real hardware and report LIGHTWEIGHT signals only (no ncu/nsys profiling).
+      agentRetry(() => agent(`${__taskContractBlock()}You are a ${langToken(LEGACY_EVAL_LANG_TOKEN)} kernel evaluator. Compile and run this candidate on real hardware and report LIGHTWEIGHT signals only (no ncu/nsys profiling).
 
 # Target GPU: ${TARGET_GPU}
 # Reference op chain: ${(setup.op_chain || []).join(' -> ')}
@@ -915,7 +926,7 @@ Then append:
 
 # Candidate (island role: ${islands[v.islIdx].role.name}):
 ${v.variant_path ? `# Full candidate source (Read for complete context — AWK #61): ${v.variant_path}\n` : ''}\`\`\`python
-${v.code.substring(0, 4000)}
+${v.code}
 \`\`\`
 
 # Steps:
@@ -1019,8 +1030,8 @@ Then append, using the values you just measured (status="done" if it compiled an
       const kPath = `${EXP_DIR}/variants/${suffix}/${kernelFilename()}`
       const variant = `kfdx_${suffix}`.replace(/[^A-Za-z0-9_]/g, '_')
       // Materialize the candidate source so the embedded eval can apply/register it.
-      await agentRetry(() => agent(`Write the candidate kernel source to ${kPath} (mkdir -p its dir first).\n\n` +
-        `\`\`\`${langToken(LEGACY_EVAL_LANG_TOKEN)}\n${(v.code || '').substring(0, 6000)}\n\`\`\`\n` +
+      await agentRetry(() => agent(`${__taskContractBlock()}Write the candidate kernel source to ${kPath} (mkdir -p its dir first).\n\n` +
+        `\`\`\`${langToken(LEGACY_EVAL_LANG_TOKEN)}\n${(v.code || '')}\n\`\`\`\n` +
         `Return {ok:true, path:"${kPath}"}.`,
         { model: MODEL.mechanical, label: `embedded-materialize-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
       let embLatency = 0, embMetrics = {}, embBclass = 'unknown'
@@ -1063,7 +1074,7 @@ Then append, using the values you just measured (status="done" if it compiled an
       const e = evals[k]
       if (!e) return Promise.resolve(null)
       const correct = !!e.is_correct && !!e.compiles
-      return agentRetry(() => agent(`You are the RESULT ANALYZER for a diagnosis-driven kernel optimizer. Diagnose this evaluated candidate and produce a reusable optimization hint. Use LIGHTWEIGHT signals only (no profiler).
+      return agentRetry(() => agent(`${__taskContractBlock()}You are the RESULT ANALYZER for a diagnosis-driven kernel optimizer. Diagnose this evaluated candidate and produce a reusable optimization hint. Use LIGHTWEIGHT signals only (no profiler).
 
 # Candidate island role: ${islands[v.islIdx].role.name}
 # Evaluation signals:
@@ -1075,7 +1086,7 @@ Then append, using the values you just measured (status="done" if it compiled an
 
 # Candidate code (head — full source at ${v.variant_path || 'n/a'}, AWK #61):
 \`\`\`python
-${v.code.substring(0, 2500)}
+${v.code}
 \`\`\`
 
 # Diagnosis rules:
@@ -1234,7 +1245,7 @@ Then append (status="done" for a performance diagnosis, "error" for a failure di
 // =============================================================================
 phase('Report')
 
-const finalReport = await agentRetry(() => agent(`Write a concise technical report for this Kernel Foundry (diagnosis-driven, multi-island) optimization run.
+const finalReport = await agentRetry(() => agent(`${__taskContractBlock()}Write a concise technical report for this Kernel Foundry (diagnosis-driven, multi-island) optimization run.
 
 # Operation: ${OP_DESC} (${opType})
 # Target GPU: ${TARGET_GPU}
@@ -1252,7 +1263,7 @@ ${[...hintLibrary].sort((a, b) => (b.avg_speedup || 0) - (a.avg_speedup || 0)).m
 
 # Best kernel:
 \`\`\`python
-${bestKernel ? bestKernel.code.substring(0, 3000) : '(none)'}
+${bestKernel ? bestKernel.code : '(none)'}
 \`\`\`
 
 Write:
@@ -1267,7 +1278,7 @@ Write:
 
 // embedded_inplace exit safety net: unconditionally restore the pristine operator file.
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${TASK_PATH}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${TASK_PATH}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 

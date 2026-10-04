@@ -139,6 +139,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -175,7 +186,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -592,9 +603,9 @@ const DEFAULT_SKILL_LIBRARY = {
 // =============================================================================
 // Helpers
 // =============================================================================
-function asJsonBlock(obj, limit) {
+function asJsonBlock(obj) {
   const s = JSON.stringify(obj, null, 2)
-  return limit && s.length > limit ? s.slice(0, limit) + '\n... (truncated)' : s
+  return s
 }
 
 function buildOptimizeMemoryBlock(mem, maxItems) {
@@ -611,7 +622,7 @@ function buildRepairMemoryBlock(mem) {
   if (!mem.length) return '(no prior repair attempts in this chain)'
   return mem.map((m, i) =>
     `${i + 1}. round ${m.round}: root_cause="${m.root_cause}" | strategy="${m.repair_strategy}" | ` +
-    `fixed=${m.fixed} | error: ${(m.error_excerpt || '').slice(0, 160)}`
+    `fixed=${m.fixed} | error: ${(m.error_excerpt || '')}`
   ).join('\n')
 }
 
@@ -622,7 +633,7 @@ phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agentRetry(() => agent(
-    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `${__taskContractBlock()}Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
@@ -643,7 +654,7 @@ if (USE_DRIVER) {
 // Load (optionally) an external long-term skill library to override the default.
 let skillLibrary = DEFAULT_SKILL_LIBRARY
 if (SKILL_LIBRARY_PATH) {
-  const loaded = await agentRetry(() => agent(`Load the KernelSkill long-term skill library (JSON) from: ${SKILL_LIBRARY_PATH}
+  const loaded = await agentRetry(() => agent(`${__taskContractBlock()}Load the KernelSkill long-term skill library (JSON) from: ${SKILL_LIBRARY_PATH}
 
 Read the file. If it exists and is valid JSON with "machine_check" and "llm_assist" keys, return it as loaded=true with the parsed object in "library". If it does not exist or is invalid, return loaded=false (the workflow will fall back to the embedded default library) and explain why in "note".
 
@@ -668,7 +679,7 @@ Return ONLY the JSON object.`, {
   }
 }
 
-const setup = await agentRetry(() => agent(`Read the PyTorch reference task at: ${REFERENCE_PATH || '(not provided)'}
+const setup = await agentRetry(() => agent(`${__taskContractBlock()}Read the PyTorch reference task at: ${REFERENCE_PATH || '(not provided)'}
 If problem_definition is provided, use it as the authoritative task:
 ${PROBLEM_DEFINITION || '(not provided)'}
 
@@ -711,7 +722,7 @@ log(`Reference: ${opType} — ${setup.forward_summary}`)
 let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
 if (USE_DRIVER) {
   const _pd = await agentRetry(() => agent(
-    `Read the PyTorch reference task (op_type="${opType}", inputs=${setup.input_shapes || 'see get_inputs()'}); ` +
+    `${__taskContractBlock()}Read the PyTorch reference task (op_type="${opType}", inputs=${setup.input_shapes || 'see get_inputs()'}); ` +
     `classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve ` +
     `--backend-manifest ${driverPath('manifest.json')} --task <op_class> --size <size> ` +
@@ -739,7 +750,7 @@ if (KERNEL_PATH && !args.integration_pattern) {
 
   const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
   const _integ = await agentRetry(() => agent(
-    `Read ${KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+    `${__taskContractBlock()}Read ${KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
     `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
     `--kernel "${KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
@@ -759,7 +770,7 @@ const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'sta
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 // A-O1 closure: native_profiler but ncu unavailable → perf_heuristic. KernelSkill's
@@ -817,7 +828,7 @@ const baseline = HOST_SOL ? {
   baseline_available: validHostResult(hostBaseline),
   baseline_latency_ms: validHostResult(hostBaseline) ? hostBaseline.reference_latency_ms : null,
   harness_notes: 'Reference latency measured by the Host on the complete workload set.',
-} : await agentRetry(() => agent(`You are a GPU benchmarking expert. Establish the Torch Eager baseline latency for this PyTorch reference, which is the denominator for speedup (speedup = baseline_latency / kernel_latency).
+} : await agentRetry(() => agent(`${__taskContractBlock()}You are a GPU benchmarking expert. Establish the Torch Eager baseline latency for this PyTorch reference, which is the denominator for speedup (speedup = baseline_latency / kernel_latency).
 
 # Reference task: ${REFERENCE_PATH}
 # Operation: ${OP_DESC} (${opType})
@@ -860,11 +871,11 @@ phase('Seed')
 
 const seedKernels = await parallel(
   Array.from({ length: SEED_CANDIDATES }, (_, i) => () =>
-    agentRetry(() => agent(`You are the KernelSkill Generator. Translate this PyTorch reference into an EQUIVALENT implementation backed by custom CUDA kernel(s). Your ONLY goal here is CORRECTNESS — it must compile and match the reference within tolerance (rtol=${RTOL}, atol=${ATOL}). Do not over-optimize; produce a clean, materialized baseline.
+    agentRetry(() => agent(`${__taskContractBlock()}You are the KernelSkill Generator. Translate this PyTorch reference into an EQUIVALENT implementation backed by custom CUDA kernel(s). Your ONLY goal here is CORRECTNESS — it must compile and match the reference within tolerance (rtol=${RTOL}, atol=${ATOL}). Do not over-optimize; produce a clean, materialized baseline.
 
 # PyTorch Reference:
 \`\`\`python
-${referenceCode.substring(0, 4000)}
+${referenceCode}
 \`\`\`
 
 # Operation: ${OP_DESC} (${opType})
@@ -906,7 +917,7 @@ log(`Generated ${validSeeds.length}/${SEED_CANDIDATES} seed candidates`)
 // Reviewer evaluates each seed; pick the best VALID one (fastest), else the first that compiles.
 const seedEvals = HOST_SOL ? await Promise.all(validSeeds.map(async (seed, i) => hostReview(await measureKernel(seed.code, `seed${i}`)))) : await parallel(
   validSeeds.map((seed, i) => () =>
-    agentRetry(() => agent(`You are the KernelSkill Reviewer (Compiler + Verifier + Profiler). Evaluate this SEED kernel against the PyTorch reference.
+    agentRetry(() => agent(`${__taskContractBlock()}You are the KernelSkill Reviewer (Compiler + Verifier + Profiler). Evaluate this SEED kernel against the PyTorch reference.
 
 # Reference task: ${REFERENCE_PATH}
 # Torch Eager baseline latency: ${baselineLatency}ms
@@ -914,7 +925,7 @@ const seedEvals = HOST_SOL ? await Promise.all(validSeeds.map(async (seed, i) =>
 
 # Seed kernel (candidate ${i + 1}):
 \`\`\`${fenceToken()}
-${seed.code.substring(0, 4000)}
+${seed.code}
 \`\`\`
 
 # Steps
@@ -1003,12 +1014,12 @@ compiled=${__hostMeasured.compiled} correct=${__hostMeasured.correct}
 speedup=${__hostMeasured.speedup} latency_ms=${__hostMeasured.latency_ms}
 workloads_passed=${__hostMeasured.n_pass}/${__hostMeasured.n_total}
 ${__hostMeasured.failure_code ? `failure_code=${__hostMeasured.failure_code}` : ''}
-${__hostMeasured.stderr ? `compiler/run output:\n${String(__hostMeasured.stderr).substring(0, 2000)}` : ''}
+${__hostMeasured.stderr ? `compiler/run output:\n${String(__hostMeasured.stderr)}` : ''}
 Do not re-derive these. If it did not compile, base the repair on the compiler
 output above. The profiler section is yours to reason about; the compile,
 correctness and latency numbers are settled.` : ''
 
-  const review = await agentRetry(() => agent(`You are the KernelSkill Reviewer for round ${round + 1}. Produce execution feedback for the CURRENT kernel using Compiler + Verifier + Profiler (ncu + nsys).
+  const review = await agentRetry(() => agent(`${__taskContractBlock()}You are the KernelSkill Reviewer for round ${round + 1}. Produce execution feedback for the CURRENT kernel using Compiler + Verifier + Profiler (ncu + nsys).
 
 # Reference task: ${REFERENCE_PATH}
 # Torch Eager baseline: ${baselineLatency}ms
@@ -1018,7 +1029,7 @@ ${__measuredBlock}
 
 # Current kernel:
 \`\`\`${fenceToken()}
-${currentKernelCode.substring(0, 4500)}
+${currentKernelCode}
 \`\`\`
 
 # Steps
@@ -1198,10 +1209,10 @@ Then append, using the values you just measured (status="done" if compiles AND c
     // =========================================================================
     phase('Repair')
 
-    const diagnosis = await agentRetry(() => agent(`You are the KernelSkill Diagnoser. The current kernel is INVALID. Infer the root cause and propose a repair plan. You are given the CHAINED repair memory for this fault chain — use it to AVOID proposing a fix that was already tried and failed (no cyclic repair).
+    const diagnosis = await agentRetry(() => agent(`${__taskContractBlock()}You are the KernelSkill Diagnoser. The current kernel is INVALID. Infer the root cause and propose a repair plan. You are given the CHAINED repair memory for this fault chain — use it to AVOID proposing a fix that was already tried and failed (no cyclic repair).
 
 # Compiler/Verifier error excerpt:
-${(review.error_excerpt || 'unknown failure').slice(0, 1500)}
+${(review.error_excerpt || 'unknown failure')}
 
 # Current (faulty) kernel:
 \`\`\`${fenceToken()}
@@ -1225,7 +1236,7 @@ Return: root_cause (concise), repair_strategy (a concrete, DIFFERENT plan than a
       },
     }), { retries: 5 })
 
-    const repaired = await agentRetry(() => agent(`You are the KernelSkill Repairer. Apply this repair plan to fix the kernel. Output a COMPLETE, compilable kernel that matches the PyTorch reference within tolerance (rtol=${RTOL}, atol=${ATOL}).
+    const repaired = await agentRetry(() => agent(`${__taskContractBlock()}You are the KernelSkill Repairer. Apply this repair plan to fix the kernel. Output a COMPLETE, compilable kernel that matches the PyTorch reference within tolerance (rtol=${RTOL}, atol=${ATOL}).
 
 # Root cause: ${diagnosis.root_cause}
 # Repair strategy: ${diagnosis.repair_strategy}
@@ -1236,7 +1247,7 @@ ${currentKernelCode}
 \`\`\`
 
 # Error excerpt:
-${(review.error_excerpt || '').slice(0, 1000)}
+${(review.error_excerpt || '')}
 
 Keep the public signature identical to the reference. Return the complete fixed kernel source.${SOL_SOURCE_CONTRACT}
 
@@ -1279,7 +1290,7 @@ Then append:
     phase('Optimize')
 
     // 1) Feature Extractor (hybrid: rule-based + LLM structural inference)
-    const features = await agentRetry(() => agent(`You are the KernelSkill Feature Extractor. Derive the deterministic code-structure features the gate needs. Use a hybrid approach: rule-based pattern matching over the source for stable lexical/syntactic signatures, and structural inference for features that syntax alone cannot capture.
+    const features = await agentRetry(() => agent(`${__taskContractBlock()}You are the KernelSkill Feature Extractor. Derive the deterministic code-structure features the gate needs. Use a hybrid approach: rule-based pattern matching over the source for stable lexical/syntactic signatures, and structural inference for features that syntax alone cannot capture.
 
 # Kernel source:
 \`\`\`${fenceToken()}
@@ -1334,7 +1345,7 @@ Return ONLY the features object (booleans + the two ints).`, {
       matched_case_id: 'MISSING_PROFILE', allowed_methods: [],
       key_metrics: 'No Host profiler receipt. Metrics are unknown, not zero. Use source hypotheses only.',
       tier: 'unknown', bottleneck_id: 'unknown',
-    } : await agentRetry(() => agent(`You are the KernelSkill deterministic GATE (machine_check layer). You DETERMINISTICALLY evaluate the decision policy. You do NOT use judgment about which optimization is "best" — you only apply the rules to compute normalized fields, derived fields, the headroom tier, the matched bottleneck case, and the resulting allowed_methods set.
+    } : await agentRetry(() => agent(`${__taskContractBlock()}You are the KernelSkill deterministic GATE (machine_check layer). You DETERMINISTICALLY evaluate the decision policy. You do NOT use judgment about which optimization is "best" — you only apply the rules to compute normalized fields, derived fields, the headroom tier, the matched bottleneck case, and the resulting allowed_methods set.
 
 # Decision policy (long-term memory, machine_check layer):
 ${asJsonBlock({
@@ -1346,10 +1357,10 @@ ${asJsonBlock({
 }, 6000)}
 
 # Normalized NCU metrics (from Profiler):
-${asJsonBlock(review.ncu_metrics || {}, 2000)}
+${asJsonBlock(review.ncu_metrics || {})}
 
 # Code features (from Feature Extractor):
-${asJsonBlock(features, 2000)}
+${asJsonBlock(features)}
 
 # Procedure (apply in order, deterministically):
 1. Compute derived_fields from the metrics + features.
@@ -1385,7 +1396,7 @@ Return the gate decision. allowed_methods MUST be a subset of the matched case's
 
     // 4) Planner — pick a method from allowed_methods (HARD CONSTRAINT) and write a stepwise plan,
     //    conditioned on the short-term optimization memory.
-    const plan = await agentRetry(() => agent(`You are the KernelSkill Planner. The deterministic gate has ALREADY decided which optimization methods are FEASIBLE. You MUST select your method from allowed_methods (HARD CONSTRAINT). Then produce a concrete, stepwise optimization plan. Use the short-term optimization memory to avoid repeating an unproductive method and to build coupled multi-step improvements.
+    const plan = await agentRetry(() => agent(`${__taskContractBlock()}You are the KernelSkill Planner. The deterministic gate has ALREADY decided which optimization methods are FEASIBLE. You MUST select your method from allowed_methods (HARD CONSTRAINT). Then produce a concrete, stepwise optimization plan. Use the short-term optimization memory to avoid repeating an unproductive method and to build coupled multi-step improvements.
 
 # Gate result:
 - tier: ${gate.tier || 'Tier-M'}
@@ -1395,13 +1406,13 @@ Return the gate decision. allowed_methods MUST be a subset of the matched case's
 - key metrics: ${gate.key_metrics || 'n/a'}
 
 # Method knowledge (rationale + implementation cues) for the allowed methods:
-${asJsonBlock(methodKnowledge, 4000)}
+${asJsonBlock(methodKnowledge)}
 
 # Short-term OPTIMIZATION memory (methods tried this task + measured outcomes):
 ${buildOptimizeMemoryBlock(optimizeMemory, 8)}
 
 # Current performance: ${roundSpeedup != null ? roundSpeedup.toFixed(2) + 'x vs Torch Eager' : 'unknown'}
-# Profiler summary: ${(review.profile_summary || '').slice(0, 500)}
+# Profiler summary: ${(review.profile_summary || '')}
 
 # Current kernel:
 \`\`\`${fenceToken()}
@@ -1428,7 +1439,7 @@ Return: method_name, rationale (citing the metric evidence), and plan (numbered,
     }), { retries: 5 })
 
     // 5) Optimizer — apply the plan.
-    const optimized = await agentRetry(() => agent(`You are the KernelSkill Optimizer. Apply the optimization plan to the current kernel and output a COMPLETE, compilable kernel that is still correct vs the PyTorch reference within tolerance (rtol=${RTOL}, atol=${ATOL}).
+    const optimized = await agentRetry(() => agent(`${__taskContractBlock()}You are the KernelSkill Optimizer. Apply the optimization plan to the current kernel and output a COMPLETE, compilable kernel that is still correct vs the PyTorch reference within tolerance (rtol=${RTOL}, atol=${ATOL}).
 
 # Selected method: ${plan.method_name}
 # Rationale: ${plan.rationale}
@@ -1513,14 +1524,14 @@ Then append (the speedup of this edit is not measured by this agent, so leave it
 // mutated during eval. Even though each round restores the pristine backup, force a
 // final restore before returning so the project tree is left byte-identical. ---
 if (IS_EMBEDDED && ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Exit restore: run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` to leave the project kernel byte-identical, then confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Exit restore: run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` to leave the project kernel byte-identical, then confirm.`,
     { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 
 // =============================================================================
 // Final report
 // =============================================================================
-const finalReport = await agentRetry(() => agent(`Write a concise technical report for this KernelSkill optimization run.
+const finalReport = await agentRetry(() => agent(`${__taskContractBlock()}Write a concise technical report for this KernelSkill optimization run.
 
 # KernelSkill Results
 - Operation: ${OP_DESC} (${opType})
@@ -1538,7 +1549,7 @@ ${buildOptimizeMemoryBlock(optimizeMemory, 50)}
 
 # Best kernel:
 \`\`\`${fenceToken()}
-${(bestKernelCode || currentKernelCode || '').substring(0, 3000)}
+${(bestKernelCode || currentKernelCode || '')}
 \`\`\`
 
 Write:

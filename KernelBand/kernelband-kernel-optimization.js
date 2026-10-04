@@ -146,6 +146,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -170,9 +181,9 @@ const ATTEMPT_PLAN = (args.attempt_plan && typeof args.attempt_plan === 'object'
 // KerSor emits the cumulative ids as `failed_strategy_ids`; the per-round
 // derivation stays as the fallback for a dispatch that predates that channel.
 const FAILED_STRATEGY_IDS = Array.isArray(args.failed_strategy_ids)
-  ? (args.failed_strategy_ids || []).filter(id => typeof id === 'string' && id)
+  ? args.failed_strategy_ids.filter(id => typeof id === 'string' && id)
   : ((ATTEMPT_EVIDENCE && Array.isArray(ATTEMPT_EVIDENCE.transfer_items))
-    ? (ATTEMPT_EVIDENCE.transfer_items || []).filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
+    ? ATTEMPT_EVIDENCE.transfer_items.filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
     : [])
 function __attemptBlock() {
   if (!ATTEMPT_EVIDENCE && !ATTEMPT_PLAN) return ''
@@ -182,7 +193,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -455,7 +466,7 @@ async function hostCudaProfile(buildOut, suffix, phaseName) {
   const brokerPath = process.env.KERSOR_GPUQ || ''
   if (!brokerPath) return { ok: false, error: 'KERSOR_GPUQ is required for Host-owned NCU profiling' }
   const plan = await agentRetry(() => agent(
-    `Read the caller benchmark and this candidate. Benchmark: ${BENCHMARK_CMD || '(not provided)'}. ` +
+    `${__taskContractBlock()}Read the caller benchmark and this candidate. Benchmark: ${BENCHMARK_CMD || '(not provided)'}. ` +
     `Return JSON only: {launcher_argv:[executable,...args],metrics:null|string,kernel_name:null|string,launch_count:null|integer}. ` +
     `The argv must run the same workload and include {artifact} as a literal candidate placeholder. ` +
     `Choose device-supported counters for the bottleneck question, or leave metrics null for defaults. ` +
@@ -507,7 +518,7 @@ let iterationLog = []
 async function resolveInitialKernelFromProblem() {
   if (INPUT_MODE !== 'generate_then_optimize') return ''
 
-  const generated = await agentRetry(() => agent(`No kernel_path was provided. Generate and verify an initial kernel before starting KernelBand.
+  const generated = await agentRetry(() => agent(`${__taskContractBlock()}No kernel_path was provided. Generate and verify an initial kernel before starting KernelBand.
 
 # Problem Input
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
@@ -591,7 +602,7 @@ phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agentRetry(() => agent(
-    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `${__taskContractBlock()}Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods, saturation_threshold}.`,
@@ -616,7 +627,7 @@ if (INPUT_MODE === 'generate_then_optimize') {
 }
 
 const taskSeedSourcePath = `${EXP_DIR}/kernelband_seed${/\.[^/.]+$/.exec(KERNEL_PATH)?.[0] || '.cu'}`
-const setupResult = await agentRetry(() => agent(`You are setting up a KernelBand optimization session.
+const setupResult = await agentRetry(() => agent(`${__taskContractBlock()}You are setting up a KernelBand optimization session.
 
 # Task
 ${TASK_TEST ? TASK_TEST_INSTRUCTIONS + '\nBefore testing or editing, preserve the complete initial source at ' + taskSeedSourcePath + '. Keep that snapshot unchanged; later tests may install candidates at the original source path.\n' : ''}1. Read the kernel file: ${KERNEL_PATH}
@@ -692,7 +703,7 @@ Then append:
 let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
 if (USE_DRIVER) {
   const _pd = await agentRetry(() => agent(
-    `Read ${KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
+    `${__taskContractBlock()}Read ${KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
     `run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${driverPath('manifest.json')} --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.\n` +
     `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
     { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
@@ -715,7 +726,7 @@ if (!args.integration_pattern) {
   const _kernelFile = KERNEL_PATH || `${EXP_DIR}/baseline.kernel`
   const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
   const _integ = await agentRetry(() => agent(
-    `Read ${_kernelFile}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+    `${__taskContractBlock()}Read ${_kernelFile}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
     `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
     `--kernel "${_kernelFile}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
@@ -736,7 +747,7 @@ const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGR
 // The embedded operator file we swap in place is the project-referenced KERNEL_PATH.
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 // A-O1 closure: native_profiler chosen but no project-native profiler is reachable
@@ -752,11 +763,11 @@ if (USE_DRIVER_STANDALONE) {
   const buildOut = `${EXP_DIR}/baseline.artifact`
   const profOut = `${EXP_DIR}/baseline.prof.native`
   await agentRetry(() => agent(
-    `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+    `${__taskContractBlock()}${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
     `Return its stdout JSON verbatim.`,
     { model: MODEL.mechanical, label: 'driver-build-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
   const runOut = await agentRetry(() => agent(
-    `${driverSh('run.sh', `--artifact ${buildOut} --problem ${PROBLEM_PATH} --out ${buildOut}.run.json`)}\n` +
+    `${__taskContractBlock()}${driverSh('run.sh', `--artifact ${buildOut} --problem ${PROBLEM_PATH} --out ${buildOut}.run.json`)}\n` +
     `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
     { model: MODEL.profile, label: 'driver-run-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   let evidenceOut
@@ -789,11 +800,11 @@ if (USE_DRIVER_STANDALONE) {
       { model: MODEL.profile, label: 'driver-perf-evidence-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   }
   await agentRetry(() => agent(
-    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+    `${__taskContractBlock()}Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
     `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
     { model: MODEL.mechanical, label: 'driver-diagnose-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
   await agentRetry(() => agent(
-    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --source ${kPath} --metrics ${EXP_DIR}/baseline.result.json\`.\n` +
+    `${__taskContractBlock()}Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --source ${kPath} --metrics ${EXP_DIR}/baseline.result.json\`.\n` +
     `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
     { model: MODEL.mechanical, label: 'driver-anti-cheat-setup', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
@@ -854,7 +865,7 @@ for (let t = 1; t <= ITERATIONS; t++) {
   if (shouldRecluster) {
     phase('Cluster')
 
-    const clusterResult = await agentRetry(() => agent(`You are the KernelBand Dynamic Clustering module (Section 3.3).
+    const clusterResult = await agentRetry(() => agent(`${__taskContractBlock()}You are the KernelBand Dynamic Clustering module (Section 3.3).
 
 # Task: Re-cluster the candidate kernel pool using K-Means on behavioral features.
 
@@ -929,7 +940,7 @@ Then append (this is bandit iteration ${t}):
     // Profile cluster centroids for hardware signature updates
     phase('Profile')
 
-    const profileResult = await agentRetry(() => agent(`You are the KernelBand Representative Profiling module (Section 3.3).
+    const profileResult = await agentRetry(() => agent(`${__taskContractBlock()}You are the KernelBand Representative Profiling module (Section 3.3).
 
 # Task: Profile the representative kernel from each active cluster to update hardware signatures.
 
@@ -1048,7 +1059,7 @@ Then append (this is bandit iteration ${t}):
   // ===========================================================================
   phase('Generate')
 
-  const generateResult = await agentRetry(() => agent(`You are the KernelBand Code Generator. Apply a specific optimization strategy to the given kernel.
+  const generateResult = await agentRetry(() => agent(`${__taskContractBlock()}You are the KernelBand Code Generator. Apply a specific optimization strategy to the given kernel.
 
 # Selected Action: (Cluster ${selectedCluster}, Strategy: ${selectedStrategy})
 # Target Hardware: ${GPU_TARGET}
@@ -1056,7 +1067,7 @@ Then append (this is bandit iteration ${t}):
 
 # Source Kernel (ID ${selectedKernel.id}, current speedup: ${__fmt(selectedKernel.speedup, 2)}x):
 \`\`\`${fenceToken()}
-${FILE_CANDIDATES ? 'Read the complete source from ' + (selectedKernel.source_path || KERNEL_PATH) : (selectedKernel.code || '').substring(0, 6000)}
+${FILE_CANDIDATES ? 'Read the complete source from ' + (selectedKernel.source_path || KERNEL_PATH) : (selectedKernel.code || '')}
 \`\`\`
 
 # Strategy: ${selectedStrategy}
@@ -1178,11 +1189,11 @@ Steps 1-3 already ran. Report these values rather than re-deriving them; spend
 your turn on step 4, the behavioural features, and on whether the change did
 what the strategy intended.` : ''
 
-  const evalResult = await agentRetry(() => agent(`You are the KernelBand Evaluation module. Verify correctness and measure performance.
+  const evalResult = await agentRetry(() => agent(`${__taskContractBlock()}You are the KernelBand Evaluation module. Verify correctness and measure performance.
 
 # Generated Kernel:
 \`\`\`${fenceToken()}
-${FILE_CANDIDATES ? 'Read the complete candidate from ' + generatedSourcePath : generatedCode.substring(0, 6000)}
+${FILE_CANDIDATES ? 'Read the complete candidate from ' + generatedSourcePath : generatedCode}
 \`\`\`
 
 ${TASK_TEST ? TASK_TEST_INSTRUCTIONS + '\nCandidate: ' + generatedSourcePath + '\nResult path: ' + EXP_DIR + '/kernelband_iter_' + t + '.test.json\n\n' : ''}# Evaluation Steps (Two-stage verification from Section 4.1):
@@ -1308,8 +1319,8 @@ Then append, using the values you just measured (status="done" if it compiled AN
     const kPath = `${EXP_DIR}/iter_${t}.kernel`
     const variant = `kband_${suffix}`.replace(/[^A-Za-z0-9_]/g, '_')
     // Materialize the candidate source so the embedded eval can apply/register it.
-    await agentRetry(() => agent(`Write the candidate kernel source to ${kPath} (mkdir -p its dir first).\n\n` +
-      `\`\`\`${fenceToken()}\n${(generatedCode || '').substring(0, 6000)}\n\`\`\`\n` +
+    await agentRetry(() => agent(`${__taskContractBlock()}Write the candidate kernel source to ${kPath} (mkdir -p its dir first).\n\n` +
+      `\`\`\`${fenceToken()}\n${(generatedCode || '')}\n\`\`\`\n` +
       `Return {ok:true, path:"${kPath}"}.`,
       { model: MODEL.mechanical, label: `embedded-materialize-${suffix}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
     let embLatency = 0, embMetrics = {}, embBclass = 'unknown'
@@ -1449,7 +1460,7 @@ for (const s of STRATEGIES) {
   }
 }
 
-const finalReport = await agentRetry(() => agent(`Write a KernelBand optimization report.
+const finalReport = await agentRetry(() => agent(`${__taskContractBlock()}Write a KernelBand optimization report.
 
 # KernelBand Results
 - Target: ${GPU_TARGET}
@@ -1497,7 +1508,7 @@ Then append, using the final results above (speedup is the best speedup ${__fmt(
 
 // embedded_inplace exit safety net: unconditionally restore the pristine operator file.
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 

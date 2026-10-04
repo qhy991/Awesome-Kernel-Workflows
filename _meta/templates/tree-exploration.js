@@ -224,7 +224,7 @@ for (let cycle = 0; cycle < {{MAX_CYCLES_VAR}}; cycle++) {
   const selection = await agentRetry(() => agent(`{{SELECT_PROMPT}}
 
 # Current Decision Tree:
-${JSON.stringify(decisionTree, null, 2).substring(0, 6000)}
+${JSON.stringify(decisionTree, null, 2)}
 
 # Best metric so far: ${bestMetric || 'none'}
 # Solutions found: ${solutionDb.length}
@@ -266,11 +266,11 @@ ${actionDescription}
 
 # Base code (from parent node):
 \`\`\`
-${parentCode.substring(0, 5000)}
+${parentCode}
 \`\`\`
 
 # Decision tree context:
-${JSON.stringify(selection.context_for_generation || {}).substring(0, 2000)}`, {
+${JSON.stringify(selection.context_for_generation || {})}`, {
           label: `gen-${cycle}-${attempt}`,
           phase: 'Generate',
           schema: {{GENERATE_SCHEMA}},
@@ -282,11 +282,11 @@ ${actionDescription}
 
 # Current code (attempt ${attempt}):
 \`\`\`
-${(cycleBestCode || parentCode).substring(0, 5000)}
+${(cycleBestCode || parentCode)}
 \`\`\`
 
 # Previous evaluation:
-${JSON.stringify(cycleBestEval || {}).substring(0, 2000)}
+${JSON.stringify(cycleBestEval || {})}
 
 # Improvement target: beat metric ${bestMetric || 'baseline'}`, {
           label: `improve-${cycle}-${attempt}`,
@@ -305,7 +305,7 @@ ${JSON.stringify(cycleBestEval || {}).substring(0, 2000)}
 
 # Code to evaluate:
 \`\`\`
-${genResult.code.substring(0, 5000)}
+${genResult.code}
 \`\`\`
 
 # Action: "${selection.action_title || ''}"
@@ -376,7 +376,7 @@ ${genResult.code.substring(0, 5000)}
 # Code summary: ${cycleBestEval.performance_analysis || ''}
 
 # Current tree:
-${JSON.stringify(decisionTree, null, 2).substring(0, 5000)}
+${JSON.stringify(decisionTree, null, 2)}
 
 Tasks:
 1. Attach the solution to node ${activeNodeId}
@@ -398,10 +398,10 @@ Tasks:
 # Cycle outcome: FAILED (no valid solution produced)
 # Node: ${activeNodeId}
 # Action attempted: "${selection.action_title || ''}"
-# Best attempt eval: ${JSON.stringify(cycleBestEval || {}).substring(0, 1000)}
+# Best attempt eval: ${JSON.stringify(cycleBestEval || {})}
 
 # Current tree:
-${JSON.stringify(decisionTree, null, 2).substring(0, 5000)}
+${JSON.stringify(decisionTree, null, 2)}
 
 Tasks:
 1. Downgrade node ${activeNodeId} — reduce its score and increase difficulty rating
@@ -438,7 +438,7 @@ const finalReport = await agentRetry(() => agent(`{{REPORT_PROMPT}}
 - Best solution node: ${bestSolution?.node_id || 'none'}
 
 # Final Decision Tree:
-${JSON.stringify(decisionTree, null, 2).substring(0, 4000)}
+${JSON.stringify(decisionTree, null, 2)}
 
 # Solution Lineage (top 5):
 ${JSON.stringify(solutionDb.filter(s => s.eval?.is_valid).sort((a, b) => {{HIGHER_IS_BETTER}} ? (b.eval.metric_value - a.eval.metric_value) : (a.eval.metric_value - b.eval.metric_value)).slice(0, 5).map(s => ({id: s.id, node: s.node_id, metric: s.eval.metric_value})))}`, {

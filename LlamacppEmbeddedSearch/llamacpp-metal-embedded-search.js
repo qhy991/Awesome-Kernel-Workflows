@@ -73,6 +73,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -109,7 +120,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -657,7 +668,7 @@ for (let round = 1; round <= MAX_ROUNDS; ++round) {
     const reg = await registerVariant(v.variant_name, v.metal_path)
     if (reg.state !== 'grounded' || !reg.value.ok) {
       history.push({ round, variant_name: v.variant_name, title: v.title, verdict: 'register_failed', speedup: null,
-        detail: JSON.stringify(reg).slice(0, 400) })
+        detail: JSON.stringify(reg) })
       continue
     }
 
@@ -665,7 +676,7 @@ for (let round = 1; round <= MAX_ROUNDS; ++round) {
     if (b.state !== 'grounded' || !b.value.ok) {
       await unregisterVariant(v.variant_name)
       history.push({ round, variant_name: v.variant_name, title: v.title, verdict: 'build_failed', speedup: null,
-        detail: b.state === 'grounded' ? (b.value.stderr_tail || '').slice(-400) : JSON.stringify(b) })
+        detail: b.state === 'grounded' ? (b.value.stderr_tail || '') : JSON.stringify(b) })
       continue
     }
 
@@ -713,7 +724,7 @@ phase('Report')
 let bestCode = null
 if (bestVariantName !== '(baseline)') {
   const r = await agentRetry(() => agent(
-    `Read the file at ${bestMetalPath} and return its full contents in best_kernel_code.
+    `${__taskContractBlock()}Read the file at ${bestMetalPath} and return its full contents in best_kernel_code.
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
