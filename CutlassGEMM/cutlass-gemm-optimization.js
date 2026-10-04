@@ -135,6 +135,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -171,7 +182,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -365,7 +376,7 @@ let mfuReport = []
 // =============================================================================
 phase('Analyze')
 
-const analyzeResult = await agentRetry(() => agent(`You are a CUTLASS GEMM optimization expert. Analyze the SOL-ExecBench problem.
+const analyzeResult = await agentRetry(() => agent(`${__taskContractBlock()}You are a CUTLASS GEMM optimization expert. Analyze the SOL-ExecBench problem.
 
 # Task:
 1. Read: ${PROBLEM_DIR}/definition.json
@@ -415,7 +426,7 @@ log(`Problem: ${analyzeResult.problem_name} | ${analyzeResult.operation} | N=${a
 // =============================================================================
 phase('Baseline')
 
-const baselineResult = await agentRetry(() => agent(`You are a CUTLASS GEMM kernel engineer. Generate an optimized solution using PROVEN configurations from prior experiments.
+const baselineResult = await agentRetry(() => agent(`${__taskContractBlock()}You are a CUTLASS GEMM kernel engineer. Generate an optimized solution using PROVEN configurations from prior experiments.
 
 # Problem:
 - ${analyzeResult.operation}: A=${analyzeResult.shape_a} ${analyzeResult.dtype_a}, B=${analyzeResult.shape_b}, C=${analyzeResult.shape_c}
@@ -499,7 +510,7 @@ Then append, using the values you just measured (status="done" if it compiled, e
 if (!baselineResult.compilation_success) {
   log(`COMPILATION FAILED: ${baselineResult.compilation_error}`)
   // Try to fix
-  const fixResult = await agentRetry(() => agent(`The CUTLASS solution failed to compile. Fix it.
+  const fixResult = await agentRetry(() => agent(`${__taskContractBlock()}The CUTLASS solution failed to compile. Fix it.
 Error: ${baselineResult.compilation_error}
 
 Read the solution at ${OUTPUT_DIR}/solution.json, fix the compilation error, write the fixed version,
@@ -650,7 +661,7 @@ phase('NCU Profile')
 // The agent must NOT assign confidence. Defaults to native_profiler/measured so
 // the happy path (ncu as written) is unchanged if the decision is ignored. ---
 let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
-const _pd = await agentRetry(() => agent(`Classify the GEMM problem SIZE for the profiling strategist (the task is fixed to 'gemm'; you classify size only — one of tiny|small|large — based on the M range ${analyzeResult.variable_range.min}-${analyzeResult.variable_range.max} and N=${analyzeResult.fixed_N}, K=${analyzeResult.fixed_K}).
+const _pd = await agentRetry(() => agent(`${__taskContractBlock()}Classify the GEMM problem SIZE for the profiling strategist (the task is fixed to 'gemm'; you classify size only — one of tiny|small|large — based on the M range ${analyzeResult.variable_range.min}-${analyzeResult.variable_range.max} and N=${analyzeResult.fixed_N}, K=${analyzeResult.fixed_K}).
 Then run exactly: \`${SUBSTRATE_PY} ${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${STRATEGIST_MANIFEST} --task gemm --size <tiny|small|large> --cache ${OUTPUT_DIR}/prof_cache.json --trajectory ${OUTPUT_DIR}/genome.jsonl\`
 Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}. Do NOT assign confidence yourself — the substrate stamps it.`, {
   model: MODEL.mechanical,
@@ -680,7 +691,7 @@ let INTEGRATION_DECISION = {
 if (!args.integration_pattern) {
   const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
   const _integ = await agentRetry(() => agent(
-    `Read ${EMBEDDED_OP_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+    `${__taskContractBlock()}Read ${EMBEDDED_OP_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
     `(use no when the file cannot compile as a single TU — e.g. an inference-engine embedded CUTLASS-GEMM operator with project-only deps). Then ` +
     `Run exactly: \`${SUBSTRATE_PY} ${SUBSTRATE}/integration/integration_strategist.py resolve ` +
     `--kernel "${EMBEDDED_OP_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
@@ -700,7 +711,7 @@ const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGR
 // The embedded operator file we swap in place is the project-referenced EMBEDDED_OP_PATH.
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${OUTPUT_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${EMBEDDED_OP_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Byte-exact backup: run \`cp -a "${EMBEDDED_OP_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'NCU Profile', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 // native -> perf downgrade: this BESPOKE family has no backend driver / project-native
@@ -713,7 +724,7 @@ if (PROFILING_DECISION.method === 'native_profiler' && IS_EMBEDDED && !NCU_COMMA
     profiler_name: 'project-native-perf', rationale: 'native_profiler unreachable on embedded path -> perf_heuristic' }
 }
 
-const ncuResult = await agentRetry(() => agent(`Run profiling on the CUTLASS kernel for representative M values using only the user-provided profiling contract.
+const ncuResult = await agentRetry(() => agent(`${__taskContractBlock()}Run profiling on the CUTLASS kernel for representative M values using only the user-provided profiling contract.
 
 # Profiling Contract
 - ncu_command/profile_command: ${NCU_COMMAND || '(not provided)'}
@@ -830,7 +841,7 @@ for (let iter = 0; iter < ITERATIONS; iter++) {
 
   phase('Tune')
 
-  const tuneResult = await agentRetry(() => agent(`You are a CUTLASS GEMM tuning expert. Improve the solution based on NCU data and per-workload feedback.
+  const tuneResult = await agentRetry(() => agent(`${__taskContractBlock()}You are a CUTLASS GEMM tuning expert. Improve the solution based on NCU data and per-workload feedback.
 
 # Current solution: ${OUTPUT_DIR}/solution.json
 # Read it first.
@@ -1003,7 +1014,7 @@ if (ENABLE_HYBRID && ceilingDetected && bestPerWorkload.length > 0) {
   if (smallMBelow1x.length > 0) {
     log(`Hybrid: ${smallMBelow1x.length} workloads below 1.0x in ceiling zone (M<${ceilingThreshold}) — adding cuBLAS fallback`)
 
-    const hybridResult = await agentRetry(() => agent(`Add cuBLAS (torch::matmul) fallback for small M values where CUTLASS overhead dominates.
+    const hybridResult = await agentRetry(() => agent(`${__taskContractBlock()}Add cuBLAS (torch::matmul) fallback for small M values where CUTLASS overhead dominates.
 
 # Current best solution: ${OUTPUT_DIR}/solution.json (or latest iter file)
 # Read it.
@@ -1095,7 +1106,7 @@ Then append, using the values you just measured (status="done" if it compiled an
 // =============================================================================
 phase('Validate')
 
-await agentRetry(() => agent(`Save the final best solution.
+await agentRetry(() => agent(`${__taskContractBlock()}Save the final best solution.
 1. Write to: ${OUTPUT_DIR}/solution_best.json
 2. Also to: ${OUTPUT_DIR}/solution.json (canonical)
 Content:
@@ -1125,7 +1136,7 @@ log(`Best: ${bestAvgSpeedup.toFixed(4)}x`)
 // host project is never left mutated by an embedded eval. No-op when not embedded
 // (ORIGINAL_BACKUP is '') — legacy path byte-identical. ---
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Exit restore (embedded_inplace safety net): ALWAYS restore pristine by running ` +
+  await agentRetry(() => agent(`${__taskContractBlock()}Exit restore (embedded_inplace safety net): ALWAYS restore pristine by running ` +
     `\`cp -a "${ORIGINAL_BACKUP}" "${EMBEDDED_OP_PATH}"\` and confirm the project operator file matches the backup.`,
     { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Validate', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }

@@ -206,6 +206,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -242,7 +253,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -554,7 +565,7 @@ let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured' }
 {
   const _profilerManifest = args.backend_manifest || `${SUBSTRATE}/backends/cuda/manifest.json`
   const _pd = await agentRetry(() => agent(
-    `Classify this GPU kernel's op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large) from its spec/path: ` +
+    `${__taskContractBlock()}Classify this GPU kernel's op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large) from its spec/path: ` +
     `kernel_spec="${KERNEL_SPEC}", kernel_path="${KERNEL_PATH}", computation hint from hardware target ${HARDWARE_TARGET}. Then ` +
     `Run exactly: \`${SUBSTRATE}/profiling/profiling_strategist.py resolve ` +
     `--backend-manifest ${_profilerManifest} --task <op_class> --size <size> ` +
@@ -576,7 +587,7 @@ if (!args.integration_pattern) {
   const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true, sol_execbench_cli: !!SOL_CLI })
 
   const _integ = await agentRetry(() => agent(
-    `Read ${KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+    `${__taskContractBlock()}Read ${KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
     `(use no when the file cannot compile as a single TU — e.g. a llama.cpp .cuh with project-only deps). Then ` +
     `Run exactly: \`${SUBSTRATE}/integration/integration_strategist.py resolve ` +
     `--kernel "${KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
@@ -604,7 +615,7 @@ if (IS_SOL) {
 }
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 // If the strategist routed to an embedded path, validate the required wiring now
@@ -631,7 +642,7 @@ if (PROFILING_DECISION.method === 'native_profiler' && !BENCH_CMD) {
 }
 
 if (INPUT_MODE === 'generate_then_optimize') {
-  const generated = await agentRetry(() => agent(`No kernel_path was provided. Generate and verify an initial kernel before starting ARGUS ICRL optimization.
+  const generated = await agentRetry(() => agent(`${__taskContractBlock()}No kernel_path was provided. Generate and verify an initial kernel before starting ARGUS ICRL optimization.
 
 # Problem Input
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
@@ -668,7 +679,7 @@ Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run
   KERNEL_PATH = generatedKernelPath
 }
 
-const setupResult = await agentRetry(() => agent(`You are a GPU kernel optimization expert. Read and analyze the initial kernel implementation.
+const setupResult = await agentRetry(() => agent(`${__taskContractBlock()}You are a GPU kernel optimization expert. Read and analyze the initial kernel implementation.
 
 # Kernel file: ${KERNEL_PATH}
 # Kernel specification: ${KERNEL_SPEC}
@@ -722,7 +733,7 @@ bestKernelCode = setupResult.kernel_code
 const computationType = setupResult.computation_type
 
 // Run baseline benchmark if available
-const baselineResult = await withTurnTimeout(agentRetry(() => agent(`You are a GPU kernel validator. Run the baseline kernel to establish performance.
+const baselineResult = await withTurnTimeout(agentRetry(() => agent(`${__taskContractBlock()}You are a GPU kernel validator. Run the baseline kernel to establish performance.
 
 # Kernel: ${KERNEL_PATH}
 # Test command: ${TEST_CMD || '(not provided; do not infer from project structure)'}
@@ -775,12 +786,12 @@ for (let outerIter = 0; outerIter < ITERATIONS; outerIter++) {
   const recentHistory = optimizationHistory.slice(-10)
   const recentViolations = invariantViolationLog.slice(-5)
 
-  const plannerResult = await agentRetry(() => agent(`You are the ARGUS Learnable Planner (ICRL, Section 6).
+  const plannerResult = await agentRetry(() => agent(`${__taskContractBlock()}You are the ARGUS Learnable Planner (ICRL, Section 6).
 Your job is to propose optimization candidates with associated data-flow invariants.
 
 # Current Kernel (${computationType}):
 \`\`\`
-${bestKernelCode.substring(0, 5000)}
+${bestKernelCode}
 \`\`\`
 
 # Hardware: ${HARDWARE_TARGET}
@@ -865,7 +876,7 @@ Then append (this is ICRL iteration ${outerIter}):
   // ===========================================================================
   phase('Select')
 
-  const selectResult = await agentRetry(() => agent(`You are the ARGUS Optimization Selector (Section 6).
+  const selectResult = await agentRetry(() => agent(`${__taskContractBlock()}You are the ARGUS Optimization Selector (Section 6).
 The planner produced a ranked list of proposals. Your job is to select and sequence
 a concrete optimization plan that resolves dependencies between coupled optimizations.
 
@@ -929,12 +940,12 @@ Then append (this is ICRL iteration ${outerIter}):
   for (let stepIdx = 0; stepIdx < Math.min(selectedPlan.length, INNER_STEPS); stepIdx++) {
     const step = selectedPlan[stepIdx]
 
-    const lowerResult = await agentRetry(() => agent(`You are the ARGUS Lowering Agent (Section 6).
+    const lowerResult = await agentRetry(() => agent(`${__taskContractBlock()}You are the ARGUS Lowering Agent (Section 6).
 Implement the selected optimization transformation directly in the kernel code.
 
 # Current Kernel Code:
 \`\`\`
-${currentCode.substring(0, 6000)}
+${currentCode}
 \`\`\`
 
 # Optimization to Apply: "${step.optimization}"
@@ -1019,7 +1030,7 @@ Then append (ICRL iteration ${outerIter}, lowering step ${stepIdx}):
   if (IS_EMBEDDED) {
     variantName = `argus_i${outerIter}`.replace(/[^A-Za-z0-9_]/g, '_')
     candidatePath = `${EXP_DIR}/candidates/${variantName}.cuh`
-    await agentRetry(() => agent(`Write the embedded candidate file to disk verbatim (no edits, no extra files).
+    await agentRetry(() => agent(`${__taskContractBlock()}Write the embedded candidate file to disk verbatim (no edits, no extra files).
 
 # Target path: ${candidatePath}
 # Create parent dir first: mkdir -p ${EXP_DIR}/candidates
@@ -1101,12 +1112,12 @@ The parse step prints one line "SPEEDUP=<aggregate> REDUCTION=<contract reductio
     }
   }
 
-  const validateResult = await withTurnTimeout(agentRetry(() => agent(`You are the ARGUS Validator Agent (Section 6).
+  const validateResult = await withTurnTimeout(agentRetry(() => agent(`${__taskContractBlock()}You are the ARGUS Validator Agent (Section 6).
 Validate the transformed kernel through invariant checking, unit tests, and profiling.
 
 # Transformed Kernel:
 \`\`\`
-${currentCode.substring(0, 6000)}
+${currentCode}
 \`\`\`
 
 # Invariants to Check:
@@ -1297,7 +1308,7 @@ Then append, using the values you just measured (status="done" if invariants sat
   // ===========================================================================
   phase('Learn')
 
-  const learnResult = await agentRetry(() => agent(`You are performing the ICRL policy update for the ARGUS planner (Algorithm 1, Section 6).
+  const learnResult = await agentRetry(() => agent(`${__taskContractBlock()}You are performing the ICRL policy update for the ARGUS planner (Algorithm 1, Section 6).
 
 # This Iteration's Results:
 - Optimizations attempted: ${loweringResults.map(r => r.step).join(' → ')}
@@ -1352,7 +1363,7 @@ Then append (this is ICRL iteration ${outerIter}):
 // =============================================================================
 // Final Report
 // =============================================================================
-const finalReport = await agentRetry(() => agent(`Write a concise technical report on the ARGUS optimization results.
+const finalReport = await agentRetry(() => agent(`${__taskContractBlock()}Write a concise technical report on the ARGUS optimization results.
 
 # ARGUS Optimization Results
 - Computation: ${computationType}
@@ -1380,7 +1391,7 @@ ${plannerPolicy}
 
 # Final Kernel:
 \`\`\`
-${bestKernelCode.substring(0, 4000)}
+${bestKernelCode}
 \`\`\`
 
 Write:
@@ -1396,7 +1407,7 @@ Write:
 // embedded_inplace exit safety net: unconditionally restore the pristine original
 // so the project is left byte-exact regardless of how the loop terminated.
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Learn', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 

@@ -244,6 +244,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -280,7 +291,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -676,7 +687,7 @@ log(`Generalist solver | beam | breadth=${BREADTH} topk=${TOPK} iters=${ITERATIO
 
 if (USE_DRIVER) {
   DRIVER = await agentRetry(() => agent(
-    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `${__taskContractBlock()}Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
@@ -695,7 +706,7 @@ if (USE_DRIVER) {
 }
 
 if (INPUT_MODE === 'generate_then_optimize') {
-  const generated = await agentRetry(() => agent(`No kernel_path was provided. Generate and verify an initial kernel before seeding the Generalist candidate beam.
+  const generated = await agentRetry(() => agent(`${__taskContractBlock()}No kernel_path was provided. Generate and verify an initial kernel before seeding the Generalist candidate beam.
 
 # Problem Input
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
@@ -859,7 +870,7 @@ const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'sta
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
   await agentRetry(() => agent(
-    `Byte-exact backup of the original embedded kernel: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm it succeeded. ` +
+    `${__taskContractBlock()}Byte-exact backup of the original embedded kernel: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm it succeeded. ` +
     `This backup is the pristine restore target for every candidate eval and the final exit restore. Do not modify it.`,
     { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
@@ -875,7 +886,7 @@ let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', no
   // the manifest to the cuda backend when no driver dir is present.
   const _profManifest = (USE_DRIVER && BACKEND_DIR) ? `${BACKEND_DIR}/manifest.json` : `${SUBSTRATE}/backends/cuda/manifest.json`
   const _pd = await agentRetry(() => agent(
-    `Read ${KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
+    `${__taskContractBlock()}Read ${KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
     substrateInstruction('profiling/profiling_strategist.py',
       `resolve --backend-manifest ${_profManifest} --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
     ` Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
@@ -920,11 +931,11 @@ function perfHeuristicProfileHint(evalCmd) {
 
 async function runDriverMetricsEnvelope({ suffix, phaseName, kernelPath, artifactPath, resultPath, profilePath }) {
   await agentRetry(() => agent(
-    `${driverSh('build.sh', `--source ${kernelPath} --out ${artifactPath}`)}\n` +
+    `${__taskContractBlock()}${driverSh('build.sh', `--source ${kernelPath} --out ${artifactPath}`)}\n` +
     `Return its stdout JSON verbatim.`,
     { model: MODEL.mechanical, label: `driver-build-${suffix}`, phase: phaseName, schema: JSON_PASSTHROUGH }), { retries: 5 })
   const runOut = await agentRetry(() => agent(
-    `${driverSh('run.sh', `--artifact ${artifactPath} --problem ${PROBLEM_PATH} --out ${artifactPath}.run.json`)}\n` +
+    `${__taskContractBlock()}${driverSh('run.sh', `--artifact ${artifactPath} --problem ${PROBLEM_PATH} --out ${artifactPath}.run.json`)}\n` +
     `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
     { model: MODEL.profile, label: `driver-run-${suffix}`, phase: phaseName, schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   const hostNcu = DRIVER_BACKEND_ID === 'cuda' && PROFILING_DECISION.method === 'native_profiler'
@@ -1009,11 +1020,11 @@ async function runDriverMetricsEnvelope({ suffix, phaseName, kernelPath, artifac
       { model: MODEL.mechanical, label: `driver-to-evidence-${suffix}`, phase: phaseName, schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   }
   await agentRetry(() => agent(
-    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+    `${__taskContractBlock()}Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
     `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
     { model: MODEL.mechanical, label: `driver-diagnose-${suffix}`, phase: phaseName, schema: JSON_PASSTHROUGH }), { retries: 5 })
   await agentRetry(() => agent(
-    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --source ${kernelPath} --metrics ${resultPath}\`.\n` +
+    `${__taskContractBlock()}Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --source ${kernelPath} --metrics ${resultPath}\`.\n` +
     `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
     { model: MODEL.mechanical, label: `driver-anti-cheat-${suffix}`, phase: phaseName, schema: JSON_PASSTHROUGH }), { retries: 5 })
 
@@ -1093,7 +1104,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
   // ---- Diagnose (Layer C, deterministic script) ----
   phase('Diagnose')
   const diag = await agentRetry(() => agent(
-    `Write these metrics to ${EXP_DIR}/run-${iter}/metrics.json:\n${JSON.stringify(metrics.metrics || {})}\n` +
+    `${__taskContractBlock()}Write these metrics to ${EXP_DIR}/run-${iter}/metrics.json:\n${JSON.stringify(metrics.metrics || {})}\n` +
     `${substrateInstruction('diagnose.py', `--metrics ${EXP_DIR}/run-${iter}/metrics.json`)} ` +
     `Return its stdout JSON verbatim ({bottleneck_class, evidence}). If the substrate command is unavailable, return {bottleneck_class:"unknown", evidence:"missing_substrate_command_prefix"}.`,
     { label: `diagnose-${iter}`, phase: 'Diagnose', schema: JSON_PASSTHROUGH, model: MODEL.mechanical }), { retries: 5 })
@@ -1338,13 +1349,13 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
     source_round: iter,
   }
   const refute = await agentRetry(() => agent(
-    `Adversarially REFUTE this attribution against the MEASURED profile ` +
+    `${__taskContractBlock()}Adversarially REFUTE this attribution against the MEASURED profile ` +
     `${JSON.stringify(metrics.metrics || {})}: "${roundInsightRaw.claim}". ` +
     `Default to refuted=true if the data does not clearly support it. Return {refuted, reason}.`,
     { label: `refute-${iter}`, phase: 'Learn', model: MODEL.judgment,
       schema: { type: 'object', properties: { refuted: { type: 'boolean' }, reason: { type: 'string' } }, required: ['refuted'] } }), { retries: 5 })
   const verified = await agentRetry(() => agent(
-    `Write this insight to ${EXP_DIR}/run-${iter}/insight.json:\n${JSON.stringify(roundInsightRaw)}\n` +
+    `${__taskContractBlock()}Write this insight to ${EXP_DIR}/run-${iter}/insight.json:\n${JSON.stringify(roundInsightRaw)}\n` +
     `${substrateInstruction('verify_insight.py', `--insight ${EXP_DIR}/run-${iter}/insight.json --refuted ${refute.refuted ? 1 : 0}`)} ` +
     `Return its stdout JSON verbatim. If unavailable, return {verified:false, reason:"missing_substrate_command_prefix"}.`,
     { label: `verify-insight-${iter}`, phase: 'Learn', schema: JSON_PASSTHROUGH, model: MODEL.mechanical }), { retries: 5, allowNull: true })
@@ -1383,7 +1394,7 @@ for (let iter = 1; iter <= ITERATIONS; iter++) {
 // candidate; this guarantees a clean exit. Best kernel is persisted via best_kernel_code path.)
 if (ORIGINAL_BACKUP) {
   await agentRetry(() => agent(
-    `Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm the ` +
+    `${__taskContractBlock()}Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm the ` +
     `project kernel is now byte-equal to the pristine original backup. This always runs on exit.`,
     { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }

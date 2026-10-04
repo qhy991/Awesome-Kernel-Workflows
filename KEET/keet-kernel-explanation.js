@@ -140,6 +140,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -164,9 +175,9 @@ const ATTEMPT_PLAN = (args.attempt_plan && typeof args.attempt_plan === 'object'
 // KerSor emits the cumulative ids as `failed_strategy_ids`; the per-round
 // derivation stays as the fallback for a dispatch that predates that channel.
 const FAILED_STRATEGY_IDS = Array.isArray(args.failed_strategy_ids)
-  ? (args.failed_strategy_ids || []).filter(id => typeof id === 'string' && id)
+  ? args.failed_strategy_ids.filter(id => typeof id === 'string' && id)
   : ((ATTEMPT_EVIDENCE && Array.isArray(ATTEMPT_EVIDENCE.transfer_items))
-    ? (ATTEMPT_EVIDENCE.transfer_items || []).filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
+    ? ATTEMPT_EVIDENCE.transfer_items.filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
     : [])
 function __attemptBlock() {
   if (!ATTEMPT_EVIDENCE && !ATTEMPT_PLAN) return ''
@@ -176,7 +187,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -399,7 +410,7 @@ const PROFILE_METHOD_GUARD =
 
 const setupResults = await parallel([
   // Agent 1: Read and catalog all source files
-  () => agentRetry(() => agent(`You are a CUDA source code reader. Read and catalog kernel source files.
+  () => agentRetry(() => agent(`${__taskContractBlock()}You are a CUDA source code reader. Read and catalog kernel source files.
 
 # Primary kernel file: ${KERNEL_PATH}
 # Additional source files: ${JSON.stringify(SOURCE_PATHS)}
@@ -431,7 +442,7 @@ Return a catalog of all source files with their contents and metadata.`, {
   }), { retries: 5 }),
 
   // Agent 2: Extract NCU profile data
-  () => agentRetry(() => agent(`You are an NCU profiling expert. Extract performance data from NCU profile(s).
+  () => agentRetry(() => agent(`${__taskContractBlock()}You are an NCU profiling expert. Extract performance data from NCU profile(s).
 
 # NCU Report: ${NCU_REPORT_PATH || '(need to generate)'}
 # NCU Binary: ${NCU_BINARY || '(not provided)'}
@@ -509,7 +520,7 @@ phase('Source Inspection')
 
 // KEET's Source Code Inspection: iteratively review each source file,
 // build algorithm summary, generate performance hypotheses BEFORE seeing data
-const sourceInspection = await agentRetry(() => agent(`You are a GPU performance expert analyzing CUDA kernel source code.
+const sourceInspection = await agentRetry(() => agent(`${__taskContractBlock()}You are a GPU performance expert analyzing CUDA kernel source code.
 Your job is to understand the algorithm and predict performance characteristics
 WITHOUT looking at any profiling data. This is the "hypothesis-first" approach from KEET.
 
@@ -518,10 +529,10 @@ WITHOUT looking at any profiling data. This is the "hypothesis-first" approach f
 
 # Kernel Source Code:
 \`\`\`cuda
-${sourceData?.primary_source?.substring(0, 8000) || 'No source available'}
+${sourceData?.primary_source || 'No source available'}
 \`\`\`
 
-${(sourceData?.additional_sources || []).map(s => `# Additional Source: ${s.path}\n\`\`\`cuda\n${(s.content || '').substring(0, 3000)}\n\`\`\``).join('\n\n')}
+${(sourceData?.additional_sources || []).map(s => `# Additional Source: ${s.path}\n\`\`\`cuda\n${(s.content || '')}\n\`\`\``).join('\n\n')}
 
 # Your Tasks (KEET Source Code Inspection roles):
 
@@ -614,7 +625,7 @@ const guidelines = ANALYSIS_GUIDELINES_PATH
 // Analyze each profile — metric selection + grounded analysis
 const profileAnalysisResults = await parallel(
   profilesToAnalyze.map((profile, profIdx) => () =>
-    agentRetry(() => agent(`You are the KEET Profile Analyzer — an expert GPU performance analyst.
+    agentRetry(() => agent(`${__taskContractBlock()}You are the KEET Profile Analyzer — an expert GPU performance analyst.
 You produce data-grounded natural language explanations of kernel performance.
 
 # Role: Profile Analyzer (KEET Section III-C)
@@ -628,7 +639,7 @@ ${algorithmSummary}
 ${performanceHypotheses.map((h, i) => `${i + 1}. ${h.hypothesis} [evidence: ${h.code_evidence}]`).join('\n')}
 
 # Profile Data (${profile.label}):
-${String(profile.metrics ?? '').substring(0, 6000)}
+${String(profile.metrics ?? '')}
 
 # Key Metrics Summary:
 ${profileData?.primary_profile?.latency_us ? `- Latency: ${profileData.primary_profile.latency_us} us` : ''}
@@ -640,7 +651,7 @@ ${profileData?.primary_profile?.sectors_per_request_ld ? `- Sectors/Request (LD)
 
 # Source Code (for reference):
 \`\`\`cuda
-${sourceData?.primary_source?.substring(0, 4000) || ''}
+${sourceData?.primary_source || ''}
 \`\`\`
 
 ${guidelines}
@@ -722,7 +733,7 @@ log(`Profile Inspection: ${profileAnalyses.length} profile(s) analyzed | Primary
 // Optional: DrGPU integration (KEET Section III-C)
 let drgpuAnalysis = null
 if (INCLUDE_DRGPU) {
-  drgpuAnalysis = await agentRetry(() => agent(`You are the DrGPU Evaluator agent (KEET Section III-C).
+  drgpuAnalysis = await agentRetry(() => agent(`${__taskContractBlock()}You are the DrGPU Evaluator agent (KEET Section III-C).
 DrGPU is a rule-based tool that decomposes stall reasons into a tree structure.
 Simulate DrGPU's analysis approach:
 
@@ -732,7 +743,7 @@ Simulate DrGPU's analysis approach:
 4. Evaluate which DrGPU suggestions are useful given the algorithm context
 
 # Profile Data:
-${profileData?.primary_profile?.full_metrics_text?.substring(0, 3000) || ''}
+${profileData?.primary_profile?.full_metrics_text || ''}
 
 # Top Stalls:
 ${profileData?.primary_profile?.top_stalls ? JSON.stringify(profileData.primary_profile.top_stalls) : 'N/A'}
@@ -761,7 +772,7 @@ Generate DrGPU-style suggestions and evaluate their applicability.`, {
 // =============================================================================
 phase('Aggregation')
 
-const aggregatedReport = await agentRetry(() => agent(`You are the KEET Analysis Aggregator (Section III-D).
+const aggregatedReport = await agentRetry(() => agent(`${__taskContractBlock()}You are the KEET Analysis Aggregator (Section III-D).
 Combine all performance analyses into a single, coherent performance explanation report.
 
 # Operation: ${OP_DESC}
@@ -833,7 +844,7 @@ log(`Aggregation: ${aggregatedReport.bottleneck_list?.length || 0} bottlenecks, 
 // =============================================================================
 phase('Review')
 
-const reviewResult = await agentRetry(() => agent(`You are the KEET Explanation Reviewer (Section III-D).
+const reviewResult = await agentRetry(() => agent(`${__taskContractBlock()}You are the KEET Explanation Reviewer (Section III-D).
 Your job is to cross-check the final performance explanation against the
 performance hypotheses that were generated BEFORE seeing any profiling data.
 
@@ -841,10 +852,10 @@ performance hypotheses that were generated BEFORE seeing any profiling data.
 ${performanceHypotheses.map((h, i) => `${i + 1}. HYPOTHESIS: ${h.hypothesis}\n   CODE EVIDENCE: ${h.code_evidence}\n   PREDICTED METRIC: ${h.predicted_metric || 'N/A'}`).join('\n\n')}
 
 # Final Performance Explanation:
-${aggregatedReport.full_report?.substring(0, 5000) || ''}
+${aggregatedReport.full_report || ''}
 
 # Profile Data (ground truth):
-${profileData?.primary_profile?.full_metrics_text?.substring(0, 3000) || ''}
+${profileData?.primary_profile?.full_metrics_text || ''}
 
 # Review Tasks:
 For each hypothesis, determine:

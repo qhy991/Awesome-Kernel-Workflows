@@ -274,7 +274,7 @@ Details: ${plan.plan}`, {
 # Variant: ${variant.id} — Plan: "${variant.plan.title}"
 # Code:
 \`\`\`
-${variant.code.substring(0, 4000)}
+${variant.code}
 \`\`\``, {
         label: `eval-${variant.id}`,
         phase: 'Evaluate',
@@ -344,12 +344,12 @@ ${variant.code.substring(0, 4000)}
 
 # Slow Kernel:
 \`\`\`
-${pair.slow.substring(0, 2500)}
+${pair.slow}
 \`\`\`
 
 # Fast Kernel:
 \`\`\`
-${pair.fast.substring(0, 2500)}
+${pair.fast}
 \`\`\`
 
 # Speedup: ${pair.speedup.toFixed(2)}x

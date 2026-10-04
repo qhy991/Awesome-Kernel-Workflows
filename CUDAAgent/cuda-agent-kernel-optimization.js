@@ -274,6 +274,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -310,7 +321,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -672,7 +683,7 @@ function bestKernelPath() {
 phase('Setup')
 
 if (INPUT_MODE === 'generate_then_optimize') {
-  const generated = await agentRetry(() => agent(args.task_result_command ? `Generate ${SEED_CANDIDATES} complete independent ${LANGUAGE} Python implementations from frozen specification ${PROBLEM_PATH}; no historical seed. Preserve the task run ABI and all official workloads/tolerances. Write source i to ${EXP_DIR}/generated/initial_<index>.py. For every index0..${SEED_CANDIDATES-1}, run exactly once serially: ${args.task_result_command.replaceAll('{kernel_path}',EXP_DIR+'/generated/initial_<index>.py').replaceAll('{result_path}',EXP_DIR+'/generated/initial_<index>.json')}. Await terminal and read each JSON. Return initial_candidates containing verbatim test_result_path/test_result_json for all candidates including failures. generated_kernel_path and initial_generation_result are compatibility fields; selection is deterministic from full evidence.` : `No kernel_path was provided. Generate and verify an initial PyTorch model plus CUDA kernel scaffold before CUDAAgent optimization.
+  const generated = await agentRetry(() => agent(args.task_result_command ? `${__taskContractBlock()}Generate ${SEED_CANDIDATES} complete independent ${LANGUAGE} Python implementations from frozen specification ${PROBLEM_PATH}; no historical seed. Preserve the task run ABI and all official workloads/tolerances. Write source i to ${EXP_DIR}/generated/initial_<index>.py. For every index0..${SEED_CANDIDATES-1}, run exactly once serially: ${args.task_result_command.replaceAll('{kernel_path}',EXP_DIR+'/generated/initial_<index>.py').replaceAll('{result_path}',EXP_DIR+'/generated/initial_<index>.json')}. Await terminal and read each JSON. Return initial_candidates containing verbatim test_result_path/test_result_json for all candidates including failures. generated_kernel_path and initial_generation_result are compatibility fields; selection is deterministic from full evidence.` : `${__taskContractBlock()}No kernel_path was provided. Generate and verify an initial PyTorch model plus CUDA kernel scaffold before CUDAAgent optimization.
 
 # Problem Input
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
@@ -718,7 +729,7 @@ Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run
   MODEL_PATH = generatedKernelPath
 }
 
-const setupResult = await agentRetry(() => agent(`You are a CUDA kernel optimization expert. Set up the optimization workspace.
+const setupResult = await agentRetry(() => agent(`${__taskContractBlock()}You are a CUDA kernel optimization expert. Set up the optimization workspace.
 
 # Task:
 1. Read the PyTorch model from: ${MODEL_PATH}
@@ -762,7 +773,7 @@ modelCode = setupResult.model_code
 // happy-path ncu behavior unchanged if the decision is ignored. ---
 if (INTEGRATION_PATTERN !== 'sol_execbench_solution') {
   const _pd = await agentRetry(() => agent(
-    `Classify the kernel under optimization. Source: ` +
+    `${__taskContractBlock()}Classify the kernel under optimization. Source: ` +
     (MODEL_PATH ? `read ${MODEL_PATH}` : `operation "${OP_DESC}"`) + `.\n` +
     `Pick op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
     substrateInstruction('profiling/profiling_strategist.py',
@@ -844,7 +855,7 @@ if (IS_SOL) {
 // candidate restores to a pristine original and the exit net can too.
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Byte-exact backup (once): run \`cp -a "${REFERENCE_FILE || MODEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm it exists.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Byte-exact backup (once): run \`cp -a "${REFERENCE_FILE || MODEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm it exists.`,
     { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 // A-O1 closure: native_profiler needs a real profiler to run; CUDAAgent's native
@@ -873,11 +884,11 @@ const profileResult = args.task_result_command
       fusion_plan: 'single GEMM solution entry point',
       heuristic_bclass: 'compute_bound',
     }
-  : await agentRetry(() => agent(`You are a CUDA performance profiler. Profile the baseline PyTorch model.
+  : await agentRetry(() => agent(`${__taskContractBlock()}You are a CUDA performance profiler. Profile the baseline PyTorch model.
 
 # Model Code:
 \`\`\`python
-${modelCode.substring(0, 4000)}
+${modelCode}
 \`\`\`
 
 # Profiling Tasks (CUDA Agent SKILL.md Step 1):
@@ -968,7 +979,7 @@ for (currentAttempt = 0; currentAttempt < MAX_TURNS && !targetMet; currentAttemp
 
   const recentHistory = history.slice(-5)
   const historyContext = recentHistory.length > 0
-    ? `\n# Previous Attempts:\n${recentHistory.map(h => `Turn ${h.turn}: ${h.action} → ${h.outcome}${h.error ? ' (' + h.error.substring(0, 100) + ')' : ''} ${h.speedup ? h.speedup.toFixed(2) + 'x' : ''}`).join('\n')}`
+    ? `\n# Previous Attempts:\n${recentHistory.map(h => `Turn ${h.turn}: ${h.action} → ${h.outcome}${h.error ? ' (' + h.error + ')' : ''} ${h.speedup ? h.speedup.toFixed(2) + 'x' : ''}`).join('\n')}`
     : ''
 
   // Proactive knowledge fetch: when retrying after a failure (history non-empty),
@@ -996,11 +1007,11 @@ for (currentAttempt = 0; currentAttempt < MAX_TURNS && !targetMet; currentAttemp
 
   let implResult
   try {
-  implResult = await withTurnTimeout(agentRetry(() => agent(args.task_result_command ? `Implement the CUDAAgent optimization strategy ${profileResult.optimization_strategy} in complete ${LANGUAGE} Python source. Read the FULL current tested artifact ${bestBoundSourcePath}; preserve exact frozen task signature and correctness. Prior feedback: ${JSON.stringify(history.slice(-3))}. Write the COMPLETE new source to ${EXP_DIR}/task_attempt_${currentAttempt}.py and return variant_path plus kernel_code (display only), implementation_notes. Do not modify the incumbent or benchmark; serial task verification follows. Read all3 task skills for genuine diagnostics.` : `You are a CUDA kernel developer. Implement an optimized CUDA kernel for this PyTorch model.
+  implResult = await withTurnTimeout(agentRetry(() => agent(args.task_result_command ? `${__taskContractBlock()}Implement the CUDAAgent optimization strategy ${profileResult.optimization_strategy} in complete ${LANGUAGE} Python source. Read the FULL current tested artifact ${bestBoundSourcePath}; preserve exact frozen task signature and correctness. Prior feedback: ${JSON.stringify(history.slice(-3))}. Write the COMPLETE new source to ${EXP_DIR}/task_attempt_${currentAttempt}.py and return variant_path plus kernel_code (display only), implementation_notes. Do not modify the incumbent or benchmark; serial task verification follows. Read all3 task skills for genuine diagnostics.` : `${__taskContractBlock()}You are a CUDA kernel developer. Implement an optimized CUDA kernel for this PyTorch model.
 
 # Model to Optimize:
 \`\`\`python
-${modelCode.substring(0, 3000)}
+${modelCode}
 \`\`\`
 
 # Operation: ${OP_DESC}
@@ -1228,21 +1239,21 @@ The parse step prints one line "SPEEDUP=<aggregate> REDUCTION=<contract reductio
       const gain=measured.is_valid ? taskInitialMeasurement.latency_ms/measured.latency_ms : 0
       return {...measured,kernel_time_ms:measured.latency_ms,speedup_vs_generated_initial:gain,speedup_vs_reference:measured.speedup,speedup_vs_compile:null,speedup_vs_eager:null,reward:!measured.is_valid ? -1 : TARGET_SPEEDUP !== null && gain>1 && gain>=TARGET_SPEEDUP ? 3 : gain>1 ? 1 : 0}
     })()
-    : await withTurnTimeout(agentRetry(() => agent(`You are a CUDA kernel validator. Compile, verify, and benchmark this kernel implementation.${embeddedEvalBlock}${solEvalBlock}
+    : await withTurnTimeout(agentRetry(() => agent(`${__taskContractBlock()}You are a CUDA kernel validator. Compile, verify, and benchmark this kernel implementation.${embeddedEvalBlock}${solEvalBlock}
 
 # Kernel Code (kernel.cu):
 \`\`\`cuda
-${IS_SOL ? implResult.kernel_code : implResult.kernel_code.substring(0, 4000)}
+${implResult.kernel_code}
 \`\`\`
 
 # Binding Code (kernel_binding.cpp):
 \`\`\`cpp
-${IS_SOL ? implResult.binding_code : implResult.binding_code.substring(0, 2000)}
+${implResult.binding_code}
 \`\`\`
 
 # Model New (model_new.py):
 \`\`\`python
-${implResult.model_new_code.substring(0, 2000)}
+${implResult.model_new_code}
 \`\`\`
 
 # Validation Steps:
@@ -1330,7 +1341,7 @@ Then append, using the values you just measured (status="done" if correctness pa
 
   history.push({
     turn: currentAttempt,
-    action: implResult.implementation_notes?.substring(0, 50) || 'kernel implementation',
+    action: implResult.implementation_notes || 'kernel implementation',
     outcome: outcome,
     speedup: args.task_result_command ? verifyResult.speedup_vs_generated_initial || 0 : (IS_SOL ? verifyResult.speedup_vs_seed || 0 : verifyResult.speedup_vs_compile || 0),
     error: error,
@@ -1479,7 +1490,7 @@ if (terminationReason !== 'turn_limit') {
     `Completed ${turnsCompleted}/${MAX_TURNS} turns; best verified speedup ` +
     `${(IS_SOL ? bestSolSeedRelative : bestSpeedup).toFixed(6)}x versus the ${IS_SOL ? 'supplied seed' : 'compile baseline'}.`
 } else {
-  finalReport = await agentRetry(() => agent(`Write a concise optimization report.
+  finalReport = await agentRetry(() => agent(`${__taskContractBlock()}Write a concise optimization report.
 
 # CUDA Agent Optimization Results
 - Adaptation scope: ${ADAPTATION_SCOPE}
@@ -1501,7 +1512,7 @@ ${history.map(h => `Turn ${h.turn + 1}: ${h.outcome} (reward=${h.reward})`).join
 
 # Best Kernel:
 \`\`\`cuda
-${bestKernelCode.substring(0, 3000)}
+${bestKernelCode}
 \`\`\`
 
 Write:
@@ -1518,7 +1529,7 @@ Write:
 // attempt, but force one final restore so the project file is byte-exact pristine on
 // exit regardless of how the loop terminated. No-op for standalone/embedded_dispatch.
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Exit restore: run \`cp -a "${ORIGINAL_BACKUP}" "${REFERENCE_FILE || MODEL_PATH}"\` and confirm the project file is byte-exact pristine.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Exit restore: run \`cp -a "${ORIGINAL_BACKUP}" "${REFERENCE_FILE || MODEL_PATH}"\` and confirm the project file is byte-exact pristine.`,
     { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 

@@ -193,6 +193,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -229,7 +240,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -631,7 +642,7 @@ phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agentRetry(() => agent(
-    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `${__taskContractBlock()}Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
@@ -667,7 +678,7 @@ if (!args.integration_pattern) {
 
   const _kernelForIntegration = PROBLEM_PATH || `${EXP_DIR}/problem.py`
   const _integ = await agentRetry(() => agent(
-    `Classify can_compile_standalone for ${_kernelForIntegration} as yes|no|uncertain. Then run exactly: ` +
+    `${__taskContractBlock()}Classify can_compile_standalone for ${_kernelForIntegration} as yes|no|uncertain. Then run exactly: ` +
     `\`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
     `--kernel "${_kernelForIntegration}" --can-standalone <yes|no|uncertain> ` +
     `--host-probe '${_probe}' --cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
@@ -738,7 +749,7 @@ async function verifySolCandidate(candidate, label, phaseName) {
     envPrefix: SOL_ENV_PREFIX,
     definitionPath: SOL_DEFINITION_PATH,
   })
-  return agentRetry(() => agent(`Verify this KernelAgent candidate through the authoritative sol-execbench contract.
+  return agentRetry(() => agent(`${__taskContractBlock()}Verify this KernelAgent candidate through the authoritative sol-execbench contract.
 
 1. Create ${candidateDir} and atomically write the exact source below to ${candidatePath}.
 \`\`\`python
@@ -842,7 +853,7 @@ async function kernelAgentSafePoint(completed) {
 }
 
 // Read problem from file or use description directly
-const setupResult = await agentRetry(() => agent(`You are a ${langToken(LEGACY_ROUTE_LANG_TOKEN)} kernel synthesis expert. Analyze the problem and produce a structured description.
+const setupResult = await agentRetry(() => agent(`${__taskContractBlock()}You are a ${langToken(LEGACY_ROUTE_LANG_TOKEN)} kernel synthesis expert. Analyze the problem and produce a structured description.
 
 # Problem Source
 ${PROBLEM_PATH ? `File: ${PROBLEM_PATH} — read and extract the problem description from the Python code.` : ''}
@@ -899,7 +910,7 @@ const RTOL = args.rtol != null ? args.rtol : defaultTol(_outDtype).rtol
 const ATOL = args.atol != null ? args.atol : defaultTol(_outDtype).atol
 
 // Generate test harness
-const testResult = await agentRetry(() => agent(`You are a ${langToken(LEGACY_HARNESS_LANG_TOKEN)} kernel test engineer. Generate a Python test harness for the following problem.
+const testResult = await agentRetry(() => agent(`${__taskContractBlock()}You are a ${langToken(LEGACY_HARNESS_LANG_TOKEN)} kernel test engineer. Generate a Python test harness for the following problem.
 
 # Problem Description
 ${problemDescription}
@@ -969,7 +980,7 @@ log(`Session directory: ${sessionDir}`)
 // =============================================================================
 phase('Route')
 
-const routeResult = await agentRetry(() => agent(`Analyze this problem to determine the optimal synthesis path.
+const routeResult = await agentRetry(() => agent(`${__taskContractBlock()}Analyze this problem to determine the optimal synthesis path.
 
 # Problem Description
 ${problemDescription}
@@ -1029,7 +1040,7 @@ log(`Routing: ${routeResult.path} — ${routeResult.reason}`)
 
 // If pipeline path, extract subgraphs
 if (routeResult.path === 'pipeline') {
-  const subgraphResult = await agentRetry(() => agent(`Extract subgraphs from this problem for parallel kernel synthesis.
+  const subgraphResult = await agentRetry(() => agent(`${__taskContractBlock()}Extract subgraphs from this problem for parallel kernel synthesis.
 
 # Problem Description
 ${problemDescription}
@@ -1094,14 +1105,14 @@ for (const target of synthesisTargets) {
   for (let seedIdx = 0; seedIdx < MAX_SEEDS; seedIdx++) {
     const temperature = TEMPERATURE_BASE + (seedIdx * 0.1)
     seedPromises.push(() =>
-      agentRetry(() => agent(`You are an expert ${langToken(LEGACY_SYNTH_LANG_TOKEN)} kernel developer. Generate a complete, working ${langToken(LEGACY_SYNTH_LANG_TOKEN)} kernel.
+      agentRetry(() => agent(`${__taskContractBlock()}You are an expert ${langToken(LEGACY_SYNTH_LANG_TOKEN)} kernel developer. Generate a complete, working ${langToken(LEGACY_SYNTH_LANG_TOKEN)} kernel.
 
 # Problem
 ${target.description}
 
 # Test Harness (the kernel MUST pass this test)
 \`\`\`python
-${testCode.substring(0, 3000)}
+${testCode}
 \`\`\`
 
 # ${USE_DRIVER ? `${DRIVER_LANG_FENCE} Guidelines` : 'Triton Guidelines'}
@@ -1193,16 +1204,16 @@ if (VERIFY && validCandidates.length > 0) {
   const verifyPromises = validCandidates.map(candidate => () =>
     IS_SOL
       ? verifySolCandidate(candidate, `sol-verify-${candidate.id}`, 'Verify')
-      : agentRetry(() => agent(`You are a kernel verification engineer. Execute the test harness against this ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel.
+      : agentRetry(() => agent(`${__taskContractBlock()}You are a kernel verification engineer. Execute the test harness against this ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel.
 
 # Kernel Code
 \`\`\`python
-${candidate.code.substring(0, 4000)}
+${candidate.code}
 \`\`\`
 
 # Test Harness
 \`\`\`python
-${testCode.substring(0, 3000)}
+${testCode}
 \`\`\`
 
 # Instructions
@@ -1299,7 +1310,7 @@ Then append, using the result you just measured (status="done" if the kernel pas
       })
     } else {
       candidate.status = 'failed'
-      candidate.error = result.error_summary || result.stderr?.substring(0, 500) || 'Unknown failure'
+      candidate.error = result.error_summary || result.stderr || 'Unknown failure'
     }
   }
 
@@ -1385,24 +1396,24 @@ while (!terminationReason && failedCandidates.length > 0 && currentRound < MAX_R
   log(`Refinement round ${currentRound}/${MAX_ROUNDS} — ${failedCandidates.length} candidates to fix`)
 
   const refinePromises = failedCandidates.map(candidate => () =>
-    agentRetry(() => agent(`You are a ${langToken(LEGACY_REFINE_LANG_TOKEN)} kernel debugging expert. Fix this failing kernel.
+    agentRetry(() => agent(`${__taskContractBlock()}You are a ${langToken(LEGACY_REFINE_LANG_TOKEN)} kernel debugging expert. Fix this failing kernel.
 
 # Problem Description
 ${problemDescription}
 
 # Current Kernel Code
 \`\`\`python
-${candidate.code.substring(0, 4000)}
+${candidate.code}
 \`\`\`
 
 # Test Output (stdout)
 \`\`\`
-${(candidate.verification?.stdout || '').substring(0, 1500)}
+${(candidate.verification?.stdout || '')}
 \`\`\`
 
 # Error Output (stderr)
 \`\`\`
-${(candidate.verification?.stderr || '').substring(0, 1500)}
+${(candidate.verification?.stderr || '')}
 \`\`\`
 
 # Error Summary
@@ -1495,16 +1506,16 @@ Then append (this is refinement round ${currentRound} for ${candidate.id}):
       const reVerifyPromises = toReVerify.map(candidate => () =>
         IS_SOL
           ? verifySolCandidate(candidate, `sol-reverify-${candidate.id}-r${currentRound}`, 'Refine')
-          : agentRetry(() => agent(`Verify this refined ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel against the test harness.
+          : agentRetry(() => agent(`${__taskContractBlock()}Verify this refined ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel against the test harness.
 
 # Kernel Code
 \`\`\`python
-${candidate.code.substring(0, 4000)}
+${candidate.code}
 \`\`\`
 
 # Test Harness
 \`\`\`python
-${testCode.substring(0, 3000)}
+${testCode}
 \`\`\`
 
 ${USE_DRIVER ? driverSh('run.sh', `--kernel ${kernelFilename()} --test ${testFilename()}`) + '\n' : ''}Execute the test and report results. Parse the measured kernel latency from a \`LATENCY_MS=<value>\` line in stdout (null if absent). Return JSON with:
@@ -1575,7 +1586,7 @@ ${USE_DRIVER ? driverSh('run.sh', `--kernel ${kernelFilename()} --test ${testFil
         })
       } else {
         candidate.status = 'failed'
-        candidate.error = result.error_summary || result.stderr?.substring(0, 500) || 'Still failing'
+        candidate.error = result.error_summary || result.stderr || 'Still failing'
       }
     }
   }
@@ -1599,7 +1610,7 @@ if (currentRound > 0) {
 phase('Compose')
 
 if (!terminationReason && routingDecision.path === 'pipeline' && subgraphs.length > 1 && COMPOSE && verifiedKernels.length > 0) {
-  const composeResult = await agentRetry(() => agent(`You are a ${langToken(LEGACY_COMPOSE_LANG_TOKEN)} kernel composition expert. Stitch these verified subgraph kernels into a single, cohesive ${langToken(LEGACY_COMPOSE_LANG_TOKEN)} program.
+  const composeResult = await agentRetry(() => agent(`${__taskContractBlock()}You are a ${langToken(LEGACY_COMPOSE_LANG_TOKEN)} kernel composition expert. Stitch these verified subgraph kernels into a single, cohesive ${langToken(LEGACY_COMPOSE_LANG_TOKEN)} program.
 
 # Problem Description
 ${problemDescription}
@@ -1608,7 +1619,7 @@ ${problemDescription}
 ${verifiedKernels.map((k, i) => `
 ## Subgraph ${k.target_id} (approach: ${k.approach})
 \`\`\`python
-${k.code.substring(0, 2500)}
+${k.code}
 \`\`\`
 `).join('\n')}
 
@@ -1653,16 +1664,16 @@ Then append:
 
   // Verify composed kernel
   if (VERIFY) {
-    const composeVerify = await agentRetry(() => agent(`Verify this composed ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel against the original problem.
+    const composeVerify = await agentRetry(() => agent(`${__taskContractBlock()}Verify this composed ${langToken(LEGACY_VERIFY_LANG_TOKEN)} kernel against the original problem.
 
 # Composed Kernel
 \`\`\`python
-${composedKernel.substring(0, 5000)}
+${composedKernel}
 \`\`\`
 
 # Test Harness
 \`\`\`python
-${testCode.substring(0, 3000)}
+${testCode}
 \`\`\`
 
 ${USE_DRIVER ? driverSh('run.sh', `--kernel ${kernelFilename()} --test ${testFilename()}`) + '\n' : ''}Execute the test and report results. Return JSON with:
@@ -1721,7 +1732,7 @@ const reportResult = terminationReason
       recommendations: ['Resume from the canonical checkpoint only if more search is authorized.'],
       artifacts_path: EXP_DIR,
     }
-  : await agentRetry(() => agent(`Generate a comprehensive synthesis report for this KernelAgent session.
+  : await agentRetry(() => agent(`${__taskContractBlock()}Generate a comprehensive synthesis report for this KernelAgent session.
 
 # Problem
 ${problemDescription}

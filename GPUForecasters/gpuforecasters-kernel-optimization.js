@@ -165,6 +165,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -189,9 +200,9 @@ const ATTEMPT_PLAN = (args.attempt_plan && typeof args.attempt_plan === 'object'
 // KerSor emits the cumulative ids as `failed_strategy_ids`; the per-round
 // derivation stays as the fallback for a dispatch that predates that channel.
 const FAILED_STRATEGY_IDS = Array.isArray(args.failed_strategy_ids)
-  ? (args.failed_strategy_ids || []).filter(id => typeof id === 'string' && id)
+  ? args.failed_strategy_ids.filter(id => typeof id === 'string' && id)
   : ((ATTEMPT_EVIDENCE && Array.isArray(ATTEMPT_EVIDENCE.transfer_items))
-    ? (ATTEMPT_EVIDENCE.transfer_items || []).filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
+    ? ATTEMPT_EVIDENCE.transfer_items.filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
     : [])
 function __attemptBlock() {
   if (!ATTEMPT_EVIDENCE && !ATTEMPT_PLAN) return ''
@@ -201,7 +212,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -554,7 +565,7 @@ async function main() {
   {
     const _pd = await agentRetry(() => agent(
       `Classify the kernel under optimization. Source: ` +
-      (KERNEL_PATH ? `read ${KERNEL_PATH}` : `operation "${OP_DESC}"${PROBLEM_DEFINITION ? ` / spec:\n${PROBLEM_DEFINITION.substring(0, 1500)}` : ''}`) + `.\n` +
+      (KERNEL_PATH ? `read ${KERNEL_PATH}` : `operation "${OP_DESC}"${PROBLEM_DEFINITION ? ` / spec:\n${PROBLEM_DEFINITION}` : ''}`) + `.\n` +
       `Pick op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
       substrateInstruction('profiling/profiling_strategist.py',
         `resolve --backend-manifest ${BACKEND_MANIFEST} --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
@@ -590,7 +601,7 @@ async function main() {
   RUNTIME_INTEGRATION_METHOD = INTEGRATION_DECISION.method
   const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
   if (ORIGINAL_BACKUP) {
-    await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+    await agentRetry(() => agent(`${__taskContractBlock()}Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
       { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
   }
   // If the strategist routed to an embedded path, validate the required wiring now
@@ -622,7 +633,7 @@ async function main() {
   EMBEDDED = IS_EMBEDDED
 
   const setupResult = await agentRetry(() => agent(
-    `Set up GPU Forecasters optimization environment:
+    `${__taskContractBlock()}Set up GPU Forecasters optimization environment:
 
 ${taskContract()}
 
@@ -718,7 +729,7 @@ Then append:
   log(`Training surrogate models with budget ${trainingBudget} evaluations...`);
 
   const trainingResult = await agentRetry(() => agent(
-    `Train surrogate forecasting models:
+    `${__taskContractBlock()}Train surrogate forecasting models:
 
 ${taskContract()}
 
@@ -850,7 +861,7 @@ Then append (best_training_speedup is a measured speedup from training evaluatio
   log('Calibrating abstention thresholds...');
 
   const calibrationResult = await agentRetry(() => agent(
-    `Calibrate abstention thresholds for forecasters:
+    `${__taskContractBlock()}Calibrate abstention thresholds for forecasters:
 
 ${taskContract()}
 
@@ -935,7 +946,7 @@ Then append:
   log(`Running PUCT tree search with ${puctSimulations} simulations...`);
 
   const puctResult = await agentRetry(() => agent(
-    `Perform PUCT (Polynomial Upper Confidence Trees) search:
+    `${__taskContractBlock()}Perform PUCT (Polynomial Upper Confidence Trees) search:
 
 ${taskContract()}
 
@@ -1066,7 +1077,7 @@ Then append (candidate_id is the best config found; best_speedup is the measured
   log('Refining top candidates with local search...');
 
   const refinementResult = await agentRetry(() => agent(
-    `Refine best configuration found:
+    `${__taskContractBlock()}Refine best configuration found:
 
 ${taskContract()}
 
@@ -1147,7 +1158,7 @@ Then append (candidate_id is the best refined config; best_refined_speedup is th
   log('Validating best configuration...');
 
   const validationResult = await agentRetry(() => agent(
-    `Validate best configuration:
+    `${__taskContractBlock()}Validate best configuration:
 
 ${taskContract()}
 
@@ -1232,7 +1243,7 @@ Then append (status="done" if correctness passed AND validation passed, else "er
     // embedded_inplace exit safety net: restore pristine original before the early
     // return so the project is left byte-exact even when validation fails mid-flow.
     if (ORIGINAL_BACKUP) {
-      await agentRetry(() => agent(`Exit restore (unconditional, validation failed): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
+      await agentRetry(() => agent(`${__taskContractBlock()}Exit restore (unconditional, validation failed): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
         { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Validation', schema: JSON_PASSTHROUGH }), { retries: 5 })
     }
     return {
@@ -1257,7 +1268,7 @@ Then append (status="done" if correctness passed AND validation passed, else "er
   phase('Report');
 
   const report = await agentRetry(() => agent(
-    `Generate GPU Forecasters optimization report:
+    `${__taskContractBlock()}Generate GPU Forecasters optimization report:
 
 ${taskContract()}
 
@@ -1326,7 +1337,7 @@ Then append (speedup is the final best validated speedup number, or null if unav
   // embedded_inplace exit safety net: unconditionally restore the pristine original
   // so the project is left byte-exact regardless of how the workflow terminated.
   if (ORIGINAL_BACKUP) {
-    await agentRetry(() => agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
+    await agentRetry(() => agent(`${__taskContractBlock()}Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
       { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH }), { retries: 5 })
   }
 

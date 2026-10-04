@@ -38,6 +38,6 @@ test('cudaagent: timed doers use explicit runtime model tiers', () => {
 
 test('cudaagent: Sol verification receives complete kernel and binding sources', () => {
   assert.match(SOURCE, /FULL kernel_code and FULL binding_code/)
-  assert.match(SOURCE, /\$\{IS_SOL \? implResult\.kernel_code : implResult\.kernel_code\.substring\(0, 4000\)\}/)
-  assert.match(SOURCE, /\$\{IS_SOL \? implResult\.binding_code : implResult\.binding_code\.substring\(0, 2000\)\}/)
+  assert.match(SOURCE, /\$\{implResult\.kernel_code\}/)
+  assert.match(SOURCE, /\$\{implResult\.binding_code\}/)
 })

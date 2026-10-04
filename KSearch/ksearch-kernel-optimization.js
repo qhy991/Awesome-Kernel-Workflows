@@ -257,6 +257,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -293,7 +304,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -636,7 +647,7 @@ phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agentRetry(() => agent(
-    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `${__taskContractBlock()}Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
@@ -654,7 +665,7 @@ if (USE_DRIVER) {
   log(`Driver loaded: ${DRIVER_BACKEND_ID} (fence=${DRIVER_LANG_FENCE})`)
 }
 
-const setupResult = await agentRetry(() => agent(`You are a GPU kernel optimization expert. Read and analyze the kernel specification.
+const setupResult = await agentRetry(() => agent(`${__taskContractBlock()}You are a GPU kernel optimization expert. Read and analyze the kernel specification.
 
 # Task
 Read the kernel specification file at: ${KERNEL_SPEC_PATH || '(not provided)'}
@@ -717,14 +728,14 @@ const baselineEval = args.task_result_command
       performance_profile: 'owned by sol-execbench per-workload reference rows',
       bottleneck_analysis: 'deferred to measured candidate feedback',
     }
-  : await agentRetry(() => agent(`You are a kernel evaluation expert. Evaluate the baseline kernel to establish reference performance.
+  : await agentRetry(() => agent(`${__taskContractBlock()}You are a kernel evaluation expert. Evaluate the baseline kernel to establish reference performance.
 
 # Kernel Spec:
-${specText.substring(0, 2000)}
+${specText}
 
 # Baseline Code:
 \`\`\`${langToken(LANGUAGE)}
-${(setupResult.baseline_code || '').substring(0, 3000)}
+${(setupResult.baseline_code || '')}
 \`\`\`
 
 # Evaluation Instructions:
@@ -759,7 +770,7 @@ Return evaluation results.`, {
 let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
 if (USE_DRIVER) {
   const _pd = await agentRetry(() => agent(
-    `Read ${BASELINE_CODE_PATH || ksearchNodeKernelPath('ksearch_root')}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
+    `${__taskContractBlock()}Read ${BASELINE_CODE_PATH || ksearchNodeKernelPath('ksearch_root')}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${BACKEND_DIR}/manifest.json --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
     `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
     { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
@@ -777,7 +788,7 @@ if (!args.integration_pattern) {
   const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true, sol_execbench_cli: !!SOL_CLI })
 
   const _integ = await agentRetry(() => agent(
-    `Read ${INTEG_KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+    `${__taskContractBlock()}Read ${INTEG_KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
     `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
     `--kernel "${INTEG_KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
@@ -834,7 +845,7 @@ if (IS_SOL) {
 }
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Byte-exact backup (once): run \`cp -a "${INTEG_KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Byte-exact backup (once): run \`cp -a "${INTEG_KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 // A-O1 closure: native_profiler chosen but no standalone driver build to profile → perf_heuristic.
@@ -849,11 +860,11 @@ if (USE_DRIVER_STANDALONE) {
   const buildOut = `${EXP_DIR}/ksearch_root.artifact`
   const profOut = `${EXP_DIR}/ksearch_root.prof.native`
   await agentRetry(() => agent(
-    `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+    `${__taskContractBlock()}${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
     `Return its stdout JSON verbatim.`,
     { model: MODEL.mechanical, label: 'driver-build-root', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
   const runOut = await agentRetry(() => agent(
-    `${driverSh('run.sh', `--artifact ${buildOut} --problem ${KERNEL_SPEC_PATH} --out ${buildOut}.run.json`)}\n` +
+    `${__taskContractBlock()}${driverSh('run.sh', `--artifact ${buildOut} --problem ${KERNEL_SPEC_PATH} --out ${buildOut}.run.json`)}\n` +
     `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
     { model: MODEL.profile, label: 'driver-run-root', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   let evidenceOut = null
@@ -880,11 +891,11 @@ if (USE_DRIVER_STANDALONE) {
     }
   }
   await agentRetry(() => agent(
-    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+    `${__taskContractBlock()}Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
     `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
     { model: MODEL.mechanical, label: 'driver-diagnose-root', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
   await agentRetry(() => agent(
-    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --source ${kPath} --metrics ${EXP_DIR}/ksearch_root.result.json\`.\n` +
+    `${__taskContractBlock()}Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --source ${kPath} --metrics ${EXP_DIR}/ksearch_root.result.json\`.\n` +
     `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
     { model: MODEL.mechanical, label: 'driver-anti-cheat-root', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
   baselineEval.driver_envelope = {
@@ -905,10 +916,10 @@ log(`Bottleneck: ${baselineEval.bottleneck_analysis || 'unknown'}`)
 // =============================================================================
 phase('Initialize')
 
-const initResult = await agentRetry(() => agent(`You are a kernel optimization architect. Build an initial world model decision tree for systematic design space exploration.
+const initResult = await agentRetry(() => agent(`${__taskContractBlock()}You are a kernel optimization architect. Build an initial world model decision tree for systematic design space exploration.
 
 # Kernel Specification:
-${specText.substring(0, 3000)}
+${specText}
 
 # Operation: ${OP_DESC} (${opType})
 # Language: ${langToken(LANGUAGE)}
@@ -1043,10 +1054,10 @@ for (let cycle = _startCycle; cycle < MAX_CYCLES; cycle++) {
   // ===========================================================================
   phase('Select')
 
-  const proposeResult = await agentRetry(() => agent(`You are a world model manager. Ensure the decision tree has enough high-quality open action nodes on the frontier.
+  const proposeResult = await agentRetry(() => agent(`${__taskContractBlock()}You are a world model manager. Ensure the decision tree has enough high-quality open action nodes on the frontier.
 
 # Current Decision Tree:
-${JSON.stringify(decisionTree, null, 2).substring(0, 5000)}
+${JSON.stringify(decisionTree, null, 2)}
 
 # Frontier Requirements:
 - There must be at least 3 open frontier action nodes (status="open", action.title non-empty)
@@ -1089,10 +1100,10 @@ Return the (possibly updated) tree and a count of open frontier nodes.`, {
   // Hard constraint: only executable frontier nodes with difficulty <= MAX_DIFFICULTY
   // ===========================================================================
 
-  const selection = await agentRetry(() => agent(`You are a search strategy expert implementing the K-Search action selection algorithm.
+  const selection = await agentRetry(() => agent(`${__taskContractBlock()}You are a search strategy expert implementing the K-Search action selection algorithm.
 
 # Decision Tree (current state):
-${JSON.stringify(decisionTree, null, 2).substring(0, 6000)}
+${JSON.stringify(decisionTree, null, 2)}
 
 # Selection Algorithm (DETERMINISTIC — follow exactly):
 1. Identify all "open frontier" nodes: status="open" AND action.title is non-empty AND (parent has solution_id OR parent is root)
@@ -1180,7 +1191,7 @@ Then append:
   // generation is concurrent; evaluation below stays serial so GPU timing and
   // embedded project mutation retain one owner.
   const wmSection =
-    `\n\n# World Model (persistent decision tree — use it to guide design):\n${JSON.stringify(decisionTree, null, 2).substring(0, 3000)}` +
+    `\n\n# World Model (persistent decision tree — use it to guide design):\n${JSON.stringify(decisionTree, null, 2)}` +
     (LANGUAGE === 'cute-dsl'
       ? '\n\n# Requested DSL: CuTe DSL\nWrite Python .py source using cutlass.cute and @cute.kernel where appropriate. Preserve the task callable entry point and argument contract. Every workload must execute a CuTe-compiled kernel; do not delegate GEMM to torch.matmul/mm/bmm/addmm/einsum, Python @, cuBLAS, cutlass.op.Gemm, or another library implementation. The Host rejects delegated candidates before GPU evaluation. Keep the implementation in CuTe DSL; do not switch to CUDA C++ or Triton. The caller-owned correctness and benchmark commands provide execution evidence.'
       : '') +
@@ -1191,25 +1202,25 @@ Then append:
       const diversityDirective = SEED_CANDIDATES > 1
         ? `\n\n# Parallel seed branch: ${attempt + 1}/${SEED_CANDIDATES}\nChoose a materially distinct implementation strategy from the other branches while preserving the selected world-model action.`
         : ''
-      return withTurnTimeout(agentRetry(() => agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. Generate a high-performance kernel implementing a SPECIFIC optimization action.
+      return withTurnTimeout(agentRetry(() => agent(`${__taskContractBlock()}You are an expert ${langToken(LANGUAGE)} kernel developer. Generate a high-performance kernel implementing a SPECIFIC optimization action.
 
 # Operation: ${OP_DESC} (${opType})
 # Target: ${TARGET_GPU}
 # Language: ${langToken(LANGUAGE)}
 
 # Kernel Specification:
-${specText.substring(0, 2000)}
+${specText}
 
 # Action to implement: "${selection.action_title}"
 ${selection.action_description || ''}${diversityDirective}
 
 ${parentCode ? `# Base code (from parent node — start from this and apply the action):
 \`\`\`${langToken(LANGUAGE)}
-${parentCode.substring(0, 4000)}
+${parentCode}
 \`\`\`` : '# No base code available — implement from specification directly.'}
 
 # Tree context (ancestor decisions):
-${JSON.stringify(selection.context_for_generation || {}).substring(0, 1500)}
+${JSON.stringify(selection.context_for_generation || {})}
 ${wmSection}
 
 # Requirements:
@@ -1266,30 +1277,30 @@ Then append:
     } else if (!hasPassedInCycle) {
       // Attempts 2+, NO passing solution yet: DEBUG prompt
       // Uses currentRawCode (last attempt's code) as the buggy code to fix
-      genResult = await withTurnTimeout(agentRetry(() => agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. The previous attempt has bugs or fails correctness. Debug and fix it.
+      genResult = await withTurnTimeout(agentRetry(() => agent(`${__taskContractBlock()}You are an expert ${langToken(LANGUAGE)} kernel developer. The previous attempt has bugs or fails correctness. Debug and fix it.
 
 # Operation: ${OP_DESC} (${opType})
 # Target: ${TARGET_GPU}
 # Language: ${langToken(LANGUAGE)}
 
 # Kernel Specification:
-${specText.substring(0, 1500)}
+${specText}
 
 # Action: "${selection.action_title}"
 ${selection.action_description || ''}
 
 ${parentCode ? `# Base code (known-good reference, from ${baseForDebugLabel}):
 \`\`\`${langToken(LANGUAGE)}
-${baseForDebug.substring(0, 3000)}
+${baseForDebug}
 \`\`\`` : ''}
 
 # Buggy code (last attempt — FIX THIS):
 \`\`\`${langToken(LANGUAGE)}
-${(currentRawCode || '').substring(0, 4000)}
+${(currentRawCode || '')}
 \`\`\`
 
 # Previous evaluation (shows what went wrong):
-${JSON.stringify(cycleBestEval || {}, null, 2).substring(0, 1500)}
+${JSON.stringify(cycleBestEval || {}, null, 2)}
 
 # Debug round: ${attempt + 1}/${ATTEMPTS_PER_CYCLE}
 # Priority: FIX CORRECTNESS FIRST, then optimize performance.
@@ -1316,23 +1327,23 @@ Then append:
     } else {
       // Attempts 2+, HAVE a passing solution: IMPROVE prompt
       // Focus on performance, not correctness
-      genResult = await withTurnTimeout(agentRetry(() => agent(`You are an expert ${langToken(LANGUAGE)} kernel developer. You have a working solution — improve its performance.
+      genResult = await withTurnTimeout(agentRetry(() => agent(`${__taskContractBlock()}You are an expert ${langToken(LANGUAGE)} kernel developer. You have a working solution — improve its performance.
 
 # Operation: ${OP_DESC} (${opType})
 # Target: ${TARGET_GPU}
 # Language: ${langToken(LANGUAGE)}
 
 # Kernel Specification:
-${specText.substring(0, 1500)}
+${specText}
 
 ${parentCode ? `# Base code (reference, from ${baseForDebugLabel}):
 \`\`\`${langToken(LANGUAGE)}
-${baseForDebug.substring(0, 3000)}
+${baseForDebug}
 \`\`\`` : ''}
 
 # Current working code (improve this):
 \`\`\`${langToken(LANGUAGE)}
-${(currentRawCode || cycleBestCode || '').substring(0, 4000)}
+${(currentRawCode || cycleBestCode || '')}
 \`\`\`
 
 # Current performance:
@@ -1451,7 +1462,7 @@ Then append:
           throw new Error('CuTe DSL requires the Host deterministic evaluator; an agent cannot run its benchmark')
         }
         const plan = __solExecbenchEvalPlan(evalContext)
-        return agentRetry(() => agent(`Evaluate this K-Search candidate through the authoritative sol-execbench contract.
+        return agentRetry(() => agent(`${__taskContractBlock()}Evaluate this K-Search candidate through the authoritative sol-execbench contract.
 
 1. Atomically write the exact candidate below to ${candidatePath}.
 \`\`\`${langToken(LANGUAGE)}
@@ -1487,7 +1498,7 @@ Return the parsed result.`, {
           },
         }), { retries: 5 })
       })()
-      : await agentRetry(() => agent(`You are a kernel evaluation expert. Evaluate this ${langToken(LANGUAGE)} kernel for correctness and performance.
+      : await agentRetry(() => agent(`${__taskContractBlock()}You are a kernel evaluation expert. Evaluate this ${langToken(LANGUAGE)} kernel for correctness and performance.
 
 WALL-CLOCK BUDGET: ${EVAL_TIMEOUT_SEC}s for this whole eval attempt (compile + correctness + benchmark combined). If you exceed it on correctness alone with no benchmark latency yet, RETURN EARLY with {is_valid:false, latency_ms:null, metric_value:null, reason:"timeout_in_correctness"} — do not keep retrying. A budget-exceeded attempt is itself useful signal; a 90-minute correctness loop is not.
 
@@ -1496,11 +1507,11 @@ ${genResult.variant_path || 'n/a'}
 
 # Kernel Code (orientation snippet):
 \`\`\`${langToken(LANGUAGE)}
-${genResult.code.substring(0, 4000)}
+${genResult.code}
 \`\`\`
 
 # Kernel Specification (for correctness reference):
-${specText.substring(0, 1500)}
+${specText}
 
 # Evaluation Steps:
 
@@ -1717,7 +1728,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
 
     // Refine the tree — attach solution, update scores, add continuation children
     // K-Search hard requirement: the solved node MUST have at least one open child after refine
-    const refineResult = await agentRetry(() => agent(`You are a world model manager. The search cycle SUCCEEDED. Update the decision tree.
+    const refineResult = await agentRetry(() => agent(`${__taskContractBlock()}You are a world model manager. The search cycle SUCCEEDED. Update the decision tree.
 
 # Outcome:
 - Node: ${activeNodeId}
@@ -1729,7 +1740,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
 - Global best: ${bestMetric}
 
 # Current Decision Tree:
-${JSON.stringify(decisionTree, null, 2).substring(0, 5000)}
+${JSON.stringify(decisionTree, null, 2)}
 
 # Tasks (ALL REQUIRED):
 1. **Attach solution**: Mark node ${activeNodeId} as status="solved", record metric=${cycleBestScore}
@@ -1771,7 +1782,7 @@ Then append:
     }
   } else {
     // Backtrack — downgrade node (note_action_too_hard)
-    const backtrackResult = await agentRetry(() => agent(`You are a world model manager. The search cycle FAILED — no passing solution was produced. Update the decision tree.
+    const backtrackResult = await agentRetry(() => agent(`${__taskContractBlock()}You are a world model manager. The search cycle FAILED — no passing solution was produced. Update the decision tree.
 
 # Outcome:
 - Node: ${activeNodeId}
@@ -1781,7 +1792,7 @@ Then append:
 - Error: ${cycleBestEval?.error_log || 'compilation/correctness failure'}
 
 # Current Decision Tree:
-${JSON.stringify(decisionTree, null, 2).substring(0, 5000)}
+${JSON.stringify(decisionTree, null, 2)}
 
 # Tasks:
 1. **Downgrade node**: Mark ${activeNodeId} status="failed", reduce score_0_to_1 significantly, increase difficulty_1_to_5 by 1 (cap at 5)
@@ -1917,7 +1928,7 @@ if (terminationReason !== 'cycle_limit') {
     `Completed ${cycleCount}/${MAX_CYCLES} cycles; best verified speedup ` +
     `${bestMetric != null && baselineMetric > 0 ? (bestMetric / baselineMetric).toFixed(6) : '0'}x.`
 } else {
-  finalReport = await agentRetry(() => agent(`Write a concise technical report on this K-Search kernel optimization campaign.
+  finalReport = await agentRetry(() => agent(`${__taskContractBlock()}Write a concise technical report on this K-Search kernel optimization campaign.
 
 # K-Search Optimization Results
 - Operation: ${OP_DESC} (${opType})
@@ -1931,14 +1942,14 @@ if (terminationReason !== 'cycle_limit') {
 
 # Best Solution (node: ${bestSolution?.node_id || 'none'}):
 \`\`\`${langToken(LANGUAGE)}
-${(bestSolution?.code || '').substring(0, 3000)}
+${(bestSolution?.code || '')}
 \`\`\`
 
 # Top 5 Solutions:
 ${topSolutions.map((s, i) => `${i + 1}. ${s.id} (node=${s.node_id}, metric=${s.eval.metric_value})`).join('\n')}
 
 # Final Decision Tree State:
-${JSON.stringify(decisionTree, null, 2).substring(0, 3000)}
+${JSON.stringify(decisionTree, null, 2)}
 
 # Write:
 1. Search trajectory: which actions were attempted in what order, success/failure pattern
@@ -1958,7 +1969,7 @@ Then append:
 
 // embedded_inplace exit safety net — ALWAYS restore the project file byte-exact.
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${INTEG_KERNEL_PATH}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${INTEG_KERNEL_PATH}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 

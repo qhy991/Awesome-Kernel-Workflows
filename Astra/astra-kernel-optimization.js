@@ -150,6 +150,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -186,7 +197,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -484,7 +495,7 @@ phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agentRetry(() => agent(
-    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `${__taskContractBlock()}Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
@@ -503,7 +514,7 @@ if (USE_DRIVER) {
 }
 
 if (INPUT_MODE === 'generate_then_optimize') {
-  const generated = await agentRetry(() => agent(`No kernel_path was provided. Generate and verify an initial ${langToken(LEGACY_SETUP_LANG_TOKEN)} kernel before starting Astra optimization.
+  const generated = await agentRetry(() => agent(`${__taskContractBlock()}No kernel_path was provided. Generate and verify an initial ${langToken(LEGACY_SETUP_LANG_TOKEN)} kernel before starting Astra optimization.
 
 # Problem Input
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
@@ -544,7 +555,7 @@ ${USE_DRIVER
   INITIAL_KERNEL_PATH = generatedKernelPath
 }
 
-const setup = await agentRetry(() => agent(`You are the Astra setup agent for production ${langToken(LEGACY_SETUP_LANG_TOKEN)} kernel optimization.
+const setup = await agentRetry(() => agent(`${__taskContractBlock()}You are the Astra setup agent for production ${langToken(LEGACY_SETUP_LANG_TOKEN)} kernel optimization.
 
 # Inputs
 - kernel_path: ${INITIAL_KERNEL_PATH}
@@ -592,7 +603,7 @@ currentBestCode = initialKernelCode
 // =============================================================================
 phase('PrepareTests')
 
-const tests = await agentRetry(() => agent(`You are Astra's Testing Agent. Build a correctness and benchmark test suite for this ${langToken(LEGACY_TESTING_LANG_TOKEN)} kernel.
+const tests = await agentRetry(() => agent(`${__taskContractBlock()}You are Astra's Testing Agent. Build a correctness and benchmark test suite for this ${langToken(LEGACY_TESTING_LANG_TOKEN)} kernel.
 
 # Compare kind
 ${COMPARE_KIND}
@@ -652,7 +663,7 @@ phase('ProfileBaseline')
 let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
 if (USE_DRIVER) {
   const _pd = await agentRetry(() => agent(
-    `Read ${INITIAL_KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
+    `${__taskContractBlock()}Read ${INITIAL_KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${BACKEND_DIR}/manifest.json --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
     `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
     { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'ProfileBaseline', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
@@ -671,7 +682,7 @@ let INTEGRATION_DECISION = {
 if (!args.integration_pattern) {
   const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
   const _integ = await agentRetry(() => agent(
-    `Read ${INITIAL_KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+    `${__taskContractBlock()}Read ${INITIAL_KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
     `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
     `--kernel "${INITIAL_KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
@@ -691,7 +702,7 @@ const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'sta
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${INITIAL_KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Byte-exact backup: run \`cp -a "${INITIAL_KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'ProfileBaseline', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 // A-O1 closure: native_profiler but no standalone driver path (embedded/legacy) → perf_heuristic
@@ -701,11 +712,11 @@ if (PROFILING_DECISION.method === 'native_profiler' && !USE_DRIVER_STANDALONE) {
     profiler_name: 'test-harness-perf', rationale: 'native_profiler but no standalone driver -> perf_heuristic' }
 }
 
-baselineProfile = await agentRetry(() => agent(`You are Astra's Profiling Agent. Establish the baseline profile for the initial kernel.
+baselineProfile = await agentRetry(() => agent(`${__taskContractBlock()}You are Astra's Profiling Agent. Establish the baseline profile for the initial kernel.
 
 # Initial kernel
 \`\`\`${fenceToken()}
-${initialKernelCode.substring(0, 10000)}
+${initialKernelCode}
 \`\`\`
 
 # Commands
@@ -714,7 +725,7 @@ ${initialKernelCode.substring(0, 10000)}
 
 # Test suite
 \`\`\`json
-${JSON.stringify(testSuite, null, 2).substring(0, 6000)}
+${JSON.stringify(testSuite, null, 2)}
 \`\`\`
 
 # Required behavior
@@ -752,21 +763,21 @@ for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
 
   phase('Plan')
 
-  const plan = await agentRetry(() => agent(`You are Astra's Planning Agent. Propose the next ${langToken(LEGACY_PLAN_LANG_TOKEN)} optimization.
+  const plan = await agentRetry(() => agent(`${__taskContractBlock()}You are Astra's Planning Agent. Propose the next ${langToken(LEGACY_PLAN_LANG_TOKEN)} optimization.
 
 # Current best kernel
 \`\`\`${fenceToken()}
-${currentBestCode.substring(0, 12000)}
+${currentBestCode}
 \`\`\`
 
 # Baseline profile
 \`\`\`json
-${JSON.stringify(baselineProfile, null, 2).substring(0, 6000)}
+${JSON.stringify(baselineProfile, null, 2)}
 \`\`\`
 
 # Prior run log
 \`\`\`json
-${JSON.stringify(runLog.slice(-6), null, 2).substring(0, 8000)}
+${JSON.stringify(runLog.slice(-6), null, 2)}
 \`\`\`
 
 # Lessons
@@ -802,12 +813,12 @@ Then append (this is loop iteration ${iteration}):
 
   phase('Code')
 
-  const code = await agentRetry(() => agent(`You are Astra's Coding Agent. Apply the planning agent's optimization to the current best ${langToken(LEGACY_CODE_LANG_TOKEN)} kernel.
+  const code = await agentRetry(() => agent(`${__taskContractBlock()}You are Astra's Coding Agent. Apply the planning agent's optimization to the current best ${langToken(LEGACY_CODE_LANG_TOKEN)} kernel.
 ${SOL_CANDIDATE_CONTRACT}
 
 # Current best kernel
 \`\`\`${fenceToken()}
-${currentBestCode.substring(0, 14000)}
+${currentBestCode}
 \`\`\`
 
 # Integration contract
@@ -874,11 +885,11 @@ Then append (this is loop iteration ${iteration}):
     }
   }
 
-  const evaluation = await agentRetry(() => agent(`You are Astra's Testing and Profiling Agents working together. Evaluate this candidate with real evidence.
+  const evaluation = await agentRetry(() => agent(`${__taskContractBlock()}You are Astra's Testing and Profiling Agents working together. Evaluate this candidate with real evidence.
 
 # Candidate code
 \`\`\`${fenceToken()}
-${(code.candidate_code || '').substring(0, 16000)}
+${(code.candidate_code || '')}
 \`\`\`
 
 # Commands
@@ -891,7 +902,7 @@ ${(code.candidate_code || '').substring(0, 16000)}
 
 # Test suite
 \`\`\`json
-${JSON.stringify(testSuite, null, 2).substring(0, 6000)}
+${JSON.stringify(testSuite, null, 2)}
 \`\`\`
 
 # Required behavior
@@ -1035,11 +1046,11 @@ Then append, using the values you just measured (status="done" if it compiled an
     currentBestCode = code.candidate_code || currentBestCode
   }
 
-  const lesson = await agentRetry(() => agent(`Distill the useful lesson from this Astra iteration.
+  const lesson = await agentRetry(() => agent(`${__taskContractBlock()}Distill the useful lesson from this Astra iteration.
 
 # Record
 \`\`\`json
-${JSON.stringify(record, null, 2).substring(0, 8000)}
+${JSON.stringify(record, null, 2)}
 \`\`\`
 
 # Best updated?
@@ -1070,7 +1081,7 @@ Then append (this is loop iteration ${iteration}):
 // =============================================================================
 phase('PostProcess')
 
-const postProcess = await agentRetry(() => agent(`Prepare final Astra post-processing guidance.
+const postProcess = await agentRetry(() => agent(`${__taskContractBlock()}Prepare final Astra post-processing guidance.
 
 # Integration mode
 ${INTEGRATION_MODE}
@@ -1080,7 +1091,7 @@ ${GENERATED_EXPORT_FUNC}
 
 # Best kernel
 \`\`\`${fenceToken()}
-${currentBestCode.substring(0, 12000)}
+${currentBestCode}
 \`\`\`
 
 # Best result
@@ -1119,7 +1130,7 @@ Then append:
 // =============================================================================
 phase('Report')
 
-const finalReport = await agentRetry(() => agent(`Write a concise technical report for this Astra optimization campaign.
+const finalReport = await agentRetry(() => agent(`${__taskContractBlock()}Write a concise technical report for this Astra optimization campaign.
 
 # Kernel
 ${INITIAL_KERNEL_PATH}
@@ -1129,7 +1140,7 @@ ${COMPARE_KIND}
 
 # Baseline/profile
 \`\`\`json
-${JSON.stringify(baselineProfile, null, 2).substring(0, 6000)}
+${JSON.stringify(baselineProfile, null, 2)}
 \`\`\`
 
 # Best result
@@ -1139,7 +1150,7 @@ ${JSON.stringify(bestResult, null, 2)}
 
 # Run log
 \`\`\`json
-${JSON.stringify(runLog, null, 2).substring(0, 12000)}
+${JSON.stringify(runLog, null, 2)}
 \`\`\`
 
 # Post-process notes
@@ -1164,7 +1175,7 @@ Then append (speedup is the best measured speedup, or null if no candidate was v
 
 // embedded_inplace exit safety net: unconditionally restore pristine original.
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${INITIAL_KERNEL_PATH}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${INITIAL_KERNEL_PATH}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 

@@ -27,6 +27,8 @@ for the versioning policy.
 ### Added
 
 - Add opt-in native KSearch task-result evaluation consuming complete task JSON and keeping reference scoring separate from estimates.
+### Fixed
+- Preserve complete agent prompt content across workflows and generation templates: remove fixed character clipping of task requirements, source, measurements and typed evidence; carry the original task reference into fresh activations. Long JSON evidence remains parseable. Search population limits and display identifiers are unchanged. Add executed KSearch and shared-context regressions.
 
 ### Changed
 

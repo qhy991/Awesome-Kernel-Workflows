@@ -156,6 +156,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -180,9 +191,9 @@ const ATTEMPT_PLAN = (args.attempt_plan && typeof args.attempt_plan === 'object'
 // KerSor emits the cumulative ids as `failed_strategy_ids`; the per-round
 // derivation stays as the fallback for a dispatch that predates that channel.
 const FAILED_STRATEGY_IDS = Array.isArray(args.failed_strategy_ids)
-  ? (args.failed_strategy_ids || []).filter(id => typeof id === 'string' && id)
+  ? args.failed_strategy_ids.filter(id => typeof id === 'string' && id)
   : ((ATTEMPT_EVIDENCE && Array.isArray(ATTEMPT_EVIDENCE.transfer_items))
-    ? (ATTEMPT_EVIDENCE.transfer_items || []).filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
+    ? ATTEMPT_EVIDENCE.transfer_items.filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
     : [])
 function __attemptBlock() {
   if (!ATTEMPT_EVIDENCE && !ATTEMPT_PLAN) return ''
@@ -192,7 +203,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -373,7 +384,7 @@ async function main() {
   phase('Setup');
 
   const setupResult = await agentRetry(() => agent(
-    `Set up FACT compositional synthesis environment:
+    `${__taskContractBlock()}Set up FACT compositional synthesis environment:
 
 1. Initialize CUTLASS workspace:
    - CUTLASS version and headers
@@ -460,7 +471,7 @@ Then append:
   // must NOT assign confidence. Default keeps the happy path unchanged if the
   // decision is ignored. Useful for the ablation stage; does not disturb the
   // discover/realize/compose loop. ---
-  const _pd = await agentRetry(() => agent(`Classify the GEMM problem SIZE for the profiling strategist (the task is fixed to 'gemm'; you classify size only — one of tiny|small|large — based on the target operation ${kernelSpec.operation}, shapes ${kernelSpec.shapes}, and dtypes ${(kernelSpec.dtypes || []).join(', ')}).
+  const _pd = await agentRetry(() => agent(`${__taskContractBlock()}Classify the GEMM problem SIZE for the profiling strategist (the task is fixed to 'gemm'; you classify size only — one of tiny|small|large — based on the target operation ${kernelSpec.operation}, shapes ${kernelSpec.shapes}, and dtypes ${(kernelSpec.dtypes || []).join(', ')}).
 Then run exactly: \`${SUBSTRATE_PY} ${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${STRATEGIST_MANIFEST} --task gemm --size <tiny|small|large> --cache ${args.exp_dir}/prof_cache.json --trajectory ${args.exp_dir}/genome.jsonl\`
 Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}. Do NOT assign confidence yourself — the substrate stamps it.`, {
     model: MODEL.mechanical,
@@ -500,7 +511,7 @@ Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, 
   const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
   const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${args.exp_dir}/integ_original.backup` : ''
   if (ORIGINAL_BACKUP && _integProbeKernel) {
-    await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${_integProbeKernel}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+    await agentRetry(() => agent(`${__taskContractBlock()}Byte-exact backup: run \`cp -a "${_integProbeKernel}" "${ORIGINAL_BACKUP}"\` and confirm.`,
       { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
   }
   // If the strategist routed to an embedded path, validate the required wiring now
@@ -542,7 +553,7 @@ Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, 
   log(`Discovering optimization patterns from ${setupResult.exemplar_kernels.length} exemplars...`);
 
   const discoveryResult = await agentRetry(() => agent(
-    `Discover optimization patterns from exemplar kernels:
+    `${__taskContractBlock()}Discover optimization patterns from exemplar kernels:
 
 Target operation: ${kernelSpec.operation}
 Target architecture: ${setupResult.target_architecture}
@@ -645,7 +656,7 @@ Then append:
   let realizationResult = null;
   try {
   realizationResult = await agentRetry(() => agent(
-    `Realize discovered patterns as concrete code transformations:
+    `${__taskContractBlock()}Realize discovered patterns as concrete code transformations:
 
 Target: ${kernelSpec.operation}
 Architecture: ${setupResult.target_architecture}
@@ -799,13 +810,13 @@ Emit every line of every candidate. Do NOT describe a candidate as a delta again
       pattern_parameters: k.pattern_parameters,
       measurement: __measured.filter(m => m.kernel_id === k.kernel_id).map(m => ({
         compiled: m.compiled, correct: m.correct, speedup: m.speedup,
-        failure_code: m.failure_code, diagnostics: String(m.stderr || '').slice(-2000),
+        failure_code: m.failure_code, diagnostics: String(m.stderr || ''),
       }))[0] || null,
     }));
     let compositionResult = null;
     try {
     compositionResult = await agentRetry(() => agent(
-    `Compose patterns to generate optimized CUTLASS kernels:
+    `${__taskContractBlock()}Compose patterns to generate optimized CUTLASS kernels:
 
 Target specification:
 - Operation: ${kernelSpec.operation}
@@ -922,7 +933,7 @@ Then append:
   log('Running ablation studies to validate pattern contributions...');
 
   const ablationResult = await agentRetry(() => agent(
-    `Run ablation studies on top composed kernels:
+    `${__taskContractBlock()}Run ablation studies on top composed kernels:
 
 Top kernels: ${Math.min(composedKernels.length, 5)}
 
@@ -1095,7 +1106,7 @@ Rank and pick best_kernel from these. Do not re-derive or estimate them, and do
 not mark a kernel unavailable that appears above.` : ''
 
   let evaluationResult = await agentRetry(() => agent(
-    `Evaluate all composed kernels:${evaluationEmbeddingBlock}${__measuredBlock}
+    `${__taskContractBlock()}Evaluate all composed kernels:${evaluationEmbeddingBlock}${__measuredBlock}
 
 Kernels to evaluate: ${composedKernels.length}
 Target: ${setupResult.target_architecture}
@@ -1195,7 +1206,7 @@ Then append, using the values you just measured (status="done" if the best kerne
   phase('Report');
 
   const report = await agentRetry(() => agent(
-    `Generate FACT compositional synthesis report:
+    `${__taskContractBlock()}Generate FACT compositional synthesis report:
 
 Summary:
 - Target: ${kernelSpec.operation} on ${setupResult.target_architecture}
@@ -1262,7 +1273,7 @@ Then append (speedup is the best speedup vs baseline, or null if unavailable):
   // terminated. (embedded_dispatch is non-mutating — adapter unregister is the
   // reversibility — so it is exempt.)
   if (ORIGINAL_BACKUP && _integProbeKernel) {
-    await agentRetry(() => agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${_integProbeKernel}"\` and confirm.`,
+    await agentRetry(() => agent(`${__taskContractBlock()}Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${_integProbeKernel}"\` and confirm.`,
       { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH }), { retries: 5 })
   }
 

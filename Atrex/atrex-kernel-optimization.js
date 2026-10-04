@@ -53,6 +53,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -89,7 +100,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -236,7 +247,7 @@ function expandedCommandContract() {
 
 log('Phase 1/4: Doctor')
 const doctor = await withTurnTimeout(agentRetry(
-  () => agent(`
+  () => agent(`${__taskContractBlock()}
 Act as a strict Atrex Kernel Agent adapter doctor.
 
 ${expandedCommandContract()}
@@ -256,7 +267,7 @@ if (!expandedCommand) return { ok: false, error: 'missing_expanded_atrex_command
 
 log('Phase 2/4: Launch Campaign')
 const launch = await withTurnTimeout(agentRetry(
-  () => agent(`
+  () => agent(`${__taskContractBlock()}
 Launch exactly one official Atrex Kernel Agent campaign.
 
 Expanded command: ${expandedCommand}
@@ -273,7 +284,7 @@ Return command, exit_code, campaign_root, stdout_path, stderr_path, and terminal
 
 log('Phase 3/4: Evidence Audit')
 const audit = await withTurnTimeout(agentRetry(
-  () => agent(`
+  () => agent(`${__taskContractBlock()}
 Audit the completed Atrex campaign without changing it.
 
 Atrex root: ${ATREX_ROOT}
@@ -289,7 +300,7 @@ Return exact existing paths and verdicts. Use false/null/empty strings for absen
 
 log('Phase 4/4: Report')
 const report = await withTurnTimeout(agentRetry(
-  () => agent(`
+  () => agent(`${__taskContractBlock()}
 Write the strict-adapter report for one Atrex campaign.
 
 Doctor: ${JSON.stringify(doctor)}

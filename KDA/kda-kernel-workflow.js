@@ -216,6 +216,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -252,7 +263,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -538,7 +549,7 @@ phase('Inspect')
 
 if (USE_DRIVER) {
   DRIVER = await agentRetry(() => agent(
-    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `${__taskContractBlock()}Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
@@ -567,7 +578,7 @@ if (USE_DRIVER) {
 }
 
 if (INPUT_MODE === 'generate_then_optimize') {
-  const generated = await agentRetry(() => agent(`No kernel_path was provided. Generate and verify an initial kernel before KDA inspects and optimizes the workspace.
+  const generated = await agentRetry(() => agent(`${__taskContractBlock()}No kernel_path was provided. Generate and verify an initial kernel before KDA inspects and optimizes the workspace.
 
 # Problem Input
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
@@ -606,7 +617,7 @@ ${USE_DRIVER
   KERNEL_PATH = generatedKernelPath
 }
 
-const inspection = await agentRetry(() => agent(`You are in a task implementation workspace. Inspect the workspace and the target kernel.
+const inspection = await agentRetry(() => agent(`${__taskContractBlock()}You are in a task implementation workspace. Inspect the workspace and the target kernel.
 
 # Task Contract
 - Task name: ${TASK_NAME}
@@ -671,7 +682,7 @@ log(`Inspected: ${_inspKeyFns.length} key functions, approach: ${guard(inspectio
 // =============================================================================
 phase('Plan')
 
-const draftResult = await agentRetry(() => agent(`Write a plan draft to docs/draft.md for this kernel optimization task.
+const draftResult = await agentRetry(() => agent(`${__taskContractBlock()}Write a plan draft to docs/draft.md for this kernel optimization task.
 
 # Task Contract
 - Task name: ${TASK_NAME}
@@ -691,7 +702,7 @@ const draftResult = await agentRetry(() => agent(`Write a plan draft to docs/dra
 
 # Current kernel (first 3000 chars):
 \`\`\`
-${baselineCode.substring(0, 3000)}
+${baselineCode}
 \`\`\`
 
 # External Resources
@@ -749,7 +760,7 @@ const directions = draftResult.candidate_directions
 log(`Draft written. ${directions.length} candidate directions identified.`)
 
 // Convert draft to executable plan
-const planResult = await agentRetry(() => agent(`Convert the draft into an executable plan at docs/plan.md.
+const planResult = await agentRetry(() => agent(`${__taskContractBlock()}Convert the draft into an executable plan at docs/plan.md.
 
 # Draft Content:
 ${draftResult.draft_content}
@@ -810,7 +821,7 @@ log(`Plan written. ${planCandidates.length} candidates ordered by priority.`)
 // owns method+confidence. Honored in the Validate profile block below. ---
 if (USE_DRIVER) {
   const _pd = await agentRetry(() => agent(
-    `Read ${KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
+    `${__taskContractBlock()}Read ${KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${BACKEND_DIR}/manifest.json --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
     `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
     { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
@@ -832,7 +843,7 @@ if (!args.integration_pattern) {
   const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true, sol_execbench_cli: !!SOL_CLI })
 
   const _integ = await agentRetry(() => agent(
-    `Read ${KERNEL_PATH}; classify can_compile_standalone (yes|no|uncertain). Then ` +
+    `${__taskContractBlock()}Read ${KERNEL_PATH}; classify can_compile_standalone (yes|no|uncertain). Then ` +
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
     `--kernel "${KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
     `--cache ${EXP_DIR}/integ_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`. ` +
@@ -861,7 +872,7 @@ if (IS_SOL) {
 }
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: { type: 'object', additionalProperties: true } }), { retries: 5 })
 }
 // A-O1 closure: native_profiler but no driver standalone (embedded/legacy) → perf_heuristic
@@ -880,7 +891,7 @@ for (iteration = 0; iteration < Math.min(planCandidates.length, MAX_CANDIDATES) 
   // ---- Phase 3: Implement ----
   phase('Implement')
 
-  const impl = await agentRetry(() => agent(`Implement this optimization candidate as a complete, compilable kernel.
+  const impl = await agentRetry(() => agent(`${__taskContractBlock()}Implement this optimization candidate as a complete, compilable kernel.
 
 # Task Contract
 - Objective: ${OBJECTIVE}
@@ -889,7 +900,7 @@ for (iteration = 0; iteration < Math.min(planCandidates.length, MAX_CANDIDATES) 
 
 # Current Best Implementation:
 \`\`\`
-${currentBestCode.substring(0, 4000)}
+${currentBestCode}
 \`\`\`
 
 # Candidate to Implement
@@ -1000,7 +1011,7 @@ The parse step prints one line "SPEEDUP=<aggregate> REDUCTION=<contract reductio
     }
   }
 
-  const validation = await agentRetry(() => agent(`Validate this kernel candidate: run correctness and performance tests.${solEvalBlock}
+  const validation = await agentRetry(() => agent(`${__taskContractBlock()}Validate this kernel candidate: run correctness and performance tests.${solEvalBlock}
 
 # Candidate: ${candidateId} — ${candidate.title}
 
@@ -1010,7 +1021,7 @@ The parse step prints one line "SPEEDUP=<aggregate> REDUCTION=<contract reductio
 
 # Candidate code (first 3000 chars):
 \`\`\`
-${candidateCode.substring(0, 3000)}
+${candidateCode}
 \`\`\`
 
 # Correctness requirements: ${CORRECTNESS}
@@ -1201,7 +1212,7 @@ Then append, using the values you just measured (status="done" if correctness pa
 // =============================================================================
 phase('Report')
 
-const report = await agentRetry(() => agent(`Write the final optimization report.
+const report = await agentRetry(() => agent(`${__taskContractBlock()}Write the final optimization report.
 
 # Task: ${TASK_NAME}
 # Objective: ${OBJECTIVE}
@@ -1232,7 +1243,7 @@ Then append, using the final outcome (status="done" if a candidate was promoted,
 
 // embedded_inplace exit safety net
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 

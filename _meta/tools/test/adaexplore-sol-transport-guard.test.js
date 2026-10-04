@@ -14,8 +14,8 @@ function source() {
 
 test('AdaExplore preserves the full selected source for Sol tuner edits', () => {
   const text = source()
-  assert.match(text, /IS_SOL \? selectedNode\.code : selectedNode\.code\.substring\(0, 5000\)/)
-  assert.match(text, /IS_SOL \? selectedNode\.code : selectedNode\.code\.substring\(0, 6000\)/)
+  assert.match(text, /\$\{selectedNode\.code\}/)
+  assert.match(text, /\$\{selectedNode\.code\}/)
   assert.match(text, /never omit an unchanged suffix from the selected kernel/)
 })
 

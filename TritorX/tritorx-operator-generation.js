@@ -78,6 +78,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -114,7 +125,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -303,7 +314,7 @@ let VERIFICATION_CONFIRM = { method: 'compile_lint', confidence: 'inferred', evi
 // =============================================================================
 phase('Setup')
 
-const setupResult = await agentRetry(() => agent(`You are setting up a TritorX kernel generation session.
+const setupResult = await agentRetry(() => agent(`${__taskContractBlock()}You are setting up a TritorX kernel generation session.
 
 # Target Platform: ${TARGET_PLATFORM}
 # Triton Dialect: ${TRITON_DIALECT}
@@ -325,7 +336,7 @@ const setupResult = await agentRetry(() => agent(`You are setting up a TritorX k
    - Nested operator dependencies (e.g., argmax references max)
    - Expected output format
 
-${operators.length === 1 ? `# Operator: ${operators[0].name}\n# Docstring:\n${operators[0].docstring?.substring(0, 2000) || '(to be loaded)'}` : ''}
+${operators.length === 1 ? `# Operator: ${operators[0].name}\n# Docstring:\n${operators[0].docstring || '(to be loaded)'}` : ''}
 
 Return setup status.
 
@@ -388,17 +399,17 @@ for (const op of operators) {
     // =========================================================================
     phase('Generate')
 
-    const generateResult = await agentRetry(() => agent(`You are a TritorX kernel generator. Generate a Triton ${TRITON_DIALECT} kernel and Python wrapper for this PyTorch ATen operator.
+    const generateResult = await agentRetry(() => agent(`${__taskContractBlock()}You are a TritorX kernel generator. Generate a Triton ${TRITON_DIALECT} kernel and Python wrapper for this PyTorch ATen operator.
 
 # Operator: ${opName}
 # Docstring:
-${opDoc.substring(0, 3000) || `(Generate implementation for ${opName})`}
+${opDoc || `(Generate implementation for ${opName})`}
 
 # Target Platform: ${TARGET_PLATFORM}
 # Triton Dialect: ${TRITON_DIALECT}
 # Supported dtypes: ${SUPPORTED_DTYPES.join(', ')}
 
-${FEW_SHOT_EXAMPLES.length > 0 ? `# Few-shot Examples:\n${FEW_SHOT_EXAMPLES.slice(0, 3).map((ex, i) => `## Example ${i + 1}: ${ex.name}\nKernel:\n\`\`\`python\n${ex.kernel?.substring(0, 1000)}\n\`\`\`\nWrapper:\n\`\`\`python\n${ex.wrapper?.substring(0, 500)}\n\`\`\``).join('\n\n')}` : ''}
+${FEW_SHOT_EXAMPLES.length > 0 ? `# Few-shot Examples:\n${FEW_SHOT_EXAMPLES.slice(0, 3).map((ex, i) => `## Example ${i + 1}: ${ex.name}\nKernel:\n\`\`\`python\n${ex.kernel}\n\`\`\`\nWrapper:\n\`\`\`python\n${ex.wrapper}\n\`\`\``).join('\n\n')}` : ''}
 
 ${feedbackPrompt ? `# Feedback from previous attempt:\n${feedbackPrompt}` : ''}
 
@@ -452,17 +463,17 @@ Then append (operator ${opName}, attempt ${attempt}):
         // =====================================================================
         phase('Lint')
 
-        const lintResult = await agentRetry(() => agent(`You are the TritorX Custom Linter (Section 3.2).
+        const lintResult = await agentRetry(() => agent(`${__taskContractBlock()}You are the TritorX Custom Linter (Section 3.2).
 Check this Triton kernel + wrapper for violations.
 
 # Kernel:
 \`\`\`python
-${currentKernel.substring(0, 4000)}
+${currentKernel}
 \`\`\`
 
 # Wrapper:
 \`\`\`python
-${currentWrapper.substring(0, 2000)}
+${currentWrapper}
 \`\`\`
 
 # Lint Rules:
@@ -511,17 +522,17 @@ Then append (operator ${opName}, status="done" if lint passed else "error"):
         // =====================================================================
         phase('Compile-Test')
 
-        const testResult = await agentRetry(() => agent(`You are the TritorX Compile/Test executor.
+        const testResult = await agentRetry(() => agent(`${__taskContractBlock()}You are the TritorX Compile/Test executor.
 Compile and test this kernel on ${TARGET_PLATFORM}.
 
 # Kernel:
 \`\`\`python
-${currentKernel.substring(0, 3000)}
+${currentKernel}
 \`\`\`
 
 # Wrapper:
 \`\`\`python
-${currentWrapper.substring(0, 2000)}
+${currentWrapper}
 \`\`\`
 
 # Steps:
@@ -581,16 +592,16 @@ Then append, using the values you just measured (status="done" if all_passed, el
         // =====================================================================
         phase('Debug')
 
-        const debugResult = await agentRetry(() => agent(`You are the TritorX Debug agent. Fix this kernel based on the error feedback.
+        const debugResult = await agentRetry(() => agent(`${__taskContractBlock()}You are the TritorX Debug agent. Fix this kernel based on the error feedback.
 
 # Current Kernel:
 \`\`\`python
-${currentKernel.substring(0, 3000)}
+${currentKernel}
 \`\`\`
 
 # Current Wrapper:
 \`\`\`python
-${currentWrapper.substring(0, 1500)}
+${currentWrapper}
 \`\`\`
 
 # Error Feedback:
@@ -644,7 +655,7 @@ Then append (operator ${opName}, attempt ${attempt}):
   }
 
   if (!success) {
-    operatorsFailed.push({ name: opName, attempts: MAX_ATTEMPTS, last_error: feedbackPrompt?.substring(0, 100) || '' })
+    operatorsFailed.push({ name: opName, attempts: MAX_ATTEMPTS, last_error: feedbackPrompt || '' })
     log(`  ${opName}: FAILED after ${MAX_ATTEMPTS} attempts`)
   }
 
@@ -658,7 +669,7 @@ phase('Report')
 
 const coverage = operators.length > 0 ? (operatorsPassed.length / operators.length * 100).toFixed(1) : '0'
 
-const finalReport = await agentRetry(() => agent(`Write a TritorX generation report.
+const finalReport = await agentRetry(() => agent(`${__taskContractBlock()}Write a TritorX generation report.
 
 # TritorX Results
 - Target: ${TARGET_PLATFORM} (${TRITON_DIALECT})

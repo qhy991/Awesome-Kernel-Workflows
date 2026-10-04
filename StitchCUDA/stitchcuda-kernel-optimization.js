@@ -205,6 +205,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -229,9 +240,9 @@ const ATTEMPT_PLAN = (args.attempt_plan && typeof args.attempt_plan === 'object'
 // KerSor emits the cumulative ids as `failed_strategy_ids`; the per-round
 // derivation stays as the fallback for a dispatch that predates that channel.
 const FAILED_STRATEGY_IDS = Array.isArray(args.failed_strategy_ids)
-  ? (args.failed_strategy_ids || []).filter(id => typeof id === 'string' && id)
+  ? args.failed_strategy_ids.filter(id => typeof id === 'string' && id)
   : ((ATTEMPT_EVIDENCE && Array.isArray(ATTEMPT_EVIDENCE.transfer_items))
-    ? (ATTEMPT_EVIDENCE.transfer_items || []).filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
+    ? ATTEMPT_EVIDENCE.transfer_items.filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
     : [])
 function __attemptBlock() {
   if (!ATTEMPT_EVIDENCE && !ATTEMPT_PLAN) return ''
@@ -241,7 +252,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -527,7 +538,7 @@ async function main() {
   IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
   ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXPDIR}/integ_original.backup` : ''
   if (ORIGINAL_BACKUP) {
-    await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+    await agentRetry(() => agent(`${__taskContractBlock()}Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
       { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
   }
   // embedded_inplace exit safety net: unconditionally restore the pristine original
@@ -536,7 +547,7 @@ async function main() {
   // suspenders exit restore the rollout guard requires.
   async function __exitRestore() {
     if (!ORIGINAL_BACKUP) return
-    await agentRetry(() => agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
+    await agentRetry(() => agent(`${__taskContractBlock()}Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
       { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH }), { retries: 5 })
   }
   // A-O1 closure: native_profiler but ncu unavailable -> perf_heuristic (no ncu in
@@ -548,7 +559,7 @@ async function main() {
   }
 
   const setupResult = await agentRetry(() => agent(
-    `Set up StitchCUDA orchestration environment:
+    `${__taskContractBlock()}Set up StitchCUDA orchestration environment:
 
 1. Initialize ${langToken(LEGACY_SETUP_LANG_TOKEN)} environment:
    - ${langToken(LEGACY_SETUP_LANG_TOKEN)} version and user-provided compiler/toolchain
@@ -1034,7 +1045,7 @@ Then append:
 
 Kernel to verify:
 \`\`\`${fenceToken()}
-${String(codeResult.kernel_code ?? '').substring(0, 2500)}${codeResult.kernel_code.length > 2500 ? '\n... (truncated)' : ''}
+${String(codeResult.kernel_code ?? '')}
 \`\`\`
 
 Verification process:
@@ -1177,7 +1188,7 @@ Then append, using the values you just measured (status="done" if verification_p
   }
 
   const report = await agentRetry(() => agent(
-    `Generate StitchCUDA synthesis report:
+    `${__taskContractBlock()}Generate StitchCUDA synthesis report:
 
 Orchestration summary:
 - Target: ${kernelSpec.operation} on ${setupResult.target_architecture}
