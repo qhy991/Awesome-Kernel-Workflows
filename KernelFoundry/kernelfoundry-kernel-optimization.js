@@ -68,6 +68,12 @@ Wait for its terminal result and read ${ctx.resultPath}. Return test_result_path
   return __taskResult(output, ctx.resultPath, ctx.workloadCount)
     || __taskHold('missing task result')
 }
+
+async function __nativeTaskAcceptedParent(ctx) {
+  const measured = await __nativeTaskEvaluate(ctx)
+  if (!measured?.is_valid) return __taskHold('accepted parent failed full official task measurement')
+  return measured
+}
 // --- END inlined task-result scaffolding ---
 // --- BEGIN sol-execbench-eval substrate (auto-inlined by scripts/patch-sol-execbench-eval.js) ---
 const SOL_SOLUTION_CONTRACT = [
@@ -841,6 +847,23 @@ const operatorCode = setupResult.operator_code
 const baselineTime = args.task_result_command ? null : setupResult.baseline_time_ms
 
 log(`Setup: ${setupResult.operator_type} on ${TARGET_HW} | Baseline: ${baselineTime}ms | Target: ${SPEEDUP_TARGET}x | Language: ${TARGET_LANG}`)
+
+let taskParentMeasurement = null
+if (args.task_result_command && KERNEL_PATH) {
+  taskParentMeasurement = await __nativeTaskAcceptedParent({candidatePath:KERNEL_PATH,
+    resultPath:`${EXP_DIR}/accepted_parent.task.json`,command:args.task_result_command,
+    workloadCount:args.task_workload_count,label:'accepted-parent-task'})
+  const descriptor = await agentRetry(() => agent(`Read the complete officially measured accepted parent at ${taskParentMeasurement.host_candidate_path}. Classify this exact implementation on the existing KernelFoundry behavioral axes. d_mem: ${JSON.stringify(BEHAVIORAL_DIMS.d_mem)}; d_algo: ${JSON.stringify(BEHAVIORAL_DIMS.d_algo)}; d_sync: ${JSON.stringify(BEHAVIORAL_DIMS.d_sync)}. Return only integer coordinates 0 through 3. Do not modify the file or estimate measurements.`,
+    {label:'accepted-parent-descriptor',phase:'Setup',schema:{type:'object',properties:{d_mem:{type:'integer'},d_algo:{type:'integer'},d_sync:{type:'integer'}},required:['d_mem','d_algo','d_sync']}}),{retries:0})
+  if (!descriptor || !['d_mem','d_algo','d_sync'].every(k => Number.isInteger(descriptor[k]) && descriptor[k] >= 0 && descriptor[k] <= 3)) __taskHold('accepted parent behavioral descriptor unavailable')
+  const cell = `${descriptor.d_mem},${descriptor.d_algo},${descriptor.d_sync}`
+  globalBest = {...globalBest,id:'accepted-parent',cell,compiled:true,correct:true,
+    fitness:computeFitness(true,true,taskParentMeasurement.speedup),speedup:taskParentMeasurement.speedup,
+    candidate_path:taskParentMeasurement.host_candidate_path,result_path:taskParentMeasurement.test_result_path,
+    binding_path:taskParentMeasurement.test_result_path,candidate_sha256:taskParentMeasurement.source_binding.source_sha256,
+    strategy:'independently accepted parent'}
+  archive[cell] = {...globalBest}
+}
 
 // =============================================================================
 // MAP-Elites Evolutionary Loop
@@ -1761,6 +1784,7 @@ return {
     name: args.task_result_command ? 'speedup_vs_reference' : 'speedup',
     value: globalBest.speedup,
   },
+  ...(taskParentMeasurement ? {accepted_parent_measurement:taskParentMeasurement,speedup_vs_accepted_parent:globalBest.speedup/taskParentMeasurement.speedup} : {}),
   best_cell: globalBest.cell,
   best_kernel_code: args.task_result_command ? '' : globalBest.code,
   generations: GENERATIONS,

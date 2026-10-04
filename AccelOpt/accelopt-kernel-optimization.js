@@ -68,6 +68,12 @@ Wait for its terminal result and read ${ctx.resultPath}. Return test_result_path
   return __taskResult(output, ctx.resultPath, ctx.workloadCount)
     || __taskHold('missing task result')
 }
+
+async function __nativeTaskAcceptedParent(ctx) {
+  const measured = await __nativeTaskEvaluate(ctx)
+  if (!measured?.is_valid) return __taskHold('accepted parent failed full official task measurement')
+  return measured
+}
 // --- END inlined task-result scaffolding ---
 // --- BEGIN sol-execbench-eval substrate (auto-inlined by scripts/patch-sol-execbench-eval.js) ---
 const SOL_SOLUTION_CONTRACT = [
@@ -999,6 +1005,12 @@ if (USE_DRIVER) {
 
 if (INPUT_MODE === 'generate_then_optimize') {
   KERNEL_PATH = await resolveInitialKernelFromProblem()
+}
+if (args.task_result_command && INPUT_MODE === 'optimize_existing') {
+  taskSeedMeasurement = await __nativeTaskAcceptedParent({candidatePath:KERNEL_PATH,
+    resultPath:`${EXP_DIR}/accepted_parent.task.json`,command:args.task_result_command,
+    workloadCount:args.task_workload_count,label:'task-accepted-parent'})
+  KERNEL_PATH = taskSeedMeasurement.host_candidate_path
 }
 
 const setupResult = await agentRetry(() => agent(USE_DRIVER ? driverSetupReadPrompt() : legacySetupReadPrompt(), {
@@ -2070,7 +2082,7 @@ return {
   best_kernel_code: args.task_result_command ? '' : bestKernelCode,
   best_candidate_binding: bestCandidateBinding,
   performance_domain: args.task_result_command ? 'official_full_workload_generated_initial_relative' : (SOL_AVAILABLE ? 'official_full_workload_seed_relative' : 'legacy'),
-  ...(args.task_result_command ? {initial_measurement:taskSeedMeasurement, canonical_metric:{name:'speedup_vs_generated_initial',value:baselineLatency/bestLatency},speedup_vs_reference:candidateBeam[0]?.referenceSpeedup || null} : {}),
+  ...(args.task_result_command ? {initial_measurement:taskSeedMeasurement, canonical_metric:{name:INPUT_MODE === 'optimize_existing' ? 'speedup_vs_accepted_parent' : 'speedup_vs_generated_initial',value:baselineLatency/bestLatency},speedup_vs_reference:candidateBeam[0]?.referenceSpeedup || null} : {}),
   seed_measurement: solSeedMeasurement,
   ncu_baseline_profile: baselineNcuProfile,
   report: finalReport,

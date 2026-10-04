@@ -18,6 +18,16 @@
 
 ### Fixed
 
+- 原生KSearch对显式已验收root完整实测并绑定源码；慢候选保留其reference相对incumbent，生成阶段读取冻结父文件，并单列父实现相对提升（KSearch脚本及task-result回归）。
+
+### Fixed
+
+- 原生CUDALLM FSR与KernelFoundry MAP-Elites明确实测并保留已验收父实现，保持原有限搜索和reference相对奖励；按现有archive轴分类实测父实现，另报父实现相对提升（CUDALLM manifest、workflow脚本及composition-parent-task-result回归）。
+
+- CUDAAgent/AccelOpt原生任务继承分支先通过共享完整workload助手测量明确的已验收父实现；保留clean生成及原生循环，NCU仅供诊断，并区分父实现相对指标与生成初始实现指标。
+
+### Fixed
+
 - 在相同完整workload、源码、测量和unknown-HOLD门槛下兼容原生结构化task-result对象与JSON字符串，修复CUDAAgent初始候选因native返回对象而解析失败。
 
 - 原生CUDAAgent诊断从冻结任务的broker GPU范围读取设备约束，不再把B300-M4的GPU范围写死在提示中；SOL仍使用其合同拥有的基线。
