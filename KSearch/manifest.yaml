@@ -405,6 +405,12 @@ phases:
 args:
   required: []
   optional:
+  - name: task_result_command
+    type: string
+    description: Optional native full-task command with {kernel_path}/{result_path}; writes kersor-task-result-v1 JSON and an explicit frozen artifact. Final acceptance remains independent.
+  - name: task_workload_count
+    type: number
+    description: Exact frozen full workload count required by the task-result gate.
   - name: problem_path
     type: string
     default: ''''''

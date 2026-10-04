@@ -11,6 +11,64 @@ export const meta = {
     { title: 'Evolve-Prompts', detail: 'Meta-prompter analyzes outcomes, evolves prompt sections co-operatively' },
   ],
 }
+// --- BEGIN inlined task-result scaffolding (from _meta/scaffolding/task-result.js) ---
+// Native task-result compatibility: task command is the measurement authority.
+function __taskHold(reason) {
+  const error = new Error('TASK_RESULT_HOLD: ' + reason)
+  error.code = 'TASK_RESULT_HOLD'
+  error.retryable = false
+  error.outcome_state = 'unknown'
+  throw error
+}
+function __taskResult(output, expectedPath, expectedCount) {
+  let result
+  try {
+    const raw = output?.test_result_json
+    result = typeof raw === 'string' ? JSON.parse(raw)
+      : raw && typeof raw === 'object' && !Array.isArray(raw) ? JSON.parse(JSON.stringify(raw))
+      : __taskHold('missing/malformed raw task result')
+  } catch { return __taskHold('missing/malformed raw task result') }
+  if (output?.test_result_path !== expectedPath || result?.test_result_path !== expectedPath || result?.contract_version !== 'kersor-task-result-v1') return __taskHold('task result contract/path mismatch')
+  if (output.model_observation === 'unknown' || result.model_observation === 'unknown' || result.outcome_state === 'unknown' || (result.failure_origin && result.failure_origin !== 'candidate')) return __taskHold('infrastructure, evidence, or model observation unknown')
+  const valid = result.compiled === true && result.correct === true
+    && result.full_workload_set === true && result.measurement_valid === true
+    && result.source_binding?.verified === true && result.n_pass === result.n_total
+    && Number.isInteger(result.n_total) && result.n_total === expectedCount
+    && /^[0-9a-f]{64}$/i.test(result.source_binding?.source_sha256 || '')
+    && result.candidate_path === expectedPath + '.artifact/candidate.py'
+    && result.n_total > 0 && Number.isFinite(result.candidate_latency_aggregate_ms)
+    && result.candidate_latency_aggregate_ms > 0 && Number.isFinite(result.speedup_vs_reference)
+    && result.speedup_vs_reference > 0
+  const candidateFailure = result.outcome_state === 'candidate_failure' && result.failure_origin === 'candidate'
+    && result.full_workload_set === true && result.n_total === expectedCount
+    && Number.isInteger(result.n_pass) && result.n_pass >= 0 && result.n_pass < expectedCount
+    && result.source_binding?.verified === true
+    && /^[0-9a-f]{64}$/i.test(result.source_binding?.source_sha256 || '')
+    && result.candidate_path === expectedPath + '.artifact/candidate.py'
+  if (!valid && !candidateFailure) return __taskHold('incomplete workload/measurement/source proof')
+  return {is_valid:valid, measurement_valid:valid, compiled:result.compiled, correct:valid,
+    metric_value:valid ? result.speedup_vs_reference : 0,
+    speedup:valid ? result.speedup_vs_reference : 0,
+    latency_ms:valid ? result.candidate_latency_aggregate_ms : null,
+    n_pass:result.n_pass, n_total:result.n_total,
+    pass_rate:String(result.n_pass)+'/'+String(result.n_total),
+    source_binding:result.source_binding, host_candidate_path:result.candidate_path, test_result_path:output.test_result_path,
+    outcome_state:valid ? 'passed' : 'candidate_failure', error_log:valid ? '' : 'explicit candidate failure'}
+}
+
+async function __nativeTaskEvaluate(ctx) {
+  let output
+  try { output = await agentRetry(() => agent(`Use the explicitly declared candidate file at ${ctx.candidatePath}. If it is absent, write the COMPLETE returned source below to that exact path. Never rewrite an existing declared file or select another directory entry.
+${ctx.candidateSource || ''}
+Run the trusted task command once: ${ctx.command.replaceAll('{kernel_path}', ctx.candidatePath).replaceAll('{result_path}', ctx.resultPath)}
+Wait for its terminal result and read ${ctx.resultPath}. Return test_result_path and test_result_json copied verbatim from that file. No estimates or rewritten source in this reply.`, {
+    label:ctx.label, phase:'Evaluate',
+    schema:{type:'object', properties:{test_result_path:{type:'string'},test_result_json:{type:'string'}}, required:['test_result_path','test_result_json']},
+  }), {retries:0}) } catch (error) { return __taskHold('agent/transport result unavailable: ' + (error?.message || String(error))) }
+  return __taskResult(output, ctx.resultPath, ctx.workloadCount)
+    || __taskHold('missing task result')
+}
+// --- END inlined task-result scaffolding ---
 // --- BEGIN sol-execbench-eval substrate (auto-inlined by scripts/patch-sol-execbench-eval.js) ---
 const SOL_SOLUTION_CONTRACT = [
   'SOL-EXECBENCH SOLUTION CONTRACT (this task is evaluated by the sol-execbench CLI):',
@@ -106,6 +164,42 @@ function __solGuardHarnessFault(result) {
     )
   }
   return result
+}
+// Deterministic measurement authority for native SOL consumers. Agent replies
+// may explain evidence but cannot supply correctness, workload coverage or score.
+function __solHostFeedback(host, explanation = {}) {
+  const latency = host?.candidate_latency_aggregate_ms
+  const valid = host?.compiled === true && host?.correct === true
+    && host?.measurement_valid === true && host?.full_workload_set === true
+    && host?.output_contract_valid === true && host?.artifact_binding?.verified === true
+    && Number.isInteger(host?.n_total) && host.n_total > 0 && host.n_pass === host.n_total
+    && Number.isFinite(latency) && latency > 0
+    && Number.isFinite(host?.speedup_vs_seed) && host.speedup_vs_seed > 0
+  return {
+    compiled: host?.compiled === true, correct: valid,
+    full_workload_set: host?.full_workload_set === true,
+    measurement_valid: host?.measurement_valid === true,
+    output_contract_valid: host?.output_contract_valid === true,
+    speedup: valid ? host.speedup_vs_seed : 0,
+    latency_ms: valid ? latency : null,
+    passed_tests: Number.isInteger(host?.n_pass) ? host.n_pass : null,
+    total_tests: Number.isInteger(host?.n_total) ? host.n_total : null,
+    source_binding: valid ? host.artifact_binding : null,
+    reference_speedup: Number.isFinite(host?.speedup) ? host.speedup : null,
+    explanation: {error_message: explanation?.error_message || '',
+      reward_hacking_flags: explanation?.reward_hacking_flags || []},
+    measurement_owner: 'Host',
+  }
+}
+async function __solOfficialSeedBaseline(ctx) {
+  const seed = await __solExecbenchEvaluate(ctx)
+  const latency = seed?.candidate_latency_aggregate_ms
+  if (seed?.compiled !== true || seed?.correct !== true
+      || seed?.full_workload_set !== true || seed?.measurement_valid !== true
+      || seed?.output_contract_valid !== true || !Number.isFinite(latency) || latency <= 0) {
+    throw new Error('Host could not establish a complete official Sol seed baseline')
+  }
+  return seed
 }
 // --- END sol-execbench-eval substrate ---
 
@@ -533,7 +627,7 @@ function fenceToken() {
 }
 function kernelPathForGeneration(gen) {
   const legacyExt = TARGET_LANG === 'cuda' ? '.cu'
-    : (TARGET_LANG === 'triton' || TARGET_LANG === 'python') ? '.py'
+    : (TARGET_LANG === 'triton' || TARGET_LANG === 'python' || TARGET_LANG === 'cute-dsl') ? '.py'
     : `.${TARGET_LANG}`
   const ext = USE_DRIVER ? (DRIVER_SOURCE_EXT || legacyExt) : legacyExt
   return `${EXP_DIR}/gen_${gen}${ext}`
@@ -541,7 +635,7 @@ function kernelPathForGeneration(gen) {
 
 function bestKernelPath() {
   const ext = TARGET_LANG === 'cuda' ? 'cu'
-    : (TARGET_LANG === 'triton' || TARGET_LANG === 'python') ? 'py'
+    : (TARGET_LANG === 'triton' || TARGET_LANG === 'python' || TARGET_LANG === 'cute-dsl') ? 'py'
     : TARGET_LANG
   return `${EXP_DIR}/best_kernel.${ext}`
 }
@@ -744,7 +838,7 @@ Then append:
 }), { retries: 5 })
 
 const operatorCode = setupResult.operator_code
-const baselineTime = setupResult.baseline_time_ms
+const baselineTime = args.task_result_command ? null : setupResult.baseline_time_ms
 
 log(`Setup: ${setupResult.operator_type} on ${TARGET_HW} | Baseline: ${baselineTime}ms | Target: ${SPEEDUP_TARGET}x | Language: ${TARGET_LANG}`)
 
@@ -835,6 +929,7 @@ ${metaPrompt.analysis_guidance}
 
 # === END EVOLVED GUIDANCE ===
 ${parentContext}
+${args.task_result_command && selectedParent?.candidate_path ? `Read the complete tested parent file at ${selectedParent.candidate_path}; display code above is not the source authority.` : ''}
 
 ${gradientHints ? `# Gradient Hints (from evolutionary history):\n${gradientHints}` : ''}
 
@@ -845,6 +940,7 @@ ${gradientHints ? `# Gradient Hints (from evolutionary history):\n${gradientHint
 4. Try to explore a DIFFERENT optimization strategy than the parent (different memory pattern, algorithm, or parallelism level)
 5. You may optionally produce a TEMPLATED kernel with configurable parameters (tile_size, work_group_size, unroll_factor) alongside a dispatch function
 6. Classify the produced candidate itself with integer d_mem, d_algo, d_sync coordinates in [0, 3]
+${args.task_result_command ? `7. Write the COMPLETE source to ${kernelPathForGeneration(generation)} and return variant_path naming that exact file. CuTe DSL uses Python cutlass.cute and the frozen task run entry point. The file is the source authority; kernel_code is display only.` : ''}
 
 ${IS_SOL ? SOL_SOLUTION_CONTRACT : ''}
 
@@ -863,6 +959,7 @@ Then append (this is generation ${generation}):
       type: 'object',
       properties: {
         kernel_code: { type: 'string' },
+        variant_path: { type: 'string' },
         strategy_description: { type: 'string' },
         memory_pattern: { type: 'string' },
         algorithm_type: { type: 'string' },
@@ -889,7 +986,7 @@ Then append (this is generation ${generation}):
   const testCommand = harnessCommand(TEST_CMD, candidatePath, generationResultPath)
   const benchmarkCommand = harnessCommand(BENCH_CMD, candidatePath, generationResultPath)
 
-  if (!IS_SOL) await agentRetry(() => agent(`${__taskContractBlock()}Materialize the exact KernelFoundry candidate below at ${candidatePath}.
+  if (!IS_SOL && !args.task_result_command) await agentRetry(() => agent(`${__taskContractBlock()}Materialize the exact KernelFoundry candidate below at ${candidatePath}.
 Create the parent directory first. Write the complete source byte-for-byte without
 summarizing, repairing, or reformatting it. Use an atomic temporary file + rename.
 The authoritative producer call_id prefix is Vary/vary-${generation}/. If you
@@ -1041,6 +1138,8 @@ Return the parsed result.`, {
         },
       }), { retries: 0 })
     })()
+    : args.task_result_command
+    ? await __nativeTaskEvaluate({candidatePath:varyResult?.variant_path || candidatePath, candidateSource:offspringCode, resultPath:generationResultPath, command:args.task_result_command, workloadCount:args.task_workload_count, label:`task-eval-${generation}`})
     : await agentRetry(() => agent(`${__taskContractBlock()}You are a kernel evaluator for KernelFoundry. Evaluate the already-materialized ${langToken(LEGACY_LANG_TOKEN)} kernel.
 
 # Candidate Path:
@@ -1128,7 +1227,10 @@ Then append (this is generation ${generation}; status="done" if it compiled AND 
     candidate_sha256: '', measurement_sha256: '',
     task_path: '', task_sha256: '', task_fingerprint_kind: '',
   }
-  if (EVIDENCE_MODE === 'measured') {
+  if (args.task_result_command) {
+    candidateBinding = {verified:evalResult.is_valid === true, binding_path:evalResult.test_result_path || '', candidate_sha256:evalResult.source_binding?.source_sha256 || ''}
+    evalResult.d_mem = varyResult?.d_mem || 0; evalResult.d_algo = varyResult?.d_algo || 0; evalResult.d_sync = varyResult?.d_sync || 0
+  } else if (EVIDENCE_MODE === 'measured') {
     const generationBindingPath = `${EXP_DIR}/bindings/gen_${generation}.json`
     const canonicalEval = IS_SOL && typeof evaluate === 'function'
       ? (evalResult.artifact_binding || { verified: false, compiled: false, correct: false, speedup: 0 })
@@ -1343,7 +1445,7 @@ Run one small deterministic Python program; do not infer or repair anything:
       compiled: evalResult.compiled,
       correct: evalResult.correct,
       result_path: generationResultPath,
-      candidate_path: candidatePath,
+      candidate_path: args.task_result_command ? evalResult.host_candidate_path : candidatePath,
       candidate_sha256: candidateBinding.candidate_sha256,
       measurement_sha256: candidateBinding.measurement_sha256,
       binding_path: candidateBinding.binding_path,
@@ -1367,7 +1469,7 @@ Run one small deterministic Python program; do not infer or repair anything:
         compiled: evalResult.compiled,
         correct: evalResult.correct,
         result_path: generationResultPath,
-        candidate_path: candidatePath,
+        candidate_path: args.task_result_command ? evalResult.host_candidate_path : candidatePath,
         candidate_sha256: candidateBinding.candidate_sha256,
         measurement_sha256: candidateBinding.measurement_sha256,
         binding_path: candidateBinding.binding_path,
@@ -1413,7 +1515,7 @@ Run one small deterministic Python program; do not infer or repair anything:
   )
   const plannedTerminationReason = shouldStopOnTarget ? 'speedup_target_reached' : null
   const finalKernelPath = bestKernelPath()
-  const bestChanged = Boolean(globalBest.code && globalBest.id !== checkpointedBestId)
+  const bestChanged = Boolean(!args.task_result_command && globalBest.code && globalBest.id !== checkpointedBestId)
   const checkpointPayload = {
     schema_version: 1,
     workflow: WORKFLOW_NAME,
@@ -1642,7 +1744,8 @@ return {
   generated_kernel_path: globalBest.binding_path && globalBest.candidate_path
     ? globalBest.candidate_path : (globalBest.code ? bestKernelPath() : ''),
   best_candidate_id: globalBest.id || '',
-  artifact_binding_required: EVIDENCE_MODE === 'measured',
+  artifact_binding_required: !args.task_result_command && EVIDENCE_MODE === 'measured',
+  ...(args.task_result_command ? {task_result_path:globalBest.result_path || null, source_binding:{verified:globalBest.correct === true, source_sha256:globalBest.candidate_sha256}} : {}),
   artifact_binding_path: globalBest.binding_path || '',
   initial_candidates: [],
   initial_generation_result: {
@@ -1655,11 +1758,11 @@ return {
   baseline_time_ms: baselineTime,
   best_speedup: globalBest.speedup,
   canonical_metric: {
-    name: 'speedup',
+    name: args.task_result_command ? 'speedup_vs_reference' : 'speedup',
     value: globalBest.speedup,
   },
   best_cell: globalBest.cell,
-  best_kernel_code: globalBest.code,
+  best_kernel_code: args.task_result_command ? '' : globalBest.code,
   generations: GENERATIONS,
   generations_completed: generationsCompleted,
   termination_reason: terminationReason,

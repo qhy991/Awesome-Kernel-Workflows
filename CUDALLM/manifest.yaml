@@ -307,6 +307,12 @@ args:
     description: Evaluator command with {kernel_path} and {result_path} substitutions
     example: <user-provided benchmark command with {kernel_path}/{result_path}>
   optional:
+  - name: task_result_command
+    type: string
+    description: Optional native full-task command with {kernel_path}/{result_path}; writes kersor-task-result-v1 JSON and an explicit frozen artifact. Final acceptance remains independent.
+  - name: task_workload_count
+    type: number
+    description: Exact frozen full workload count required by the task-result gate.
   - name: reference_code_path
     type: string
     default: ''''''

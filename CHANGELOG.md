@@ -1,5 +1,11 @@
 # Changelog
 
+- Give every AccelOpt variant an iteration-qualified identity so candidate, solution, benchmark and binding evidence cannot overwrite an earlier best across rounds; verify retained source/binding with native two-round replay.
+
+- Make CUDALLM SOL measurements authoritative over contradictory agent evaluation replies, with strict full-workload validity, source binding and official seed-relative scores. Share the canonical Host feedback and seed-baseline helpers with AccelOpt; preserve the native FSR loop.
+
+- Fix AccelOpt Sol ranking to use one complete official seed measurement and Host-bound seed-relative candidate feedback; NCU is diagnostic only, missing/partial results cannot retain estimates, and beam gains do not compound. Generate its Host helper from the shared substrate.
+
 All notable changes to Awesome-Kernel-Workflows are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
@@ -8,7 +14,22 @@ for the versioning policy.
 
 ## [Unreleased]
 
+### Added
+
+- Add opt-in native KSearch task-result evaluation consuming complete task JSON and keeping reference scoring separate from estimates.
+
 ### Fixed
+
+- Accept native structured task-result objects alongside JSON strings through the same shared full-workload/source/measurement and unknown-HOLD gates; CUDAAgent initial candidate delivery no longer fails merely because native returns JSON objects.
+
+- Route native CUDAAgent diagnostics through the frozen site's broker GPU allowlist rather than a B300-M4-specific prompt; SOL continues to use its contract-owned baseline.
+
+- Keep unknown native task evidence on non-retryable HOLD, rather than scoring missing/partial/broker/model observations as candidate failures; only explicit full-workload candidate failures receive zero.
+
+- Add optional shared native task-result branches for CUDAAgent, AccelOpt, CUDALLM and KernelFoundry, retaining finite topology and explicitly measured source delivery; distinguish generated-initial/reference scores and fix CUDAAgent manifest filename. Native JSON transport still requires raw-file and independent acceptance audits.
+
+- Bind native task self-tests to immutable explicitly selected artifacts and complete broker/task traces; opt-in KSearch keeps original tree search and official reference scoring, rejects incomplete results, and returns the tested artifact instead of rewriting source.
+
 - Preserve complete agent prompt content across workflows and generation templates: remove fixed character clipping of task requirements, source, measurements and typed evidence; carry the original task reference into fresh activations. Long JSON evidence remains parseable. Search population limits and display identifiers are unchanged. Add executed KSearch and shared-context regressions.
 
 ### Changed
@@ -16,6 +37,8 @@ for the versioning policy.
 - Merge the WSR Host-bound parent/candidate lineage and CuTe qualification fixes with main executable workflow tools, explicit integration selection, and real-launch profiling; preserve the current retry helper and independent score ownership.
 
 ### Fixed
+
+- Initialize the file-backed incumbent from its measured initial implementation, so slower or invalid task candidates cannot replace it; add a deterministic regression control (KernelBand).
 
 - Preserve the task seed in a separate source snapshot before agents install candidates into fixed harness paths; pool entries retain their measured source (`KernelBand/kernelband-kernel-optimization.js`).
 

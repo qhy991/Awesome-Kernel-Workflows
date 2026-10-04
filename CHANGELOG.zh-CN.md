@@ -1,12 +1,33 @@
 # 更新日志（中文）
 
+- AccelOpt候选身份包含iteration，确保候选、solution、benchmark及binding证据跨轮不覆盖；原生两轮回放验证较慢后轮不破坏前轮最佳源码与绑定。
+
+- CUDALLM SOL测量以Host为确定性权威，评价agent不能覆盖完整正确性、覆盖率、源码绑定及官方seed相对评分；与AccelOpt共享canonical反馈及seed基线helper，保留原生FSR循环。
+
+- 修复 AccelOpt Sol 排名口径：使用一次完整官方seed测量与Host绑定的seed相对候选反馈；NCU只作诊断，缺失/partial结果不得保留估算，beam增益不重复累乘。Host helper统一从共享substrate生成。
+
 本文件记录 Awesome-Kernel-Workflows 的重要变更。格式遵循
 [Keep a Changelog](https://keepachangelog.com/),版本号遵循
 [语义化版本(SemVer)](https://semver.org/)。版本策略见 `AGENTS.md`。
 
 ## [Unreleased]
 
+### Added
+
+- 增加显式启用的原生KSearch任务结果分支：消费完整task JSON，以reference评分并拒绝估算替代。
+
 ### Fixed
+
+- 在相同完整workload、源码、测量和unknown-HOLD门槛下兼容原生结构化task-result对象与JSON字符串，修复CUDAAgent初始候选因native返回对象而解析失败。
+
+- 原生CUDAAgent诊断从冻结任务的broker GPU范围读取设备约束，不再把B300-M4的GPU范围写死在提示中；SOL仍使用其合同拥有的基线。
+
+- 原生task证据缺失、partial、broker或模型观察未知时进入不可重试HOLD，不再按候选失败记0；仅明确完整workload候选失败允许零分。
+
+- 为 CUDAAgent、AccelOpt、CUDALLM 和 KernelFoundry 添加可选共享 native 任务结果分支，保留有限拓扑及明确实测源码交付；区分本轮自行生成初始实现/reference 评分并修正 CUDAAgent manifest 文件名。Native JSON 传输仍须核对原始文件及独立终验。
+
+- 将 native 任务自测绑定到明确选择的不可变 artifact 及完整 broker/task 原始记录；可选 KSearch 分支保持原生树搜索及 official reference 评分，拒绝缺失结果，返回实测 artifact 而不重写源码。
+
 - 修复 workflow 与生成模板中的固定字符截断：完整传递任务要求、源码、测量和结构化证据，并向新激活传入原始任务引用；长 JSON 保持可解析。搜索候选数量和显示标识不变。增加实际执行 KSearch 与共享上下文的回归测试。
 
 ### Changed
@@ -14,6 +35,8 @@
 - 整合 WSR 的 Host 父实现与候选源码绑定、CuTe 资格修复，同时保留 main 的可执行工具、显式集成选择、真实启动 profiling、当前重试 helper 与独立计分归属。
 
 ### Fixed
+
+- 用已测量的初始实现初始化文件路径下的最佳候选，避免更慢或无效候选覆盖起点；补充确定性退化回归（KernelBand）。
 
 - 在 agent 将候选安装到测试固定源码路径前保留独立 seed 快照，避免候选池初始条目指向已被覆盖的实现（`KernelBand/kernelband-kernel-optimization.js`）。
 
