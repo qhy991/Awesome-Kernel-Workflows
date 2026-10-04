@@ -14,6 +14,14 @@ for the versioning policy.
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve an explicitly accepted native KSearch root with full official task measurement and source binding; retain its reference-relative incumbent against slower candidates, pass its frozen file to generation, and report parent-relative improvement separately (`KSearch/ksearch-kernel-optimization.js`, native task-result regression).
+
+### Fixed
+
+- Preserve and canonically measure explicitly accepted parents in native CUDALLM FSR and KernelFoundry MAP-Elites, while retaining original finite search and reference-relative rewards; classify the measured parent on existing archive axes and report parent-relative improvement separately (`CUDALLM/manifest.yaml`, workflow scripts, `composition-parent-task-result.test.js`).
+
 - Measure an explicitly accepted native task parent through the shared full-workload helper before CUDAAgent/AccelOpt optimize-existing paths; preserve clean generation and native loops, keep NCU diagnostic, and distinguish parent-relative from generated-initial metrics.
 
 ### Fixed

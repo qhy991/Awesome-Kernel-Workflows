@@ -538,7 +538,7 @@ const EXP_DIR = args.exp_dir || '/tmp/cudallm_fsr_exp'
 const DRIVER_PROBLEM_PATH = args.problem_json_path || `${EXP_DIR}/driver_problem.json`
 const PROFILE_SOURCE_PATH = args.profile_source_path || REFERENCE_CODE_PATH || ''
 const ADAPTATION_SCOPE = 'workflow_adaptation'
-const INPUT_MODE = 'generate_then_optimize'
+const INPUT_MODE = args.task_result_command && args.kernel_path ? 'optimize_existing' : 'generate_then_optimize'
 
 // --- Backend driver wiring (P5c Stage B; off-by-default; legacy path byte-identical) ---
 const BACKEND_DIR = args.backend_dir || ''
@@ -889,6 +889,15 @@ Then append:
 featureCatalog = catalog.features || []
 for (const feature of featureCatalog) initFeatureScore(feature)
 
+let taskParentMeasurement = null
+if (args.task_result_command && args.kernel_path) {
+  taskParentMeasurement = await __nativeTaskAcceptedParent({candidatePath:args.kernel_path,
+    resultPath:`${EXP_DIR}/accepted_parent.task.json`,command:args.task_result_command,
+    workloadCount:args.task_workload_count,label:'accepted-parent-task'})
+  bestCandidate = {id:'accepted-parent',path:taskParentMeasurement.host_candidate_path,
+    selected_feature_ids:[],implemented_feature_ids:[],code:'',eval:taskParentMeasurement}
+}
+
 // =============================================================================
 // Phase 3: GenerateTests
 // =============================================================================
@@ -999,6 +1008,8 @@ ${taskSpec}
 \`\`\`
 ${referenceCode}
 \`\`\`
+
+${taskParentMeasurement ? `# Independently accepted parent\nRead the complete measured parent at ${taskParentMeasurement.host_candidate_path}. Use it as the starting implementation when applying the selected FSR features. Reference-relative score: ${taskParentMeasurement.speedup}; retain this parent unless an officially measured candidate improves it.` : ''}
 
 # Selected features
 \`\`\`json
@@ -1385,6 +1396,7 @@ return {
   ...(args.task_result_command ? {canonical_metric:{name:'speedup_vs_reference',value:bestCandidate?.eval?.speedup || 0},task_result_path:bestCandidate?.eval?.test_result_path || null} : {}),
   best_candidate_binding: bestCandidate?.eval?.source_binding || null,
   seed_measurement: solSeedMeasurement,
+  ...(taskParentMeasurement ? {accepted_parent_measurement:taskParentMeasurement,speedup_vs_accepted_parent:(bestCandidate?.eval?.speedup || 0)/taskParentMeasurement.speedup} : {}),
   performance_domain: args.task_result_command ? 'official_full_workload_reference_relative' : (SOL_AVAILABLE ? 'official_full_workload_seed_relative' : 'legacy'),
   best_candidate_id: bestCandidate?.id || '',
   feature_scores: featureScores,

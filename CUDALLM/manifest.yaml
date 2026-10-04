@@ -307,6 +307,9 @@ args:
     description: Evaluator command with {kernel_path} and {result_path} substitutions
     example: <user-provided benchmark command with {kernel_path}/{result_path}>
   optional:
+  - name: kernel_path
+    type: string
+    description: Optional independently accepted parent Python implementation for the native task_result_command path; measure and retain it before FSR search. Legacy reference-only generation remains unchanged.
   - name: task_result_command
     type: string
     description: Optional native full-task command with {kernel_path}/{result_path}; writes kersor-task-result-v1 JSON and an explicit frozen artifact. Final acceptance remains independent.
@@ -380,7 +383,7 @@ routing:
     constraints: []
   best_kernel_field: best_kernel_code
   topology: iterative
-  seed_contract: greenfield
+  seed_contract: hybrid
   requires_harness: true
   languages:
   - cuda

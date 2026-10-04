@@ -728,9 +728,12 @@ const opType = setupResult.op_type
 // SOL carries its honest reference latency in every official workload row, so a
 // separate LLM baseline turn cannot add evidence. Other integrations retain the
 // legacy baseline characterization path.
+const taskParentMeasurement = args.task_result_command && BASELINE_CODE_PATH
+  ? await __nativeTaskAcceptedParent({candidatePath:BASELINE_CODE_PATH,resultPath:`${EXP_DIR}/accepted_parent.task.json`,command:args.task_result_command,workloadCount:args.task_workload_count,label:'accepted-parent-task'}) : null
+
 const baselineEval = args.task_result_command
-  ? {baseline_metric:1, baseline_latency_ms:null, eval_passed:false,
-     performance_profile:'official reference denominator only; no historical seed', bottleneck_analysis:'await measured candidate'}
+  ? {baseline_metric:taskParentMeasurement?.speedup || 1, baseline_latency_ms:taskParentMeasurement?.latency_ms || null, eval_passed:Boolean(taskParentMeasurement),
+     performance_profile:taskParentMeasurement ? 'official full-workload accepted parent; candidate metrics remain reference-relative' : 'official reference denominator only; no historical seed', bottleneck_analysis:'await measured candidate'}
   : INTEGRATION_PATTERN === 'sol_execbench_solution'
   ? {
       baseline_metric: 1.0,
@@ -919,6 +922,10 @@ if (USE_DRIVER_STANDALONE) {
 
 baselineMetric = baselineEval.baseline_metric || 1.0
 bestMetric = args.task_result_command ? null : baselineMetric
+if (taskParentMeasurement) {
+  bestMetric = taskParentMeasurement.speedup
+  bestSolution = {id:'accepted-parent',code:'',path:taskParentMeasurement.host_candidate_path,eval:taskParentMeasurement,node_id:'root'}
+}
 log(`Baseline: metric=${baselineMetric}, latency=${baselineEval.baseline_latency_ms || 'N/A'}ms`)
 log(`Bottleneck: ${baselineEval.bottleneck_analysis || 'unknown'}`)
 
@@ -1229,6 +1236,8 @@ ${parentCode ? `# Base code (from parent node — start from this and apply the 
 \`\`\`${langToken(LANGUAGE)}
 ${parentCode}
 \`\`\`` : '# No base code available — implement from specification directly.'}
+
+${taskParentMeasurement ? `# Independently accepted parent\nRead the complete measured implementation at ${taskParentMeasurement.host_candidate_path} as the root starting implementation. Apply the selected world-model action without inventing measurements. The reference-relative parent score is ${taskParentMeasurement.speedup}.` : ''}
 
 # Tree context (ancestor decisions):
 ${JSON.stringify(selection.context_for_generation || {})}
@@ -2020,6 +2029,7 @@ return {
     metric: s.eval.metric_value,
   })),
   report: finalReport,
+  ...(taskParentMeasurement ? {accepted_parent_measurement:taskParentMeasurement,speedup_vs_accepted_parent:bestMetric/taskParentMeasurement.speedup} : {}),
   baseline_metric: baselineMetric,
   speedup_over_baseline: bestMetric ? bestMetric / baselineMetric : 1.0,
 }
