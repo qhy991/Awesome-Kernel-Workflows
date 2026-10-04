@@ -14,6 +14,10 @@ for the versioning policy.
 
 ## [Unreleased]
 
+### Fixed
+
+- Accept native structured task-result objects alongside JSON strings through the same shared full-workload/source/measurement and unknown-HOLD gates; CUDAAgent initial candidate delivery no longer fails merely because native returns JSON objects.
+
 - Keep unknown native task evidence on non-retryable HOLD, rather than scoring missing/partial/broker/model observations as candidate failures; only explicit full-workload candidate failures receive zero.
 
 ### Fixed

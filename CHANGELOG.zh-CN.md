@@ -12,6 +12,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- 在相同完整workload、源码、测量和unknown-HOLD门槛下兼容原生结构化task-result对象与JSON字符串，修复CUDAAgent初始候选因native返回对象而解析失败。
+
 - 原生task证据缺失、partial、broker或模型观察未知时进入不可重试HOLD，不再按候选失败记0；仅明确完整workload候选失败允许零分。
 
 ### Fixed

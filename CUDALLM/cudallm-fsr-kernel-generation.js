@@ -24,7 +24,12 @@ function __taskHold(reason) {
 }
 function __taskResult(output, expectedPath, expectedCount) {
   let result
-  try { result = JSON.parse(output?.test_result_json || '') } catch { return __taskHold('missing/malformed raw task result') }
+  try {
+    const raw = output?.test_result_json
+    result = typeof raw === 'string' ? JSON.parse(raw)
+      : raw && typeof raw === 'object' && !Array.isArray(raw) ? JSON.parse(JSON.stringify(raw))
+      : __taskHold('missing/malformed raw task result')
+  } catch { return __taskHold('missing/malformed raw task result') }
   if (output?.test_result_path !== expectedPath || result?.test_result_path !== expectedPath || result?.contract_version !== 'kersor-task-result-v1') return __taskHold('task result contract/path mismatch')
   if (output.model_observation === 'unknown' || result.model_observation === 'unknown' || result.outcome_state === 'unknown' || (result.failure_origin && result.failure_origin !== 'candidate')) return __taskHold('infrastructure, evidence, or model observation unknown')
   const valid = result.compiled === true && result.correct === true
