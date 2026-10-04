@@ -166,6 +166,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -202,7 +213,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -591,7 +602,7 @@ phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agentRetry(() => agent(
-    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `${__taskContractBlock()}Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
@@ -623,7 +634,7 @@ if (USE_DRIVER) {
 // method+confidence. Honored in the per-generation Evaluate driver-profile branch.
 if (USE_DRIVER) {
   const _pd = await agentRetry(() => agent(
-    `${KERNEL_PATH ? `Read ${KERNEL_PATH}; ` : 'Read the operator spec below; '}` +
+    `${__taskContractBlock()}${KERNEL_PATH ? `Read ${KERNEL_PATH}; ` : 'Read the operator spec below; '}` +
     `classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
     substrateInstruction('profiling/profiling_strategist.py',
       `resolve --backend-manifest ${driverPath('manifest.json')} --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl`) +
@@ -645,7 +656,7 @@ if (!args.integration_pattern) {
   const _probe = JSON.stringify({ compiler: true, project_build: !!PROJECT_BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true, sol_execbench_cli: !!SOL_CLI })
 
   const _integ = await agentRetry(() => agent(
-    `${KERNEL_PATH ? `Read ${KERNEL_PATH}; ` : 'Read the operator spec; '}` +
+    `${__taskContractBlock()}${KERNEL_PATH ? `Read ${KERNEL_PATH}; ` : 'Read the operator spec; '}` +
     `classify can_compile_standalone as exactly one of yes|no|uncertain ` +
     `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
     substrateInstruction('integration/integration_strategist.py',
@@ -674,7 +685,7 @@ if (IS_SOL) {
 }
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 // A-O1 closure: native_profiler chosen but driver-profile path unavailable when not
@@ -686,11 +697,11 @@ if (PROFILING_DECISION.method === 'native_profiler' && !USE_DRIVER_STANDALONE) {
     profiler_name: 'test-harness-perf', rationale: 'native_profiler but not USE_DRIVER_STANDALONE -> perf_heuristic' }
 }
 
-const setupResult = await agentRetry(() => agent(`You are a GPU kernel optimization expert setting up the KernelFoundry evolutionary search.
+const setupResult = await agentRetry(() => agent(`${__taskContractBlock()}You are a GPU kernel optimization expert setting up the KernelFoundry evolutionary search.
 
 # Task:
 ${KERNEL_PATH ? `Read kernel/operator from: ${KERNEL_PATH}` : ''}
-${TASK_SPEC ? `\`\`\`python\n${TASK_SPEC.substring(0, 3000)}\n\`\`\`` : '(Determine from op_description)'}
+${TASK_SPEC ? `\`\`\`python\n${TASK_SPEC}\n\`\`\`` : '(Determine from op_description)'}
 
 # Operation: ${OP_DESC}
 # Target language: ${langToken(LEGACY_LANG_TOKEN)} (SYCL/CUDA/Triton)
@@ -793,15 +804,15 @@ for (generation = 0; generation < GENERATIONS; generation++) {
   phase('Vary')
 
   const parentContext = selectedParent
-    ? `\n# Parent Kernel (from cell [${selectedParent.cell}], fitness=${selectedParent.fitness.toFixed(2)}, speedup=${selectedParent.speedup.toFixed(2)}x):\n\`\`\`${fenceToken()}\n${IS_SOL ? selectedParent.code : selectedParent.code.substring(0, 4000)}\n\`\`\``
+    ? `\n# Parent Kernel (from cell [${selectedParent.cell}], fitness=${selectedParent.fitness.toFixed(2)}, speedup=${selectedParent.speedup.toFixed(2)}x):\n\`\`\`${fenceToken()}\n${selectedParent.code}\n\`\`\``
     : ''
 
-  const varyResult = await agentRetry(() => agent(`You are a GPU kernel generator for the KernelFoundry evolutionary framework.
+  const varyResult = await agentRetry(() => agent(`${__taskContractBlock()}You are a GPU kernel generator for the KernelFoundry evolutionary framework.
 Generate a ${TARGET_LANG.toUpperCase()} kernel that implements the given operator.
 
 # Operator to Implement:
 \`\`\`python
-${operatorCode.substring(0, 2500)}
+${operatorCode}
 \`\`\`
 
 # Operation: ${OP_DESC}
@@ -878,7 +889,7 @@ Then append (this is generation ${generation}):
   const testCommand = harnessCommand(TEST_CMD, candidatePath, generationResultPath)
   const benchmarkCommand = harnessCommand(BENCH_CMD, candidatePath, generationResultPath)
 
-  if (!IS_SOL) await agentRetry(() => agent(`Materialize the exact KernelFoundry candidate below at ${candidatePath}.
+  if (!IS_SOL) await agentRetry(() => agent(`${__taskContractBlock()}Materialize the exact KernelFoundry candidate below at ${candidatePath}.
 Create the parent directory first. Write the complete source byte-for-byte without
 summarizing, repairing, or reformatting it. Use an atomic temporary file + rename.
 The authoritative producer call_id prefix is Vary/vary-${generation}/. If you
@@ -972,7 +983,7 @@ Return {"written":true,"path":"${candidatePath}"}.`, {
         envPrefix: SOL_ENV_PREFIX,
         definitionPath: SOL_DEFINITION_PATH,
       })
-      return agentRetry(() => agent(`Evaluate this already-materialized KernelFoundry candidate through the authoritative sol-execbench contract.
+      return agentRetry(() => agent(`${__taskContractBlock()}Evaluate this already-materialized KernelFoundry candidate through the authoritative sol-execbench contract.
 
 Candidate: ${candidatePath}
 Run exactly in order:
@@ -1030,14 +1041,14 @@ Return the parsed result.`, {
         },
       }), { retries: 0 })
     })()
-    : await agentRetry(() => agent(`You are a kernel evaluator for KernelFoundry. Evaluate the already-materialized ${langToken(LEGACY_LANG_TOKEN)} kernel.
+    : await agentRetry(() => agent(`${__taskContractBlock()}You are a kernel evaluator for KernelFoundry. Evaluate the already-materialized ${langToken(LEGACY_LANG_TOKEN)} kernel.
 
 # Candidate Path:
 ${candidatePath}
 
 # Reference Operator:
 \`\`\`python
-${operatorCode.substring(0, 1500)}
+${operatorCode}
 \`\`\`
 
 # Evaluation Steps:
@@ -1121,7 +1132,7 @@ Then append (this is generation ${generation}; status="done" if it compiled AND 
     const generationBindingPath = `${EXP_DIR}/bindings/gen_${generation}.json`
     const canonicalEval = IS_SOL && typeof evaluate === 'function'
       ? (evalResult.artifact_binding || { verified: false, compiled: false, correct: false, speedup: 0 })
-      : await agentRetry(() => agent(`Create the immutable
+      : await agentRetry(() => agent(`${__taskContractBlock()}Create the immutable
 KernelFoundry source-measurement binding for candidate gen${generation}.
 
 Run one small deterministic Python program; do not infer or repair anything:
@@ -1270,7 +1281,7 @@ Run one small deterministic Python program; do not infer or repair anything:
     const variant = `kf_gen_${generation}`.replace(/[^A-Za-z0-9_]/g, '_')
     let embLatency = 0, embMetrics = {}, embBclass = 'unknown'
     // Materialize the offspring source to kPath first so build/test/bench can find it.
-    await agentRetry(() => agent(`Write the offspring kernel source to ${kPath} (mkdir -p its parent dir first):\n\`\`\`${fenceToken()}\n${offspringCode.substring(0, 6000)}\n\`\`\``,
+    await agentRetry(() => agent(`${__taskContractBlock()}Write the offspring kernel source to ${kPath} (mkdir -p its parent dir first):\n\`\`\`${fenceToken()}\n${offspringCode}\n\`\`\``,
       { model: MODEL.mechanical, label: `embedded-materialize-${generation}`, phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
     if (INTEGRATION_DECISION.method === 'embedded_inplace' && ORIGINAL_BACKUP) {
       const embResult = await agentRetry(() => agent(
@@ -1498,7 +1509,7 @@ Run one small deterministic Python program; do not infer or repair anything:
     const improvements = recentOutcomes.filter(t => t.outcome === 'improvement' || t.outcome === 'discovery')
     const failures = recentOutcomes.filter(t => t.outcome === 'regression' || t.outcome === 'neutral')
 
-    const metaResult = await agentRetry(() => agent(`You are the KernelFoundry Meta-Prompter (Section 3.5).
+    const metaResult = await agentRetry(() => agent(`${__taskContractBlock()}You are the KernelFoundry Meta-Prompter (Section 3.5).
 Your job is to evolve the optimization guidance prompts based on recent evolutionary outcomes.
 
 # Current Evolvable Prompt Sections:
@@ -1520,7 +1531,7 @@ ${metaPrompt.analysis_guidance}
 - Successful transitions: ${improvements.map(t => `${t.parent_cell}→${t.child_cell}`).join(', ') || 'none'}
 
 # Top archive entries:
-${Object.entries(archive).sort((a, b) => b[1].fitness - a[1].fitness).slice(0, 5).map(([k, v]) => `[${k}] fitness=${v.fitness.toFixed(2)} speedup=${v.speedup.toFixed(2)}x: ${v.strategy?.substring(0, 60)}`).join('\n')}
+${Object.entries(archive).sort((a, b) => b[1].fitness - a[1].fitness).slice(0, 5).map(([k, v]) => `[${k}] fitness=${v.fitness.toFixed(2)} speedup=${v.speedup.toFixed(2)}x: ${v.strategy}`).join('\n')}
 
 # Meta-Prompting Rules (Section 3.5):
 1. Diagnose which guidance was MISSING, MISLEADING, or INSUFFICIENT for recent outcomes
@@ -1574,7 +1585,7 @@ if (terminationReason !== 'generation_limit') {
     `contract aggregate speedup ${globalBest.speedup.toFixed(6)}x; ` +
     `archive coverage ${Object.keys(archive).length}/64.`
 } else {
-  finalReport = await agentRetry(() => agent(`Write a concise technical report on KernelFoundry MAP-Elites optimization.
+  finalReport = await agentRetry(() => agent(`${__taskContractBlock()}Write a concise technical report on KernelFoundry MAP-Elites optimization.
 
 # Results
 - Operation: ${OP_DESC}
@@ -1590,11 +1601,11 @@ if (terminationReason !== 'generation_limit') {
 - Archive update artifact: ${ARCHIVE_UPDATE_RESULT_PATH}
 
 # Archive (top cells):
-${Object.entries(archive).sort((a, b) => b[1].fitness - a[1].fitness).slice(0, 10).map(([k, v]) => `[${k}] ${v.speedup.toFixed(2)}x — ${v.strategy?.substring(0, 60)}`).join('\n')}
+${Object.entries(archive).sort((a, b) => b[1].fitness - a[1].fitness).slice(0, 10).map(([k, v]) => `[${k}] ${v.speedup.toFixed(2)}x — ${v.strategy}`).join('\n')}
 
 # Best Kernel:
 \`\`\`${fenceToken()}
-${globalBest.code.substring(0, 3000)}
+${globalBest.code}
 \`\`\`
 
 # Final Meta-Prompt State:
@@ -1617,7 +1628,7 @@ Then append (final report; speedup is the best speedup found, or null if none):
 
 // embedded_inplace exit safety net: unconditionally restore pristine original.
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${KERNEL_PATH}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Evaluate', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 

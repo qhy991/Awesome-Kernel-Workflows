@@ -60,6 +60,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -96,7 +107,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -403,7 +414,7 @@ const hardware = HOST_SOL ? {
   arch: `sm_${String(hostBaseline.environment.compute_capability || '').replace('.', '')}`,
   sm_count: hostBaseline.environment.sms, cuda_version: hostBaseline.environment.libs?.cuda || null,
   caveats: ['Hardware identity comes from the Host baseline evaluator receipt.'],
-} : await agentRetry(() => agent(`You are the hardware-census agent for a GEMM/PTX optimization workflow.
+} : await agentRetry(() => agent(`${__taskContractBlock()}You are the hardware-census agent for a GEMM/PTX optimization workflow.
 
 # Goal
 Collect target GPU facts that constrain PTX/SASS-level GEMM decisions.
@@ -441,7 +452,7 @@ log(`Hardware: arch=${hardware.arch || '?'} gpu=${hardware.gpu_name || TARGET_GP
 // =============================================================================
 phase('GEMM Signature')
 
-const signature = await agentRetry(() => agent(`You are a GEMM kernel analyst. Build a structured signature for the target GEMM.
+const signature = await agentRetry(() => agent(`${__taskContractBlock()}You are a GEMM kernel analyst. Build a structured signature for the target GEMM.
 
 # Inputs
 - kernel_path: ${KERNEL_PATH}
@@ -497,7 +508,7 @@ const baseline = HOST_SOL ? {
   sass_path: hostBaseline.disassembly.sass_path,
   observed_instructions: (hostBaseline.disassembly.top_mnemonics || []).map(x => x[0]),
   instruction_summary: hostBaseline.disassembly.note,
-} : await agentRetry(() => agent(`You are the baseline-evidence agent. Establish measured baseline correctness, latency, and instruction evidence before any edit.
+} : await agentRetry(() => agent(`${__taskContractBlock()}You are the baseline-evidence agent. Establish measured baseline correctness, latency, and instruction evidence before any edit.
 
 # Baseline source
 ${KERNEL_PATH}
@@ -550,7 +561,7 @@ history.push({ candidate_id: 'baseline', status: 'baseline', speedup: best.speed
 // =============================================================================
 phase('Instruction Plan')
 
-const plan = await agentRetry(() => agent(`You are the GEMM/PTX instruction planner. Choose a small candidate set, each with a falsifiable instruction-level hypothesis.
+const plan = await agentRetry(() => agent(`${__taskContractBlock()}You are the GEMM/PTX instruction planner. Choose a small candidate set, each with a falsifiable instruction-level hypothesis.
 
 # Hardware
 ${JSON.stringify(hardware, null, 2)}
@@ -639,7 +650,7 @@ for (let i = 0; i < candidates.length; i++) {
   const artifactPath = `${EXP_DIR}/candidates/${candidateId}/kernel_artifact`
 
   phase('Implement')
-  const implementation = await agentRetry(() => agent(`You are the GEMM/PTX implementor. Materialize exactly one candidate and do not mutate the original kernel.
+  const implementation = await agentRetry(() => agent(`${__taskContractBlock()}You are the GEMM/PTX implementor. Materialize exactly one candidate and do not mutate the original kernel.
 
 # Candidate
 ${JSON.stringify(spec, null, 2)}
@@ -693,7 +704,7 @@ ${genomeFooter('Implement', candidateId)}`, {
     sass_path: hostCandidate?.disassembly?.sass_path || null,
     artifact_path: hostCandidate?.solution_path || null,
     error: hostCandidate?.stderr || hostCandidate?.disassembly?.error || '',
-  } : await agentRetry(() => agent(`You are the instruction-evidence gate. Compile, test, and disassemble the candidate, then verify the expected PTX/SASS regexes.
+  } : await agentRetry(() => agent(`${__taskContractBlock()}You are the instruction-evidence gate. Compile, test, and disassemble the candidate, then verify the expected PTX/SASS regexes.
 
 # Candidate
 - candidate_id: ${candidateId}
@@ -789,7 +800,7 @@ workloads_passed=${__hostMeasured.n_pass}/${__hostMeasured.n_total}
 Report these rather than re-deriving them. Spend the turn on the profile and on
 mechanism_moved: did ${spec.target_instruction} appear and move the number the
 way the hypothesis predicted?` : ''
-  const measured = await agentRetry(() => agent(`You are the measurement agent. The candidate already compiled, passed correctness, and verified its instruction path. Now benchmark and optionally profile it.
+  const measured = await agentRetry(() => agent(`${__taskContractBlock()}You are the measurement agent. The candidate already compiled, passed correctness, and verified its instruction path. Now benchmark and optionally profile it.
 
 # Candidate
 - candidate_id: ${candidateId}
@@ -867,7 +878,7 @@ ${genomeFooter('Profile', candidateId)}`, {
 // =============================================================================
 phase('Report')
 
-const report = await agentRetry(() => agent(`Write the final GEMM/PTX optimization report.
+const report = await agentRetry(() => agent(`${__taskContractBlock()}Write the final GEMM/PTX optimization report.
 
 # Output directory
 ${EXP_DIR}

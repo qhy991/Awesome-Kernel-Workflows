@@ -96,6 +96,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -120,9 +131,9 @@ const ATTEMPT_PLAN = (args.attempt_plan && typeof args.attempt_plan === 'object'
 // KerSor emits the cumulative ids as `failed_strategy_ids`; the per-round
 // derivation stays as the fallback for a dispatch that predates that channel.
 const FAILED_STRATEGY_IDS = Array.isArray(args.failed_strategy_ids)
-  ? (args.failed_strategy_ids || []).filter(id => typeof id === 'string' && id)
+  ? args.failed_strategy_ids.filter(id => typeof id === 'string' && id)
   : ((ATTEMPT_EVIDENCE && Array.isArray(ATTEMPT_EVIDENCE.transfer_items))
-    ? (ATTEMPT_EVIDENCE.transfer_items || []).filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
+    ? ATTEMPT_EVIDENCE.transfer_items.filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
     : [])
 function __attemptBlock() {
   if (!ATTEMPT_EVIDENCE && !ATTEMPT_PLAN) return ''
@@ -132,7 +143,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -926,7 +937,7 @@ phase('Seed'); await __genomeReport('Seed', WORKFLOW_NAME)
 {
   const _genDir = genomeDir()
   const _pd = await agentRetry(() => agent(
-    `Classify the kernel under optimization (op_class one of attention|gemm|elementwise|reduction|default; size one of tiny|small|large) from this context: ` +
+    `${__taskContractBlock()}Classify the kernel under optimization (op_class one of attention|gemm|elementwise|reduction|default; size one of tiny|small|large) from this context: ` +
     `editable kernel paths=${KERNEL_PATHS.join(', ')}; bench shape="${BENCH_SHAPE}"; task="${OP_DESC || '(none)'}". ` +
     `Pick the closest op_class and size (fuzzy is fine; use default/small if unsure). Then ` +
     substrateInstruction('profiling/profiling_strategist.py',
@@ -960,7 +971,7 @@ if (!args.integration_pattern) {
   const _genDir = genomeDir()
   const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
   const _integ = await agentRetry(() => agent(
-    `Read ${PRIMARY_KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+    `${__taskContractBlock()}Read ${PRIMARY_KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
     `(use no when the file cannot compile as a single translation unit — e.g. a llama.cpp .cuh with project-only deps). Then ` +
     substrateInstruction('integration/integration_strategist.py',
       `resolve --kernel "${PRIMARY_KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' --cache ${_genDir}/integ_cache.json --trajectory ${_genDir}/genome.jsonl`) +
@@ -981,7 +992,7 @@ const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGR
 // so every serial candidate restores to a pristine original and the exit net can too.
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${genomeDir()}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Byte-exact backup (once): run \`cp -a "${PRIMARY_KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Byte-exact backup (once): run \`cp -a "${PRIMARY_KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Seed', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 // Unconditional exit-restore net for embedded_inplace: each serial candidate restores
@@ -990,7 +1001,7 @@ if (ORIGINAL_BACKUP) {
 async function __exitRestore() {
   if (!ORIGINAL_BACKUP) return
   try {
-    await agentRetry(() => agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${P.project_dir}/${PRIMARY_KERNEL_PATH}"\` and confirm.`,
+    await agentRetry(() => agent(`${__taskContractBlock()}Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${P.project_dir}/${PRIMARY_KERNEL_PATH}"\` and confirm.`,
       { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH }), { retries: 5 })
   } catch (e) { /* restore is best-effort on the way out */ }
 }

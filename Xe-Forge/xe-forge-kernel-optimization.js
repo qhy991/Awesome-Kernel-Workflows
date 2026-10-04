@@ -95,6 +95,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -119,9 +130,9 @@ const ATTEMPT_PLAN = (args.attempt_plan && typeof args.attempt_plan === 'object'
 // KerSor emits the cumulative ids as `failed_strategy_ids`; the per-round
 // derivation stays as the fallback for a dispatch that predates that channel.
 const FAILED_STRATEGY_IDS = Array.isArray(args.failed_strategy_ids)
-  ? (args.failed_strategy_ids || []).filter(id => typeof id === 'string' && id)
+  ? args.failed_strategy_ids.filter(id => typeof id === 'string' && id)
   : ((ATTEMPT_EVIDENCE && Array.isArray(ATTEMPT_EVIDENCE.transfer_items))
-    ? (ATTEMPT_EVIDENCE.transfer_items || []).filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
+    ? ATTEMPT_EVIDENCE.transfer_items.filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
     : [])
 function __attemptBlock() {
   if (!ATTEMPT_EVIDENCE && !ATTEMPT_PLAN) return ''
@@ -131,7 +142,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -238,7 +249,7 @@ async function main() {
   phase('Setup');
 
   const setupResult = await agentRetry(() => agent(
-    `Set up Xe-Forge optimization environment for Intel XPU:
+    `${__taskContractBlock()}Set up Xe-Forge optimization environment for Intel XPU:
 
 1. Verify Intel XPU availability (Data Center GPU Max)
 2. Check backend support:
@@ -344,7 +355,7 @@ Then append:
   log('Generating initial kernel implementation...');
 
   const initialResult = await agentRetry(() => agent(
-    `Generate initial ${targetBackend} implementation:
+    `${__taskContractBlock()}Generate initial ${targetBackend} implementation:
 
 Kernel specification:
 - Operation: ${kernelSpec.operation}
@@ -428,7 +439,7 @@ Then append:
 Backend: ${targetBackend}
 Current kernel:
 \`\`\`${targetBackend}
-${String(currentImplementation.kernel_code ?? '').substring(0, 3000)}${currentImplementation.kernel_code.length > 3000 ? '\n... (truncated)' : ''}
+${String(currentImplementation.kernel_code ?? '')}${currentImplementation.kernel_code.length > 3000 ? '\n... (truncated)' : ''}
 \`\`\`
 
 Profiling analysis:
@@ -613,7 +624,7 @@ Then append:
 
 Current implementation:
 \`\`\`${targetBackend}
-${String(currentImplementation.kernel_code ?? '').substring(0, 2000)}...
+${String(currentImplementation.kernel_code ?? '')}
 \`\`\`
 
 Strategies to apply:
@@ -678,7 +689,7 @@ Then append:
 
 Optimized kernel:
 \`\`\`${targetBackend}
-${String(optimizeResult.optimized_kernel_code ?? '').substring(0, 2000)}...
+${String(optimizeResult.optimized_kernel_code ?? '')}
 \`\`\`
 
 Verification:
@@ -814,7 +825,7 @@ Return JSON:
   phase('Report');
 
   const report = await agentRetry(() => agent(
-    `Generate Xe-Forge optimization report:
+    `${__taskContractBlock()}Generate Xe-Forge optimization report:
 
 Kernel: ${kernelSpec.operation}
 Target: ${setupResult.xpu_model}

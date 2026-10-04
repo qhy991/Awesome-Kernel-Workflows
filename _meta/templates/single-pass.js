@@ -192,7 +192,7 @@ const transforms = await pipeline(
 
 # Current code (output of previous pass):
 \`\`\`
-${currentCode.substring(0, 5000)}
+${currentCode}
 \`\`\`
 
 # Analysis findings relevant to this pass:
@@ -224,12 +224,12 @@ const verification = await agentRetry(() => agent(`{{VERIFY_PROMPT}}
 
 # Original code:
 \`\`\`
-${analysis.source_code?.substring(0, 3000) || ''}
+${analysis.source_code || ''}
 \`\`\`
 
 # Final transformed code:
 \`\`\`
-${currentCode.substring(0, 3000)}
+${currentCode}
 \`\`\`
 
 # Passes applied: ${transformResults.map(t => t.pass_name || 'unknown').join(' → ')}

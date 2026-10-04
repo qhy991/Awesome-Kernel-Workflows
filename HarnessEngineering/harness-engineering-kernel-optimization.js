@@ -55,6 +55,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -91,7 +102,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -247,7 +258,7 @@ function measuredSpeedup(baseline, candidate) {
 
 log('Phase 1/6: Freeze Contract')
 const setup = await withTurnTimeout(agentRetry(
-  () => agent(`
+  () => agent(`${__taskContractBlock()}
 You are freezing a Harness Engineering run contract.
 
 Harness root: ${HARNESS_ROOT}
@@ -269,7 +280,7 @@ if (!baselineCandidate) return { ok: false, error: 'contract_materialization_fai
 
 log('Phase 2/6: Baseline')
 const baseline = await withTurnTimeout(agentRetry(
-  () => agent(`
+  () => agent(`${__taskContractBlock()}
 Establish authoritative baseline evidence for a frozen Harness Engineering contract.
 
 ${commandContract(baselineCandidate, `${EXP_DIR}/baseline`)}
@@ -293,7 +304,7 @@ for (let round = 1; round <= ITERATIONS; round++) {
   const roundDir = `${EXP_DIR}/round-${round}`
   log(`Phase 3/6: Profile and Decide — round ${round}/${ITERATIONS}`)
   const decision = await withTurnTimeout(agentRetry(
-    () => agent(`
+    () => agent(`${__taskContractBlock()}
 Act as the profile-backed controller for Harness Engineering round ${round}.
 
 Current incumbent: ${bestCandidate}
@@ -310,7 +321,7 @@ Return strategy_id, hypothesis, expected_bottleneck, supporting_artifacts, and i
 
   log(`Phase 4/6: Implement — round ${round}/${ITERATIONS}`)
   const implementation = await withTurnTimeout(agentRetry(
-    () => agent(`
+    () => agent(`${__taskContractBlock()}
 Implement exactly one Harness Engineering candidate.
 
 Incumbent: ${bestCandidate}
@@ -333,7 +344,7 @@ Return candidate_path, strategy_id, change_summary, and modified_files.
 
   log(`Phase 5/6: Official Gate — round ${round}/${ITERATIONS}`)
   const evidence = await withTurnTimeout(agentRetry(
-    () => agent(`
+    () => agent(`${__taskContractBlock()}
 Evaluate one Harness Engineering candidate with the frozen contract.
 
 ${commandContract(candidatePath, roundDir)}
@@ -358,7 +369,7 @@ Write ${roundDir}/evidence.json, retain raw command outputs, and bind the eviden
 
 log('Phase 6/6: Audit and Report')
 const report = await withTurnTimeout(agentRetry(
-  () => agent(`
+  () => agent(`${__taskContractBlock()}
 Audit and report this Harness Engineering run.
 
 Contract: ${guard(setup, 'contract_path', `${EXP_DIR}/contract.json`)}

@@ -165,6 +165,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -201,7 +212,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -738,7 +749,7 @@ phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agentRetry(() => agent(
-    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `${__taskContractBlock()}Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, lang_fence, impl_requirements, methods}.`,
@@ -765,7 +776,7 @@ if (USE_DRIVER) {
 let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
 if (USE_DRIVER) {
   const _pd = await agentRetry(() => agent(
-    `Read the operator spec for this run (${KERNEL_PATH || PROBLEM_PATH || 'the inline problem_definition'}) and classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
+    `${__taskContractBlock()}Read the operator spec for this run (${KERNEL_PATH || PROBLEM_PATH || 'the inline problem_definition'}) and classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${BACKEND_DIR}/manifest.json --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.\n` +
     `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
     { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
@@ -786,7 +797,7 @@ if (!args.integration_pattern) {
   const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true, sol_execbench_cli: !!SOL_CLI })
 
   const _integ = await agentRetry(() => agent(
-    `Classify can_compile_standalone for the operator under optimization (${_kForIntg}) as exactly one of yes|no|uncertain ` +
+    `${__taskContractBlock()}Classify can_compile_standalone for the operator under optimization (${_kForIntg}) as exactly one of yes|no|uncertain ` +
     `(use no when the file cannot compile as a single TU — e.g. a llama.cpp .cuh with project-only deps). Then ` +
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
     `--kernel "${_kForIntg}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
@@ -815,7 +826,7 @@ if (IS_SOL) {
 }
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Byte-exact backup: run \`cp -a "${KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 // A-O1 closure: embedded operators have no driver-provided native profiler
@@ -827,7 +838,7 @@ if (IS_EMBEDDED && PROFILING_DECISION.method === 'native_profiler') {
     profiler_name: 'embedded-perf', rationale: 'native_profiler but embedded operator -> perf_heuristic' }
 }
 
-const setupResult = await agentRetry(() => agent(`Set up a standalone AdaExplore-style ${setupLangToken()} optimization run.
+const setupResult = await agentRetry(() => agent(`${__taskContractBlock()}Set up a standalone AdaExplore-style ${setupLangToken()} optimization run.
 
 # Hard boundary
 Do not call the AdaExplore repository or any AdaExplore Python entrypoint. This workflow must run from the operator spec, local files, and the evaluator command provided here.
@@ -835,7 +846,7 @@ Do not call the AdaExplore repository or any AdaExplore Python entrypoint. This 
 # Operator source
 ${KERNEL_PATH ? `Read the operator spec from: ${KERNEL_PATH}` : ''}
 ${PROBLEM_PATH ? `Read the operator spec from problem_path: ${PROBLEM_PATH}` : ''}
-${OPERATOR_SPEC ? `\`\`\`python\n${OPERATOR_SPEC.substring(0, 5000)}\n\`\`\`` : ''}
+${OPERATOR_SPEC ? `\`\`\`python\n${OPERATOR_SPEC}\n\`\`\`` : ''}
 
 # Operation
 ${OP_DESC}
@@ -943,17 +954,17 @@ for (let searchStep = 0; searchStep < STEPS; searchStep++) {
   if (isLargeStep) {
     const diversePool = buildDiversePool(selectedNode)
     const poolContext = diversePool.length
-      ? diversePool.map((node, i) => `## Context ${i + 1}: node=${node.id}, speedup=${node.speedup.toFixed(3)}\n\`\`\`python\n${node.code.substring(0, 2200)}\n\`\`\``).join('\n\n')
+      ? diversePool.map((node, i) => `## Context ${i + 1}: node=${node.id}, speedup=${node.speedup.toFixed(3)}\n\`\`\`python\n${node.code}\n\`\`\``).join('\n\n')
       : 'No correct diverse context yet.'
 
-    const proposerResult = await agentRetry(() => agent(`You are the AdaExplore Large-Step Proposer.
+    const proposerResult = await agentRetry(() => agent(`${__taskContractBlock()}You are the AdaExplore Large-Step Proposer.
 
 # Goal
 Generate a structurally new ${USE_DRIVER ? `${DRIVER_LANG_FENCE} implementation` : 'Triton implementation'} for the PyTorch operator. This is a broad exploration step, not a local patch.
 
 # PyTorch reference
 \`\`\`python
-${operatorCode.substring(0, 5000)}
+${operatorCode}
 \`\`\`
 
 # Operation
@@ -1004,17 +1015,17 @@ Then append (this is large-step proposal for candidate node-${searchStep + 1}-L)
     const pathContext = pathToRoot(selectedNode)
       .filter(node => node.code)
       .slice(-5)
-      .map(node => `## Node ${node.id}: ${node.correct ? 'correct' : 'incorrect'}, speedup=${node.speedup.toFixed(3)}\n\`\`\`python\n${node.code.substring(0, 1800)}\n\`\`\``)
+      .map(node => `## Node ${node.id}: ${node.correct ? 'correct' : 'incorrect'}, speedup=${node.speedup.toFixed(3)}\n\`\`\`python\n${node.code}\n\`\`\``)
       .join('\n\n')
 
-    const reviserResult = await agentRetry(() => agent(`You are the AdaExplore Reviser.
+    const reviserResult = await agentRetry(() => agent(`${__taskContractBlock()}You are the AdaExplore Reviser.
 
 # Task
 Inspect the selected kernel and its recent path. Produce 1-3 concrete local improvement suggestions. Do not rewrite the kernel.
 
 # Selected kernel: node ${selectedNode.id}
 \`\`\`python
-${IS_SOL ? selectedNode.code : selectedNode.code.substring(0, 5000)}
+${selectedNode.code}
 \`\`\`
 
 # Recent path context
@@ -1042,14 +1053,14 @@ Return specific, surgical suggestions only.`, {
 
     const suggestions = reviserResult?.suggestions || [reviserDefaultHint()]
 
-    const tunerResult = await agentRetry(() => agent(`You are the AdaExplore Tuner.
+    const tunerResult = await agentRetry(() => agent(`${__taskContractBlock()}You are the AdaExplore Tuner.
 
 # Task
 Apply the reviser suggestions as surgical edits. Preserve the overall structure of the selected kernel. Do not regenerate from scratch.
 
 # Current kernel
 \`\`\`python
-${IS_SOL ? selectedNode.code : selectedNode.code.substring(0, 6000)}
+${selectedNode.code}
 \`\`\`
 
 # Suggestions
@@ -1148,7 +1159,7 @@ Then append (this is small-step surgical edit for candidate node-${searchStep + 
         envPrefix: SOL_ENV_PREFIX,
         definitionPath: SOL_DEFINITION_PATH,
       })
-      return agentRetry(() => agent(`Evaluate this AdaExplore candidate through the authoritative sol-execbench contract.
+      return agentRetry(() => agent(`${__taskContractBlock()}Evaluate this AdaExplore candidate through the authoritative sol-execbench contract.
 
 1. Atomically write the exact candidate below to ${solCandidatePath}.
    The authoritative producer call_id prefix is ${producerCallPrefix}. If you
@@ -1197,7 +1208,7 @@ Return the parsed result.`, {
         },
       }), { retries: 0 })
     })()
-    : await agentRetry(() => agent(`Evaluate this candidate with real execution evidence.
+    : await agentRetry(() => agent(`${__taskContractBlock()}Evaluate this candidate with real execution evidence.
 
 # Hard rules
 1. Write the candidate code exactly to: ${kernelPath}
@@ -1212,12 +1223,12 @@ ${evaluatorCommand || '(No benchmark_command provided; measured evidence unavail
 
 # Candidate code
 \`\`\`${USE_DRIVER ? DRIVER_LANG_FENCE : 'python'}
-${newKernelCode.substring(0, 9000)}
+${newKernelCode}
 \`\`\`
 
 # PyTorch reference
 \`\`\`python
-${operatorCode.substring(0, 5000)}
+${operatorCode}
 \`\`\`
 
 Return the parsed evaluation result.
@@ -1408,7 +1419,7 @@ Then append, using the values you just measured (status="done" if the candidate 
   if (!compiled || !correct) {
     failureLogs.push({
       node_id: newNodeId,
-      kernel_excerpt: newKernelCode.substring(0, 2500),
+      kernel_excerpt: newKernelCode,
       error_type: evalResult.error_type || (compiled ? 'correctness' : 'compile'),
       error_message: evalResult.error_message || 'unknown evaluator failure',
       result_path: evalResult.result_path || resultPath,
@@ -1477,7 +1488,7 @@ phase('AdaptMemory')
 let memoryUpdateReport = { updated: false, new_rules: 0, total_rules: skillMemory.length }
 
 if (MEMORY_UPDATE && failureLogs.length && terminationReason === 'step_limit') {
-  const memoryResult = await agentRetry(() => agent(`Update standalone AdaExplore skill memory from evaluated failure logs.
+  const memoryResult = await agentRetry(() => agent(`${__taskContractBlock()}Update standalone AdaExplore skill memory from evaluated failure logs.
 
 # Hard rules
 1. Only use the provided failure logs and evaluator messages.
@@ -1495,7 +1506,7 @@ ${SKILL_MEMORY_PATH || '(no path provided; return memory in workflow output only
 
 # Failure logs
 \`\`\`json
-${JSON.stringify(failureLogs, null, 2).substring(0, 12000)}
+${JSON.stringify(failureLogs, null, 2)}
 \`\`\`
 
 Return updated memory rules.
@@ -1552,7 +1563,7 @@ if (terminationReason !== 'step_limit') {
     `Completed ${stepsCompleted}/${STEPS} steps; best verified speedup ` +
     `${globalBest.correct ? globalBest.speedup.toFixed(6) : '0'}x.`
 } else {
-  finalReport = await agentRetry(() => agent(`Write a concise technical report for this standalone AdaExplore-style optimization run.
+  finalReport = await agentRetry(() => agent(`${__taskContractBlock()}Write a concise technical report for this standalone AdaExplore-style optimization run.
 
 # Operation
 ${OP_DESC}
@@ -1567,7 +1578,7 @@ ${JSON.stringify(treeStats, null, 2)}
 
 # Best kernel excerpt
 \`\`\`python
-${globalBest.code.substring(0, 5000)}
+${globalBest.code}
 \`\`\`
 
 # Memory update
@@ -1599,7 +1610,7 @@ Then append, using the best measured result (speedup is the best measured speedu
 // exit the project tree could be left dirty. Restore pristine unconditionally before
 // returning so the embedded_inplace path never leaves the original kernel mutated.
 if (INTEGRATION_DECISION.method === 'embedded_inplace' && ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Exit-restore: run \`cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}\` and confirm the original kernel is restored byte-exact.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Exit-restore: run \`cp -a ${ORIGINAL_BACKUP} ${KERNEL_PATH}\` and confirm the original kernel is restored byte-exact.`,
     { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 

@@ -150,6 +150,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -186,7 +197,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -527,7 +538,7 @@ phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agentRetry(() => agent(
-    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `${__taskContractBlock()}Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods, feature_catalog, ` +
@@ -554,7 +565,7 @@ if (USE_DRIVER) {
   // confidence. Computed once per task; PROFILING_DECISION gates the
   // profile.sh / ncu branch in the Evaluate loop below.
   const _pd = await agentRetry(() => agent(
-    `Read ${PROFILE_SOURCE_PATH || REFERENCE_CODE_PATH || TASK_SPEC_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
+    `${__taskContractBlock()}Read ${PROFILE_SOURCE_PATH || REFERENCE_CODE_PATH || TASK_SPEC_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
     `run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${BACKEND_DIR}/manifest.json --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.\n` +
     `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
     { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
@@ -580,7 +591,7 @@ if (!args.integration_pattern) {
   const _kernelForInteg = REFERENCE_CODE_PATH || PROFILE_SOURCE_PATH || TASK_SPEC_PATH
   const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
   const _integ = await agentRetry(() => agent(
-    `Read ${_kernelForInteg}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+    `${__taskContractBlock()}Read ${_kernelForInteg}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
     `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
     `--kernel "${_kernelForInteg}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
@@ -600,7 +611,7 @@ const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'sta
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${REFERENCE_CODE_PATH || PROFILE_SOURCE_PATH || TASK_SPEC_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Byte-exact backup: run \`cp -a "${REFERENCE_CODE_PATH || PROFILE_SOURCE_PATH || TASK_SPEC_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 // native_profiler downgrade keyed on !USE_DRIVER_STANDALONE: when running the
@@ -612,7 +623,7 @@ if (PROFILING_DECISION.method === 'native_profiler' && !USE_DRIVER_STANDALONE) {
     profiler_name: 'project-native-perf', rationale: 'native_profiler but embedded/non-standalone path -> perf_heuristic' }
 }
 
-const setup = await agentRetry(() => agent(`You are a ${langToken(LEGACY_SETUP_LANG_TOKEN)} kernel generation expert. Read and structure this CUDA-LLM task.
+const setup = await agentRetry(() => agent(`${__taskContractBlock()}You are a ${langToken(LEGACY_SETUP_LANG_TOKEN)} kernel generation expert. Read and structure this CUDA-LLM task.
 
 # Inputs
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
@@ -671,14 +682,14 @@ const LEGACY_FEATURE_CATALOG = `# Required feature families
 - fast math or CUDA intrinsics, only when tolerance allows
 - boundary handling / tail masking`
 
-const catalog = await agentRetry(() => agent(`Build a ${langToken(LEGACY_CATALOG_LANG_TOKEN)} optimization feature catalog for Feature Search and Reinforcement.
+const catalog = await agentRetry(() => agent(`${__taskContractBlock()}Build a ${langToken(LEGACY_CATALOG_LANG_TOKEN)} optimization feature catalog for Feature Search and Reinforcement.
 
 # Task
-${taskSpec.substring(0, 5000)}
+${taskSpec}
 
 # Reference
 \`\`\`
-${referenceCode.substring(0, 5000)}
+${referenceCode}
 \`\`\`
 
 # Target GPU
@@ -720,7 +731,7 @@ for (const feature of featureCatalog) initFeatureScore(feature)
 // =============================================================================
 phase('GenerateTests')
 
-const testPlan = await agentRetry(() => agent(`Generate diverse correctness tests for this CUDA-LLM task.
+const testPlan = await agentRetry(() => agent(`${__taskContractBlock()}Generate diverse correctness tests for this CUDA-LLM task.
 
 # Operation
 ${setup.operation_type}
@@ -771,21 +782,21 @@ for (let iteration = 0; iteration < ITERATIONS; iteration++) {
 
     phase('SelectFeatures')
 
-    const selection = await agentRetry(() => agent(`Select a ${langToken(LEGACY_SELECT_LANG_TOKEN)} feature combination for the next candidate.
+    const selection = await agentRetry(() => agent(`${__taskContractBlock()}Select a ${langToken(LEGACY_SELECT_LANG_TOKEN)} feature combination for the next candidate.
 
 # Feature catalog
 \`\`\`json
-${JSON.stringify(featureCatalog, null, 2).substring(0, 10000)}
+${JSON.stringify(featureCatalog, null, 2)}
 \`\`\`
 
 # Feature scores
 \`\`\`json
-${JSON.stringify(featureScores, null, 2).substring(0, 10000)}
+${JSON.stringify(featureScores, null, 2)}
 \`\`\`
 
 # Recent candidates
 \`\`\`json
-${JSON.stringify(candidates.slice(-8), null, 2).substring(0, 10000)}
+${JSON.stringify(candidates.slice(-8), null, 2)}
 \`\`\`
 
 # Selection rules
@@ -816,14 +827,14 @@ Then append:
 
     phase('GenerateKernel')
 
-    const generation = await agentRetry(() => agent(`Generate a ${langToken(LEGACY_GENERATE_LANG_TOKEN)} kernel using the selected CUDA-LLM FSR features.
+    const generation = await agentRetry(() => agent(`${__taskContractBlock()}Generate a ${langToken(LEGACY_GENERATE_LANG_TOKEN)} kernel using the selected CUDA-LLM FSR features.
 
 # Task specification
-${taskSpec.substring(0, 8000)}
+${taskSpec}
 
 # Reference implementation
 \`\`\`
-${referenceCode.substring(0, 8000)}
+${referenceCode}
 \`\`\`
 
 # Selected features
@@ -898,11 +909,11 @@ ${__hostMeasured.failure_code ? `failure_code=${__hostMeasured.failure_code}` : 
 Rule 3 does not apply: the evidence exists. Report these numbers and base the
 reward on them. Still report any reward-hacking signs you see in the code.` : ''
 
-    const evaluation = await agentRetry(() => agent(`Evaluate this ${langToken(LEGACY_EVAL_LANG_TOKEN)} candidate with compile, correctness, and latency evidence.
+    const evaluation = await agentRetry(() => agent(`${__taskContractBlock()}Evaluate this ${langToken(LEGACY_EVAL_LANG_TOKEN)} candidate with compile, correctness, and latency evidence.
 
 # Candidate code
 \`\`\`${fenceToken()}
-${(generation.candidate_code || '').substring(0, 16000)}
+${(generation.candidate_code || '')}
 \`\`\`
 
 # Eval command
@@ -914,7 +925,7 @@ ${EVAL_CMD || '(no benchmark_command provided)'}${__measuredBlock}
 
 # Tests
 \`\`\`json
-${JSON.stringify(tests, null, 2).substring(0, 8000)}
+${JSON.stringify(tests, null, 2)}
 \`\`\`
 
 # Required behavior
@@ -1067,7 +1078,7 @@ Then append, using the values you just measured (status="done" only if compiled 
 
     phase('Reinforce')
 
-    const reinforce = await agentRetry(() => agent(`Update ${langToken(LEGACY_REINFORCE_LANG_TOKEN)} feature scores from this measured candidate.
+    const reinforce = await agentRetry(() => agent(`${__taskContractBlock()}Update ${langToken(LEGACY_REINFORCE_LANG_TOKEN)} feature scores from this measured candidate.
 
 # Candidate
 \`\`\`json
@@ -1081,7 +1092,7 @@ ${JSON.stringify({
 
 # Current feature scores
 \`\`\`json
-${JSON.stringify(featureScores, null, 2).substring(0, 10000)}
+${JSON.stringify(featureScores, null, 2)}
 \`\`\`
 
 # Reward rules
@@ -1120,10 +1131,10 @@ Then append:
 // =============================================================================
 phase('Report')
 
-const finalReport = await agentRetry(() => agent(`Write a concise CUDA-LLM FSR optimization report.
+const finalReport = await agentRetry(() => agent(`${__taskContractBlock()}Write a concise CUDA-LLM FSR optimization report.
 
 # Task
-${taskSpec.substring(0, 4000)}
+${taskSpec}
 
 # Adaptation scope
 ${ADAPTATION_SCOPE}
@@ -1140,7 +1151,7 @@ ${JSON.stringify(bestCandidate ? {
 
 # Feature scores
 \`\`\`json
-${JSON.stringify(featureScores, null, 2).substring(0, 12000)}
+${JSON.stringify(featureScores, null, 2)}
 \`\`\`
 
 # Candidate history
@@ -1150,7 +1161,7 @@ ${JSON.stringify(candidates.map(c => ({
   selected_feature_ids: c.selected_feature_ids,
   implemented_feature_ids: c.implemented_feature_ids,
   eval: c.eval,
-})), null, 2).substring(0, 14000)}
+})), null, 2)}
 \`\`\`
 
 Cover:
@@ -1171,7 +1182,7 @@ Then append:
 // embedded_inplace exit safety net: unconditionally restore the pristine project
 // operator so the host project is left byte-exact regardless of how the loop ended.
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${REFERENCE_CODE_PATH || PROFILE_SOURCE_PATH || TASK_SPEC_PATH}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${REFERENCE_CODE_PATH || PROFILE_SOURCE_PATH || TASK_SPEC_PATH}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 

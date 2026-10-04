@@ -151,6 +151,17 @@ args = __unwrapArgs(typeof args === 'undefined' ? undefined : args)
 // agents/dispatch-arg-synthesizer.md), independent of op_description so the
 // solver can treat them as distinct lower-authority signals.
 const EXPERIENCE_EXCERPTS = Array.isArray(args.experience_excerpts) ? args.experience_excerpts : []
+// Task requirements must reach every fresh activation independently of a
+// previous agent's summary. The runtime owns file access and skill admission.
+function __taskContractBlock() {
+  const taskPath = args.problem_path || args.kernel_spec_path
+  const inlineTask = args.problem_definition
+  if (!taskPath && !inlineTask) return ''
+  return '\n# Authoritative task contract\n'
+    + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
+    + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
+    + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
+}
 function __experienceBlock() {
   if (!EXPERIENCE_EXCERPTS.length) return ''
   const lines = EXPERIENCE_EXCERPTS.map(e => {
@@ -175,9 +186,9 @@ const ATTEMPT_PLAN = (args.attempt_plan && typeof args.attempt_plan === 'object'
 // KerSor emits the cumulative ids as `failed_strategy_ids`; the per-round
 // derivation stays as the fallback for a dispatch that predates that channel.
 const FAILED_STRATEGY_IDS = Array.isArray(args.failed_strategy_ids)
-  ? (args.failed_strategy_ids || []).filter(id => typeof id === 'string' && id)
+  ? args.failed_strategy_ids.filter(id => typeof id === 'string' && id)
   : ((ATTEMPT_EVIDENCE && Array.isArray(ATTEMPT_EVIDENCE.transfer_items))
-    ? (ATTEMPT_EVIDENCE.transfer_items || []).filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
+    ? ATTEMPT_EVIDENCE.transfer_items.filter(i => i && i.kind === 'failed_strategy' && i.id).map(i => i.id)
     : [])
 function __attemptBlock() {
   if (!ATTEMPT_EVIDENCE && !ATTEMPT_PLAN) return ''
@@ -187,7 +198,7 @@ function __attemptBlock() {
   }
   if (ATTEMPT_EVIDENCE) {
     const j = JSON.stringify(ATTEMPT_EVIDENCE, null, 2)
-    parts.push('## Prior attempt evidence (last round):\n```json\n' + (j.length > 4000 ? j.slice(0, 4000) + '\n... [truncated to 4000 chars]' : j) + '\n```')
+    parts.push('## Prior attempt evidence (last round):\n```json\n' + j + '\n```')
   }
   if (ATTEMPT_PLAN && Array.isArray(ATTEMPT_PLAN.candidate_plans)) {
     parts.push('## Routing-suggested candidate plans:\n```json\n' + JSON.stringify({phase_intent: ATTEMPT_PLAN.phase_intent, candidate_plans: ATTEMPT_PLAN.candidate_plans}, null, 2) + '\n```')
@@ -569,7 +580,7 @@ function buildPlanContext(nodeId, langFence) {
   for (const c of children) {
     ctx += `- ${c.id}: runtime=${c.runtime !== null ? c.runtime + 'ms' : 'N/A'}, correct=${c.correct}, compile=${c.compile_ok}\n`
     if (c.plan) {
-      ctx += `  Plan: ${String(c.plan ?? '').substring(0, 200)}...\n`
+      ctx += `  Plan: ${String(c.plan ?? '')}\n`
     }
   }
 
@@ -579,7 +590,7 @@ function buildPlanContext(nodeId, langFence) {
     ctx += `${i + 1}. ${l.id}: ${l.runtime}ms\n`
   }
 
-  ctx += `\n## Source Reference Kernel\n\`\`\`${fence}\n${referenceKernelCode.substring(0, 3000)}\n\`\`\`\n`
+  ctx += `\n## Source Reference Kernel\n\`\`\`${fence}\n${referenceKernelCode}\n\`\`\`\n`
 
   return ctx
 }
@@ -597,20 +608,20 @@ function buildCodeContext(nodeId, langFence) {
   ctx += `\n## Children of Selected Node (${children.length})\n`
   for (const c of children) {
     if (c.correct && c.runtime !== null) {
-      ctx += `- ${c.id}: SUCCESS, ${c.runtime}ms. Code snippet:\n\`\`\`${fence}\n${String(c.kernel_code ?? '').substring(0, 800)}\n\`\`\`\n`
+      ctx += `- ${c.id}: SUCCESS, ${c.runtime}ms. Code snippet:\n\`\`\`${fence}\n${String(c.kernel_code ?? '')}\n\`\`\`\n`
     } else if (!c.compile_ok || !c.correct) {
-      ctx += `- ${c.id}: FAILED — ${c.logs?.substring(0, 200) || 'unknown error'}\n`
+      ctx += `- ${c.id}: FAILED — ${c.logs || 'unknown error'}\n`
     }
   }
 
   ctx += `\n## Sibling Nodes (${siblings.length}) — Transferable patches\n`
   for (const s of siblings) {
     if (s.correct && s.runtime !== null) {
-      ctx += `- ${s.id}: ${s.runtime}ms. Key implementation:\n\`\`\`${fence}\n${String(s.kernel_code ?? '').substring(0, 600)}\n\`\`\`\n`
+      ctx += `- ${s.id}: ${s.runtime}ms. Key implementation:\n\`\`\`${fence}\n${String(s.kernel_code ?? '')}\n\`\`\`\n`
     }
   }
 
-  ctx += `\n## Source Reference Kernel\n\`\`\`${fence}\n${referenceKernelCode.substring(0, 1500)}\n\`\`\`\n`
+  ctx += `\n## Source Reference Kernel\n\`\`\`${fence}\n${referenceKernelCode}\n\`\`\`\n`
 
   return ctx
 }
@@ -623,7 +634,7 @@ function buildDebugContext(nodeId, langFence) {
 
   let ctx = `# Context Window for DEBUG Agent\n\n## Failing Node (id=${nodeId})\n`
   ctx += `Failing kernel code:\n\`\`\`${fence}\n${String(node.kernel_code ?? '')}\n\`\`\`\n`
-  ctx += `\n## Error Logs\n\`\`\`\n${(node.logs || '').substring(0, 2000)}\n\`\`\`\n`
+  ctx += `\n## Error Logs\n\`\`\`\n${(node.logs || '')}\n\`\`\`\n`
   ctx += `\n## Original Plan (if any)\n${node.plan || 'No plan recorded'}\n`
   ctx += `\n## Anchors (if any)\n${node.anchors || 'No anchors recorded'}\n`
 
@@ -631,13 +642,13 @@ function buildDebugContext(nodeId, langFence) {
   for (const s of siblings) {
     ctx += `### ${s.id}\n`
     if (s.correct) {
-      ctx += `CORRECT — ${s.runtime}ms:\n\`\`\`${fence}\n${String(s.kernel_code ?? '').substring(0, 800)}\n\`\`\`\n`
+      ctx += `CORRECT — ${s.runtime}ms:\n\`\`\`${fence}\n${String(s.kernel_code ?? '')}\n\`\`\`\n`
     } else {
-      ctx += `Also failing — ${s.logs?.substring(0, 200) || 'unknown'}\n`
+      ctx += `Also failing — ${s.logs || 'unknown'}\n`
     }
   }
 
-  ctx += `\n## Source Reference Kernel\n\`\`\`${fence}\n${referenceKernelCode.substring(0, 1500)}\n\`\`\`\n`
+  ctx += `\n## Source Reference Kernel\n\`\`\`${fence}\n${referenceKernelCode}\n\`\`\`\n`
 
   return ctx
 }
@@ -659,7 +670,7 @@ phase('Setup')
 
 if (USE_DRIVER) {
   DRIVER = await agentRetry(() => agent(
-    `Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
+    `${__taskContractBlock()}Load the backend driver at ${BACKEND_DIR} and return its manifest plus idioms verbatim.\n` +
     `1. Run exactly: \`cat ${driverPath('manifest.json')}\` and parse JSON.\n` +
     `2. Run exactly: \`cat ${driverPath('idioms.json')}\` and parse JSON.\n` +
     `Return {present, backend_id, source_ext, aux_ext, lang_fence, impl_requirements, methods}.`,
@@ -678,7 +689,7 @@ if (USE_DRIVER) {
 }
 
 if (INPUT_MODE === 'generate_then_optimize') {
-  const generated = await agentRetry(() => agent(`No kernel_path was provided. Generate and verify an initial ${langToken(LEGACY_GENERATION_LANG_TOKEN)} kernel before constructing the STARK search tree.
+  const generated = await agentRetry(() => agent(`${__taskContractBlock()}No kernel_path was provided. Generate and verify an initial ${langToken(LEGACY_GENERATION_LANG_TOKEN)} kernel before constructing the STARK search tree.
 
 # Problem Input
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
@@ -714,7 +725,7 @@ Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run
   REF_KERNEL_PATH = generatedKernelPath
 }
 
-const setupResult = await agentRetry(() => agent(`Read the reference kernel file at: ${REF_KERNEL_PATH}
+const setupResult = await agentRetry(() => agent(`${__taskContractBlock()}Read the reference kernel file at: ${REF_KERNEL_PATH}
 
 Analyze it and return:
 1. Full kernel source code
@@ -756,11 +767,11 @@ referenceDescription = setupResult.algorithm_description
 log(`Reference loaded: ${setupResult.op_type}, ${referenceKernelCode.length} chars`)
 
 // Evaluate reference kernel as root node
-const rootEval = await agentRetry(() => agent(`Evaluate this reference kernel for correctness and performance.
+const rootEval = await agentRetry(() => agent(`${__taskContractBlock()}Evaluate this reference kernel for correctness and performance.
 
 # Kernel Code
 \`\`\`${fenceToken()}
-${referenceKernelCode.substring(0, 4000)}
+${referenceKernelCode}
 \`\`\`
 
 # Compile and Run
@@ -793,7 +804,7 @@ Return JSON with:
 let PROFILING_DECISION = { method: 'native_profiler', confidence: 'measured', normalizer: 'to_evidence.py' }
 if (USE_DRIVER) {
   const _pd = await agentRetry(() => agent(
-    `Read ${REF_KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
+    `${__taskContractBlock()}Read ${REF_KERNEL_PATH}; classify its op_class (one of attention|gemm|elementwise|reduction|default) and size (tiny|small|large). Then ` +
     `run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/profiling/profiling_strategist.py resolve --backend-manifest ${BACKEND_DIR}/manifest.json --task <op_class> --size <size> --cache ${EXP_DIR}/prof_cache.json --trajectory ${EXP_DIR}/genome.jsonl\`.\n` +
     `Return its stdout JSON verbatim {method, confidence, normalizer, profiler_name, rationale}.`,
     { model: MODEL.mechanical, label: 'profiling-strategist', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
@@ -816,7 +827,7 @@ if (!args.integration_pattern) {
 
   const _probe = JSON.stringify({ compiler: true, project_build: !!BUILD_CMD, register_script: !!REGISTER_SCRIPT, runtime_registry: false, reversibility_net: true })
   const _integ = await agentRetry(() => agent(
-    `Read ${REF_KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
+    `${__taskContractBlock()}Read ${REF_KERNEL_PATH}; classify can_compile_standalone as exactly one of yes|no|uncertain ` +
     `(use no when the file cannot compile as a single TU — e.g. llama.cpp .cuh with project-only deps). Then ` +
     `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/integration/integration_strategist.py resolve ` +
     `--kernel "${REF_KERNEL_PATH}" --can-standalone <yes|no|uncertain> --host-probe '${_probe}' ` +
@@ -836,7 +847,7 @@ const USE_DRIVER_STANDALONE = USE_DRIVER && INTEGRATION_DECISION.method === 'sta
 const IS_EMBEDDED = INTEGRATION_DECISION.method === 'embedded_inplace' || INTEGRATION_DECISION.method === 'embedded_dispatch'
 const ORIGINAL_BACKUP = INTEGRATION_DECISION.method === 'embedded_inplace' ? `${EXP_DIR}/integ_original.backup` : ''
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Byte-exact backup: run \`cp -a "${REF_KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Byte-exact backup: run \`cp -a "${REF_KERNEL_PATH}" "${ORIGINAL_BACKUP}"\` and confirm.`,
     { model: MODEL.mechanical, label: 'integration-backup-original', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 // A-O1 closure: native_profiler but no standalone driver path (embedded/legacy) → perf_heuristic
@@ -851,11 +862,11 @@ if (USE_DRIVER_STANDALONE) {
   const buildOut = `${EXP_DIR}/stark_root.artifact`
   const profOut = `${EXP_DIR}/stark_root.prof.native`
   await agentRetry(() => agent(
-    `${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
+    `${__taskContractBlock()}${driverSh('build.sh', `--source ${kPath} --out ${buildOut}`)}\n` +
     `Return its stdout JSON verbatim.`,
     { model: MODEL.mechanical, label: 'driver-build-root', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
   const runOut = await agentRetry(() => agent(
-    `${driverSh('run.sh', `--artifact ${buildOut} --problem ${PROBLEM_PATH} --out ${buildOut}.run.json`)}\n` +
+    `${__taskContractBlock()}${driverSh('run.sh', `--artifact ${buildOut} --problem ${PROBLEM_PATH} --out ${buildOut}.run.json`)}\n` +
     `Return its stdout JSON verbatim {ok, latency_ms, compiled, correct, log}.`,
     { model: MODEL.profile, label: 'driver-run-root', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   let evidenceOut = null
@@ -882,11 +893,11 @@ if (USE_DRIVER_STANDALONE) {
       { model: MODEL.mechanical, label: 'driver-to-evidence-root', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5, allowNull: true })
   }
   await agentRetry(() => agent(
-    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
+    `${__taskContractBlock()}Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/diagnose.py --metrics-json '${JSON.stringify((evidenceOut && evidenceOut.metrics) || {})}'\`.\n` +
     `Return stdout JSON verbatim {bottleneck_class, evidence}.`,
     { model: MODEL.mechanical, label: 'driver-diagnose-root', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
   await agentRetry(() => agent(
-    `Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --source ${kPath} --metrics ${EXP_DIR}/stark_root.result.json\`.\n` +
+    `${__taskContractBlock()}Run exactly: \`${PY ? PY + ' ' : ''}${SUBSTRATE}/anti_cheat.py --source ${kPath} --metrics ${EXP_DIR}/stark_root.result.json\`.\n` +
     `Return stdout JSON verbatim {ok, suspicious, reasons}.`,
     { model: MODEL.mechanical, label: 'driver-anti-cheat-root', phase: 'Setup', schema: JSON_PASSTHROUGH }), { retries: 5 })
   rootEval.driver_envelope = {
@@ -957,7 +968,7 @@ for (let t = 0; t < BUDGET; t++) {
 
     const debugCtx = buildDebugContext(selectedId, fenceToken())
 
-    const debugResult = await agentRetry(() => agent(`You are a kernel debugging expert. Fix the failing kernel using sibling patterns.
+    const debugResult = await agentRetry(() => agent(`${__taskContractBlock()}You are a kernel debugging expert. Fix the failing kernel using sibling patterns.
 
 ${debugCtx}
 
@@ -1000,7 +1011,7 @@ Then append:
 
     const planCtx = buildPlanContext(selectedId, fenceToken())
 
-    const planResult = await agentRetry(() => agent(`You are a kernel optimization strategist. Propose a concrete, actionable optimization plan with grounded instruction anchors.
+    const planResult = await agentRetry(() => agent(`${__taskContractBlock()}You are a kernel optimization strategist. Propose a concrete, actionable optimization plan with grounded instruction anchors.
 
 ${planCtx}
 
@@ -1066,7 +1077,7 @@ Then append:
 
     const codeCtx = buildCodeContext(selectedId, fenceToken())
 
-    const codeResult = await agentRetry(() => agent(`You are a kernel coding expert. Realize the grounded instructions into executable ${langToken(LEGACY_CODE_LANG_TOKEN)} code.
+    const codeResult = await agentRetry(() => agent(`${__taskContractBlock()}You are a kernel coding expert. Realize the grounded instructions into executable ${langToken(LEGACY_CODE_LANG_TOKEN)} code.
 
 ${codeCtx}
 
@@ -1075,7 +1086,7 @@ Plan: ${planResult.plan}
 
 Anchored Scaffold:
 \`\`\`${fenceToken()}
-${String(planResult.anchored_scaffold ?? '').substring(0, 4000)}
+${String(planResult.anchored_scaffold ?? '')}
 \`\`\`
 
 # Anchor Details
@@ -1151,16 +1162,16 @@ compiled=${__hostMeasured.compiled} correct=${__hostMeasured.correct}
 speedup=${__hostMeasured.speedup} latency_ms=${__hostMeasured.latency_ms}
 workloads_passed=${__hostMeasured.n_pass}/${__hostMeasured.n_total}
 ${__hostMeasured.failure_code ? `failure_code=${__hostMeasured.failure_code}` : ''}
-${__hostMeasured.stderr ? `build/run output:\n${String(__hostMeasured.stderr).substring(0, 1500)}` : ''}
+${__hostMeasured.stderr ? `build/run output:\n${String(__hostMeasured.stderr)}` : ''}
 Report these rather than re-deriving them. Spend the turn on what the numbers
 mean for this node: worth expanding, or a dead branch.` : ''
 
-  const evalResult = await agentRetry(() => agent(`Evaluate this kernel for correctness and performance.
+  const evalResult = await agentRetry(() => agent(`${__taskContractBlock()}Evaluate this kernel for correctness and performance.
 ${__measuredBlock}
 
 # Kernel Code
 \`\`\`${fenceToken()}
-${newKernelCode.substring(0, 4000)}
+${newKernelCode}
 \`\`\`
 
 # Compile and Run
@@ -1333,7 +1344,7 @@ const bestNode = leaderboard[0] || rootNode
 const allCorrect = tree.filter(n => n.correct)
 const allFailed = tree.filter(n => !n.correct && n.id !== 'root')
 
-const report = await agentRetry(() => agent(`Generate a comprehensive optimization report for this STARK session.
+const report = await agentRetry(() => agent(`${__taskContractBlock()}Generate a comprehensive optimization report for this STARK session.
 
 # Session Statistics
 - Total attempts: ${attemptCount}
@@ -1345,7 +1356,7 @@ const report = await agentRetry(() => agent(`Generate a comprehensive optimizati
 
 # Best Kernel (id=${bestNode.id})
 \`\`\`${fenceToken()}
-${String(bestNode.kernel_code ?? '').substring(0, 4000)}
+${String(bestNode.kernel_code ?? '')}
 \`\`\`
 
 # Plan for Best Kernel
@@ -1406,7 +1417,7 @@ Then append, using the session outcome (status="done" if outcome is success or p
 
 // embedded_inplace exit safety net (unconditional restore of the project kernel)
 if (ORIGINAL_BACKUP) {
-  await agentRetry(() => agent(`Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${REF_KERNEL_PATH}"\` and confirm. ALWAYS restore.`,
+  await agentRetry(() => agent(`${__taskContractBlock()}Exit restore (unconditional): run \`cp -a "${ORIGINAL_BACKUP}" "${REF_KERNEL_PATH}"\` and confirm. ALWAYS restore.`,
     { model: MODEL.mechanical, label: 'integration-exit-restore', phase: 'Report', schema: JSON_PASSTHROUGH }), { retries: 5 })
 }
 

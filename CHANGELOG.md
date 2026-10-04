@@ -8,6 +8,9 @@ for the versioning policy.
 
 ## [Unreleased]
 
+### Fixed
+- Preserve complete agent prompt content across workflows and generation templates: remove fixed character clipping of task requirements, source, measurements and typed evidence; carry the original task reference into fresh activations. Long JSON evidence remains parseable. Search population limits and display identifiers are unchanged. Add executed KSearch and shared-context regressions.
+
 ### Changed
 
 - Merge the WSR Host-bound parent/candidate lineage and CuTe qualification fixes with main executable workflow tools, explicit integration selection, and real-launch profiling; preserve the current retry helper and independent score ownership.
