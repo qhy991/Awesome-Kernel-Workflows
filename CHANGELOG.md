@@ -14,6 +14,14 @@ for the versioning policy.
 
 ## [Unreleased]
 
+### Fixed
+
+- Bind native task self-tests to immutable explicitly selected artifacts and complete broker/task traces; opt-in KSearch keeps original tree search and official reference scoring, rejects incomplete results, and returns the tested artifact instead of rewriting source.
+
+### Added
+
+- Add opt-in native KSearch task-result evaluation consuming complete task JSON and keeping reference scoring separate from estimates.
+
 ### Changed
 
 - Merge the WSR Host-bound parent/candidate lineage and CuTe qualification fixes with main executable workflow tools, explicit integration selection, and real-launch profiling; preserve the current retry helper and independent score ownership.

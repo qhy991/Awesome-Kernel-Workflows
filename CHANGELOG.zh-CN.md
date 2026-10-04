@@ -12,6 +12,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- 将 native 任务自测绑定到明确选择的不可变 artifact 及完整 broker/task 原始记录；可选 KSearch 分支保持原生树搜索及 official reference 评分，拒绝缺失结果，返回实测 artifact 而不重写源码。
+
+### Added
+
+- 增加显式启用的原生KSearch任务结果分支：消费完整task JSON，以reference评分并拒绝估算替代。
+
 ### Changed
 
 - 整合 WSR 的 Host 父实现与候选源码绑定、CuTe 资格修复，同时保留 main 的可执行工具、显式集成选择、真实启动 profiling、当前重试 helper 与独立计分归属。

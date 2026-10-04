@@ -12,6 +12,31 @@ export const meta = {
     { title: 'Report', detail: 'Final optimization report with search trajectory' },
   ],
 }
+// --- BEGIN inlined task-result scaffolding (from _meta/scaffolding/task-result.js) ---
+// Native task-result compatibility: task command is the measurement authority.
+function __taskResult(output, expectedPath, expectedCount) {
+  let result
+  try { result = JSON.parse(output?.test_result_json || '') } catch { return null }
+  if (output?.test_result_path !== expectedPath || result?.test_result_path !== expectedPath || result?.contract_version !== 'kersor-task-result-v1') return null
+  const valid = result.compiled === true && result.correct === true
+    && result.full_workload_set === true && result.measurement_valid === true
+    && result.source_binding?.verified === true && result.n_pass === result.n_total
+    && Number.isInteger(result.n_total) && result.n_total === expectedCount
+    && /^[0-9a-f]{64}$/i.test(result.source_binding?.source_sha256 || '')
+    && result.candidate_path === expectedPath + '.artifact/candidate.py'
+    && result.n_total > 0 && Number.isFinite(result.candidate_latency_aggregate_ms)
+    && result.candidate_latency_aggregate_ms > 0 && Number.isFinite(result.speedup_vs_reference)
+    && result.speedup_vs_reference > 0
+  return {is_valid:valid, compiled:result.compiled, correct:valid,
+    metric_value:valid ? result.speedup_vs_reference : 0,
+    speedup:valid ? result.speedup_vs_reference : 0,
+    latency_ms:valid ? result.candidate_latency_aggregate_ms : null,
+    n_pass:result.n_pass, n_total:result.n_total,
+    pass_rate:String(result.n_pass)+'/'+String(result.n_total),
+    source_binding:result.source_binding, host_candidate_path:result.candidate_path, test_result_path:output.test_result_path,
+    error_log:valid ? '' : 'task correctness/measurement/binding gate failed'}
+}
+// --- END inlined task-result scaffolding ---
 // --- BEGIN sol-execbench-eval substrate (auto-inlined by scripts/patch-sol-execbench-eval.js) ---
 const SOL_SOLUTION_CONTRACT = [
   'SOL-EXECBENCH SOLUTION CONTRACT (this task is evaluated by the sol-execbench CLI):',
@@ -653,7 +678,10 @@ const opType = setupResult.op_type
 // SOL carries its honest reference latency in every official workload row, so a
 // separate LLM baseline turn cannot add evidence. Other integrations retain the
 // legacy baseline characterization path.
-const baselineEval = INTEGRATION_PATTERN === 'sol_execbench_solution'
+const baselineEval = args.task_result_command
+  ? {baseline_metric:1, baseline_latency_ms:null, eval_passed:false,
+     performance_profile:'official reference denominator only; no historical seed', bottleneck_analysis:'await measured candidate'}
+  : INTEGRATION_PATTERN === 'sol_execbench_solution'
   ? {
       baseline_metric: 1.0,
       baseline_latency_ms: 0,
@@ -840,7 +868,7 @@ if (USE_DRIVER_STANDALONE) {
 }
 
 baselineMetric = baselineEval.baseline_metric || 1.0
-bestMetric = baselineMetric
+bestMetric = args.task_result_command ? null : baselineMetric
 log(`Baseline: metric=${baselineMetric}, latency=${baselineEval.baseline_latency_ms || 'N/A'}ms`)
 log(`Bottleneck: ${baselineEval.bottleneck_analysis || 'unknown'}`)
 
@@ -1323,7 +1351,21 @@ Then append:
     // =========================================================================
     phase('Evaluate')
 
-    const evalResult = IS_SOL
+    const evalResult = args.task_result_command
+      ? await (async () => {
+        const resultPath = `${EXP_DIR}/task_cycle_${cycle}_a${attempt}.json`
+        const candidatePath = genResult.variant_path || `${EXP_DIR}/task_cycle_${cycle}_a${attempt}.py`
+        const output = await agentRetry(() => agent(`Use the full explicitly returned source at ${candidatePath}. If that declared file does not exist, write the COMPLETE returned code below to that exact path, without rewriting an existing candidate.
+${genResult.code}
+Run the trusted task command: ${args.task_result_command.replaceAll('{kernel_path}', candidatePath).replaceAll('{result_path}', resultPath)}
+Await the terminal result. Return test_result_path=${resultPath} and test_result_json copied verbatim from that file. Never report estimated numbers.`, {
+          label: `task-eval-${cycle}-${attempt}`, phase:'Evaluate',
+          schema:{type:'object',properties:{test_result_path:{type:'string'},test_result_json:{type:'string'}},required:['test_result_path','test_result_json']},
+        }), {retries:0})
+        const measured = __taskResult(output, resultPath, args.task_workload_count)
+        return measured || {is_valid:false,metric_value:0,latency_ms:null,error_log:'missing task result'}
+      })()
+      : IS_SOL
       ? await (async () => {
         const variant = `ksearch_c${cycle}_a${attempt}`.replace(/[^A-Za-z0-9_]/g, '_')
         const candidatePath = `${EXP_DIR}/${variant}${LANGUAGE === 'cuda' ? '.cu' : '.py'}`
@@ -1772,7 +1814,7 @@ Then append:
   }
   cycleCount = cycle + 1
   const plannedStall = runStagnation >= RUN_STAGNATION_LIMIT
-  const cuteHostBest = IS_SOL && LANGUAGE === 'cute-dsl' &&
+  const cuteHostBest = (Boolean(args.task_result_command) && bestSolution?.eval?.is_valid === true) || IS_SOL && LANGUAGE === 'cute-dsl' &&
     bestSolution?.eval?.artifact_binding?.verified === true
   const materializedBestPath = cuteHostBest ? bestSolution.eval.host_candidate_path
     : (bestSolution?.code ? bestKernelPath() : null)
@@ -1909,7 +1951,7 @@ return {
   problem_definition: PROBLEM_DEFINITION,
   problem_path: KERNEL_SPEC_PATH,
   kernel_path: BASELINE_CODE_PATH,
-  generated_kernel_path: IS_SOL && LANGUAGE === 'cute-dsl'
+  generated_kernel_path: args.task_result_command ? (bestSolution?.eval?.host_candidate_path || '') : IS_SOL && LANGUAGE === 'cute-dsl'
     ? (bestSolution?.eval?.host_candidate_path || '')
     : (bestSolution?.code ? bestKernelPath() : ''),
   ...(IS_SOL && LANGUAGE === 'cute-dsl' ? {
@@ -1924,8 +1966,9 @@ return {
     selected_candidate_id: bestSolution?.id || '',
   },
   best_metric: bestMetric,
-  best_solution_code: bestSolution?.code || '',
-  best_kernel_path: IS_SOL && LANGUAGE === 'cute-dsl'
+  best_solution_code: args.task_result_command ? '' : (bestSolution?.code || ''),
+  ...(args.task_result_command ? {canonical_metric:{name:'speedup_vs_reference',value:bestMetric}, source_binding:bestSolution?.eval?.source_binding || null, task_result_path:bestSolution?.eval?.test_result_path || null} : {}),
+  best_kernel_path: args.task_result_command ? (bestSolution?.eval?.host_candidate_path || null) : IS_SOL && LANGUAGE === 'cute-dsl'
     ? (bestSolution?.eval?.host_candidate_path || null)
     : (bestSolution?.code ? bestKernelPath() : null),
   cycles_completed: cycleCount,
