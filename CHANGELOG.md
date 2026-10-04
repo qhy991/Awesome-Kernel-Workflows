@@ -14,6 +14,8 @@ for the versioning policy.
 
 ## [Unreleased]
 
+- Measure an explicitly accepted native task parent through the shared full-workload helper before CUDAAgent/AccelOpt optimize-existing paths; preserve clean generation and native loops, keep NCU diagnostic, and distinguish parent-relative from generated-initial metrics.
+
 ### Fixed
 
 - Accept native structured task-result objects alongside JSON strings through the same shared full-workload/source/measurement and unknown-HOLD gates; CUDAAgent initial candidate delivery no longer fails merely because native returns JSON objects.

@@ -68,6 +68,12 @@ Wait for its terminal result and read ${ctx.resultPath}. Return test_result_path
   return __taskResult(output, ctx.resultPath, ctx.workloadCount)
     || __taskHold('missing task result')
 }
+
+async function __nativeTaskAcceptedParent(ctx) {
+  const measured = await __nativeTaskEvaluate(ctx)
+  if (!measured?.is_valid) return __taskHold('accepted parent failed full official task measurement')
+  return measured
+}
 // --- END inlined task-result scaffolding ---
 // --- BEGIN sol-execbench-eval substrate (auto-inlined by scripts/patch-sol-execbench-eval.js) ---
 const SOL_SOLUTION_CONTRACT = [
@@ -732,6 +738,16 @@ Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run
   if (!generatedKernelPath) throw new Error('Generation mode did not produce generated_kernel_path')
   if ((VERIFY_CMD || PROFILE_CMD) && initialGenerationResult.verified === false) throw new Error('No generated seed passed verification evidence')
   MODEL_PATH = generatedKernelPath
+}
+
+if (args.task_result_command && INPUT_MODE === 'optimize_existing') {
+  taskInitialMeasurement = await __nativeTaskAcceptedParent({candidatePath:MODEL_PATH,
+    resultPath:`${EXP_DIR}/accepted_parent.task.json`,command:args.task_result_command,
+    workloadCount:args.task_workload_count,label:'task-accepted-parent'})
+  MODEL_PATH = taskInitialMeasurement.host_candidate_path
+  bestBoundSourcePath = MODEL_PATH; bestArtifactBinding = taskInitialMeasurement.source_binding
+  bestCompiled = true; bestCorrect = true; bestSpeedup = 1
+  taskBestReferenceSpeedup = taskInitialMeasurement.speedup
 }
 
 const setupResult = await agentRetry(() => agent(`${__taskContractBlock()}You are a CUDA kernel optimization expert. Set up the optimization workspace.
@@ -1560,7 +1576,7 @@ return {
   eager_time_ms: eagerTime,
   compile_time_ms: compileTime,
   best_speedup_vs_compile: args.task_result_command ? null : bestSpeedup,
-  ...(args.task_result_command ? {canonical_metric:{name:'speedup_vs_generated_initial',value:bestSpeedup},speedup_vs_reference:taskBestReferenceSpeedup,initial_measurement:taskInitialMeasurement,source_binding:bestArtifactBinding,performance_domain:'official_full_workload_generated_initial_relative'} : {}),
+  ...(args.task_result_command ? {canonical_metric:{name:INPUT_MODE === 'optimize_existing' ? 'speedup_vs_accepted_parent' : 'speedup_vs_generated_initial',value:bestSpeedup},speedup_vs_reference:taskBestReferenceSpeedup,initial_measurement:taskInitialMeasurement,source_binding:bestArtifactBinding,performance_domain:INPUT_MODE === 'optimize_existing' ? 'official_full_workload_accepted_parent_relative' : 'official_full_workload_generated_initial_relative'} : {}),
   best_speedup_vs_seed: IS_SOL ? bestSolSeedRelative : null,
   best_speedup_vs_eager: args.task_result_command ? null : IS_SOL ? null : eagerTime / (compileTime / (bestSpeedup || 1)),
   target_met: targetMet,

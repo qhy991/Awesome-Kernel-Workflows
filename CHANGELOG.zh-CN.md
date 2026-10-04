@@ -12,6 +12,8 @@
 
 ## [Unreleased]
 
+- CUDAAgent/AccelOpt原生任务继承分支先通过共享完整workload助手测量明确的已验收父实现；保留clean生成及原生循环，NCU仅供诊断，并区分父实现相对指标与生成初始实现指标。
+
 ### Fixed
 
 - 在相同完整workload、源码、测量和unknown-HOLD门槛下兼容原生结构化task-result对象与JSON字符串，修复CUDAAgent初始候选因native返回对象而解析失败。

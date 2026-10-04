@@ -54,3 +54,9 @@ Wait for its terminal result and read ${ctx.resultPath}. Return test_result_path
   return __taskResult(output, ctx.resultPath, ctx.workloadCount)
     || __taskHold('missing task result')
 }
+
+async function __nativeTaskAcceptedParent(ctx) {
+  const measured = await __nativeTaskEvaluate(ctx)
+  if (!measured?.is_valid) return __taskHold('accepted parent failed full official task measurement')
+  return measured
+}
