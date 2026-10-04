@@ -1,0 +1,8 @@
+'use strict'
+const {test}=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs'),path=require('node:path');
+const s=fs.readFileSync(path.resolve(__dirname,'../../scaffolding/task-result.js'),'utf8');
+const parse=vm.runInNewContext(s+';__taskResult');
+const p='/fixture/result.json';
+const base={contract_version:'kersor-task-result-v1',test_result_path:p,compiled:true,correct:true,full_workload_set:true,measurement_valid:true,n_pass:17,n_total:17,candidate_latency_aggregate_ms:.02,speedup_vs_reference:.75,candidate_path:p+'.artifact/candidate.py',source_binding:{verified:true,source_sha256:'a'.repeat(64)}};
+for(const [name,extra] of Object.entries({broker:{outcome_state:'unknown',failure_origin:'broker'},transport:{outcome_state:'unknown',failure_origin:'transport'},missingTrace:{outcome_state:'unknown',failure_origin:'infrastructure_or_incomplete_evidence'},partialUUID:{full_workload_set:false,n_pass:16},modelUnknown:{model_observation:'unknown'}}))test(name+' cannot score zero or continue',()=>{assert.throws(()=>parse({test_result_path:p,test_result_json:JSON.stringify({...base,...extra})},p,17),e=>e.code==='TASK_RESULT_HOLD'&&e.retryable===false&&e.outcome_state==='unknown');});
+for(const compiled of [false,true])test('explicit candidate '+(compiled?'numerical':'compile')+' failure may score zero',()=>{const out=parse({test_result_path:p,test_result_json:JSON.stringify({...base,compiled,correct:false,measurement_valid:false,n_pass:0,outcome_state:'candidate_failure',failure_origin:'candidate'})},p,17);assert.equal(out.metric_value,0);assert.equal(out.outcome_state,'candidate_failure');});

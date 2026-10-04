@@ -14,6 +14,8 @@ for the versioning policy.
 
 ## [Unreleased]
 
+- Keep unknown native task evidence on non-retryable HOLD, rather than scoring missing/partial/broker/model observations as candidate failures; only explicit full-workload candidate failures receive zero.
+
 ### Fixed
 
 - Add optional shared native task-result branches for CUDAAgent, AccelOpt, CUDALLM and KernelFoundry, retaining finite topology and explicitly measured source delivery; distinguish generated-initial/reference scores and fix CUDAAgent manifest filename. Native JSON transport still requires raw-file and independent acceptance audits.

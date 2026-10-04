@@ -12,6 +12,8 @@
 
 ## [Unreleased]
 
+- 原生task证据缺失、partial、broker或模型观察未知时进入不可重试HOLD，不再按候选失败记0；仅明确完整workload候选失败允许零分。
+
 ### Fixed
 
 - 为 CUDAAgent、AccelOpt、CUDALLM 和 KernelFoundry 添加可选共享 native 任务结果分支，保留有限拓扑及明确实测源码交付；区分本轮自行生成初始实现/reference 评分并修正 CUDAAgent manifest 文件名。Native JSON 传输仍须核对原始文件及独立终验。
