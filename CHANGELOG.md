@@ -15,6 +15,9 @@ for the versioning policy.
 ## [Unreleased]
 
 ### Fixed
+- Add optional read-only result reconciliation for native delivery errors. CUDAAgent/AccelOpt initial selection and native evaluation can reread an existing slot once after malformed/transcribed output; genuine unknown/model faults stay HOLD. The reader never submits a GPU job, changes a candidate, or loops on failed delivery (`task-result` scaffolding, five manifests, method/Host regression tests).
+
+### Fixed
 - Forward rejected CUDAAgent verification diagnostics into the next Implement turn and retain rejected KernelFoundry task diagnostics before its archive-skip branch, so the next Vary turn receives the actual error without admitting invalid candidates or changing fitness.
 
 ### Fixed

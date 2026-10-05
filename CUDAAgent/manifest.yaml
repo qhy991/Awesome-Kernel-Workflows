@@ -100,6 +100,9 @@ routing:
 args:
   required: []
   optional:
+  - name: task_result_read_command
+    type: string
+    description: Optional CPU-only immutable task-result reconciliation command with {kernel_path}/{result_path}; must never submit GPU work. Used once to repair invalid result delivery.
   - name: task_result_command
     type: string
     description: Optional native full-task command with {kernel_path}/{result_path}; writes kersor-task-result-v1 JSON and an explicit frozen artifact. Final acceptance remains independent.

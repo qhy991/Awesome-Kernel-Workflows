@@ -65,14 +65,58 @@ function __taskResult(output, expectedPath, expectedCount) {
       diagnostics:result.diagnostics || [], candidate_path:result.candidate_path, evidence:result.evidence || null})}
 }
 
-async function __nativeTaskEvaluate(ctx) {
-  let command = ctx.command
-  for (const [placeholder, value] of [['{kernel_path}', ctx.candidatePath], ['{result_path}', ctx.resultPath]]) {
+function __taskCommand(command, candidatePath, resultPath) {
+  for (const [placeholder, value] of [['{kernel_path}', candidatePath], ['{result_path}', resultPath]]) {
     // The documented placeholders represent whole command arguments. Accept
     // either bare or already quoted placeholders without evaluating path text.
     const quoted = "'" + String(value).replaceAll("'", "'\\''") + "'"
     command = command.replaceAll('"'+placeholder+'"', placeholder).replaceAll("'"+placeholder+"'", placeholder).replaceAll(placeholder, quoted)
   }
+  return command
+}
+
+async function __taskResultWithReadback(ctx, output) {
+  try { return __taskResult(output, ctx.resultPath, ctx.workloadCount) }
+  catch (error) {
+    const readCommand = ctx.readCommand || (typeof args !== 'undefined' && args.task_result_read_command)
+    const raw = error?.task_result
+    if (error?.code !== 'TASK_RESULT_HOLD' || !readCommand
+        || output?.model_observation === 'unknown' || raw?.model_observation === 'unknown'
+        || (raw?.outcome_state && !['passed','candidate_failure'].includes(raw.outcome_state))
+        || (raw?.failure_origin && raw.failure_origin !== 'candidate')) throw error
+    // Repair result delivery once. The declared reader must reconcile an
+    // existing slot and must never create a slot or submit another GPU job.
+    const command = __taskCommand(readCommand, ctx.resultPath+'.artifact/candidate.py', ctx.resultPath)
+    let reread, readExit = null
+    if (typeof evaluate === 'function') {
+      const execution = await evaluate({protocol:'command-v1',label:(ctx.label || 'task')+'-read-result',
+        phase:'ReadResult',filesystem_policy:'read-only',
+        argv:['/bin/sh','-c',command]})
+      if (execution?.timed_out || execution?.stage !== 'complete' || ![0,1].includes(execution?.exit_code))
+        return __taskHold('read-only task reconciliation failed', execution?.stdout_json || raw)
+      reread = {test_result_path:ctx.resultPath,test_result_json:execution.stdout_json}
+      readExit = execution.exit_code
+    } else {
+      try { reread = await agentRetry(() => agent(`Repair only the result delivery for ${ctx.resultPath}.
+The previous returned JSON failed validation: ${error.message}
+Run the declared CPU-only read command exactly once: ${command}
+It reconciles the existing frozen candidate, complete trace and broker receipt. Do not submit a GPU job, alter any file, regenerate source, or repeat an unknown/refused request.
+Return test_result_path and test_result_json copied exactly from this command's output. Do not reconstruct paths or measurements from memory.`, {
+        label:(ctx.label || 'task')+'-read-result',phase:'ReadResult',
+        schema:{type:'object',properties:{test_result_path:{type:'string'},test_result_json:{type:'string'}},required:['test_result_path','test_result_json']},
+      }), {retries:0}) } catch (readError) {
+        return __taskHold('read-only result delivery unavailable: '+(readError?.message || String(readError)), raw)
+      }
+    }
+    // A second invalid delivery remains HOLD. This is not an unbounded retry.
+    const measured = __taskResult(reread,ctx.resultPath,ctx.workloadCount)
+    if (readExit !== null && readExit !== (measured.is_valid ? 0 : 1)) return __taskHold('read-only command exit differs from raw outcome', raw)
+    return {...measured,result_delivery_recovered:true}
+  }
+}
+
+async function __nativeTaskEvaluate(ctx) {
+  const command = __taskCommand(ctx.command, ctx.candidatePath, ctx.resultPath)
   // Host uses the existing generic command runner. Read the designated file;
   // command chatter and an agent-selected alternative are not the return owner.
   if (typeof evaluate === 'function') {
@@ -95,7 +139,7 @@ Read ${ctx.resultPath}. Return test_result_path and test_result_json copied verb
     label:ctx.label, phase:'Evaluate',
     schema:{type:'object', properties:{test_result_path:{type:'string'},test_result_json:{type:'string'}}, required:['test_result_path','test_result_json']},
   }), {retries:0}) } catch (error) { return __taskHold('agent/transport result unavailable: ' + (error?.message || String(error))) }
-  return __taskResult(output, ctx.resultPath, ctx.workloadCount)
+  return await __taskResultWithReadback(ctx, output)
     || __taskHold('missing task result')
 }
 

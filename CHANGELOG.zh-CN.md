@@ -13,6 +13,9 @@
 ## [Unreleased]
 
 ### Fixed
+- 新增可选的只读结果复核：CUDAAgent/AccelOpt 初始选择和 native 评估遇到格式或转述错误时，自动复读已有结果一次；真正的 unknown/模型故障保持 HOLD。复读不提交 GPU、不改候选、不循环重试（`task-result` 共享 helper、五方法 manifest、方法/Host 回归测试）。
+
+### Fixed
 - 将 CUDAAgent 验证失败的完整诊断传给下一轮 Implement，并在 KernelFoundry 跳过归档之前保留任务失败诊断，供下一轮 Vary 使用；不接纳无效候选，不改变 fitness。
 
 ### Fixed
