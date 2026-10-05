@@ -43,6 +43,12 @@ test('a confirmed candidate failure still enters the method as zero reward',asyn
  assert.equal(result.outcome_state,'candidate_failure');assert.equal(result.metric_value,0)
 })
 
+test('a refused command cannot promote a stale passed artifact',async()=>{
+ const p='/result.json'
+ const execute=vm.runInNewContext(source+';__nativeTaskEvaluate',{evaluate:async()=>({stage:'complete',exit_code:1,stdout_json:shape(p)})})
+ await assert.rejects(execute({candidatePath:'/changed.py',resultPath:p,command:'refused',workloadCount:2}),e=>e.code==='TASK_RESULT_HOLD'&&/exit differs/.test(e.message))
+})
+
 test('native eval waits for terminal and preserves the exact slot',async()=>{
  let prompt
  const p='/result.json'

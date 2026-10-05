@@ -20,7 +20,7 @@ for the versioning policy.
 
 ### Fixed
 
-- Execute declared task-result commands through the existing Node `command-v1` runner and read only the designated result file; native evaluation agents wait for terminal sessions and preserve candidate/result slots. Keep unknown evidence on HOLD, quote path substitutions as data and retain the original method loops and accepted-parent gates (`_meta/scaffolding/task-result.js`, five generated workflows, AccelOpt initialization and runtime regression tests).
+- Execute declared task-result commands through the existing Node `command-v1` runner and read only the designated result file; native evaluation agents wait for terminal sessions and preserve candidate/result slots. Require command exits to match raw task outcomes, keep unknown evidence on HOLD, quote path substitutions as data and retain the original method loops and accepted-parent gates (`_meta/scaffolding/task-result.js`, five generated workflows, AccelOpt initialization and runtime regression tests).
 
 - Preserve an explicitly accepted native KSearch root with full official task measurement and source binding; retain its reference-relative incumbent against slower candidates, pass its frozen file to generation, and report parent-relative improvement separately (`KSearch/ksearch-kernel-optimization.js`, native task-result regression).
 
