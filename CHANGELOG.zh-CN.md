@@ -18,6 +18,8 @@
 
 ### Fixed
 
+- Node 通过已有 `command-v1` 执行声明的任务命令，只读取指定结果文件；原生评测 agent 等待会话终态并保留候选/结果槽位。unknown 继续 HOLD，路径替换按数据转义，保留原方法循环和 accepted-parent 门槛（`_meta/scaffolding/task-result.js`、五个生成 workflow、AccelOpt 初始化和运行时回归测试）。
+
 - 原生KSearch对显式已验收root完整实测并绑定源码；慢候选保留其reference相对incumbent，生成阶段读取冻结父文件，并单列父实现相对提升（KSearch脚本及task-result回归）。
 
 ### Fixed

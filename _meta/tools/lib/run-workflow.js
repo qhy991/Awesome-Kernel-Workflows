@@ -19,7 +19,7 @@ const schemaStub = require('./schema-stub.js')
  * @param {string} source       — raw workflow source (may start with `export `)
  * @param {object} args         — injected as the `args` global in the sandbox
  * @param {object} agentReturns — label→value map; consulted BEFORE schemaStub fallback
- * @param {object} evaluationReturns — label→Host evaluation for deterministic evaluator tests
+ * @param {object|null} evaluationReturns — label→Host evaluation; null models native Workflow without evaluate
  * @returns {Promise<{meta: any, calls: Array<{seq,label,phase,prompt,schema}>, result: any}>}
  */
 async function runWorkflow(source, args, agentReturns, evaluationReturns = {}) {
@@ -92,7 +92,7 @@ async function runWorkflow(source, args, agentReturns, evaluationReturns = {}) {
     pipeline,
     log,
     budget,
-    evaluate: evaluationStub,
+    ...(evaluationReturns === null ? {} : {evaluate: evaluationStub}),
     __solExecbenchEvaluate: evaluationStub,
     // Provide console so any debug logging in the workflow doesn't crash
     console,

@@ -1,7 +1,7 @@
 
 'use strict'
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
-const root=path.resolve(__dirname,'../../..'),run=require('../lib/run-workflow.js');
+const root=path.resolve(__dirname,'../../..'),run=(source,args,agents)=>require('../lib/run-workflow.js')(source,args,agents,null);
 const base={problem_path:'/fixture/task.md',exp_dir:'/fixture/exp',language:'cute-dsl',kernel_path:'/fixture/accepted-parent.py',task_result_command:'trusted --candidate {kernel_path} --result {result_path}',task_workload_count:17};
 function m(p,score=2,extra={}){return {test_result_path:p,test_result_json:JSON.stringify({contract_version:'kersor-task-result-v1',test_result_path:p,compiled:true,correct:true,full_workload_set:true,measurement_valid:true,n_pass:17,n_total:17,candidate_latency_aggregate_ms:.06/score,speedup_vs_reference:score,candidate_path:p+'.artifact/candidate.py',source_binding:{verified:true,source_sha256:'a'.repeat(64)},...extra})};}
 async function replay(method,parentExtra={},childScore=1.5) {const agents={'accepted-parent-task':m('/fixture/exp/accepted_parent.task.json',2,parentExtra)};let file,args={...base};

@@ -28,7 +28,7 @@ function __taskResult(output, expectedPath, expectedCount) {
       : raw && typeof raw === 'object' && !Array.isArray(raw) ? JSON.parse(JSON.stringify(raw))
       : __taskHold('missing/malformed raw task result')
   } catch { return __taskHold('missing/malformed raw task result') }
-  if (output?.test_result_path !== expectedPath || result?.test_result_path !== expectedPath || result?.contract_version !== 'kersor-task-result-v1') return __taskHold('task result contract/path mismatch')
+  if (output?.test_result_path !== expectedPath || result?.test_result_path !== expectedPath || result?.contract_version !== 'kersor-task-result-v1') return __taskHold(`task result contract/path mismatch: expected ${expectedPath}; returned ${output?.test_result_path}; recorded ${result?.test_result_path}; contract ${result?.contract_version}`)
   if (output.model_observation === 'unknown' || result.model_observation === 'unknown' || result.outcome_state === 'unknown' || (result.failure_origin && result.failure_origin !== 'candidate')) return __taskHold('infrastructure, evidence, or model observation unknown')
   const valid = result.compiled === true && result.correct === true
     && result.full_workload_set === true && result.measurement_valid === true
@@ -57,11 +57,30 @@ function __taskResult(output, expectedPath, expectedCount) {
 }
 
 async function __nativeTaskEvaluate(ctx) {
+  let command = ctx.command
+  for (const [placeholder, value] of [['{kernel_path}', ctx.candidatePath], ['{result_path}', ctx.resultPath]]) {
+    // The documented placeholders represent whole command arguments. Accept
+    // either bare or already quoted placeholders without evaluating path text.
+    const quoted = "'" + String(value).replaceAll("'", "'\\''") + "'"
+    command = command.replaceAll('"'+placeholder+'"', placeholder).replaceAll("'"+placeholder+"'", placeholder).replaceAll(placeholder, quoted)
+  }
+  // Host uses the existing generic command runner. Read the designated file;
+  // command chatter and an agent-selected alternative are not the return owner.
+  if (typeof evaluate === 'function') {
+    let execution
+    try {
+      execution = await evaluate({protocol:'command-v1', label:ctx.label, phase:'Evaluate', filesystem_policy:'workspace-write',
+        argv:['/bin/sh', '-c', `(\n${command}\n) >&2\nstatus=$?\ncat -- "$1"\nexit "$status"`, 'kersor-task-result', ctx.resultPath]})
+    } catch (error) { return __taskHold('command result unavailable: ' + (error?.message || String(error))) }
+    if (execution?.timed_out || execution?.stage !== 'complete' || ![0, 1].includes(execution?.exit_code)) return __taskHold('command execution incomplete or unknown')
+    return __taskResult({test_result_path:ctx.resultPath, test_result_json:execution.stdout_json}, ctx.resultPath, ctx.workloadCount)
+  }
   let output
   try { output = await agentRetry(() => agent(`Use the explicitly declared candidate file at ${ctx.candidatePath}. If it is absent, write the COMPLETE returned source below to that exact path. Never rewrite an existing declared file or select another directory entry.
 ${ctx.candidateSource || ''}
-Run the trusted task command once: ${ctx.command.replaceAll('{kernel_path}', ctx.candidatePath).replaceAll('{result_path}', ctx.resultPath)}
-Wait for its terminal result and read ${ctx.resultPath}. Return test_result_path and test_result_json copied verbatim from that file. No estimates or rewritten source in this reply.`, {
+Run the trusted task command once in the foreground: ${command}
+If Bash returns a running session, wait for that session to terminate. Do not detach with nohup or &, return a pending summary, or launch another command for this slot. Never rename/delete its artifact directory, change the result path, or optimize the declared source during evaluation. An unknown or failed result must be returned unchanged.
+Read ${ctx.resultPath}. Return test_result_path and test_result_json copied verbatim from that exact file. No estimates or rewritten source in this reply.`, {
     label:ctx.label, phase:'Evaluate',
     schema:{type:'object', properties:{test_result_path:{type:'string'},test_result_json:{type:'string'}}, required:['test_result_path','test_result_json']},
   }), {retries:0}) } catch (error) { return __taskHold('agent/transport result unavailable: ' + (error?.message || String(error))) }
