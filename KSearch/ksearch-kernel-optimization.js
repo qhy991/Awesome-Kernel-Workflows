@@ -41,7 +41,8 @@ function __taskResult(output, expectedPath, expectedCount) {
     && result.candidate_latency_aggregate_ms > 0 && Number.isFinite(result.speedup_vs_reference)
     && result.speedup_vs_reference > 0
   const candidateFailure = result.outcome_state === 'candidate_failure' && result.failure_origin === 'candidate'
-    && result.full_workload_set === true && result.n_total === expectedCount
+    && (result.full_workload_set === true || (result.candidate_runtime_fault_proven === true
+      && /^[0-9a-f]{64}$/i.test(result.runtime_fault_proof_sha256 || '') && result.full_workload_set === false)) && result.n_total === expectedCount
     && Number.isInteger(result.n_pass) && result.n_pass >= 0 && result.n_pass < expectedCount
     && result.source_binding?.verified === true
     && /^[0-9a-f]{64}$/i.test(result.source_binding?.source_sha256 || '')

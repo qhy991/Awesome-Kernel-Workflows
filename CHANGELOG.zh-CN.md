@@ -12,6 +12,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- 仅将具备明确证明绑定的候选 runtime 故障作为零分优化反馈，保留 unknown/reference/model 门槛及完整正确性验收（单一来源 `task-result` helper）。
+
 ### Added
 
 - 增加显式启用的原生KSearch任务结果分支：消费完整task JSON，以reference评分并拒绝估算替代。

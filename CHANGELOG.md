@@ -14,6 +14,9 @@ for the versioning policy.
 
 ## [Unreleased]
 
+### Fixed
+- Accept explicitly proof-bound candidate runtime failures as zero-score refinement feedback while preserving unknown/reference/model gates and full-workload acceptance (single-sourced `task-result` helper).
+
 ### Added
 
 - Add opt-in native KSearch task-result evaluation consuming complete task JSON and keeping reference scoring separate from estimates.
