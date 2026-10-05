@@ -14,11 +14,16 @@ export const meta = {
 }
 // --- BEGIN inlined task-result scaffolding (from _meta/scaffolding/task-result.js) ---
 // Native task-result compatibility: task command is the measurement authority.
-function __taskHold(reason) {
-  const error = new Error('TASK_RESULT_HOLD: ' + reason)
+function __taskHold(reason, taskResult = null) {
+  // The supervising agent must receive the complete diagnostic evidence even
+  // when the method cannot safely submit another GPU/model request. Native
+  // runtimes may serialize only the message, so retain it there as well.
+  const error = new Error('TASK_RESULT_HOLD: ' + reason
+    + (taskResult ? '\nRaw task evidence for diagnosis (not an accepted score):\n' + JSON.stringify(taskResult) : ''))
   error.code = 'TASK_RESULT_HOLD'
   error.retryable = false
   error.outcome_state = 'unknown'
+  if (taskResult) error.task_result = taskResult
   throw error
 }
 function __taskResult(output, expectedPath, expectedCount) {
@@ -29,8 +34,8 @@ function __taskResult(output, expectedPath, expectedCount) {
       : raw && typeof raw === 'object' && !Array.isArray(raw) ? JSON.parse(JSON.stringify(raw))
       : __taskHold('missing/malformed raw task result')
   } catch { return __taskHold('missing/malformed raw task result') }
-  if (output?.test_result_path !== expectedPath || result?.test_result_path !== expectedPath || result?.contract_version !== 'kersor-task-result-v1') return __taskHold(`task result contract/path mismatch: expected ${expectedPath}; returned ${output?.test_result_path}; recorded ${result?.test_result_path}; contract ${result?.contract_version}`)
-  if (output.model_observation === 'unknown' || result.model_observation === 'unknown' || result.outcome_state === 'unknown' || (result.failure_origin && result.failure_origin !== 'candidate')) return __taskHold('infrastructure, evidence, or model observation unknown')
+  if (output?.test_result_path !== expectedPath || result?.test_result_path !== expectedPath || result?.contract_version !== 'kersor-task-result-v1') return __taskHold(`task result contract/path mismatch: expected ${expectedPath}; returned ${output?.test_result_path}; recorded ${result?.test_result_path}; contract ${result?.contract_version}`, result)
+  if (output.model_observation === 'unknown' || result.model_observation === 'unknown' || result.outcome_state === 'unknown' || (result.failure_origin && result.failure_origin !== 'candidate')) return __taskHold('infrastructure, evidence, or model observation unknown', result)
   const valid = result.compiled === true && result.correct === true
     && result.full_workload_set === true && result.measurement_valid === true
     && result.source_binding?.verified === true && result.n_pass === result.n_total
@@ -47,7 +52,7 @@ function __taskResult(output, expectedPath, expectedCount) {
     && result.source_binding?.verified === true
     && /^[0-9a-f]{64}$/i.test(result.source_binding?.source_sha256 || '')
     && result.candidate_path === expectedPath + '.artifact/candidate.py'
-  if (!valid && !candidateFailure) return __taskHold('incomplete workload/measurement/source proof')
+  if (!valid && !candidateFailure) return __taskHold('incomplete workload/measurement/source proof', result)
   return {is_valid:valid, measurement_valid:valid, compiled:result.compiled, correct:valid,
     metric_value:valid ? result.speedup_vs_reference : 0,
     speedup:valid ? result.speedup_vs_reference : 0,
@@ -55,7 +60,10 @@ function __taskResult(output, expectedPath, expectedCount) {
     n_pass:result.n_pass, n_total:result.n_total,
     pass_rate:String(result.n_pass)+'/'+String(result.n_total),
     source_binding:result.source_binding, host_candidate_path:result.candidate_path, test_result_path:output.test_result_path,
-    outcome_state:valid ? 'passed' : 'candidate_failure', error_log:valid ? '' : 'explicit candidate failure'}
+    outcome_state:valid ? 'passed' : 'candidate_failure',
+    diagnostics:result.diagnostics || [], evidence:result.evidence || null,
+    error_log:valid ? '' : JSON.stringify({error:result.error || 'candidate rejected',
+      diagnostics:result.diagnostics || [], candidate_path:result.candidate_path, evidence:result.evidence || null})}
 }
 
 async function __nativeTaskEvaluate(ctx) {
@@ -74,7 +82,7 @@ async function __nativeTaskEvaluate(ctx) {
       execution = await evaluate({protocol:'command-v1', label:ctx.label, phase:'Evaluate', filesystem_policy:'workspace-write',
         argv:['/bin/sh', '-c', `(\n${command}\n) >&2\nstatus=$?\ncat -- "$1"\nexit "$status"`, 'kersor-task-result', ctx.resultPath]})
     } catch (error) { return __taskHold('command result unavailable: ' + (error?.message || String(error))) }
-    if (execution?.timed_out || execution?.stage !== 'complete' || ![0, 1].includes(execution?.exit_code)) return __taskHold('command execution incomplete or unknown')
+    if (execution?.timed_out || execution?.stage !== 'complete' || ![0, 1].includes(execution?.exit_code)) return __taskHold('command execution incomplete or unknown', execution?.stdout_json || null)
     const measured = __taskResult({test_result_path:ctx.resultPath, test_result_json:execution.stdout_json}, ctx.resultPath, ctx.workloadCount)
     if (execution.exit_code !== (measured.is_valid ? 0 : 1)) return __taskHold('command exit differs from raw task outcome')
     return measured

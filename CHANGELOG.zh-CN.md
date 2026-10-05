@@ -13,6 +13,9 @@
 ## [Unreleased]
 
 ### Fixed
+- 在候选反馈及不可重试 HOLD 错误中保留完整逐 workload 诊断与证据路径，覆盖 native/Host 传输，让修复和监督 agent 处理真实错误，而非仅得到通用失败文本（`_meta/scaffolding/task-result.js`、生成的五方法副本、诊断回归测试）。
+
+### Fixed
 - 仅将具备明确证明绑定的候选 runtime 故障作为零分优化反馈，保留 unknown/reference/model 门槛及完整正确性验收（单一来源 `task-result` helper）。
 
 ### Added

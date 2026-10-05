@@ -15,6 +15,9 @@ for the versioning policy.
 ## [Unreleased]
 
 ### Fixed
+- Preserve complete per-workload task diagnostics and evidence paths in candidate feedback and non-retryable HOLD errors, including native/Host transports, so repair and supervision agents can inspect the actual fault rather than a generic failure string (`_meta/scaffolding/task-result.js`, generated five-method copies, diagnostic regression tests).
+
+### Fixed
 - Accept explicitly proof-bound candidate runtime failures as zero-score refinement feedback while preserving unknown/reference/model gates and full-workload acceptance (single-sourced `task-result` helper).
 
 ### Added
