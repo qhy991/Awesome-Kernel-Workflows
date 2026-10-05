@@ -13,6 +13,9 @@
 ## [Unreleased]
 
 ### Fixed
+- 将 CUDAAgent 验证失败的完整诊断传给下一轮 Implement，并在 KernelFoundry 跳过归档之前保留任务失败诊断，供下一轮 Vary 使用；不接纳无效候选，不改变 fitness。
+
+### Fixed
 - 在候选反馈及不可重试 HOLD 错误中保留完整逐 workload 诊断与证据路径，覆盖 native/Host 传输，让修复和监督 agent 处理真实错误，而非仅得到通用失败文本（`_meta/scaffolding/task-result.js`、生成的五方法副本、诊断回归测试）。
 
 ### Fixed

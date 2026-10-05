@@ -12,3 +12,9 @@ test('native initial-candidate structured JSON reaches the original optimization
 test('accepted parent receives one full measurement before original CUDAAgent loop',async()=>{const {result,calls}=await replay({},false,true);assert.equal(calls.filter(c=>c.label==='task-accepted-parent').length,1);assert.equal(calls.filter(c=>c.label==='generate-initial-kernel').length,0);assert.equal(result.canonical_metric.value,1.25);assert.equal(result.canonical_metric.name,'speedup_vs_accepted_parent');assert.equal(result.generated_kernel_path,'/fixture/exp/task_attempt_0.json.artifact/candidate.py');});
 
 test('slower native candidates retain exact accepted parent binding',async()=>{const {result}=await replay({candidate_latency_aggregate_ms:.030,speedup_vs_reference:.5},false,true);assert.equal(result.generated_kernel_path,'/fixture/exp/accepted_parent.task.json.artifact/candidate.py');assert.equal(result.canonical_metric.value,1);assert.equal(result.correct,true);});
+
+test('next CUDAAgent implement sees full candidate ABI feedback instead of empty compile_error',async()=>{
+ const detail='pointer conversion failed '+ 'x'.repeat(10000)
+ const {calls}=await replay({compiled:null,correct:false,measurement_valid:false,n_pass:0,outcome_state:'candidate_failure',failure_origin:'candidate',diagnostics:[{workload_uuid:'w',evaluation:{error:detail}}]})
+ assert.ok(calls.find(c=>c.label==='impl-1').prompt.includes(detail))
+})

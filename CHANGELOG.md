@@ -15,6 +15,9 @@ for the versioning policy.
 ## [Unreleased]
 
 ### Fixed
+- Forward rejected CUDAAgent verification diagnostics into the next Implement turn and retain rejected KernelFoundry task diagnostics before its archive-skip branch, so the next Vary turn receives the actual error without admitting invalid candidates or changing fitness.
+
+### Fixed
 - Preserve complete per-workload task diagnostics and evidence paths in candidate feedback and non-retryable HOLD errors, including native/Host transports, so repair and supervision agents can inspect the actual fault rather than a generic failure string (`_meta/scaffolding/task-result.js`, generated five-method copies, diagnostic regression tests).
 
 ### Fixed

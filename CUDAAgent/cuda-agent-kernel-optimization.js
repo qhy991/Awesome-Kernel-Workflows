@@ -1378,7 +1378,10 @@ Then append, using the values you just measured (status="done" if correctness pa
   // Record history
   let outcome = ''
   let error = ''
-  if (!verifyResult.compiled) {
+  if (args.task_result_command && !verifyResult.is_valid) {
+    outcome = verifyResult.compiled === false ? 'compile_error' : 'candidate_failure'
+    error = verifyResult.error_log || JSON.stringify(verifyResult.diagnostics || [])
+  } else if (!verifyResult.compiled) {
     outcome = 'compile_error'
     error = verifyResult.compile_error || ''
   } else if (!verifyResult.correct) {

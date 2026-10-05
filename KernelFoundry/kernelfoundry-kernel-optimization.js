@@ -983,6 +983,7 @@ ${metaPrompt.analysis_guidance}
 # === END EVOLVED GUIDANCE ===
 ${parentContext}
 ${args.task_result_command && selectedParent?.candidate_path ? `Read the complete tested parent file at ${selectedParent.candidate_path}; display code above is not the source authority.` : ''}
+${args.task_result_command ? `# Prior candidate failure feedback (raw evidence; repair the candidate, not the frozen tests):\n${JSON.stringify(transitions.filter(t=>t.task_feedback).map(t=>({generation:t.gen,...t.task_feedback})))}` : ''}
 
 ${gradientHints ? `# Gradient Hints (from evolutionary history):\n${gradientHints}` : ''}
 
@@ -1467,6 +1468,13 @@ Run one small deterministic Python program; do not infer or repair anything:
   }
 
   if (evalResult.measurement_valid === false) {
+    if (args.task_result_command) transitions.push({
+      parent_cell:selectedParent?.cell || 'none', child_cell:'rejected', delta_f:0,
+      outcome:'candidate_failure', gen:generation, task_feedback:{
+        outcome_state:evalResult.outcome_state, candidate_path:evalResult.host_candidate_path,
+        error_log:evalResult.error_log, diagnostics:evalResult.diagnostics, evidence:evalResult.evidence,
+      },
+    })
     log(`Measurement rejected for generation ${generation}; no archive or fitness update`)
     continue
   }
