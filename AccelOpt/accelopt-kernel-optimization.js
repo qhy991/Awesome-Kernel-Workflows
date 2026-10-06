@@ -174,6 +174,18 @@ async function __nativeTaskAcceptedParent(ctx) {
   if (!measured?.is_valid) return __taskHold('accepted parent failed full official task measurement')
   return measured
 }
+
+// Prompt-only projection. Keep the raw result in runtime state and on disk.
+// A missing file reference must never be replaced by an invented path.
+function __taskEvidencePrompt(result) {
+  if (!result || !result.test_result_path) return result
+  return {test_result_path:result.test_result_path,source_path:result.host_candidate_path,
+    evidence_paths:result.evidence || null,
+    measurement:{compiled:result.compiled,correct:result.correct,is_valid:result.is_valid,
+      measurement_valid:result.measurement_valid,speedup:result.speedup,metric_value:result.metric_value,
+      latency_ms:result.latency_ms,n_pass:result.n_pass,n_total:result.n_total,outcome_state:result.outcome_state},
+    read_instruction:'Read the complete result file and referenced source/trace files for diagnostics before repairing or interpreting this candidate. This index does not replace the original evidence.'}
+}
 // --- END inlined task-result scaffolding ---
 // --- BEGIN sol-execbench-eval substrate (auto-inlined by scripts/patch-sol-execbench-eval.js) ---
 const SOL_SOLUTION_CONTRACT = [
@@ -1062,7 +1074,7 @@ function buildExperienceSection(experienceMemory, lastIterNewPatterns, maxInProm
 // Helper: format candidate beam info for planner prompt
 function buildBeamSection(candidateBeam, fence) {
   if (candidateBeam.length <= 1) return ''
-  return `\n\n# Candidate Beam (top-${candidateBeam.length} kernels from previous iterations)\n${candidateBeam.map((c, i) => `## Candidate ${i + 1}: "${c.planTitle}" — ${c.speedup.toFixed(2)}x, ${c.latency.toFixed(3)}ms\nNCU: ${c.ncuSummary || 'N/A'}\n\`\`\`${fence}\n${c.code}\n\`\`\``).join('\n\n')}`
+  return `\n\n# Candidate Beam (top-${candidateBeam.length} kernels from previous iterations)\n${candidateBeam.map((c, i) => `## Candidate ${i + 1}: "${c.planTitle}" — ${c.speedup.toFixed(2)}x, ${c.latency.toFixed(3)}ms\nNCU: ${c.ncuSummary || 'N/A'}\n\`\`\`${fence}\n${c.sourceBinding?.candidate_path ? 'Read complete tested source: '+c.sourceBinding.candidate_path : c.code}\n\`\`\``).join('\n\n')}`
 }
 
 // =============================================================================
@@ -1936,8 +1948,8 @@ ${baselineNcuProfile}`
 
   for (const r of selectedPositive) {
     pairsToSummarize.push({
-      slow: baselineKernel,
-      fast: r.variant.code,
+      slow: args.task_result_command ? 'Read complete source: '+taskSeedMeasurement.host_candidate_path : baselineKernel,
+      fast: args.task_result_command && r.evaluation.host_source_binding?.candidate_path ? 'Read complete source: '+r.evaluation.host_source_binding.candidate_path : r.variant.code,
       speedup: r.speedup,
       plan_title: r.variant.plan.title,
       ncu_evidence: r.variant.plan.ncu_evidence,
@@ -1953,8 +1965,8 @@ ${baselineNcuProfile}`
 
   for (const r of selectedNegative) {
     pairsToSummarize.push({
-      slow: r.variant.code,
-      fast: bestKernelCode,
+      slow: args.task_result_command && r.evaluation.host_source_binding?.candidate_path ? 'Read complete source: '+r.evaluation.host_source_binding.candidate_path : r.variant.code,
+      fast: args.task_result_command && bestCandidateBinding?.candidate_path ? 'Read complete source: '+bestCandidateBinding.candidate_path : bestKernelCode,
       speedup: 1.0 / r.speedup,
       plan_title: r.variant.plan.title + ' [ANTI-PATTERN]',
       ncu_evidence: r.variant.plan.ncu_evidence,

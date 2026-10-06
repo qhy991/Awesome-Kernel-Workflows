@@ -174,6 +174,18 @@ async function __nativeTaskAcceptedParent(ctx) {
   if (!measured?.is_valid) return __taskHold('accepted parent failed full official task measurement')
   return measured
 }
+
+// Prompt-only projection. Keep the raw result in runtime state and on disk.
+// A missing file reference must never be replaced by an invented path.
+function __taskEvidencePrompt(result) {
+  if (!result || !result.test_result_path) return result
+  return {test_result_path:result.test_result_path,source_path:result.host_candidate_path,
+    evidence_paths:result.evidence || null,
+    measurement:{compiled:result.compiled,correct:result.correct,is_valid:result.is_valid,
+      measurement_valid:result.measurement_valid,speedup:result.speedup,metric_value:result.metric_value,
+      latency_ms:result.latency_ms,n_pass:result.n_pass,n_total:result.n_total,outcome_state:result.outcome_state},
+    read_instruction:'Read the complete result file and referenced source/trace files for diagnostics before repairing or interpreting this candidate. This index does not replace the original evidence.'}
+}
 // --- END inlined task-result scaffolding ---
 // --- BEGIN sol-execbench-eval substrate (auto-inlined by scripts/patch-sol-execbench-eval.js) ---
 const SOL_SOLUTION_CONTRACT = [
@@ -1131,7 +1143,7 @@ for (currentAttempt = 0; currentAttempt < MAX_TURNS && !targetMet; currentAttemp
 
   let implResult
   try {
-  implResult = await withTurnTimeout(agentRetry(() => agent(args.task_result_command ? `${__taskContractBlock()}Implement the CUDAAgent optimization strategy ${profileResult.optimization_strategy} in complete ${LANGUAGE} Python source. Read the FULL current tested artifact ${bestBoundSourcePath}; preserve exact frozen task signature and correctness. Prior feedback: ${JSON.stringify(history.slice(-3))}. Write the COMPLETE new source to ${EXP_DIR}/task_attempt_${currentAttempt}.py and return variant_path plus kernel_code (display only), implementation_notes. Do not modify the incumbent or benchmark; serial task verification follows. Read all3 task skills for genuine diagnostics.` : `${__taskContractBlock()}You are a CUDA kernel developer. Implement an optimized CUDA kernel for this PyTorch model.
+  implResult = await withTurnTimeout(agentRetry(() => agent(args.task_result_command ? `${__taskContractBlock()}Implement the CUDAAgent optimization strategy ${profileResult.optimization_strategy} in complete ${LANGUAGE} Python source. Read the FULL current tested artifact ${bestBoundSourcePath}; preserve exact frozen task signature and correctness. Prior feedback: ${JSON.stringify(history.slice(-3).map(h => h.task_result_path ? {...h,error:undefined,read_complete_diagnostics:h.task_result_path} : h))}. Write the COMPLETE new source to ${EXP_DIR}/task_attempt_${currentAttempt}.py and return variant_path plus kernel_code (display only), implementation_notes. Do not modify the incumbent or benchmark; serial task verification follows. Read all3 task skills for genuine diagnostics.` : `${__taskContractBlock()}You are a CUDA kernel developer. Implement an optimized CUDA kernel for this PyTorch model.
 
 # Model to Optimize:
 \`\`\`python
@@ -1473,6 +1485,7 @@ Then append, using the values you just measured (status="done" if correctness pa
     speedup: args.task_result_command ? verifyResult.speedup_vs_generated_initial || 0 : (IS_SOL ? verifyResult.speedup_vs_seed || 0 : verifyResult.speedup_vs_compile || 0),
     error: error,
     reward: verifyResult.reward,
+    ...(args.task_result_command ? {task_result_path:verifyResult.test_result_path} : {}),
   })
 
   // Update best

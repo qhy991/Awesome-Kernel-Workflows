@@ -16,6 +16,10 @@ for the versioning policy.
 
 ### Fixed
 
+- Audit all35 workflow prompt builders; extend file-based measured-source and diagnostic handoff across CUDAAgent/AccelOpt/KernelFoundry/KSearch. Preserve full evidence and search policy, retain the last KSearch rejection for repair, and remove Xe-Forge false truncation annotation. Document unmaterialized-state risks still requiring migration.
+
+### Fixed
+
 - CUDALLM task-mode selection, reinforcement and reports now reference authoritative workspace candidate/result/trace paths instead of repeatedly embedding source and raw diagnostics. Keep the full evidence and original search counts; prevent the observed SelectFeatures prompt overflow without truncation.
 
 ### Fixed

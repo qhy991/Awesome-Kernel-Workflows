@@ -440,7 +440,7 @@ Then append:
 Backend: ${targetBackend}
 Current kernel:
 \`\`\`${targetBackend}
-${String(currentImplementation.kernel_code ?? '')}${currentImplementation.kernel_code.length > 3000 ? '\n... (truncated)' : ''}
+${String(currentImplementation.kernel_code ?? '')}
 \`\`\`
 
 Profiling analysis:

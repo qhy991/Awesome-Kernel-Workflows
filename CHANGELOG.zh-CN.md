@@ -14,6 +14,10 @@
 
 ### Fixed
 
+- 审查全部35个 workflow 的 prompt 构建；扩展 CUDAAgent/AccelOpt/KernelFoundry/KSearch 的已测源码与诊断文件交接，保留完整证据及搜索策略，保留 KSearch 最近失败反馈，移除 Xe-Forge 错误截断标注；逐项记录仍需文件落盘迁移的风险。
+
+### Fixed
+
 - CUDALLM 任务模式的选择、反馈和报告改为引用工作区候选、结果及 trace 路径，不再重复内联源码和原始诊断；完整证据及搜索次数不变，从 prompt 构建处避免 SelectFeatures 上下文溢出，不作字符截断。
 
 ### Fixed

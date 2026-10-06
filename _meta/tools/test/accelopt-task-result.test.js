@@ -13,3 +13,9 @@ test('accepted parent is measured before the original2x3x2 beam; NCU stays diagn
 test('original beam retains accepted parent when all twelve measured candidates are slower',async()=>{const {result,calls}=await replay(.0001,{candidate_latency_aggregate_ms:.030,speedup_vs_reference:.5},true);assert.equal(result.generated_kernel_path,'/fixture/exp/accepted_parent.task.json.artifact/candidate.py');assert.equal(result.overall_speedup,1);assert.equal(calls.filter(c=>c.label.startsWith('task-eval')).length,12);});
 
 test('initial candidate delivery error is repaired automatically before optimization',async()=>{const {result,calls}=await replay(.012,{},false,true);assert.equal(calls.filter(c=>c.label==='initial-2-read-result').length,1);assert.ok(calls.find(c=>c.label==='initial-2-read-result').prompt.includes('--read-only'));assert.ok(result.generated_kernel_path);});
+test('beam prompts reference bound source rather than repeating measured code',()=>{
+ const vm=require('node:vm');const body=source.slice(source.indexOf('function buildBeamSection('),source.indexOf('// =============================================================================\n// Phase 1: Setup',source.indexOf('function buildBeamSection(')))
+ const beam=vm.runInNewContext(body+';buildBeamSection');const c={planTitle:'tile',speedup:2,latency:1,code:'DO_NOT_INLINE'.repeat(20000),sourceBinding:{candidate_path:'/measured/full.py'}}
+ const rendered=beam([c,c],'python');assert.ok(rendered.includes('/measured/full.py'));assert.ok(!rendered.includes('DO_NOT_INLINE'))
+ assert.ok(beam([{...c,sourceBinding:null},{...c,sourceBinding:null}],'python').includes('DO_NOT_INLINE'))
+})

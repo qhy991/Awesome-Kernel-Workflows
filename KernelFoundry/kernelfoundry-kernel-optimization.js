@@ -174,6 +174,18 @@ async function __nativeTaskAcceptedParent(ctx) {
   if (!measured?.is_valid) return __taskHold('accepted parent failed full official task measurement')
   return measured
 }
+
+// Prompt-only projection. Keep the raw result in runtime state and on disk.
+// A missing file reference must never be replaced by an invented path.
+function __taskEvidencePrompt(result) {
+  if (!result || !result.test_result_path) return result
+  return {test_result_path:result.test_result_path,source_path:result.host_candidate_path,
+    evidence_paths:result.evidence || null,
+    measurement:{compiled:result.compiled,correct:result.correct,is_valid:result.is_valid,
+      measurement_valid:result.measurement_valid,speedup:result.speedup,metric_value:result.metric_value,
+      latency_ms:result.latency_ms,n_pass:result.n_pass,n_total:result.n_total,outcome_state:result.outcome_state},
+    read_instruction:'Read the complete result file and referenced source/trace files for diagnostics before repairing or interpreting this candidate. This index does not replace the original evidence.'}
+}
 // --- END inlined task-result scaffolding ---
 // --- BEGIN sol-execbench-eval substrate (auto-inlined by scripts/patch-sol-execbench-eval.js) ---
 const SOL_SOLUTION_CONTRACT = [
@@ -1022,7 +1034,7 @@ for (generation = 0; generation < GENERATIONS; generation++) {
   phase('Vary')
 
   const parentContext = selectedParent
-    ? `\n# Parent Kernel (from cell [${selectedParent.cell}], fitness=${selectedParent.fitness.toFixed(2)}, speedup=${selectedParent.speedup.toFixed(2)}x):\n\`\`\`${fenceToken()}\n${selectedParent.code}\n\`\`\``
+    ? `\n# Parent Kernel (from cell [${selectedParent.cell}], fitness=${selectedParent.fitness.toFixed(2)}, speedup=${selectedParent.speedup.toFixed(2)}x):\n\`\`\`${fenceToken()}\n${args.task_result_command && selectedParent.candidate_path ? 'Read complete tested source: '+selectedParent.candidate_path : selectedParent.code}\n\`\`\``
     : ''
 
   const varyResult = await agentRetry(() => agent(`${__taskContractBlock()}You are a GPU kernel generator for the KernelFoundry evolutionary framework.
@@ -1054,7 +1066,7 @@ ${metaPrompt.analysis_guidance}
 # === END EVOLVED GUIDANCE ===
 ${parentContext}
 ${args.task_result_command && selectedParent?.candidate_path ? `Read the complete tested parent file at ${selectedParent.candidate_path}; display code above is not the source authority.` : ''}
-${args.task_result_command ? `# Prior candidate failure feedback (raw evidence; repair the candidate, not the frozen tests):\n${JSON.stringify(transitions.filter(t=>t.task_feedback).map(t=>({generation:t.gen,...t.task_feedback})))}` : ''}
+${args.task_result_command ? `# Prior candidate failure feedback (raw evidence; repair the candidate, not the frozen tests):\n${JSON.stringify(transitions.filter(t=>t.task_feedback).map(t=>({generation:t.gen,...__taskEvidencePrompt({...t.task_feedback,host_candidate_path:t.task_feedback.candidate_path})})))}` : ''}
 
 ${gradientHints ? `# Gradient Hints (from evolutionary history):\n${gradientHints}` : ''}
 
@@ -1542,7 +1554,7 @@ Run one small deterministic Python program; do not infer or repair anything:
     if (args.task_result_command) transitions.push({
       parent_cell:selectedParent?.cell || 'none', child_cell:'rejected', delta_f:0,
       outcome:'candidate_failure', gen:generation, task_feedback:{
-        outcome_state:evalResult.outcome_state, candidate_path:evalResult.host_candidate_path,
+        outcome_state:evalResult.outcome_state, candidate_path:evalResult.host_candidate_path, test_result_path:evalResult.test_result_path,
         error_log:evalResult.error_log, diagnostics:evalResult.diagnostics, evidence:evalResult.evidence,
       },
     })
@@ -1839,7 +1851,7 @@ ${Object.entries(archive).sort((a, b) => b[1].fitness - a[1].fitness).slice(0, 1
 
 # Best Kernel:
 \`\`\`${fenceToken()}
-${globalBest.code}
+${args.task_result_command && globalBest.candidate_path ? 'Read complete tested source: '+globalBest.candidate_path : globalBest.code}
 \`\`\`
 
 # Final Meta-Prompt State:

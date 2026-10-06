@@ -7,8 +7,14 @@ test('native MAP-Elites accepts correct clean-start below reference and preserve
 for(const [name,extra] of Object.entries({partial:{full_workload_set:false,n_pass:16},incorrect:{correct:false,n_pass:16,measurement_valid:false,outcome_state:'candidate_failure',failure_origin:'candidate'},missingLatency:{candidate_latency_aggregate_ms:null},missingBinding:{source_binding:null}}))test('reject '+name+' despite agent inflated score',async()=>{if(name!=='incorrect'){await assert.rejects(replay(measured(0,123,extra),measured(1,.5)),e=>e.code==='TASK_RESULT_HOLD' && e.retryable===false);return;}const {result}=await replay(measured(0,123,extra),measured(1,.5));assert.equal(result.best_speedup,.5);assert.equal(result.generated_kernel_path,'/fixture/exp/gen_1_result.json.artifact/candidate.py');});
 test('missing task JSON stops native loop on non-retryable HOLD',async()=>{await assert.rejects(replay({speedup:123,correct:true,compiled:true},measured(1,.5)),e=>e.code==='TASK_RESULT_HOLD'&&e.retryable===false);});
 
-test('next KernelFoundry generation sees source-bound failure diagnostics',async()=>{
+test('next KernelFoundry generation receives source-bound failure diagnostic file references',async()=>{
  const detail='output _Tensor rejected '+ 'x'.repeat(10000)
  const {calls}=await replay(measured(0,0,{compiled:null,correct:false,measurement_valid:false,n_pass:0,outcome_state:'candidate_failure',failure_origin:'candidate',diagnostics:[{workload_uuid:'w',evaluation:{error:detail}}]}),measured(1,.5))
- assert.ok(calls.find(c=>c.label==='vary-1').prompt.includes(detail))
+ const prompt=calls.find(c=>c.label==='vary-1').prompt;assert.ok(!prompt.includes(detail));assert.ok(prompt.includes('/fixture/exp/gen_0_result.json'))
+})
+test('task-mode parent and report do not repeat measured display code',async()=>{
+ const {calls}=await replay(measured(0,.75),measured(1,.5))
+ const prompt=calls.find(c=>c.label==='vary-1').prompt
+ assert.ok(!prompt.includes('DISPLAY_0'))
+ assert.ok(prompt.includes('/fixture/exp/gen_0_result.json.artifact/candidate.py'))
 })

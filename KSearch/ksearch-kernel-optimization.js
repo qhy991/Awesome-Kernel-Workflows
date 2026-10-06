@@ -175,6 +175,18 @@ async function __nativeTaskAcceptedParent(ctx) {
   if (!measured?.is_valid) return __taskHold('accepted parent failed full official task measurement')
   return measured
 }
+
+// Prompt-only projection. Keep the raw result in runtime state and on disk.
+// A missing file reference must never be replaced by an invented path.
+function __taskEvidencePrompt(result) {
+  if (!result || !result.test_result_path) return result
+  return {test_result_path:result.test_result_path,source_path:result.host_candidate_path,
+    evidence_paths:result.evidence || null,
+    measurement:{compiled:result.compiled,correct:result.correct,is_valid:result.is_valid,
+      measurement_valid:result.measurement_valid,speedup:result.speedup,metric_value:result.metric_value,
+      latency_ms:result.latency_ms,n_pass:result.n_pass,n_total:result.n_total,outcome_state:result.outcome_state},
+    read_instruction:'Read the complete result file and referenced source/trace files for diagnostics before repairing or interpreting this candidate. This index does not replace the original evidence.'}
+}
 // --- END inlined task-result scaffolding ---
 // --- BEGIN sol-execbench-eval substrate (auto-inlined by scripts/patch-sol-execbench-eval.js) ---
 const SOL_SOLUTION_CONTRACT = [
@@ -1345,6 +1357,7 @@ Then append:
   let cycleBestCode = null
   let cycleBestPath = null  // AWK #59: path of the cycle-best candidate (authoritative; code is compat)
   let cycleBestEval = null
+  let lastAttemptEval = null
   let cycleBestScore = -1
   let currentRawCode = null  // tracks the LAST generated code (for debug prompts)
   let currentRawPath = null
@@ -1470,7 +1483,7 @@ ${(currentRawCode || '')}
 \`\`\``}
 
 # Previous evaluation (shows what went wrong):
-${JSON.stringify(cycleBestEval || {}, null, 2)}
+${JSON.stringify(args.task_result_command ? __taskEvidencePrompt(cycleBestEval || lastAttemptEval || {}) : (cycleBestEval || {}), null, 2)}
 
 # Debug round: ${attempt + 1}/${ATTEMPTS_PER_CYCLE}
 # Priority: FIX CORRECTNESS FIRST, then optimize performance.
@@ -1832,6 +1845,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
     }
 
     if (!evalResult) continue
+    lastAttemptEval = evalResult
     if (args.task_result_command && evalResult.host_candidate_path) currentRawPath = evalResult.host_candidate_path
 
     // Track solution
@@ -1963,7 +1977,7 @@ Then append:
 - Action attempted: "${selection.action_title}" (difficulty: ${selection.action_difficulty || '?'})
 - Result: NO PASSED SOLUTION in ${Math.min(ATTEMPTS_PER_CYCLE, noImproveStreak + 1)} attempts
 - Best attempt: ${cycleBestEval ? `is_valid=${cycleBestEval.is_valid}, metric=${cycleBestEval.metric_value}` : 'all failed'}
-- Error: ${cycleBestEval?.error_log || 'compilation/correctness failure'}
+- Error: ${args.task_result_command && (cycleBestEval || lastAttemptEval)?.test_result_path ? 'Read complete diagnostics from '+(cycleBestEval || lastAttemptEval).test_result_path : (cycleBestEval?.error_log || 'compilation/correctness failure')}
 
 # Current Decision Tree:
 ${JSON.stringify(decisionTree, null, 2)}

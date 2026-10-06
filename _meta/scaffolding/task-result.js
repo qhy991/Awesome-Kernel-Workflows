@@ -160,3 +160,15 @@ async function __nativeTaskAcceptedParent(ctx) {
   if (!measured?.is_valid) return __taskHold('accepted parent failed full official task measurement')
   return measured
 }
+
+// Prompt-only projection. Keep the raw result in runtime state and on disk.
+// A missing file reference must never be replaced by an invented path.
+function __taskEvidencePrompt(result) {
+  if (!result || !result.test_result_path) return result
+  return {test_result_path:result.test_result_path,source_path:result.host_candidate_path,
+    evidence_paths:result.evidence || null,
+    measurement:{compiled:result.compiled,correct:result.correct,is_valid:result.is_valid,
+      measurement_valid:result.measurement_valid,speedup:result.speedup,metric_value:result.metric_value,
+      latency_ms:result.latency_ms,n_pass:result.n_pass,n_total:result.n_total,outcome_state:result.outcome_state},
+    read_instruction:'Read the complete result file and referenced source/trace files for diagnostics before repairing or interpreting this candidate. This index does not replace the original evidence.'}
+}

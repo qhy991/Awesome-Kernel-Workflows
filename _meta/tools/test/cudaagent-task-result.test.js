@@ -13,10 +13,10 @@ test('accepted parent receives one full measurement before original CUDAAgent lo
 
 test('slower native candidates retain exact accepted parent binding',async()=>{const {result}=await replay({candidate_latency_aggregate_ms:.030,speedup_vs_reference:.5},false,true);assert.equal(result.generated_kernel_path,'/fixture/exp/accepted_parent.task.json.artifact/candidate.py');assert.equal(result.canonical_metric.value,1);assert.equal(result.correct,true);});
 
-test('next CUDAAgent implement sees full candidate ABI feedback instead of empty compile_error',async()=>{
+test('next CUDAAgent implement reads complete candidate ABI feedback from the result file',async()=>{
  const detail='pointer conversion failed '+ 'x'.repeat(10000)
  const {calls}=await replay({compiled:null,correct:false,measurement_valid:false,n_pass:0,outcome_state:'candidate_failure',failure_origin:'candidate',diagnostics:[{workload_uuid:'w',evaluation:{error:detail}}]})
- assert.ok(calls.find(c=>c.label==='impl-1').prompt.includes(detail))
+ const prompt=calls.find(c=>c.label==='impl-1').prompt;assert.ok(!prompt.includes(detail));assert.ok(prompt.includes('/fixture/exp/task_attempt_0.json'))
 })
 
 test('initial candidate delivery error is repaired automatically before optimization',async()=>{const {result,calls}=await replay({},false,false,true);assert.equal(calls.filter(c=>c.label==='initial-2-read-result').length,1);assert.ok(calls.find(c=>c.label==='initial-2-read-result').prompt.includes('--read-only'));assert.ok(result.generated_kernel_path);});

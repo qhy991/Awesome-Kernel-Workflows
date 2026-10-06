@@ -34,3 +34,12 @@ test('Host exit2 carries diagnostic evidence and never calls an extra agent or r
  })
  assert.equal(calls,1)
 })
+
+test('prompt projection references full evidence without mutating retained diagnostics',()=>{
+ const project=vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../../scaffolding/task-result.js'),'utf8')+';__taskEvidencePrompt')
+ const raw={test_result_path:'/full/result.json',host_candidate_path:'/full/candidate.py',error_log:'LONG'.repeat(100000),diagnostics:[{message:'KEEP_COMPLETE'}],is_valid:false,evidence:{trace:'/full/trace.jsonl'}}
+ const before=JSON.stringify(raw),out=project(raw)
+ assert.equal(out.test_result_path,raw.test_result_path);assert.equal(out.evidence_paths.trace,raw.evidence.trace)
+ assert.ok(!JSON.stringify(out).includes('LONG'));assert.equal(JSON.stringify(raw),before)
+ const noPath={error_log:'do not discard me'};assert.equal(project(noPath),noPath)
+})
