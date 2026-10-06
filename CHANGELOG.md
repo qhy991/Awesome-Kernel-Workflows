@@ -14,6 +14,9 @@ for the versioning policy.
 
 ## [Unreleased]
 
+### Changed
+- Require workflow authors to propagate the task's per-workload optimization objective: inspect every case, preserve regression/bottleneck evidence and avoid treating an aggregate gain or isolated winners as a finished implementation (`Agent.md`).
+
 ### Fixed
 - Task-result KSearch hands off persisted source paths for generation, repair, checkpoints and reports instead of echoing historical kernels. A CPU checkpoint reader preserves complete search/evaluation state, validates existing source bindings and reads old inline snapshots without rewriting them (`Agent.md`, KSearch workflow, file-handoff/resume regressions).
 - Add optional read-only result reconciliation for native delivery errors. CUDAAgent/AccelOpt initial selection and native evaluation can reread an existing slot once after malformed/transcribed output; genuine unknown/model faults stay HOLD. The reader never submits a GPU job, changes a candidate, or loops on failed delivery (`task-result` scaffolding, five manifests, method/Host regression tests).
