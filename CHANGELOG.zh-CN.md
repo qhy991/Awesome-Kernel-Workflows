@@ -13,6 +13,9 @@
 ## [Unreleased]
 
 ### Fixed
+- 原生任务结果改用 JSON 对象交付，并对旧字符串回复中落入字符串内的裸控制字符做无损转义，保留完整诊断；结构损坏、unknown、源码绑定和完整工作负载门禁不放宽。回归覆盖 M4 AccelOpt 的 ANSI 诊断 HOLD 与长诊断（task-result 公共 helper 和五个生成 workflow）。
+
+### Fixed
 - 新增可选的只读结果复核：CUDAAgent/AccelOpt 初始选择和 native 评估遇到格式或转述错误时，自动复读已有结果一次；真正的 unknown/模型故障保持 HOLD。复读不提交 GPU、不改候选、不循环重试（`task-result` 共享 helper、五方法 manifest、方法/Host 回归测试）。
 
 ### Fixed
