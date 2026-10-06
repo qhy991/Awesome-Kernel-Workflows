@@ -12,6 +12,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- 为每个新激活注入任务测量归属：仅指定 task-result 命令创建结果槽，原始 verifier 调用不能替代其契约；保持候选生成方法和完整诊断。
+
 ### Changed
 - 要求 workflow 维护者传递任务的逐 workload 优化目标：检查每个 case，保留退步/瓶颈证据，不能把平均收益或各候选的独立最优数字当作已完成实现（`Agent.md`）。
 

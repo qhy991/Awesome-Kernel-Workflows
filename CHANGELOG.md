@@ -14,6 +14,9 @@ for the versioning policy.
 
 ## [Unreleased]
 
+### Fixed
+- Inject task measurement ownership into each fresh activation: only the declared task-result command creates result slots, and raw verifier calls cannot substitute its contract. Preserve candidate-generation methods and complete diagnostics.
+
 ### Changed
 - Require workflow authors to propagate the task's per-workload optimization objective: inspect every case, preserve regression/bottleneck evidence and avoid treating an aggregate gain or isolated winners as a finished implementation (`Agent.md`).
 
