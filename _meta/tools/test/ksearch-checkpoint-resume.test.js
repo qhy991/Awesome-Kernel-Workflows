@@ -44,7 +44,7 @@ test('ksearch: each cycle end writes checkpoint.json with the 5 state vars', () 
   assert.match(SOURCE, /checkpointPath: CHECKPOINT_PATH/,
     'checkpoint write must target the canonical checkpoint path')
   // The 5 state vars must be in the checkpoint payload.
-  assert.match(SOURCE, /cycle: cycleCount,[\s\S]*?decisionTree,[\s\S]*?bestMetric,[\s\S]*?bestSolution,[\s\S]*?solutionDb/,
+  assert.match(SOURCE, /cycle: cycleCount,[\s\S]*?decisionTree,[\s\S]*?bestMetric,[\s\S]*?bestSolution: ksearchCheckpointSolution\(bestSolution\),[\s\S]*?solutionDb: solutionDb\.map\(ksearchCheckpointSolution\)/,
     'checkpoint payload must carry cycle + decisionTree + bestMetric + bestSolution + solutionDb')
   assert.match(SOURCE, /await __workflowRuntimeSafePoint\(\{/,
     'checkpoint must be committed through the shared atomic safe point')

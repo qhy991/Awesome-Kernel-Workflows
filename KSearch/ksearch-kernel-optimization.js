@@ -1130,22 +1130,59 @@ if (initResult.decision_tree && typeof initResult.decision_tree === 'object' &&
 log(`World model initialized: ${Object.keys(decisionTree).length} nodes, ${Object.values(decisionTree).filter(node => node?.status === 'open').length} open actions`)
 log(`Dimensions: ${(initResult.design_dimensions || []).join(', ')}`)
 
+// Task-native candidates already have immutable measured files. Persist those
+// references rather than another copy of every historical source in a prompt.
+function ksearchCheckpointSolution(solution) {
+  if (!args.task_result_command || !solution) return solution
+  const sourcePath = solution.eval?.host_candidate_path || solution.path || solution.variant_path
+  if (!sourcePath) throw new Error('KSearch checkpoint candidate has no persisted source path')
+  const {code, ...record} = solution
+  return {...record, path:sourcePath}
+}
+
+const ksearchCheckpointReadProgram = `import hashlib, json, os, sys
+try:
+    filename = sys.argv[1]
+    if not os.path.exists(filename):
+        result = {"present": False}
+    else:
+        with open(filename) as stream:
+            result = json.load(stream)
+        for record in result.get("solutionDb", []) + ([result["bestSolution"]] if result.get("bestSolution") else []):
+            evaluation = record.get("eval") or {}
+            source = evaluation.get("host_candidate_path") or record.get("path") or record.get("variant_path")
+            if not source or not os.path.isfile(source):
+                raise ValueError("checkpoint candidate source is unavailable: " + str(source))
+            expected = (evaluation.get("source_binding") or {}).get("source_sha256")
+            if expected:
+                with open(source, "rb") as stream:
+                    if hashlib.sha256(stream.read()).hexdigest() != expected:
+                        raise ValueError("checkpoint candidate source binding changed: " + source)
+            record["path"] = source
+            record.pop("code", None)
+    print(json.dumps(result))
+except Exception as error:
+    print(json.dumps({"checkpoint_error": str(error)}))`
+
 // #43: resume from checkpoint if present (mechanical agent reads it verbatim).
 // Captures the 5 in-memory state vars (decisionTree, solutionDb, bestSolution,
 // bestMetric, cycleCount) so a crashed search resumes at the next cycle instead
 // of losing cycles 1..N. Uses the existing mechanical-agent file-IO pattern
 // (same as load-driver); zero new sandbox dependencies.
 const _checkpoint = await agentRetry(() => agent(
-  `Read ${EXP_DIR}/checkpoint.json (if it exists) and return its contents as a parsed JSON object, verbatim.\n` +
+  (args.task_result_command
+    ? `Use Bash to run the following Python program with ${EXP_DIR}/checkpoint.json as its sole filename argument. Return its stdout as a parsed JSON object. Do not open the raw checkpoint or candidate source in the conversation. The program reads the files locally. It checks existing source bindings. It preserves all state except duplicate code fields. Do not modify the original files.\n# Checkpoint reader\n\`\`\`python\n${ksearchCheckpointReadProgram}\n\`\`\`\n`
+    : `Read ${EXP_DIR}/checkpoint.json (if it exists) and return its contents as a parsed JSON object, verbatim.\n`) +
   `If the file does not exist, return {"present": false}. Do NOT modify, summarize, or re-encode the JSON.\n` +
   `Return the parsed object.`,
   { model: MODEL.mechanical, label: 'load-checkpoint', phase: 'Setup', schema: JSON_PASSTHROUGH }),
   { retries: 3, allowNull: true })
 let _startCycle = 0
+if (_checkpoint?.checkpoint_error) throw new Error('KSearch checkpoint recovery: '+_checkpoint.checkpoint_error)
 if (_checkpoint && _checkpoint.present !== false && _checkpoint.cycle != null) {
   decisionTree = _checkpoint.decisionTree || decisionTree
-  solutionDb = _checkpoint.solutionDb || solutionDb
-  bestSolution = _checkpoint.bestSolution || bestSolution
+  solutionDb = (_checkpoint.solutionDb || solutionDb).map(ksearchCheckpointSolution)
+  bestSolution = ksearchCheckpointSolution(_checkpoint.bestSolution || bestSolution)
   if (_checkpoint.bestMetric != null) bestMetric = _checkpoint.bestMetric
   _startCycle = Math.min(Number(_checkpoint.cycle) || 0, MAX_CYCLES)
   cycleCount = _startCycle
@@ -1233,7 +1270,9 @@ If still no candidates, return selected_node_id = null (search exhausted).
 - Cycle: ${cycle + 1}/${MAX_CYCLES}
 
 # Also provide:
-- parent_solution_code: code from the parent node's attached solution (or baseline code if parent is root)
+${args.task_result_command
+  ? `- parent_solution_path: choose the parent node's measured source from these references; return its path without copying code:\n${JSON.stringify([...solutionDb, ...(bestSolution ? [bestSolution] : [])].map(s => ({id:s.id,node_id:s.node_id,path:s.eval?.host_candidate_path || s.path,metric:s.eval?.metric_value,is_valid:s.eval?.is_valid})))}`
+  : '- parent_solution_code: code from the parent node\'s attached solution (or baseline code if parent is root)'}
 - parent_metric: the score of the parent node's solution
 - context_for_generation: ancestor path decisions + sibling outcomes (compact)
 
@@ -1254,6 +1293,7 @@ Then append:
         action_score: { type: 'number' },
         action_difficulty: { type: 'number' },
         parent_solution_code: { type: 'string' },
+        ...(args.task_result_command ? {parent_solution_path: {type:'string'}} : {}),
         parent_metric: { type: 'number' },
         parent_is_root: { type: 'boolean' },
         context_for_generation: { type: 'object' },
@@ -1270,7 +1310,12 @@ Then append:
   }
 
   const activeNodeId = selection.selected_node_id
-  const parentCode = selection.parent_solution_code || setupResult.baseline_code || ''
+  const parentCode = args.task_result_command ? '' : selection.parent_solution_code || setupResult.baseline_code || ''
+  const parentRecord = args.task_result_command
+    ? [...solutionDb, ...(bestSolution ? [bestSolution] : [])].find(s => s.eval?.is_valid &&
+        (s.eval?.host_candidate_path || s.path) === selection.parent_solution_path)
+    : null
+  const parentPath = parentRecord?.eval?.host_candidate_path || parentRecord?.path || taskParentMeasurement?.host_candidate_path || null
   const parentIsRoot = selection.parent_is_root || false
   const baseScore = selection.parent_metric || baselineMetric
 
@@ -1296,6 +1341,7 @@ Then append:
   let cycleBestEval = null
   let cycleBestScore = -1
   let currentRawCode = null  // tracks the LAST generated code (for debug prompts)
+  let currentRawPath = null
   let noImproveStreak = 0
   let noImproveOverBaseStreak = 0
   let hasPassedInCycle = false
@@ -1327,7 +1373,7 @@ ${specText}
 # Action to implement: "${selection.action_title}"
 ${selection.action_description || ''}${diversityDirective}
 
-${parentCode ? `# Base code (from parent node — start from this and apply the action):
+${args.task_result_command ? (parentPath ? `# Parent source file\nRead the complete candidate at ${parentPath}. Copy it to your new variant before applying the selected action. Never edit the measured parent.` : '# No measured parent source exists yet. Implement the specification.') : parentCode ? `# Base code (from parent node — start from this and apply the action):
 \`\`\`${langToken(LANGUAGE)}
 ${parentCode}
 \`\`\`` : '# No base code available — implement from specification directly.'}
@@ -1339,15 +1385,15 @@ ${JSON.stringify(selection.context_for_generation || {})}
 ${wmSection}
 
 # Requirements:
-1. Output COMPLETE, COMPILABLE ${langToken(LANGUAGE)} code
+1. ${args.task_result_command ? 'Save' : 'Output'} COMPLETE, COMPILABLE ${langToken(LANGUAGE)} code${args.task_result_command ? ' in the declared variant file' : ''}
 2. Implement ONLY the specified action — keep everything else close to base
 3. Must be functionally correct (outputs within rtol=${RTOL}, atol=${ATOL})
 4. Target ${TARGET_GPU} architecture
 5. Include all necessary imports/headers
 6. PATCH-FIRST / NO-TRUNCATION (AWK #52): emit the kernel from the first line to the LAST closing brace. When parent code exists, edit ONLY the action-relevant spans and preserve the rest verbatim — do NOT rewrite unrelated regions (large whole-file rewrites are the #1 cause of mid-kernel truncation). Do NOT emit a skeleton/stub body. Your output is checked by \`${SUBSTRATE}/code_integrity.py\` — truncated or empty-body output is rejected and the attempt is discarded.
-7. NATIVE INTRINSICS FOR THE TARGET ARCH (AWK #53): use matrix-core instructions native to ${TARGET_GPU}; do not assume a vendor or ISA that the task metadata does not name.\n8. PERSIST (AWK #58/#59): Write the COMPLETE kernel to ${variantPath} (absolute path — the single source of truth for eval + the driver envelope; \`code\` is a display/compat payload only and may truncate for >20KB kernels). Return variant_path = this path.
+7. NATIVE INTRINSICS FOR THE TARGET ARCH (AWK #53): use matrix-core instructions native to ${TARGET_GPU}; do not assume a vendor or ISA that the task metadata does not name.\n8. PERSIST (AWK #58/#59): Write the COMPLETE kernel to ${variantPath}${args.task_result_command ? ' (the source file owns the complete implementation). Return variant_path = this path without copying source into JSON.' : ' (absolute path — the single source of truth for eval + the driver envelope; `code` is a display/compat payload only and may truncate for >20KB kernels). Return variant_path = this path.'}
 
-Return the complete kernel code + variant_path.
+${args.task_result_command ? 'Return variant_path and implementation notes only. Keep the complete source in that file. Do not copy source into the response.' : 'Return the complete kernel code + variant_path.'}
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -1363,7 +1409,7 @@ Then append:
             implementation_notes: { type: 'string' },
             design_choices: { type: 'array', items: { type: 'string' } },
           },
-          required: ['variant_path', 'code'],
+          required: args.task_result_command ? ['variant_path'] : ['variant_path', 'code'],
         },
       }), { retries: 5, allowNull: true }), `gen-${cycle}-${attempt}`)
   }
@@ -1376,13 +1422,16 @@ Then append:
     // Once every independent seed has been measured, continue the dependent
     // chain from the strongest passing seed rather than whichever branch was
     // evaluated last.
-    if (attempt === SEED_CANDIDATES && cycleBestCode) {
+    if (attempt === SEED_CANDIDATES && (cycleBestCode || args.task_result_command && cycleBestPath)) {
       currentRawCode = cycleBestCode
+      currentRawPath = cycleBestPath
     }
 
     // Determine base_for_debug: whichever of parentCode and cycleBestCode has higher score
     const baseForDebug = (cycleBestCode && cycleBestScore > baseScore) ? cycleBestCode : parentCode
     const baseForDebugLabel = (cycleBestCode && cycleBestScore > baseScore) ? 'cycle_best' : 'parent'
+    const basePath = cycleBestPath && cycleBestScore > baseScore ? cycleBestPath : parentPath
+    const attemptPath = ksearchNodeKernelPath(`cycle_${cycle}_a${attempt}`)
 
     let genResult
 
@@ -1404,15 +1453,15 @@ ${specText}
 # Action: "${selection.action_title}"
 ${selection.action_description || ''}
 
-${parentCode ? `# Base code (known-good reference, from ${baseForDebugLabel}):
+${args.task_result_command ? (basePath ? `# Known-good source file\nRead ${basePath} as needed. Preserve its exact bytes.` : '') : parentCode ? `# Base code (known-good reference, from ${baseForDebugLabel}):
 \`\`\`${langToken(LANGUAGE)}
 ${baseForDebug}
 \`\`\`` : ''}
 
-# Buggy code (last attempt — FIX THIS):
+${args.task_result_command ? `# Candidate to repair\nRead the complete last candidate at ${currentRawPath}. Write the corrected source to ${attemptPath}. Never modify the old candidate. Return variant_path without inline source.` : `# Buggy code (last attempt — FIX THIS):
 \`\`\`${langToken(LANGUAGE)}
 ${(currentRawCode || '')}
-\`\`\`
+\`\`\``}
 
 # Previous evaluation (shows what went wrong):
 ${JSON.stringify(cycleBestEval || {}, null, 2)}
@@ -1421,7 +1470,7 @@ ${JSON.stringify(cycleBestEval || {}, null, 2)}
 # Priority: FIX CORRECTNESS FIRST, then optimize performance.
 ${wmSection}
 
-Return the fixed kernel code.
+${args.task_result_command ? 'Return the new variant_path and repair notes only.' : 'Return the fixed kernel code.'}
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -1435,8 +1484,9 @@ Then append:
             code: { type: 'string' },
             changes_made: { type: 'string' },
             bugs_fixed: { type: 'array', items: { type: 'string' } },
+            ...(args.task_result_command ? {variant_path: {type:'string'}} : {}),
           },
-          required: ['code'],
+          required: args.task_result_command ? ['variant_path'] : ['code'],
         },
       }), { retries: 5, allowNull: true }), `debug-${cycle}-${attempt}`)
     } else {
@@ -1451,15 +1501,15 @@ Then append:
 # Kernel Specification:
 ${specText}
 
-${parentCode ? `# Base code (reference, from ${baseForDebugLabel}):
+${args.task_result_command ? (basePath ? `# Measured source file\nRead ${basePath} as needed. Do not modify it.` : '') : parentCode ? `# Base code (reference, from ${baseForDebugLabel}):
 \`\`\`${langToken(LANGUAGE)}
 ${baseForDebug}
 \`\`\`` : ''}
 
-# Current working code (improve this):
+${args.task_result_command ? `# Working candidate file\nRead the complete source at ${currentRawPath || cycleBestPath}. Write the improved candidate to ${attemptPath}. Return variant_path without inline source.` : `# Current working code (improve this):
 \`\`\`${langToken(LANGUAGE)}
 ${(currentRawCode || cycleBestCode || '')}
-\`\`\`
+\`\`\``}
 
 # Current performance:
 - Last attempt metric: ${cycleBestEval?.metric_value || 'unknown'}
@@ -1471,7 +1521,7 @@ ${(currentRawCode || cycleBestCode || '')}
 ${wmSection}
 
 Focus on PERFORMANCE OPTIMIZATION. The code is already correct.
-Return improved kernel code.
+${args.task_result_command ? 'Return the new variant_path and improvement notes only.' : 'Return improved kernel code.'}
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -1485,8 +1535,9 @@ Then append:
             code: { type: 'string' },
             changes_made: { type: 'string' },
             expected_improvement: { type: 'string' },
+            ...(args.task_result_command ? {variant_path: {type:'string'}} : {}),
           },
-          required: ['code'],
+          required: args.task_result_command ? ['variant_path'] : ['code'],
         },
       }), { retries: 5, allowNull: true }), `improve-${cycle}-${attempt}`)
     }
@@ -1495,10 +1546,11 @@ Then append:
       break
     }
 
-    if (!genResult || !genResult.code) continue
+    if (!genResult || !(args.task_result_command ? genResult.variant_path : genResult.code)) continue
 
     // Track the LAST generated code (used in debug prompts for next attempt)
-    currentRawCode = genResult.code
+    currentRawCode = args.task_result_command ? '' : genResult.code
+    currentRawPath = genResult.variant_path || null
 
     // =========================================================================
     // Phase: Evaluate
@@ -1506,7 +1558,7 @@ Then append:
     phase('Evaluate')
 
     const evalResult = args.task_result_command
-      ? await __nativeTaskEvaluate({candidatePath:genResult.variant_path || `${EXP_DIR}/task_cycle_${cycle}_a${attempt}.py`,candidateSource:genResult.code,resultPath:`${EXP_DIR}/task_cycle_${cycle}_a${attempt}.json`,command:args.task_result_command,workloadCount:args.task_workload_count,label:`task-eval-${cycle}-${attempt}`})
+      ? await __nativeTaskEvaluate({candidatePath:genResult.variant_path,candidateSource:'',resultPath:`${EXP_DIR}/task_cycle_${cycle}_a${attempt}.json`,command:args.task_result_command,workloadCount:args.task_workload_count,label:`task-eval-${cycle}-${attempt}`})
       : IS_SOL
       ? await (async () => {
         const variant = `ksearch_c${cycle}_a${attempt}`.replace(/[^A-Za-z0-9_]/g, '_')
@@ -1774,11 +1826,12 @@ Then append, using the values you just measured (status="done" if it compiled AN
     }
 
     if (!evalResult) continue
+    if (args.task_result_command && evalResult.host_candidate_path) currentRawPath = evalResult.host_candidate_path
 
     // Track solution
     solutionDb.push({
       id: `cycle_${cycle}_attempt_${attempt}`,
-      code: genResult.code,
+      code: args.task_result_command ? '' : genResult.code,
       variant_path: genResult.variant_path || null,  // AWK #59
       eval: evalResult,
       node_id: activeNodeId,
@@ -1789,7 +1842,7 @@ Then append, using the values you just measured (status="done" if it compiled AN
 
     // Update cycle best (K-Search: only update if passed AND score > cycle_best_score)
     if (allPassed && roundScore > cycleBestScore) {
-      cycleBestCode = genResult.code
+      cycleBestCode = args.task_result_command ? '' : genResult.code
       cycleBestPath = evalResult.host_candidate_path || genResult.variant_path || cycleBestPath  // AWK #59
       cycleBestEval = evalResult
       cycleBestScore = roundScore
@@ -1993,8 +2046,8 @@ Then append:
     termination_reason: plannedStall ? 'stalled' : null,
     decisionTree,
     bestMetric,
-    bestSolution,
-    solutionDb,
+    bestSolution: ksearchCheckpointSolution(bestSolution),
+    solutionDb: solutionDb.map(ksearchCheckpointSolution),
     runtime_metadata: {
       checkpoint_written_at: 'cycle-' + cycleCount + '-end',
       workflow: WORKFLOW_NAME,
@@ -2055,10 +2108,10 @@ if (terminationReason !== 'cycle_limit') {
 - Total solutions evaluated: ${solutionDb.length}
 - Valid solutions: ${solutionDb.filter(s => s.eval?.is_valid).length}
 
-# Best Solution (node: ${bestSolution?.node_id || 'none'}):
+${args.task_result_command ? `# Best Solution (node: ${bestSolution?.node_id || 'none'})\nMeasured source: ${bestSolution?.eval?.host_candidate_path || '<none>'}. Read the file only when needed for analysis. Report its path and findings without copying source.` : `# Best Solution (node: ${bestSolution?.node_id || 'none'}):
 \`\`\`${langToken(LANGUAGE)}
 ${(bestSolution?.code || '')}
-\`\`\`
+\`\`\``}
 
 # Top 5 Solutions:
 ${topSolutions.map((s, i) => `${i + 1}. ${s.id} (node=${s.node_id}, metric=${s.eval.metric_value})`).join('\n')}
