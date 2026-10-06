@@ -20,7 +20,7 @@ test('object delivery preserves a large full diagnostic without double serializa
   schema=o.schema;return {test_result_path:p,test_result_json:{...raw,diagnostics:[{error:'x'.repeat(100000)+'\u001b[91mend'}]}}
  }})
  const result=await evaluate({...ctx,command:'reader {kernel_path} {result_path}',candidatePath:'/workspace/candidate.py'})
- assert.equal(schema.properties.test_result_json.type,'object')
+ assert.equal(schema.properties.test_result_json.anyOf[0].type,'object')
  assert.equal(result.diagnostics[0].error.length,100008)
 })
 test('structural corruption and unknown outcomes are never repaired into a score',()=>{
@@ -28,4 +28,15 @@ test('structural corruption and unknown outcomes are never repaired into a score
  for(const text of [JSON.stringify(raw).replace(',"compiled"','"compiled"'),JSON.stringify({...raw,outcome_state:'unknown'}),JSON.stringify(raw).slice(0,-1)]){
   assert.throws(()=>parse({test_result_path:p,test_result_json:text},p,17),e=>e.code==='TASK_RESULT_HOLD')
  }
+})
+
+test('native delivery schema admits both encodings accepted by the parser', async()=>{
+ const helper=fs.readFileSync(path.resolve(__dirname,'../../scaffolding/task-result.js'),'utf8')
+ let schema
+ const evaluate=vm.runInNewContext(helper+';__nativeTaskEvaluate',{agentRetry:fn=>fn(),agent:async(text,options)=>{
+  schema=options.schema.properties.test_result_json
+  throw new Error('stop before GPU for schema inspection')
+ }})
+ await assert.rejects(evaluate({candidatePath:'/candidate',resultPath:'/result',command:'unused',workloadCount:1}),/TASK_RESULT_HOLD/)
+ assert.deepEqual(JSON.parse(JSON.stringify(schema)),{anyOf:[{type:'object',additionalProperties:true},{type:'string'}]})
 })

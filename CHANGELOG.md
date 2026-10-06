@@ -16,6 +16,10 @@ for the versioning policy.
 
 ### Fixed
 
+- Native task-result delivery schema accepts both JSON objects and legacy JSON strings, matching the existing parser; malformed or unverified measurements still fail validation.
+
+### Fixed
+
 - Treat duplicated task-result delivery paths as advisory; retain their original values while canonical candidate identity and full measurement gates remain mandatory. Avoid native path-copy typos terminating valid searches.
 
 ### Fixed

@@ -131,7 +131,7 @@ Run the declared CPU-only read command exactly once: ${command}
 It reconciles the existing frozen candidate, complete trace and broker receipt. Do not submit a GPU job, alter any file, regenerate source, or repeat an unknown/refused request.
 Return test_result_path and test_result_json copied exactly from this command's output. test_result_json is a JSON object, NOT a JSON-encoded string. Preserve every diagnostic and evidence field. Do not reconstruct paths or measurements from memory.`, {
         label:(ctx.label || 'task')+'-read-result',phase:'ReadResult',
-        schema:{type:'object',properties:{test_result_path:{type:'string'},test_result_json:{type:'object',additionalProperties:true}},required:['test_result_path','test_result_json']},
+        schema:{type:'object',properties:{test_result_path:{type:'string'},test_result_json:{anyOf:[{type:'object',additionalProperties:true},{type:'string'}]}},required:['test_result_path','test_result_json']},
       }), {retries:0}) } catch (readError) {
         return __taskHold('read-only result delivery unavailable: '+(readError?.message || String(readError)), raw)
       }
@@ -165,7 +165,7 @@ Run the trusted task command once in the foreground: ${command}
 If Bash returns a running session, wait for that session to terminate. Do not detach with nohup or &, return a pending summary, or launch another command for this slot. Never rename/delete its artifact directory, change the result path, or optimize the declared source during evaluation. An unknown or failed result must be returned unchanged.
 Read ${ctx.resultPath}. Return test_result_path and test_result_json copied verbatim from that exact file. test_result_json is a JSON object, NOT a JSON-encoded string. Preserve every diagnostic and evidence field. No estimates or rewritten source in this reply.`, {
     label:ctx.label, phase:'Evaluate',
-    schema:{type:'object', properties:{test_result_path:{type:'string'},test_result_json:{type:'object',additionalProperties:true}}, required:['test_result_path','test_result_json']},
+    schema:{type:'object', properties:{test_result_path:{type:'string'},test_result_json:{anyOf:[{type:'object',additionalProperties:true},{type:'string'}]}}, required:['test_result_path','test_result_json']},
   }), {retries:0}) } catch (error) { return __taskHold('agent/transport result unavailable: ' + (error?.message || String(error))) }
   return await __taskResultWithReadback(ctx, output)
     || __taskHold('missing task result')
