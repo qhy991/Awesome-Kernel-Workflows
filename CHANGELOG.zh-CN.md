@@ -13,6 +13,7 @@
 ## [Unreleased]
 
 ### Fixed
+- task-result KSearch 的生成、修复、checkpoint 和报告改为交接已保存源码路径，不再回传历史 kernel 正文。CPU checkpoint reader 保留完整搜索/测量状态，核对既有源码绑定，并只读兼容旧含源码快照（`Agent.md`、KSearch workflow、文件交接/恢复回归）。
 - 新增可选的只读结果复核：CUDAAgent/AccelOpt 初始选择和 native 评估遇到格式或转述错误时，自动复读已有结果一次；真正的 unknown/模型故障保持 HOLD。复读不提交 GPU、不改候选、不循环重试（`task-result` 共享 helper、五方法 manifest、方法/Host 回归测试）。
 
 ### Fixed
