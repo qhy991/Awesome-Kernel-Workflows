@@ -55,7 +55,11 @@ function __taskResult(output, expectedPath, expectedCount) {
       : raw && typeof raw === 'object' && !Array.isArray(raw) ? JSON.parse(JSON.stringify(raw))
       : __taskHold('missing/malformed raw task result')
   } catch { return __taskHold('missing/malformed raw task result') }
-  if (output?.test_result_path !== expectedPath || result?.test_result_path !== expectedPath || result?.contract_version !== 'kersor-task-result-v1') return __taskHold(`task result contract/path mismatch: expected ${expectedPath}; returned ${output?.test_result_path}; recorded ${result?.test_result_path}; contract ${result?.contract_version}`, result)
+  // The caller owns the slot. Duplicated delivery paths are descriptive, not
+  // candidate identity: source binding and canonical candidate_path below remain mandatory.
+  if (result?.contract_version !== 'kersor-task-result-v1') return __taskHold('task result contract mismatch', result)
+  const deliveryPathObservation = output?.test_result_path !== expectedPath || result?.test_result_path !== expectedPath
+    ? {returned:output?.test_result_path ?? null,recorded:result?.test_result_path ?? null,canonical:expectedPath} : null
   if (output.model_observation === 'unknown' || result.model_observation === 'unknown' || result.outcome_state === 'unknown' || (result.failure_origin && result.failure_origin !== 'candidate')) return __taskHold('infrastructure, evidence, or model observation unknown', result)
   const valid = result.compiled === true && result.correct === true
     && result.full_workload_set === true && result.measurement_valid === true
@@ -80,7 +84,8 @@ function __taskResult(output, expectedPath, expectedCount) {
     latency_ms:valid ? result.candidate_latency_aggregate_ms : null,
     n_pass:result.n_pass, n_total:result.n_total,
     pass_rate:String(result.n_pass)+'/'+String(result.n_total),
-    source_binding:result.source_binding, host_candidate_path:result.candidate_path, test_result_path:output.test_result_path,
+    source_binding:result.source_binding, host_candidate_path:result.candidate_path, test_result_path:expectedPath,
+    ...(deliveryPathObservation ? {delivery_path_observation:deliveryPathObservation} : {}),
     outcome_state:valid ? 'passed' : 'candidate_failure',
     diagnostics:result.diagnostics || [], evidence:result.evidence || null,
     error_log:valid ? '' : JSON.stringify({error:result.error || 'candidate rejected',

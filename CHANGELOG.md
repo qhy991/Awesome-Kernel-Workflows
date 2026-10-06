@@ -15,6 +15,10 @@ for the versioning policy.
 ## [Unreleased]
 
 ### Fixed
+
+- Treat duplicated task-result delivery paths as advisory; retain their original values while canonical candidate identity and full measurement gates remain mandatory. Avoid native path-copy typos terminating valid searches.
+
+### Fixed
 - Inject task measurement ownership into each fresh activation: only the declared task-result command creates result slots, and raw verifier calls cannot substitute its contract. Preserve candidate-generation methods and complete diagnostics.
 
 ### Changed

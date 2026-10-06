@@ -37,3 +37,10 @@ test('Host readback uses the generic command owner and exact designated result',
  assert.equal((await readback(ctx,{test_result_path:p,test_result_json:{...raw,candidate_path:'/wrong'}})).is_valid,true)
  assert.equal(calls,1)
 })
+test('duplicate result-location transcription is advisory; canonical source binding still governs',async()=>{
+ const readback=vm.runInNewContext(source+';__taskResultWithReadback',{agent:()=>assert.fail('redundant path must not consume a model turn')})
+ const result=await readback(ctx,{test_result_path:'/typo',test_result_json:{...raw,test_result_path:'/CUDAAAgent/result.json'}})
+ assert.equal(result.is_valid,true);assert.equal(result.test_result_path,p)
+ assert.equal(result.delivery_path_observation.recorded,'/CUDAAAgent/result.json')
+ await assert.rejects(readback({...ctx,readCommand:null},{test_result_path:'/typo',test_result_json:{...raw,candidate_path:'/other/candidate.py'}}),e=>e.code==='TASK_RESULT_HOLD')
+})
