@@ -5,3 +5,19 @@ function measured(i,j,extra={}) {const p=`/fixture/exp/cudallm_iter_${i}_sample_
 async function replay(extra={},reply={compiled:true,correct:true,speedup:123}){const agents={};for(let i=0;i<8;i++)for(let j=0;j<2;j++){agents[`generate-kernel-${i}-${j}`]={candidate_code:`DISPLAY_${i}_${j}`,variant_path:`/fixture/exp/cudallm_iter_${i}_sample_${j}.py`};agents[`task-eval-${i}-${j}`]=measured(i,j,extra);agents[`evaluate-${i}-${j}`]=reply;}return run(source,args,agents);}
 test('full native FSR8x2 uses task authority and returns earliest matching tested artifact',async()=>{const {result,calls}=await replay({}, {compiled:false,correct:false,speedup:0});assert.equal(result.iterations,8);assert.equal(result.samples_per_feature_set,2);assert.equal(result.candidates.length,16);assert.equal(result.best_speedup,.75);assert.equal(result.best_kernel_code,'');assert.equal(result.generated_kernel_path,'/fixture/exp/cudallm_iter_0_sample_0.json.artifact/candidate.py');assert.equal(result.performance_domain,'official_full_workload_reference_relative');assert.equal(calls.filter(c=>c.label.startsWith('task-eval')).length,16);assert.equal(result.candidates[0].eval.passed_tests,17);});
 for(const [name,extra] of Object.entries({partial:{full_workload_set:false,n_pass:16},incorrect:{correct:false,n_pass:16,measurement_valid:false,outcome_state:'candidate_failure',failure_origin:'candidate'},missingTiming:{candidate_latency_aggregate_ms:null},missingBinding:{source_binding:null}}))test('full native FSR rejects '+name+' despite inflated evaluation agent',async()=>{if(name!=='incorrect'){await assert.rejects(replay(extra),e=>e.code==='TASK_RESULT_HOLD' && e.retryable===false);return;}const {result}=await replay(extra);assert.equal(result.best_speedup,0);assert.equal(result.generated_kernel_path,'');assert.equal(result.candidates[0].eval.correct,false);});
+test('FSR selectors and reinforcement use authoritative files instead of repeating bulky evidence',async()=>{
+ const marker='RAW_DIAGNOSTIC_MARKER'.repeat(5000),agents={};
+ for(let i=0;i<8;i++)for(let j=0;j<2;j++){
+  agents[`generate-kernel-${i}-${j}`]={candidate_code:'SOURCE_BODY_MARKER'.repeat(4000),variant_path:`/fixture/exp/cudallm_iter_${i}_sample_${j}.py`};
+  agents[`task-eval-${i}-${j}`]=measured(i,j,{diagnostics:[{message:marker}]});
+ }
+ const {calls,result}=await run(source,args,agents);
+ for(const c of calls.filter(c=>['SelectFeatures','Reinforce','Report'].includes(c.phase))){
+  assert.ok(!c.prompt.includes('SOURCE_BODY_MARKER'),c.label);
+  assert.ok(!c.prompt.includes('RAW_DIAGNOSTIC_MARKER'),c.label);
+ }
+ const selector=calls.find(c=>c.label==='select-features-4-0');
+ assert.ok(selector.prompt.includes('/fixture/exp/cudallm_iter_3_sample_1.json'));
+ assert.equal(result.candidates[0].eval.diagnostics[0].message,marker);
+ assert.equal(result.candidates.length,16);
+})

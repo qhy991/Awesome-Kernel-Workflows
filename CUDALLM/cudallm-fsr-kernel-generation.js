@@ -751,6 +751,28 @@ let featureScores = {}
 let candidates = []
 let bestCandidate = null
 
+// Task-owned files retain complete source and evidence. Selection/reinforcement
+// carry an index, not repeated source bodies or compiler output. No byte cap.
+function candidatePromptRecord(candidate) {
+  if (!args.task_result_command) return candidate
+  const e = candidate.eval || {}
+  return {
+    id: candidate.id,
+    selected_feature_ids: candidate.selected_feature_ids,
+    implemented_feature_ids: candidate.implemented_feature_ids,
+    source_path: e.host_candidate_path || candidate.path,
+    task_result_path: e.test_result_path,
+    evidence_paths: e.evidence || null,
+    measurement: {compiled:e.compiled,correct:e.correct,is_valid:e.is_valid,
+      measurement_valid:e.measurement_valid,speedup:e.speedup,latency_ms:e.latency_ms,
+      n_pass:e.n_pass,n_total:e.n_total,outcome_state:e.outcome_state},
+  }
+}
+const CANDIDATE_FILE_GUIDANCE = args.task_result_command
+  ? 'The following records index authoritative workspace files. Read task_result_path for COMPLETE diagnostics and source_path for COMPLETE code when comparing or changing a candidate. Follow evidence_paths to original per-workload traces. Do not infer missing data from this index. No original file has been truncated. Keep feature-score records as feature statistics and link evidence by path; do not copy source or raw diagnostics into score notes.'
+  : ''
+
+
 function initFeatureScore(feature) {
   if (!featureScores[feature.id]) {
     featureScores[feature.id] = {
@@ -1067,9 +1089,9 @@ ${JSON.stringify(featureCatalog, null, 2)}
 ${JSON.stringify(featureScores, null, 2)}
 \`\`\`
 
-# Recent candidates
+# Recent candidates${CANDIDATE_FILE_GUIDANCE ? '\n' + CANDIDATE_FILE_GUIDANCE : ''}
 \`\`\`json
-${JSON.stringify(candidates.slice(-8), null, 2)}
+${JSON.stringify(candidates.slice(-8).map(candidatePromptRecord), null, 2)}
 \`\`\`
 
 # Selection rules
@@ -1369,9 +1391,9 @@ Then append, using the values you just measured (status="done" only if compiled 
 
     const reinforce = await agentRetry(() => agent(`${__taskContractBlock()}Update ${langToken(LEGACY_REINFORCE_LANG_TOKEN)} feature scores from this measured candidate.
 
-# Candidate
+# Candidate${CANDIDATE_FILE_GUIDANCE ? '\n' + CANDIDATE_FILE_GUIDANCE : ''}
 \`\`\`json
-${JSON.stringify({
+${JSON.stringify(args.task_result_command ? candidatePromptRecord(candidate) : {
   id: candidate.id,
   selected_feature_ids: candidate.selected_feature_ids,
   implemented_feature_ids: candidate.implemented_feature_ids,
@@ -1430,12 +1452,12 @@ ${ADAPTATION_SCOPE}
 
 # Best candidate summary
 \`\`\`json
-${JSON.stringify(bestCandidate ? {
+${JSON.stringify(bestCandidate ? (args.task_result_command ? candidatePromptRecord(bestCandidate) : {
   id: bestCandidate.id,
   selected_feature_ids: bestCandidate.selected_feature_ids,
   implemented_feature_ids: bestCandidate.implemented_feature_ids,
   eval: bestCandidate.eval,
-} : null, null, 2)}
+}) : null, null, 2)}
 \`\`\`
 
 # Feature scores
@@ -1443,9 +1465,9 @@ ${JSON.stringify(bestCandidate ? {
 ${JSON.stringify(featureScores, null, 2)}
 \`\`\`
 
-# Candidate history
+# Candidate history${CANDIDATE_FILE_GUIDANCE ? '\n' + CANDIDATE_FILE_GUIDANCE : ''}
 \`\`\`json
-${JSON.stringify(candidates.map(c => ({
+${JSON.stringify(candidates.map(c => args.task_result_command ? candidatePromptRecord(c) : ({
   id: c.id,
   selected_feature_ids: c.selected_feature_ids,
   implemented_feature_ids: c.implemented_feature_ids,

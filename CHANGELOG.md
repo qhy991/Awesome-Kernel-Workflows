@@ -16,6 +16,10 @@ for the versioning policy.
 
 ### Fixed
 
+- CUDALLM task-mode selection, reinforcement and reports now reference authoritative workspace candidate/result/trace paths instead of repeatedly embedding source and raw diagnostics. Keep the full evidence and original search counts; prevent the observed SelectFeatures prompt overflow without truncation.
+
+### Fixed
+
 - Native task-result delivery schema accepts both JSON objects and legacy JSON strings, matching the existing parser; malformed or unverified measurements still fail validation.
 
 ### Fixed
