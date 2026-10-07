@@ -200,6 +200,45 @@ function __attemptBlock() {
   }
   return parts.join('\n') + '\n'
 }
+
+// File-backed candidate context. Pure builders; execute persistence inside the
+// existing producer/evaluator activation, not an additional model call.
+function __workspaceSource(path, fallback) {
+  return path ? `Read COMPLETE source from ${path}. Do not reconstruct it from a summary. Report a missing file explicitly.` : String(fallback ?? '')
+}
+function __workspaceResult(path, fallback) {
+  if (!path) return fallback
+  const measurement = {}
+  for (const key of ['compiled','correct','is_valid','measurement_valid','speedup','runtime_ms','latency_ms','kernel_time_ms','n_pass','n_total','status','measured','is_correct','is_compilable','error_type','failure_origin']) {
+    const value = fallback && fallback[key]
+    if (value === null || ['number','boolean','string'].includes(typeof value)) measurement[key] = value
+  }
+  return {result_path:path,measurement,read_instruction:'Read the COMPLETE result and referenced raw traces before diagnosing. Retain the runtime measurement scalars in this index; do not replace them with an author estimate.'}
+}
+function __workspaceStore(path, source, root) {
+  const quote = value => "'" + String(value).replaceAll("'", "'\\''") + "'"
+  const program = [
+    'import json,sys',
+    'from pathlib import Path',
+    'root=Path(sys.argv[1]).resolve()',
+    'raw=Path(sys.argv[2])',
+    'assert not raw.is_symlink(), "candidate path is a symlink"',
+    'p=raw.resolve()',
+    'assert p.is_relative_to(root) and p!=root, "candidate outside workspace"',
+    'data=json.load(sys.stdin).encode("utf-8")',
+    'p.parent.mkdir(parents=True,exist_ok=True)',
+    'try:',
+    ' with p.open("xb") as f: f.write(data)',
+    'except FileExistsError:',
+    ' assert p.read_bytes()==data, "candidate identity collision; retain original"',
+    'assert p.read_bytes()==data, "candidate persistence incomplete"',
+    'print(json.dumps({"source_path":str(p),"source_saved":True}))',
+  ].join('\n')
+  return '# Before testing, execute this CPU-only source persistence command once. It preserves the complete source and refuses a different existing candidate; it does not allocate a GPU. Do not recreate or overwrite a mismatched file.\n'
+    + ['python3','-c',program,root,path].map(quote).join(' ')
+    + " <<'KERSOR_WORKSPACE_SOURCE_JSON'\n" + JSON.stringify(String(source ?? '')) + '\nKERSOR_WORKSPACE_SOURCE_JSON'
+}
+
 // --- END inlined typed-args ---
 
 // --- BEGIN inlined agent-retry scaffolding (from _meta/scaffolding/agent-retry.js) ---
@@ -436,6 +475,7 @@ function regraphtNodeKernelPath(label) {
 let sourceCode = ''
 let baselineMetric = 1.0
 let bestCandidate = null
+let graphContextPath = ''
 let graph = {
   nodes: [
     {
@@ -642,7 +682,7 @@ ${sourceCode}
 4. Include v_init as the start node.
 5. For each edge, include a prior score and one or more example snippets when available.
 
-Return a graph suitable for Monte Carlo Graph Search.
+Write the COMPLETE normalized graph to ${EXP_DIR}/graph_0.json, including all example source and evidence; return the same graph suitable for Monte Carlo Graph Search.
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -664,6 +704,7 @@ Then append:
 
 if (graphResult?.graph?.nodes && graphResult?.graph?.edges) {
   graph = graphResult.graph
+  graphContextPath = `${EXP_DIR}/graph_0.json`
 }
 
 // --- profiling-strategist: pick the analysis METHOD per backend×task×host, then
@@ -789,7 +830,7 @@ for (let attempt = 0; attempt < BUDGET; attempt++) {
 
 # ReGraph state
 \`\`\`json
-${JSON.stringify(graph, null, 2)}
+${JSON.stringify(__workspaceResult(graphContextPath,graph), null, 2)}
 \`\`\`
 
 # Selection constraints
@@ -802,10 +843,10 @@ ${JSON.stringify(graph, null, 2)}
 
 # Prior evaluated candidates
 \`\`\`json
-${JSON.stringify(evaluatedCandidates.slice(-8), null, 2)}
+${JSON.stringify(evaluatedCandidates.slice(-8).map(c=>({id:c.id,path_node_ids:c.path_node_ids,methods:c.methods,source_path:c.source_path,eval:__workspaceResult(c.result_path,c.eval)})), null, 2)}
 \`\`\`
 
-Return the selected method path and the examples that should condition generation.
+Write the COMPLETE selected method path and examples to ${EXP_DIR}/selection_${attempt}.json; return the selected method path and the examples that should condition generation.
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -848,7 +889,7 @@ ${(selection.method_sequence || []).map((item, i) => `${i + 1}. ${item}`).join('
 
 # Retrieved optimization examples
 \`\`\`json
-${JSON.stringify(selection.selected_examples || [], null, 2)}
+Read COMPLETE retrieved examples from ${EXP_DIR}/selection_${attempt}.json; keep the method sequence above unchanged.
 \`\`\`
 
 # Evaluator contract
@@ -883,6 +924,8 @@ Then append (this is MCGS attempt ${attempt}):
   }), { retries: 5 })
 
   phase('Evaluate')
+  const contextSourcePath = SOL_AVAILABLE ? `${EXP_DIR}/regrapht_attempt_${attempt}.cu` : `${EXP_DIR}/regrapht_attempt_${attempt}${USE_DRIVER ? DRIVER_SOURCE_EXT : '.cu'}`
+  const contextResultPath = `${EXP_DIR}/regrapht_attempt_${attempt}.context-result.json`
 
   // "with real evidence" is exactly what a read-only activation cannot supply:
   // it has no execution tool, so it can neither build nor time the candidate.
@@ -923,9 +966,9 @@ the graph rewrite did or did not pay off.` : ''
 
 ${__measuredBlock}
 
-# Candidate code
-\`\`\`${fenceToken()}
-${(generation.candidate_code || '')}
+# Source persistence command
+\`\`\`sh
+${__workspaceStore(contextSourcePath,generation.candidate_code || '',EXP_DIR)}
 \`\`\`
 
 # Evaluation command
@@ -941,7 +984,7 @@ Use ${EXP_DIR}/regrapht_attempt_${attempt}.cu as {kernel_path}.
 3. Parse evaluator JSON. If no command is provided, mark correct=false and explain missing evidence.
 4. Correctness and speedup must be based on evaluator output only.
 
-Return evaluator evidence.
+Save the complete evaluator evidence (including failure diagnostics) to ${contextResultPath}, then return it. Do not overwrite another candidate result.
 
 # Genome self-report (REQUIRED — do this LAST; do NOT let it change your returned JSON)
 Append exactly one line to ${EXP_DIR}/genome.jsonl (create if missing; shell append with >>). Timestamp first: date -u +%Y-%m-%dT%H:%M:%SZ
@@ -1036,6 +1079,7 @@ Then append, using the values you just measured (status="done" if correctness pa
     path_node_ids: selection.path_node_ids || [],
     methods: generation.applied_methods || [],
     code: generation.candidate_code || '',
+    source_path:contextSourcePath, result_path:contextResultPath,
     eval: evaluation,
   }
   evaluatedCandidates.push(candidateRecord)
@@ -1059,21 +1103,21 @@ ${(generation.applied_methods || []).join(' -> ') || '(none)'}
 
 # Evaluator result
 \`\`\`json
-${JSON.stringify(evaluation, null, 2)}
+${JSON.stringify(__workspaceResult(contextResultPath,evaluation), null, 2)}
 \`\`\`
 
 # Current graph
 \`\`\`json
-${JSON.stringify(graph, null, 2)}
+${JSON.stringify(__workspaceResult(graphContextPath,graph), null, 2)}
 \`\`\`
 
 # Update rules
 1. Increment visits along selected nodes.
 2. Add reward equal to speedup for correct candidates, small positive reward for compile-only progress, and zero/negative evidence for failures.
-3. Attach the concrete optimization example to the traversed edge or final node.
+3. Attach the concrete optimization example by source_path=${contextSourcePath} and result_path=${contextResultPath}; do not copy source or diagnostics into the graph.
 4. If the candidate used a new method label, add or relabel a node instead of duplicating equivalent methods.
 5. Add 1-3 follow-up edges from the best promising node when evidence suggests a next method.
-6. If graph_path is provided, write the updated graph there.
+6. Write the COMPLETE updated graph to ${EXP_DIR}/graph_${attempt + 1}.json, including all examples and evidence. Preserve earlier graph files. Do not replace source references with copied code.
 
 Return the updated graph and update summary.
 
@@ -1099,6 +1143,7 @@ Then append (this is MCGS attempt ${attempt}):
 
   if (update?.updated_graph?.nodes && update?.updated_graph?.edges) {
     graph = update.updated_graph
+    graphContextPath = `${EXP_DIR}/graph_${attempt + 1}.json`
   }
 }
 
@@ -1129,13 +1174,13 @@ ${JSON.stringify(finalGraphStats, null, 2)}
 ${JSON.stringify(bestCandidate ? {
   id: bestCandidate.id,
   methods: bestCandidate.methods,
-  eval: bestCandidate.eval,
+  eval: __workspaceResult(bestCandidate.result_path,bestCandidate.eval),
 } : null, null, 2)}
 \`\`\`
 
 # Best code excerpt
 \`\`\`${fenceToken()}
-${(bestCandidate?.code || '')}
+${__workspaceSource(bestCandidate?.source_path,bestCandidate?.code)}
 \`\`\`
 
 # Selected paths
@@ -1168,7 +1213,9 @@ return {
   problem_definition: PROBLEM_DEFINITION,
   problem_path: PROBLEM_PATH,
   kernel_path: SOURCE_CODE_PATH,
-  generated_kernel_path: generatedKernelPath,
+  generated_kernel_path: bestCandidate?.source_path || generatedKernelPath,
+  best_kernel_path: bestCandidate?.source_path || null,
+  graph_path: graphContextPath,
   initial_candidates: initialCandidates,
   initial_generation_result: initialGenerationResult,
   operation: OP_DESC,

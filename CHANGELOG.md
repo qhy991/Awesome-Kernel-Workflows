@@ -14,6 +14,10 @@ for the versioning policy.
 
 ## [Unreleased]
 
+### Changed
+
+- Migrate remaining audited historical-source contexts to workspace files across twelve methods; add exact CPU source persistence, round-specific candidate identity, full graph/evidence files, executable method regressions and an8-theorem Lean store model. Preserve algorithms and raw artifacts; native/GPU qualification remains separate.
+
 ### Fixed
 
 - Audit all35 workflow prompt builders; extend file-based measured-source and diagnostic handoff across CUDAAgent/AccelOpt/KernelFoundry/KSearch. Preserve full evidence and search policy, retain the last KSearch rejection for repair, and remove Xe-Forge false truncation annotation. Document unmaterialized-state risks still requiring migration.

@@ -206,6 +206,45 @@ function __attemptBlock() {
   }
   return parts.join('\n') + '\n'
 }
+
+// File-backed candidate context. Pure builders; execute persistence inside the
+// existing producer/evaluator activation, not an additional model call.
+function __workspaceSource(path, fallback) {
+  return path ? `Read COMPLETE source from ${path}. Do not reconstruct it from a summary. Report a missing file explicitly.` : String(fallback ?? '')
+}
+function __workspaceResult(path, fallback) {
+  if (!path) return fallback
+  const measurement = {}
+  for (const key of ['compiled','correct','is_valid','measurement_valid','speedup','runtime_ms','latency_ms','kernel_time_ms','n_pass','n_total','status','measured','is_correct','is_compilable','error_type','failure_origin']) {
+    const value = fallback && fallback[key]
+    if (value === null || ['number','boolean','string'].includes(typeof value)) measurement[key] = value
+  }
+  return {result_path:path,measurement,read_instruction:'Read the COMPLETE result and referenced raw traces before diagnosing. Retain the runtime measurement scalars in this index; do not replace them with an author estimate.'}
+}
+function __workspaceStore(path, source, root) {
+  const quote = value => "'" + String(value).replaceAll("'", "'\\''") + "'"
+  const program = [
+    'import json,sys',
+    'from pathlib import Path',
+    'root=Path(sys.argv[1]).resolve()',
+    'raw=Path(sys.argv[2])',
+    'assert not raw.is_symlink(), "candidate path is a symlink"',
+    'p=raw.resolve()',
+    'assert p.is_relative_to(root) and p!=root, "candidate outside workspace"',
+    'data=json.load(sys.stdin).encode("utf-8")',
+    'p.parent.mkdir(parents=True,exist_ok=True)',
+    'try:',
+    ' with p.open("xb") as f: f.write(data)',
+    'except FileExistsError:',
+    ' assert p.read_bytes()==data, "candidate identity collision; retain original"',
+    'assert p.read_bytes()==data, "candidate persistence incomplete"',
+    'print(json.dumps({"source_path":str(p),"source_saved":True}))',
+  ].join('\n')
+  return '# Before testing, execute this CPU-only source persistence command once. It preserves the complete source and refuses a different existing candidate; it does not allocate a GPU. Do not recreate or overwrite a mismatched file.\n'
+    + ['python3','-c',program,root,path].map(quote).join(' ')
+    + " <<'KERSOR_WORKSPACE_SOURCE_JSON'\n" + JSON.stringify(String(source ?? '')) + '\nKERSOR_WORKSPACE_SOURCE_JSON'
+}
+
 // --- END inlined typed-args ---
 // --- END inlined arg_guard ---
 
@@ -591,7 +630,7 @@ function buildPlanContext(nodeId, langFence) {
     ctx += `${i + 1}. ${l.id}: ${l.runtime}ms\n`
   }
 
-  ctx += `\n## Source Reference Kernel\n\`\`\`${fence}\n${referenceKernelCode}\n\`\`\`\n`
+  ctx += `\n## Source Reference Kernel\n\`\`\`${fence}\n${__workspaceSource(REF_KERNEL_PATH,referenceKernelCode)}\n\`\`\`\n`
 
   return ctx
 }
@@ -604,25 +643,25 @@ function buildCodeContext(nodeId, langFence) {
   const fence = langFence || LEGACY_FENCE_TOKEN
 
   let ctx = `# Context Window for CODE Agent\n\n## Selected Node (id=${nodeId})\n`
-  ctx += `Selected kernel code:\n\`\`\`${fence}\n${String(node.kernel_code ?? '')}\n\`\`\`\n`
+  ctx += `Selected kernel code:\n\`\`\`${fence}\n${__workspaceSource(node.source_path,node.kernel_code)}\n\`\`\`\n`
 
   ctx += `\n## Children of Selected Node (${children.length})\n`
   for (const c of children) {
     if (c.correct && c.runtime !== null) {
-      ctx += `- ${c.id}: SUCCESS, ${c.runtime}ms. Code snippet:\n\`\`\`${fence}\n${String(c.kernel_code ?? '')}\n\`\`\`\n`
+      ctx += `- ${c.id}: SUCCESS, ${c.runtime}ms. Code snippet:\n\`\`\`${fence}\n${__workspaceSource(c.source_path,c.kernel_code)}\n\`\`\`\n`
     } else if (!c.compile_ok || !c.correct) {
-      ctx += `- ${c.id}: FAILED — ${c.logs || 'unknown error'}\n`
+      ctx += `- ${c.id}: FAILED — ${c.result_path ? 'Read complete diagnostics: '+c.result_path : (c.logs || 'unknown error')}\n`
     }
   }
 
   ctx += `\n## Sibling Nodes (${siblings.length}) — Transferable patches\n`
   for (const s of siblings) {
     if (s.correct && s.runtime !== null) {
-      ctx += `- ${s.id}: ${s.runtime}ms. Key implementation:\n\`\`\`${fence}\n${String(s.kernel_code ?? '')}\n\`\`\`\n`
+      ctx += `- ${s.id}: ${s.runtime}ms. Key implementation:\n\`\`\`${fence}\n${__workspaceSource(s.source_path,s.kernel_code)}\n\`\`\`\n`
     }
   }
 
-  ctx += `\n## Source Reference Kernel\n\`\`\`${fence}\n${referenceKernelCode}\n\`\`\`\n`
+  ctx += `\n## Source Reference Kernel\n\`\`\`${fence}\n${__workspaceSource(REF_KERNEL_PATH,referenceKernelCode)}\n\`\`\`\n`
 
   return ctx
 }
@@ -634,8 +673,8 @@ function buildDebugContext(nodeId, langFence) {
   const fence = langFence || LEGACY_FENCE_TOKEN
 
   let ctx = `# Context Window for DEBUG Agent\n\n## Failing Node (id=${nodeId})\n`
-  ctx += `Failing kernel code:\n\`\`\`${fence}\n${String(node.kernel_code ?? '')}\n\`\`\`\n`
-  ctx += `\n## Error Logs\n\`\`\`\n${(node.logs || '')}\n\`\`\`\n`
+  ctx += `Failing kernel code:\n\`\`\`${fence}\n${__workspaceSource(node.source_path,node.kernel_code)}\n\`\`\`\n`
+  ctx += `\n## Error Logs\n\`\`\`\n${node.result_path ? 'Read COMPLETE diagnostics: '+node.result_path : (node.logs || '')}\n\`\`\`\n`
   ctx += `\n## Original Plan (if any)\n${node.plan || 'No plan recorded'}\n`
   ctx += `\n## Anchors (if any)\n${node.anchors || 'No anchors recorded'}\n`
 
@@ -643,13 +682,13 @@ function buildDebugContext(nodeId, langFence) {
   for (const s of siblings) {
     ctx += `### ${s.id}\n`
     if (s.correct) {
-      ctx += `CORRECT — ${s.runtime}ms:\n\`\`\`${fence}\n${String(s.kernel_code ?? '')}\n\`\`\`\n`
+      ctx += `CORRECT — ${s.runtime}ms:\n\`\`\`${fence}\n${__workspaceSource(s.source_path,s.kernel_code)}\n\`\`\`\n`
     } else {
       ctx += `Also failing — ${s.logs || 'unknown'}\n`
     }
   }
 
-  ctx += `\n## Source Reference Kernel\n\`\`\`${fence}\n${referenceKernelCode}\n\`\`\`\n`
+  ctx += `\n## Source Reference Kernel\n\`\`\`${fence}\n${__workspaceSource(REF_KERNEL_PATH,referenceKernelCode)}\n\`\`\`\n`
 
   return ctx
 }
@@ -772,10 +811,11 @@ const rootEval = await agentRetry(() => agent(`${__taskContractBlock()}Evaluate 
 
 # Kernel Code
 \`\`\`${fenceToken()}
-${referenceKernelCode}
+${__workspaceSource(REF_KERNEL_PATH,referenceKernelCode)}
 \`\`\`
 
 # Compile and Run
+Preserve the complete evaluation result and raw diagnostics at ${EXP_DIR}/stark_root.context-result.json; store measured values only, and record unavailable measurement as unavailable. Keep raw command-output file paths.
 ${COMPILE_CMD ? `Compile: ${COMPILE_CMD}` : 'No compile_command provided; perform static compileability review only.'}
 ${BENCHMARK_CMD ? `Benchmark: ${BENCHMARK_CMD}` : 'No benchmark_command provided; do not invent a test harness.'}
 
@@ -913,6 +953,8 @@ rootNode = {
   id: 'root',
   parent_id: null,
   kernel_code: referenceKernelCode,
+  source_path: REF_KERNEL_PATH,
+  result_path: `${EXP_DIR}/stark_root.context-result.json`,
   plan: 'Reference kernel (no optimization applied)',
   anchors: '',
   runtime: rootEval.correct ? rootEval.runtime_ms : null,
@@ -1130,6 +1172,8 @@ Then append:
   // Phase 5: Evaluate — Compile, correctness test, runtime
   // ===========================================================================
   phase('Evaluate')
+  const contextSourcePath = SOL_AVAILABLE ? `${EXP_DIR}/stark_a${attemptCount}.cu` : starkNodeKernelPath(`node_${attemptCount}`)
+  const contextResultPath = `${EXP_DIR}/node_${attemptCount}.context-result.json`
 
   // Each node in the search tree is scored from this turn, so an unmeasured or
   // invented number does not just mislead one report - it steers which branch
@@ -1170,12 +1214,13 @@ mean for this node: worth expanding, or a dead branch.` : ''
   const evalResult = await agentRetry(() => agent(`${__taskContractBlock()}Evaluate this kernel for correctness and performance.
 ${__measuredBlock}
 
-# Kernel Code
-\`\`\`${fenceToken()}
-${newKernelCode}
+# Source persistence command
+\`\`\`sh
+${__workspaceStore(contextSourcePath,newKernelCode,EXP_DIR)}
 \`\`\`
 
 # Compile and Run
+Preserve the complete evaluation result and raw diagnostics at ${contextResultPath}; store measured values only, and record unavailable measurement as unavailable. Keep raw command-output file paths.
 ${COMPILE_CMD ? `Compile: ${COMPILE_CMD}` : 'No compile_command provided; perform static compileability review only.'}
 ${BENCHMARK_CMD ? `Benchmark: ${BENCHMARK_CMD}` : 'No benchmark_command provided; do not invent a test harness.'}
 
@@ -1302,6 +1347,7 @@ Then append, using the values you just measured (status="done" if compiled AND c
     id: childId,
     parent_id: selectedId,
     kernel_code: newKernelCode,
+    source_path:contextSourcePath, result_path:contextResultPath,
     plan: newPlan,
     anchors: newAnchors,
     runtime: evalResult.correct ? evalResult.runtime_ms : null,
@@ -1357,7 +1403,7 @@ const report = await agentRetry(() => agent(`${__taskContractBlock()}Generate a 
 
 # Best Kernel (id=${bestNode.id})
 \`\`\`${fenceToken()}
-${String(bestNode.kernel_code ?? '')}
+${__workspaceSource(bestNode.source_path,bestNode.kernel_code)}
 \`\`\`
 
 # Plan for Best Kernel
@@ -1427,7 +1473,8 @@ return {
   problem_definition: PROBLEM_DEFINITION,
   problem_path: PROBLEM_PATH,
   kernel_path: REF_KERNEL_PATH,
-  generated_kernel_path: generatedKernelPath,
+  generated_kernel_path: bestNode?.source_path || generatedKernelPath,
+  best_kernel_path: bestNode?.source_path || null,
   initial_candidates: initialCandidates,
   initial_generation_result: initialGenerationResult,
   outcome: report?.outcome || 'unknown',

@@ -125,6 +125,45 @@ function __attemptBlock() {
   }
   return parts.join('\n') + '\n'
 }
+
+// File-backed candidate context. Pure builders; execute persistence inside the
+// existing producer/evaluator activation, not an additional model call.
+function __workspaceSource(path, fallback) {
+  return path ? `Read COMPLETE source from ${path}. Do not reconstruct it from a summary. Report a missing file explicitly.` : String(fallback ?? '')
+}
+function __workspaceResult(path, fallback) {
+  if (!path) return fallback
+  const measurement = {}
+  for (const key of ['compiled','correct','is_valid','measurement_valid','speedup','runtime_ms','latency_ms','kernel_time_ms','n_pass','n_total','status','measured','is_correct','is_compilable','error_type','failure_origin']) {
+    const value = fallback && fallback[key]
+    if (value === null || ['number','boolean','string'].includes(typeof value)) measurement[key] = value
+  }
+  return {result_path:path,measurement,read_instruction:'Read the COMPLETE result and referenced raw traces before diagnosing. Retain the runtime measurement scalars in this index; do not replace them with an author estimate.'}
+}
+function __workspaceStore(path, source, root) {
+  const quote = value => "'" + String(value).replaceAll("'", "'\\''") + "'"
+  const program = [
+    'import json,sys',
+    'from pathlib import Path',
+    'root=Path(sys.argv[1]).resolve()',
+    'raw=Path(sys.argv[2])',
+    'assert not raw.is_symlink(), "candidate path is a symlink"',
+    'p=raw.resolve()',
+    'assert p.is_relative_to(root) and p!=root, "candidate outside workspace"',
+    'data=json.load(sys.stdin).encode("utf-8")',
+    'p.parent.mkdir(parents=True,exist_ok=True)',
+    'try:',
+    ' with p.open("xb") as f: f.write(data)',
+    'except FileExistsError:',
+    ' assert p.read_bytes()==data, "candidate identity collision; retain original"',
+    'assert p.read_bytes()==data, "candidate persistence incomplete"',
+    'print(json.dumps({"source_path":str(p),"source_saved":True}))',
+  ].join('\n')
+  return '# Before testing, execute this CPU-only source persistence command once. It preserves the complete source and refuses a different existing candidate; it does not allocate a GPU. Do not recreate or overwrite a mismatched file.\n'
+    + ['python3','-c',program,root,path].map(quote).join(' ')
+    + " <<'KERSOR_WORKSPACE_SOURCE_JSON'\n" + JSON.stringify(String(source ?? '')) + '\nKERSOR_WORKSPACE_SOURCE_JSON'
+}
+
 // --- END inlined typed-args ---
 
 // --- BEGIN inlined agent-retry scaffolding (from _meta/scaffolding/agent-retry.js) ---
@@ -849,7 +888,7 @@ ${island.role.focus}
 
 # Parent kernel (your starting point — produce a MUTATION/improvement of this):
 ${parentPath ? `\n# Full parent kernel (Read for complete context — the snippet below is orientation only, AWK #60 fix 4/#61): ${parentPath}\n` : ''}\`\`\`python
-${parentCode}
+${__workspaceSource(parentPath,parentCode)}
 \`\`\`
 
 ${parentDiag ? `# Diagnosis of the parent:\n- ${parent.correct === false ? 'INCORRECT: ' + (parentDiag.failure_mode || 'unknown failure') : 'limiter: ' + (parentDiag.limiter || 'unknown')}\n- ${parentDiag.rationale || ''}` : '# Parent has not been diagnosed yet.'}
@@ -927,7 +966,7 @@ Then append:
 
 # Candidate (island role: ${islands[v.islIdx].role.name}):
 ${v.variant_path ? `# Full candidate source (Read for complete context — AWK #61): ${v.variant_path}\n` : ''}\`\`\`python
-${v.code}
+${__workspaceSource(v.variant_path,v.code)}
 \`\`\`
 
 # Steps:
@@ -1087,7 +1126,7 @@ Then append, using the values you just measured (status="done" if it compiled an
 
 # Candidate code (head — full source at ${v.variant_path || 'n/a'}, AWK #61):
 \`\`\`python
-${v.code}
+${__workspaceSource(v.variant_path,v.code)}
 \`\`\`
 
 # Diagnosis rules:
@@ -1264,7 +1303,7 @@ ${[...hintLibrary].sort((a, b) => (b.avg_speedup || 0) - (a.avg_speedup || 0)).m
 
 # Best kernel:
 \`\`\`python
-${bestKernel ? bestKernel.code : '(none)'}
+${bestKernel ? __workspaceSource(bestKernel.variant_path,bestKernel.code) : '(none)'}
 \`\`\`
 
 Write:

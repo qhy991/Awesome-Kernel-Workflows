@@ -12,6 +12,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 为其余十二个已审查方法迁移历史源码到工作区文件；增加精确CPU落盘、分轮候选身份、完整图/证据文件、真实方法回归及8项Lean存储模型证明；保留算法和原始产物，原生/GPU资格验证单独进行。
+
 ### Fixed
 
 - 审查全部35个 workflow 的 prompt 构建；扩展 CUDAAgent/AccelOpt/KernelFoundry/KSearch 的已测源码与诊断文件交接，保留完整证据及搜索策略，保留 KSearch 最近失败反馈，移除 Xe-Forge 错误截断标注；逐项记录仍需文件落盘迁移的风险。

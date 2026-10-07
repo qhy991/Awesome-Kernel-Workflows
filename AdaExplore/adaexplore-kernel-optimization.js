@@ -256,6 +256,45 @@ function __attemptBlock() {
   }
   return parts.join('\n') + '\n'
 }
+
+// File-backed candidate context. Pure builders; execute persistence inside the
+// existing producer/evaluator activation, not an additional model call.
+function __workspaceSource(path, fallback) {
+  return path ? `Read COMPLETE source from ${path}. Do not reconstruct it from a summary. Report a missing file explicitly.` : String(fallback ?? '')
+}
+function __workspaceResult(path, fallback) {
+  if (!path) return fallback
+  const measurement = {}
+  for (const key of ['compiled','correct','is_valid','measurement_valid','speedup','runtime_ms','latency_ms','kernel_time_ms','n_pass','n_total','status','measured','is_correct','is_compilable','error_type','failure_origin']) {
+    const value = fallback && fallback[key]
+    if (value === null || ['number','boolean','string'].includes(typeof value)) measurement[key] = value
+  }
+  return {result_path:path,measurement,read_instruction:'Read the COMPLETE result and referenced raw traces before diagnosing. Retain the runtime measurement scalars in this index; do not replace them with an author estimate.'}
+}
+function __workspaceStore(path, source, root) {
+  const quote = value => "'" + String(value).replaceAll("'", "'\\''") + "'"
+  const program = [
+    'import json,sys',
+    'from pathlib import Path',
+    'root=Path(sys.argv[1]).resolve()',
+    'raw=Path(sys.argv[2])',
+    'assert not raw.is_symlink(), "candidate path is a symlink"',
+    'p=raw.resolve()',
+    'assert p.is_relative_to(root) and p!=root, "candidate outside workspace"',
+    'data=json.load(sys.stdin).encode("utf-8")',
+    'p.parent.mkdir(parents=True,exist_ok=True)',
+    'try:',
+    ' with p.open("xb") as f: f.write(data)',
+    'except FileExistsError:',
+    ' assert p.read_bytes()==data, "candidate identity collision; retain original"',
+    'assert p.read_bytes()==data, "candidate persistence incomplete"',
+    'print(json.dumps({"source_path":str(p),"source_saved":True}))',
+  ].join('\n')
+  return '# Before testing, execute this CPU-only source persistence command once. It preserves the complete source and refuses a different existing candidate; it does not allocate a GPU. Do not recreate or overwrite a mismatched file.\n'
+    + ['python3','-c',program,root,path].map(quote).join(' ')
+    + " <<'KERSOR_WORKSPACE_SOURCE_JSON'\n" + JSON.stringify(String(source ?? '')) + '\nKERSOR_WORKSPACE_SOURCE_JSON'
+}
+
 // --- END inlined typed-args ---
 
 // --- BEGIN inlined agent-retry scaffolding (from _meta/scaffolding/agent-retry.js) ---
@@ -991,7 +1030,7 @@ for (let searchStep = 0; searchStep < STEPS; searchStep++) {
   if (isLargeStep) {
     const diversePool = buildDiversePool(selectedNode)
     const poolContext = diversePool.length
-      ? diversePool.map((node, i) => `## Context ${i + 1}: node=${node.id}, speedup=${node.speedup.toFixed(3)}\n\`\`\`python\n${node.code}\n\`\`\``).join('\n\n')
+      ? diversePool.map((node, i) => `## Context ${i + 1}: node=${node.id}, speedup=${node.speedup.toFixed(3)}\n\`\`\`python\n${__workspaceSource(node.kernelPath,node.code)}\n\`\`\``).join('\n\n')
       : 'No correct diverse context yet.'
 
     const proposerResult = await agentRetry(() => agent(`${__taskContractBlock()}You are the AdaExplore Large-Step Proposer.
@@ -1052,7 +1091,7 @@ Then append (this is large-step proposal for candidate node-${searchStep + 1}-L)
     const pathContext = pathToRoot(selectedNode)
       .filter(node => node.code)
       .slice(-5)
-      .map(node => `## Node ${node.id}: ${node.correct ? 'correct' : 'incorrect'}, speedup=${node.speedup.toFixed(3)}\n\`\`\`python\n${node.code}\n\`\`\``)
+      .map(node => `## Node ${node.id}: ${node.correct ? 'correct' : 'incorrect'}, speedup=${node.speedup.toFixed(3)}\n\`\`\`python\n${__workspaceSource(node.kernelPath,node.code)}\n\`\`\``)
       .join('\n\n')
 
     const reviserResult = await agentRetry(() => agent(`${__taskContractBlock()}You are the AdaExplore Reviser.
@@ -1062,7 +1101,7 @@ Inspect the selected kernel and its recent path. Produce 1-3 concrete local impr
 
 # Selected kernel: node ${selectedNode.id}
 \`\`\`python
-${selectedNode.code}
+${__workspaceSource(selectedNode.kernelPath,selectedNode.code)}
 \`\`\`
 
 # Recent path context
@@ -1070,7 +1109,7 @@ ${pathContext || 'No prior kernel context.'}
 
 # Selected node metrics
 compiled=${selectedNode.compiled}, correct=${selectedNode.correct}, speedup=${selectedNode.speedup}
-error=${selectedNode.errorMessage || ''}
+error=${selectedNode.resultPath ? 'Read complete diagnostics: '+selectedNode.resultPath : (selectedNode.errorMessage || '')}
 
 # Skill memory constraints
 ${memoryLines(20).join('\n') || 'No constraints yet.'}
@@ -1097,7 +1136,7 @@ Apply the reviser suggestions as surgical edits. Preserve the overall structure 
 
 # Current kernel
 \`\`\`python
-${selectedNode.code}
+${__workspaceSource(selectedNode.kernelPath,selectedNode.code)}
 \`\`\`
 
 # Suggestions
@@ -1198,15 +1237,15 @@ Then append (this is small-step surgical edit for candidate node-${searchStep + 
       })
       return agentRetry(() => agent(`${__taskContractBlock()}Evaluate this AdaExplore candidate through the authoritative sol-execbench contract.
 
-1. Atomically write the exact candidate below to ${solCandidatePath}.
+1. Execute the CPU source persistence command below to create ${solCandidatePath}.
    The authoritative producer call_id prefix is ${producerCallPrefix}. If you
    recover the source from ${EXP_DIR}/journal.jsonl instead of the prompt, use
    only result.output.kernel_code from that exact call_id prefix. Never reuse a
    proposal or candidate from another MCTS step. Write that JSON string as exact
    bytes with no repair, reformatting, or omitted suffix, then verify the file
    bytes equal the selected journal string before PACK.
-\`\`\`python
-${newKernelCode}
+\`\`\`sh
+${__workspaceStore(solCandidatePath,newKernelCode,EXP_DIR)}
 \`\`\`
 2. Run exactly in order:
    PACK: ${plan.pack}
@@ -1248,7 +1287,7 @@ Return the parsed result.`, {
     : await agentRetry(() => agent(`${__taskContractBlock()}Evaluate this candidate with real execution evidence.
 
 # Hard rules
-1. Write the candidate code exactly to: ${kernelPath}
+1. Execute the source persistence command below; keep this exact candidate at ${kernelPath}.
 2. Do not judge correctness or speedup by inspection.
 3. ${evaluateRunInstruction()}
 4. The evaluator must compile the ${USE_DRIVER ? DRIVER_LANG_FENCE : 'Triton'} code, compare against PyTorch reference with atol=${CORRECTNESS_ATOL}, rtol=${CORRECTNESS_RTOL}, and measure speed if possible.
@@ -1258,9 +1297,9 @@ Return the parsed result.`, {
 # Evaluator command
 ${evaluatorCommand || '(No benchmark_command provided; measured evidence unavailable.)'}
 
-# Candidate code
-\`\`\`${USE_DRIVER ? DRIVER_LANG_FENCE : 'python'}
-${newKernelCode}
+# Source persistence command
+\`\`\`sh
+${__workspaceStore(kernelPath,newKernelCode,EXP_DIR)}
 \`\`\`
 
 # PyTorch reference
@@ -1420,7 +1459,7 @@ Then append, using the values you just measured (status="done" if the candidate 
     stepType: isLargeStep ? 'large' : 'small',
     errorMessage: evalResult.error_message || '',
     errorType: evalResult.error_type || '',
-    kernelPath,
+    kernelPath: authoritativeKernelPath,
     resultPath: evalResult.result_path || resultPath,
     notes: expandNotes,
     ...(driverEnvelope ? { driver_envelope: driverEnvelope } : {}),
@@ -1615,7 +1654,7 @@ ${JSON.stringify(treeStats, null, 2)}
 
 # Best kernel excerpt
 \`\`\`python
-${globalBest.code}
+${__workspaceSource(globalBest.kernelPath,globalBest.code)}
 \`\`\`
 
 # Memory update
