@@ -310,6 +310,9 @@ args:
   - name: kernel_path
     type: string
     description: Optional independently accepted parent Python implementation for the native task_result_command path; measure and retain it before FSR search. Legacy reference-only generation remains unchanged.
+  - name: native_task_result_file_handoff
+    type: boolean
+    description: Enable only after the native StructuredOutput canonical-file hook is installed and qualified. Return result references instead of model-transcribed measurements. Default false.
   - name: task_result_read_command
     type: string
     description: Optional CPU-only immutable task-result reconciliation command with {kernel_path}/{result_path}; must never submit GPU work. Used once to repair invalid result delivery.

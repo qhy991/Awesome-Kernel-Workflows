@@ -14,6 +14,10 @@ for the versioning policy.
 
 ## [Unreleased]
 
+### Added
+
+- Add an opt-in native task result reference protocol for qualified StructuredOutput hooks. The model returns a file reference and placeholder; the trusted reader supplies canonical measurements. Default delivery remains unchanged.
+
 ### Changed
 
 - Migrate remaining audited historical-source contexts to workspace files across twelve methods; add exact CPU source persistence, round-specific candidate identity, full graph/evidence files, executable method regressions and an8-theorem Lean store model. Preserve algorithms and raw artifacts; native/GPU qualification remains separate.

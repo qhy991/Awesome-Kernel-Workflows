@@ -44,3 +44,9 @@ test('duplicate result-location transcription is advisory; canonical source bind
  assert.equal(result.delivery_path_observation.recorded,'/CUDAAAgent/result.json')
  await assert.rejects(readback({...ctx,readCommand:null},{test_result_path:'/typo',test_result_json:{...raw,candidate_path:'/other/candidate.py'}}),e=>e.code==='TASK_RESULT_HOLD')
 })
+test('qualified file handoff requests only a reference while preserving canonical gates',async()=>{
+ let prompt=''
+ const evaluate=vm.runInNewContext(source+';__nativeTaskEvaluate',{args:{native_task_result_file_handoff:true},agentRetry:fn=>fn(),agent:async text=>{prompt=text;return {test_result_path:p,test_result_json:raw}}})
+ assert.equal((await evaluate({...ctx,candidatePath:'/input.py',command:'task {kernel_path} {result_path}'})).is_valid,true)
+ assert.match(prompt,/test_result_json=\{\}/);assert.doesNotMatch(prompt,/copied verbatim/)
+})
