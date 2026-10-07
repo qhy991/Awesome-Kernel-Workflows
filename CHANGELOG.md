@@ -16,6 +16,10 @@ for the versioning policy.
 
 ### Fixed
 
+- Task-mode activations explicitly read the canonical agent instructions and all selected skills, including the GPU Infra requirement. Remove hardcoded three-skill wording from CUDAAgent/AccelOpt; task policy and selection remain task-owned (`typed-args` scaffold, generated workflows, task prompts and guard regression).
+
+### Fixed
+
 - Audit all35 workflow prompt builders; extend file-based measured-source and diagnostic handoff across CUDAAgent/AccelOpt/KernelFoundry/KSearch. Preserve full evidence and search policy, retain the last KSearch rejection for repair, and remove Xe-Forge false truncation annotation. Document unmaterialized-state risks still requiring migration.
 
 ### Fixed

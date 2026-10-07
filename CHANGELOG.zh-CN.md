@@ -14,6 +14,10 @@
 
 ### Fixed
 
+- task 模式激活明确读取权威 agent 指令和全部所选 skill，并遵守其中的 GPU Infra 要求；移除 CUDAAgent/AccelOpt 的硬编码三 skill 提示，策略和选择仍归任务所有（typed-args、生成 workflow、任务 prompt 及回归）。
+
+### Fixed
+
 - 审查全部35个 workflow 的 prompt 构建；扩展 CUDAAgent/AccelOpt/KernelFoundry/KSearch 的已测源码与诊断文件交接，保留完整证据及搜索策略，保留 KSearch 最近失败反馈，移除 Xe-Forge 错误截断标注；逐项记录仍需文件落盘迁移的风险。
 
 ### Fixed
