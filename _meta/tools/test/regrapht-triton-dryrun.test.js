@@ -109,10 +109,11 @@ test('regrapht triton dry-run: generate/evaluate prompts use ```python fence (dr
   const evalCalls = caps.filter(c => /^evaluate-\d/.test(c.label))
   assert.ok(genCalls.length > 0, 'expected generate-* prompts')
   assert.ok(evalCalls.length > 0, 'expected evaluate-* prompts')
-  for (const c of [...genCalls, ...evalCalls]) {
+  for (const c of genCalls) {
     assert.match(c.prompt, /```python\b/,
       `${c.label} should embed kernel under \`\`\`python fence under triton driver: ${c.prompt.slice(0, 200)}`)
   }
+  for (const c of evalCalls) assert.match(c.prompt, /Source persistence command[\s\S]*python3/)
 })
 
 test('regrapht triton dry-run: per-iteration envelope labels emitted for root and each attempt', async () => {

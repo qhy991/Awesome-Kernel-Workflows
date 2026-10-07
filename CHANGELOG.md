@@ -14,6 +14,10 @@ for the versioning policy.
 
 ## [Unreleased]
 
+### Changed
+
+- Migrate remaining audited historical-source contexts to workspace files across twelve methods; add exact CPU source persistence, round-specific candidate identity, full graph/evidence files, executable method regressions and an8-theorem Lean store model. Preserve algorithms and raw artifacts; native/GPU qualification remains separate.
+
 ### Fixed
 
 - Task-mode activations explicitly read the canonical agent instructions and all selected skills, including the GPU Infra requirement. Remove hardcoded three-skill wording from CUDAAgent/AccelOpt; task policy and selection remain task-owned (`typed-args` scaffold, generated workflows, task prompts and guard regression).

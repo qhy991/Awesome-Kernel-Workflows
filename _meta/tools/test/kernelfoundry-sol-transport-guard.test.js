@@ -11,7 +11,7 @@ const source = () => fs.readFileSync(WORKFLOW, 'utf8')
 
 test('KernelFoundry preserves full Sol parent source during variation', () => {
   const text = source()
-  assert.match(text, /\$\{selectedParent\.code\}/)
+  assert.match(text, /selectedParent\.candidate_path.*selectedParent\.code/)
   assert.match(text, /authoritative producer call_id prefix is Vary\/vary-/)
   assert.match(text, /never reuse another generation/)
   assert.match(text, /Verify the written bytes equal that selected JSON string/)

@@ -85,7 +85,7 @@ test('KernelSkill explicit embedded integration keeps complete candidate source 
     },
   }, {integration_pattern: 'embedded_inplace', sol_cli: '', kernel_path: '/exp/seed.cu', seed_candidates: 1})
   assert.ok(materialization, 'explicit embedded branch was not executed')
-  assert.ok(materialization.includes(source), 'candidate lost bytes during materialization')
+  assert.ok(materialization.includes(JSON.stringify(source)), 'candidate lost bytes during materialization')
 })
 
 test('GemmPTX measures baseline and instruction gate before the profile turn; model score cannot win', async () => {
@@ -137,8 +137,8 @@ test('STARK Debug context carries complete source and entry contract', () => {
   const source = fs.readFileSync(path.join(root,'STARK/stark-kernel-optimization.js'),'utf8')
   const begin=source.indexOf('function buildDebugContext('), end=source.indexOf('\n}',begin)+2
   const code='prefix\n'+'x'.repeat(5000)+'\nPYBIND11_MODULE(TORCH_EXTENSION_NAME, m) { m.def("run", &run); }'
-  const context=vm.runInNewContext(`${source.slice(begin,end)}; buildDebugContext('root','cuda')`,{
-    referenceKernelCode:code, getNode:()=>({kernel_code:code,logs:'binding missing',parent_id:null,children:[]}),getSiblings:()=>[],fenceToken:()=> 'cuda',
+  const context=vm.runInNewContext(`${fs.readFileSync(path.join(root,'_meta/scaffolding/typed-args.js'),'utf8')}\n${source.slice(begin,end)}; buildDebugContext('root','cuda')`,{
+    args:{}, REF_KERNEL_PATH:'', referenceKernelCode:code, getNode:()=>({kernel_code:code,logs:'binding missing',parent_id:null,children:[]}),getSiblings:()=>[],fenceToken:()=> 'cuda',
   })
   assert.ok(context.includes('PYBIND11_MODULE'))
   assert.match(source.slice(source.indexOf('You are a kernel debugging expert.'), source.indexOf("label: `debug-")), /SOL_CANDIDATE_CONTRACT/)

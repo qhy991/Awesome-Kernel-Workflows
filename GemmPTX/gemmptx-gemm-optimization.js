@@ -116,6 +116,45 @@ function __attemptBlock() {
   }
   return parts.join('\n') + '\n'
 }
+
+// File-backed candidate context. Pure builders; execute persistence inside the
+// existing producer/evaluator activation, not an additional model call.
+function __workspaceSource(path, fallback) {
+  return path ? `Read COMPLETE source from ${path}. Do not reconstruct it from a summary. Report a missing file explicitly.` : String(fallback ?? '')
+}
+function __workspaceResult(path, fallback) {
+  if (!path) return fallback
+  const measurement = {}
+  for (const key of ['compiled','correct','is_valid','measurement_valid','speedup','runtime_ms','latency_ms','kernel_time_ms','n_pass','n_total','status','measured','is_correct','is_compilable','error_type','failure_origin']) {
+    const value = fallback && fallback[key]
+    if (value === null || ['number','boolean','string'].includes(typeof value)) measurement[key] = value
+  }
+  return {result_path:path,measurement,read_instruction:'Read the COMPLETE result and referenced raw traces before diagnosing. Retain the runtime measurement scalars in this index; do not replace them with an author estimate.'}
+}
+function __workspaceStore(path, source, root) {
+  const quote = value => "'" + String(value).replaceAll("'", "'\\''") + "'"
+  const program = [
+    'import json,sys',
+    'from pathlib import Path',
+    'root=Path(sys.argv[1]).resolve()',
+    'raw=Path(sys.argv[2])',
+    'assert not raw.is_symlink(), "candidate path is a symlink"',
+    'p=raw.resolve()',
+    'assert p.is_relative_to(root) and p!=root, "candidate outside workspace"',
+    'data=json.load(sys.stdin).encode("utf-8")',
+    'p.parent.mkdir(parents=True,exist_ok=True)',
+    'try:',
+    ' with p.open("xb") as f: f.write(data)',
+    'except FileExistsError:',
+    ' assert p.read_bytes()==data, "candidate identity collision; retain original"',
+    'assert p.read_bytes()==data, "candidate persistence incomplete"',
+    'print(json.dumps({"source_path":str(p),"source_saved":True}))',
+  ].join('\n')
+  return '# Before testing, execute this CPU-only source persistence command once. It preserves the complete source and refuses a different existing candidate; it does not allocate a GPU. Do not recreate or overwrite a mismatched file.\n'
+    + ['python3','-c',program,root,path].map(quote).join(' ')
+    + " <<'KERSOR_WORKSPACE_SOURCE_JSON'\n" + JSON.stringify(String(source ?? '')) + '\nKERSOR_WORKSPACE_SOURCE_JSON'
+}
+
 // --- END inlined typed-args ---
 
 // --- BEGIN inlined agent-retry scaffolding (from _meta/scaffolding/agent-retry.js) ---
@@ -746,11 +785,11 @@ ${genomeFooter('Disassemble Verify', candidateId)}`, {
   }), { retries: 5 })
 
   if (verify.status === 'compile_error' || verify.compiled === false) {
-    history.push({ candidate_id: candidateId, status: 'compile_error', detail: verify.error || verify.failure_reason || '', target_instruction: spec.target_instruction })
+    history.push({ candidate_id: candidateId, status: 'compile_error', detail_path:`${EXP_DIR}/candidates/${candidateId}/compile.json`, detail: verify.error || verify.failure_reason || '', target_instruction: spec.target_instruction })
     continue
   }
   if (verify.status === 'incorrect' || verify.correct === false) {
-    history.push({ candidate_id: candidateId, status: 'incorrect', detail: verify.error || verify.failure_reason || '', target_instruction: spec.target_instruction })
+    history.push({ candidate_id: candidateId, status: 'incorrect', detail_path:`${EXP_DIR}/candidates/${candidateId}/test.json`, detail: verify.error || verify.failure_reason || '', target_instruction: spec.target_instruction })
     continue
   }
   if (verify.status === 'hypothesis_not_realized' || verify.instruction_verified === false) {
@@ -802,7 +841,7 @@ workloads_passed=${__hostMeasured.n_pass}/${__hostMeasured.n_total}
 Report these rather than re-deriving them. Spend the turn on the profile and on
 mechanism_moved: did ${spec.target_instruction} appear and move the number the
 way the hypothesis predicted?` : ''
-  const measured = await agentRetry(() => agent(`${__taskContractBlock()}You are the measurement agent. The candidate already compiled, passed correctness, and verified its instruction path. Now benchmark and optionally profile it.
+  const measured = await agentRetry(() => agent(`${__taskContractBlock()}You are the measurement agent. The candidate already compiled, passed correctness, and verified its instruction path. Now benchmark and optionally profile it. Save your COMPLETE measurement/diagnosis JSON to ${EXP_DIR}/candidates/${candidateId}/assessment.json before returning; retain all raw benchmark/profile files.
 
 # Candidate
 - candidate_id: ${candidateId}
@@ -855,6 +894,7 @@ ${genomeFooter('Profile', candidateId)}`, {
     shared_mem_bytes: verify.shared_mem_bytes,
     mechanism_moved: measured.mechanism_moved,
     diagnosis: measured.diagnosis || '',
+    detail_path:`${EXP_DIR}/candidates/${candidateId}/assessment.json`,
   }
   history.push(record)
 
@@ -889,7 +929,7 @@ ${EXP_DIR}
 ${JSON.stringify(best, null, 2)}
 
 # History
-${JSON.stringify(history, null, 2)}
+${JSON.stringify(history.map(h=>h.detail_path ? {...h,detail:undefined,diagnosis:undefined,read_complete_details:h.detail_path} : h), null, 2)}
 
 # Required report contents
 1. Best candidate path and speedup.

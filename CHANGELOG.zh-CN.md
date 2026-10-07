@@ -12,6 +12,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 为其余十二个已审查方法迁移历史源码到工作区文件；增加精确CPU落盘、分轮候选身份、完整图/证据文件、真实方法回归及8项Lean存储模型证明；保留算法和原始产物，原生/GPU资格验证单独进行。
+
 ### Fixed
 
 - task 模式激活明确读取权威 agent 指令和全部所选 skill，并遵守其中的 GPU Infra 要求；移除 CUDAAgent/AccelOpt 的硬编码三 skill 提示，策略和选择仍归任务所有（typed-args、生成 workflow、任务 prompt 及回归）。
