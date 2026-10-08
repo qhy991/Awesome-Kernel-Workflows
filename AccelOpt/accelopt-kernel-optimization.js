@@ -91,6 +91,21 @@ function __taskResult(output, expectedPath, expectedCount) {
       diagnostics:result.diagnostics || [], candidate_path:result.candidate_path, evidence:result.evidence || null})}
 }
 
+// A generated candidate owns a file identity, not an array position.
+function __generatedTaskResultPath(output, directory) {
+  let raw = output?.test_result_json
+  if (typeof raw === 'string') { try { raw = __parseTaskResultJSON(raw) } catch { raw = null } }
+  const prefix = String(directory).replace(/\/+$/, '') + '/'
+  const suffix = '.artifact/candidate.py'
+  const bound = typeof raw?.candidate_path === 'string' && raw.candidate_path.endsWith(suffix)
+    ? raw.candidate_path.slice(0, -suffix.length) : null
+  const reference = bound?.startsWith(prefix) ? bound : output?.test_result_path
+  const name = typeof reference === 'string' && reference.startsWith(prefix) ? reference.slice(prefix.length) : ''
+  if (!name || name.includes('/') || name.includes('\\') || !name.endsWith('.json') || /[\x00-\x1f]/.test(name))
+    return __taskHold('explicit generated result must belong to the declared directory')
+  return reference
+}
+
 function __taskCommand(command, candidatePath, resultPath) {
   for (const [placeholder, value] of [['{kernel_path}', candidatePath], ['{result_path}', resultPath]]) {
     // The documented placeholders represent whole command arguments. Accept

@@ -91,6 +91,21 @@ function __taskResult(output, expectedPath, expectedCount) {
       diagnostics:result.diagnostics || [], candidate_path:result.candidate_path, evidence:result.evidence || null})}
 }
 
+// A generated candidate owns a file identity, not an array position.
+function __generatedTaskResultPath(output, directory) {
+  let raw = output?.test_result_json
+  if (typeof raw === 'string') { try { raw = __parseTaskResultJSON(raw) } catch { raw = null } }
+  const prefix = String(directory).replace(/\/+$/, '') + '/'
+  const suffix = '.artifact/candidate.py'
+  const bound = typeof raw?.candidate_path === 'string' && raw.candidate_path.endsWith(suffix)
+    ? raw.candidate_path.slice(0, -suffix.length) : null
+  const reference = bound?.startsWith(prefix) ? bound : output?.test_result_path
+  const name = typeof reference === 'string' && reference.startsWith(prefix) ? reference.slice(prefix.length) : ''
+  if (!name || name.includes('/') || name.includes('\\') || !name.endsWith('.json') || /[\x00-\x1f]/.test(name))
+    return __taskHold('explicit generated result must belong to the declared directory')
+  return reference
+}
+
 function __taskCommand(command, candidatePath, resultPath) {
   for (const [placeholder, value] of [['{kernel_path}', candidatePath], ['{result_path}', resultPath]]) {
     // The documented placeholders represent whole command arguments. Accept
@@ -888,7 +903,13 @@ Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run
   generatedKernelPath = generated.generated_kernel_path || ''
   if (args.task_result_command) {
     const resolved=[]
-    for (let i=0;i<initialCandidates.length;i++) resolved.push(await __taskResultWithReadback({resultPath:`${EXP_DIR}/generated/initial_${i}.json`,workloadCount:args.task_workload_count,label:`initial-${i}`},initialCandidates[i]))
+    const resultPaths = new Set()
+    for (let i=0;i<initialCandidates.length;i++) {
+      const resultPath=__generatedTaskResultPath(initialCandidates[i],`${EXP_DIR}/generated`)
+      if (resultPaths.has(resultPath)) __taskHold('duplicate initial candidate result identity')
+      resultPaths.add(resultPath)
+      resolved.push(await __taskResultWithReadback({resultPath,workloadCount:args.task_workload_count,label:`initial-${i}`},initialCandidates[i]))
+    }
     const measured=resolved.filter(c=>c?.is_valid)
     measured.sort((a,b)=>a.latency_ms-b.latency_ms);taskInitialMeasurement=measured[0] || null
     if (!taskInitialMeasurement) throw new Error('No generated initial task candidate passed complete official evidence')

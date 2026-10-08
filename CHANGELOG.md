@@ -14,6 +14,10 @@ for the versioning policy.
 
 ## [Unreleased]
 
+### Fixed
+
+- Bind CUDAAgent generated candidates to explicit canonical result files instead of array positions; preserve extra attempts and reject duplicate or escaped references.
+
 ### Added
 
 - Add an opt-in native task result reference protocol for qualified StructuredOutput hooks. The model returns a file reference and placeholder; the trusted reader supplies canonical measurements. Default delivery remains unchanged.

@@ -20,3 +20,10 @@ test('next CUDAAgent implement reads complete candidate ABI feedback from the re
 })
 
 test('initial candidate delivery error is repaired automatically before optimization',async()=>{const {result,calls}=await replay({},false,false,true);assert.equal(calls.filter(c=>c.label==='initial-2-read-result').length,1);assert.ok(calls.find(c=>c.label==='initial-2-read-result').prompt.includes('--read-only'));assert.ok(result.generated_kernel_path);});
+
+test('initial results use explicit file identities despite extra attempts and reordering',async()=>{
+ const names=['initial_2','initial_0b','initial_0','initial_1'];
+ const agents={'generate-initial-kernel':{generated_kernel_path:'/ignored.py',initial_candidates:names.map((n,i)=>measured(`/fixture/exp/generated/${n}.json`,.020+i*.001)),initial_generation_result:{verified:false}},'profile-baseline':{eager_time_ms:999,compile_time_ms:999,bottlenecks:[],optimization_strategy:'fixture'},'impl-0':{kernel_code:'display',variant_path:'/fixture/exp/task_attempt_0.py'},'task-verify-0':measured('/fixture/exp/task_attempt_0.json',.016)};
+ const {result,calls}=await run(source,args,agents);
+ assert.equal(result.correct,true);assert.equal(calls.filter(c=>c.label.includes('read-result')).length,0);
+});
