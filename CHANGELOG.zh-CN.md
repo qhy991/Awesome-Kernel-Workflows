@@ -12,6 +12,8 @@
 
 ## [Unreleased]
 
+- 即使外层消息为缺少StructuredOutput，显式模型未知或政策拒绝标记仍禁止进入只读交接恢复。
+
 - 合格native缺少StructuredOutput时，限一次通过已声明的只读读取器恢复交接；不重跑评估，不重试传输、拒绝或模型未知。共享helper在原块位置同步，兼容纯native工作流。
 
 ### Fixed

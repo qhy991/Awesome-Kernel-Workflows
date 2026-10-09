@@ -14,6 +14,8 @@ for the versioning policy.
 
 ## [Unreleased]
 
+- Keep explicit unknown-model and policy-refusal flags outside native readback recovery, even if the outer message reports missing StructuredOutput.
+
 - Repair qualified native missing-StructuredOutput delivery once via the declared read-only reader; do not replay evaluation, transport, refusal or model-unknown failures. Refresh shared helper blocks in place for native-only workflows.
 
 ### Fixed

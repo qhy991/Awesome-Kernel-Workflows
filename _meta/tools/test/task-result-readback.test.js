@@ -65,10 +65,12 @@ test('qualified native missing StructuredOutput reads the existing slot once wit
  assert.equal(calls.filter(c=>c.options.phase==='Evaluate').length,1)
  assert.equal(calls.length,2)
 })
-for(const variant of ['transport','policy','cause','unqualified','no-reader'])test('missing-output repair does not widen unknown or refused execution: '+variant,async()=>{
+for(const variant of ['transport','policy','cause','model-unknown','refusal-flag','unqualified','no-reader'])test('missing-output repair does not widen unknown or refused execution: '+variant,async()=>{
  let calls=0;const error=new Error(variant==='transport'?'HTTP 524':missingStructured)
  if(variant==='policy')error.code='KERSOR_PROVIDER_SAFEGUARD_REFUSAL'
  if(variant==='cause')error.cause=new Error('model identity unknown')
+ if(variant==='model-unknown')error.model_observation='unknown'
+ if(variant==='refusal-flag')error.policy_refusal=true
  const evaluate=vm.runInNewContext(source+';__nativeTaskEvaluate',{
   args:{native_task_result_file_handoff:variant!=='unqualified'},agentRetry:fn=>fn(),agent:async()=>{calls++;throw error}})
  await assert.rejects(evaluate({...ctx,...(variant==='no-reader'?{readCommand:null}:{}),candidatePath:'/source.py',command:'trusted-evaluation {kernel_path} {result_path}'}),e=>e.code==='TASK_RESULT_HOLD')

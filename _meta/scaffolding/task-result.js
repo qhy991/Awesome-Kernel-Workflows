@@ -179,7 +179,8 @@ ${__nativeTaskDelivery(ctx.resultPath)}`, {
       'agent({schema}): subagent completed without calling StructuredOutput (after in-conversation nudge)'
     const qualifiedFileHandoff = typeof args !== 'undefined' && args.native_task_result_file_handoff === true
     const readCommand = ctx.readCommand || (typeof args !== 'undefined' && args.task_result_read_command)
-    if (missingStructuredOutput && qualifiedFileHandoff && readCommand && !error?.code && !error?.cause) {
+    if (missingStructuredOutput && qualifiedFileHandoff && readCommand && !error?.code && !error?.cause
+        && error?.model_observation !== 'unknown' && error?.policy_refusal !== true) {
       return await __taskResultWithReadback(ctx, {test_result_path:ctx.resultPath, test_result_json:null})
     }
     return __taskHold('agent/transport result unavailable: ' + (error?.message || String(error)), null, error)
