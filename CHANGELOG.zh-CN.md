@@ -12,6 +12,8 @@
 
 ## [Unreleased]
 
+- 合格native缺少StructuredOutput时，限一次通过已声明的只读读取器恢复交接；不重跑评估，不重试传输、拒绝或模型未知。共享helper在原块位置同步，兼容纯native工作流。
+
 ### Fixed
 
 - 分离 CUDAAgent、AccelOpt 原生初始候选的源码生成与串行权威测量，固定源码身份，不再重试整个生成/测试批次；保持候选数量、方法选择和完整诊断文件，并使用源码及结果文件引用（`CUDAAgent/cuda-agent-kernel-optimization.js`、`AccelOpt/accelopt-kernel-optimization.js` 及执行边界回归测试）。

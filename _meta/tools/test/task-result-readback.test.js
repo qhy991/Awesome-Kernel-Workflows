@@ -48,5 +48,45 @@ test('qualified file handoff requests only a reference while preserving canonica
  let prompt=''
  const evaluate=vm.runInNewContext(source+';__nativeTaskEvaluate',{args:{native_task_result_file_handoff:true},agentRetry:fn=>fn(),agent:async text=>{prompt=text;return {test_result_path:p,test_result_json:raw}}})
  assert.equal((await evaluate({...ctx,candidatePath:'/input.py',command:'task {kernel_path} {result_path}'})).is_valid,true)
- assert.match(prompt,/test_result_json=\{\}/);assert.doesNotMatch(prompt,/copied verbatim/)
+ assert.ok(prompt.includes(JSON.stringify({test_result_path:p,test_result_json:{}})));assert.doesNotMatch(prompt,/copied verbatim/)
+})
+
+const missingStructured = 'agent({schema}): subagent completed without calling StructuredOutput (after in-conversation nudge)'
+test('qualified native missing StructuredOutput reads the existing slot once without replaying evaluation',async()=>{
+ const calls=[]
+ const evaluate=vm.runInNewContext(source+';__nativeTaskEvaluate',{
+  args:{native_task_result_file_handoff:true},agentRetry:fn=>fn(),agent:async(text,options)=>{
+   calls.push({text,options});if(calls.length===1)throw new Error(missingStructured)
+   assert.equal(options.phase,'ReadResult');assert.match(text,/--read-only/)
+   return {test_result_path:p,test_result_json:raw}
+  }})
+ const result=await evaluate({...ctx,candidatePath:'/source.py',command:'trusted-evaluation {kernel_path} {result_path}'})
+ assert.equal(result.is_valid,true);assert.equal(result.result_delivery_recovered,true)
+ assert.equal(calls.filter(c=>c.options.phase==='Evaluate').length,1)
+ assert.equal(calls.length,2)
+})
+for(const variant of ['transport','policy','cause','unqualified','no-reader'])test('missing-output repair does not widen unknown or refused execution: '+variant,async()=>{
+ let calls=0;const error=new Error(variant==='transport'?'HTTP 524':missingStructured)
+ if(variant==='policy')error.code='KERSOR_PROVIDER_SAFEGUARD_REFUSAL'
+ if(variant==='cause')error.cause=new Error('model identity unknown')
+ const evaluate=vm.runInNewContext(source+';__nativeTaskEvaluate',{
+  args:{native_task_result_file_handoff:variant!=='unqualified'},agentRetry:fn=>fn(),agent:async()=>{calls++;throw error}})
+ await assert.rejects(evaluate({...ctx,...(variant==='no-reader'?{readCommand:null}:{}),candidatePath:'/source.py',command:'trusted-evaluation {kernel_path} {result_path}'}),e=>e.code==='TASK_RESULT_HOLD')
+ assert.equal(calls,1)
+})
+test('failed read-only delivery stops after one repair, with no third agent or GPU retry',async()=>{
+ let calls=0
+ const evaluate=vm.runInNewContext(source+';__nativeTaskEvaluate',{args:{native_task_result_file_handoff:true},agentRetry:fn=>fn(),agent:async()=>{calls++;throw new Error(missingStructured)}})
+ await assert.rejects(evaluate({...ctx,candidatePath:'/source.py',command:'trusted-evaluation {kernel_path} {result_path}'}),e=>e.code==='TASK_RESULT_HOLD')
+ assert.equal(calls,2)
+})
+
+test('readback prompt carries the reason and path while the full diagnostic remains in the error',async()=>{
+ let prompt='';const diagnostic='FULL_RAW_DIAGNOSTIC_KEEP_IN_FILE'.repeat(10000)
+ const bad={...raw,candidate_path:'/wrong.py',diagnostics:[{error:diagnostic}]}
+ const readback=vm.runInNewContext(source+';__taskResultWithReadback',{args:{native_task_result_file_handoff:true},agentRetry:fn=>fn(),agent:async text=>{prompt=text;return {test_result_path:p,test_result_json:raw}}})
+ assert.equal((await readback(ctx,{test_result_path:p,test_result_json:bad})).is_valid,true)
+ assert.ok(prompt.includes(p));assert.ok(!prompt.includes('FULL_RAW_DIAGNOSTIC_KEEP_IN_FILE'))
+ const parse=vm.runInNewContext(source+';__taskResult')
+ assert.throws(()=>parse({test_result_path:p,test_result_json:bad},p,17),e=>e.message.includes(diagnostic) && e.task_result_reason==='incomplete workload/measurement/source proof')
 })

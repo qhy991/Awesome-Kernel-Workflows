@@ -14,6 +14,8 @@ for the versioning policy.
 
 ## [Unreleased]
 
+- Repair qualified native missing-StructuredOutput delivery once via the declared read-only reader; do not replay evaluation, transport, refusal or model-unknown failures. Refresh shared helper blocks in place for native-only workflows.
+
 ### Fixed
 
 - Separate native CUDAAgent and AccelOpt seed-source generation from serial authoritative measurement, with fixed source identities and no retry of the entire generation/test batch. Keep seed counts, method selection and raw diagnostic files; use file-backed candidate/result references (`CUDAAgent/cuda-agent-kernel-optimization.js`, `AccelOpt/accelopt-kernel-optimization.js`, execution-boundary regressions).

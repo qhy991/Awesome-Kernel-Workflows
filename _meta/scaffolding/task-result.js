@@ -8,6 +8,7 @@ function __taskHold(reason, taskResult = null, cause = null) {
   error.code = 'TASK_RESULT_HOLD'
   error.retryable = false
   error.outcome_state = 'unknown'
+  error.task_result_reason = reason
   if (taskResult) error.task_result = taskResult
   if (cause) error.cause = cause
   throw error
@@ -105,7 +106,7 @@ function __taskCommand(command, candidatePath, resultPath) {
 
 function __nativeTaskDelivery(path) {
   if (typeof args !== 'undefined' && args.native_task_result_file_handoff === true)
-    return `Return only test_result_path=${path} and test_result_json={}. The qualified native StructuredOutput hook loads the complete existing canonical result. Do not transcribe metrics or diagnostics. A missing result remains an error; do not fabricate it or rerun the GPU task.`
+    return `Before ending, call the StructuredOutput tool exactly once with ${JSON.stringify({test_result_path:path,test_result_json:{}})}. Do not replace that tool call with prose or a JSON text reply. The qualified native StructuredOutput hook loads the complete existing canonical result. Do not transcribe metrics or diagnostics. A missing result remains an error; do not fabricate it or rerun the GPU task.`
   return `Read ${path}. Return test_result_path and test_result_json copied verbatim from that exact file. test_result_json is a JSON object, NOT a JSON-encoded string. Preserve every diagnostic and evidence field. No estimates or rewritten source in this reply.`
 }
 
@@ -132,7 +133,7 @@ async function __taskResultWithReadback(ctx, output) {
       readExit = execution.exit_code
     } else {
       try { reread = await agentRetry(() => agent(`Repair only the result delivery for ${ctx.resultPath}.
-The previous returned JSON failed validation: ${error.message}
+The previous returned JSON failed validation: ${error.task_result_reason || error.message}
 Run the declared CPU-only read command exactly once: ${command}
 It reconciles the existing frozen candidate, complete trace and broker receipt. Do not submit a GPU job, alter any file, regenerate source, or repeat an unknown/refused request.
 ${__nativeTaskDelivery(ctx.resultPath)}`, {
@@ -171,7 +172,18 @@ If Bash returns a running session, wait for that session to terminate. Do not de
 ${__nativeTaskDelivery(ctx.resultPath)}`, {
     label:ctx.label, phase:'Evaluate',
     schema:{type:'object', properties:{test_result_path:{type:'string'},test_result_json:{anyOf:[{type:'object',additionalProperties:true},{type:'string'}]}}, required:['test_result_path','test_result_json']},
-  }), {retries:0}) } catch (error) { return __taskHold('agent/transport result unavailable: ' + (error?.message || String(error)), null, error) }
+  }), {retries:0}) } catch (error) {
+    // The native agent ended, but it may already have produced the trusted slot.
+    // Repair only this specific delivery failure; never repeat the evaluation.
+    const missingStructuredOutput = (error?.message || String(error)) ===
+      'agent({schema}): subagent completed without calling StructuredOutput (after in-conversation nudge)'
+    const qualifiedFileHandoff = typeof args !== 'undefined' && args.native_task_result_file_handoff === true
+    const readCommand = ctx.readCommand || (typeof args !== 'undefined' && args.task_result_read_command)
+    if (missingStructuredOutput && qualifiedFileHandoff && readCommand && !error?.code && !error?.cause) {
+      return await __taskResultWithReadback(ctx, {test_result_path:ctx.resultPath, test_result_json:null})
+    }
+    return __taskHold('agent/transport result unavailable: ' + (error?.message || String(error)), null, error)
+  }
   return await __taskResultWithReadback(ctx, output)
     || __taskHold('missing task result')
 }
