@@ -4,7 +4,8 @@
 // but not yet turn-timeout.
 //
 // For each workflow .js (or `--all`):
-//   1. If it already has `function withTurnTimeout` -> skip (idempotent).
+//   1. With --refresh, replace an existing generated block from the SSOT.
+//      Otherwise an existing `function withTurnTimeout` is left unchanged.
 //   2. Else if it has `// --- END inlined agent-retry scaffolding ---` -> INSERT
 //      the turn-timeout block right after it.
 //   3. Else -> skip (no agent-retry; turn-timeout is meaningless without it).
@@ -15,7 +16,7 @@
 // — ARGUS, CUDAAgent, KSearch — also call it in their loops). This codemod makes
 // the CAPABILITY available everywhere; activation is per-workflow.
 //
-// Validation is the caller's job: run `node --check` on every output file.
+// Validation is the caller's job: use the Host async-wrapper parser and guards.
 
 const fs = require('fs')
 const path = require('path')
@@ -38,7 +39,12 @@ function readBlock() {
   return raw.slice(s, e + 1)
 }
 
-function transform(src, block) {
+function transform(src, block, refresh = false) {
+  if (refresh && src.includes(BEGIN)) {
+    const start = src.indexOf(BEGIN), end = src.indexOf(END, start)
+    if (end < 0) throw new Error('turn-timeout: missing END sentinel')
+    return {src: src.slice(0, start) + BEGIN + '\n' + block + '\n' + END + src.slice(end + END.length), status: 'refreshed'}
+  }
   if (src.includes('function withTurnTimeout(')) return { src, status: 'already-has' }
   const gi = src.indexOf(AGENT_RETRY_END)
   if (gi === -1) return { src, status: 'no-agent-retry' }
@@ -62,7 +68,7 @@ function main() {
   for (const f of targets) {
     const orig = fs.readFileSync(f, 'utf8')
     const rel = path.relative(REPO, f)
-    const r = transform(orig, block)
+    const r = transform(orig, block, process.argv.includes('--refresh'))
     counts[r.status] = (counts[r.status] || 0) + 1
     if (r.src !== orig) {
       fs.writeFileSync(f, r.src)

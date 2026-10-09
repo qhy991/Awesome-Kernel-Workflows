@@ -13,7 +13,7 @@ export const meta = {
 }
 // --- BEGIN inlined task-result scaffolding (from _meta/scaffolding/task-result.js) ---
 // Native task-result compatibility: task command is the measurement authority.
-function __taskHold(reason, taskResult = null) {
+function __taskHold(reason, taskResult = null, cause = null) {
   // The supervising agent must receive the complete diagnostic evidence even
   // when the method cannot safely submit another GPU/model request. Native
   // runtimes may serialize only the message, so retain it there as well.
@@ -23,6 +23,7 @@ function __taskHold(reason, taskResult = null) {
   error.retryable = false
   error.outcome_state = 'unknown'
   if (taskResult) error.task_result = taskResult
+  if (cause) error.cause = cause
   throw error
 }
 function __parseTaskResultJSON(raw) {
@@ -152,7 +153,7 @@ ${__nativeTaskDelivery(ctx.resultPath)}`, {
         label:(ctx.label || 'task')+'-read-result',phase:'ReadResult',
         schema:{type:'object',properties:{test_result_path:{type:'string'},test_result_json:{anyOf:[{type:'object',additionalProperties:true},{type:'string'}]}},required:['test_result_path','test_result_json']},
       }), {retries:0}) } catch (readError) {
-        return __taskHold('read-only result delivery unavailable: '+(readError?.message || String(readError)), raw)
+        return __taskHold('read-only result delivery unavailable: '+(readError?.message || String(readError)), raw, readError)
       }
     }
     // A second invalid delivery remains HOLD. This is not an unbounded retry.
@@ -171,21 +172,20 @@ async function __nativeTaskEvaluate(ctx) {
     try {
       execution = await evaluate({protocol:'command-v1', label:ctx.label, phase:'Evaluate', filesystem_policy:'workspace-write',
         argv:['/bin/sh', '-c', `(\n${command}\n) >&2\nstatus=$?\ncat -- "$1"\nexit "$status"`, 'kersor-task-result', ctx.resultPath]})
-    } catch (error) { return __taskHold('command result unavailable: ' + (error?.message || String(error))) }
+    } catch (error) { return __taskHold('command result unavailable: ' + (error?.message || String(error)), null, error) }
     if (execution?.timed_out || execution?.stage !== 'complete' || ![0, 1].includes(execution?.exit_code)) return __taskHold('command execution incomplete or unknown', execution?.stdout_json || null)
     const measured = __taskResult({test_result_path:ctx.resultPath, test_result_json:execution.stdout_json}, ctx.resultPath, ctx.workloadCount)
     if (execution.exit_code !== (measured.is_valid ? 0 : 1)) return __taskHold('command exit differs from raw task outcome')
     return measured
   }
   let output
-  try { output = await agentRetry(() => agent(`Use the explicitly declared candidate file at ${ctx.candidatePath}. If it is absent, write the COMPLETE returned source below to that exact path. Never rewrite an existing declared file or select another directory entry.
-${ctx.candidateSource || ''}
+  try { output = await agentRetry(() => agent(`Use the explicitly declared existing candidate file at ${ctx.candidatePath}. If it is absent, report the missing file without running the task command. Never reconstruct, rewrite, or select another source; the producer owns candidate creation.
 Run the trusted task command once in the foreground: ${command}
 If Bash returns a running session, wait for that session to terminate. Do not detach with nohup or &, return a pending summary, or launch another command for this slot. Never rename/delete its artifact directory, change the result path, or optimize the declared source during evaluation. An unknown or failed result must be returned unchanged.
 ${__nativeTaskDelivery(ctx.resultPath)}`, {
     label:ctx.label, phase:'Evaluate',
     schema:{type:'object', properties:{test_result_path:{type:'string'},test_result_json:{anyOf:[{type:'object',additionalProperties:true},{type:'string'}]}}, required:['test_result_path','test_result_json']},
-  }), {retries:0}) } catch (error) { return __taskHold('agent/transport result unavailable: ' + (error?.message || String(error))) }
+  }), {retries:0}) } catch (error) { return __taskHold('agent/transport result unavailable: ' + (error?.message || String(error)), null, error) }
   return await __taskResultWithReadback(ctx, output)
     || __taskHold('missing task result')
 }
@@ -428,7 +428,8 @@ function __taskContractBlock() {
     + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
     + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
     + (args.task_result_command ? 'Read the task directory agent.md or AGENTS.md and all selected task skills. Follow its per-workload objective and GPU Infra broker requirement.\n' : '')
-    + (args.task_result_command ? `Task measurement ownership: use the declared task_result_command for all candidate tests: ${args.task_result_command}\nOnly that command creates the result file and its .artifact directory. Never pre-create, rename, delete, or write a result slot. Never run selftest.py or verify.py directly as a substitute for the declared command. Producers write candidate source files only; the task command freezes and evaluates them. Return the resulting complete contract object, including rejected candidates. Existing unknown slots require original-evidence reconciliation, not another GPU submission.\n` : '')
+    + (args.task_result_command ? `Task measurement ownership: use the declared task_result_command for all scored candidate measurements: ${args.task_result_command}\nOnly that command creates the result file and its .artifact directory. Never pre-create, rename, delete, or write a result slot. Never run selftest.py or verify.py directly as a substitute for the declared command. Producers write candidate source files only; the task command freezes and evaluates them. Existing unknown slots require original-evidence reconciliation, not another GPU submission. Diagnostic compilation, debugging, and profiling remain permitted when the task authorizes them; follow its GPU Infra broker rules and retain raw evidence. Diagnostic results do not replace scored measurements or authorize writing a task result slot.\n` : '')
+    + (args.task_result_command && args.native_task_result_file_handoff !== true ? 'Evaluation activations return the complete canonical result object, including rejected candidates; source-generation activations return candidate file references.\n' : '')
     + (args.native_task_result_file_handoff === true ? 'Native result delivery is file-backed: return each exact test_result_path with test_result_json={} and let the qualified StructuredOutput hook load the full canonical record. Do not copy or invent measurements.\n' : '')
     + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
 }
@@ -573,6 +574,39 @@ function guard(obj, field, fallback) {
   return obj[field]
 }
 // --- END inlined agent-retry scaffolding ---
+
+// --- BEGIN inlined turn-timeout scaffolding (from _meta/scaffolding/turn-timeout.js) ---
+const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn wall-clock cap
+
+/**
+ * Wrap a doer-turn promise with a wall-clock cap. On expiry the returned
+ * promise rejects with `turn-timeout: <label> exceeded Ns`. Degrades to a
+ * passthrough when the runtime has no timers or TURN_TIMEOUT_MS <= 0.
+ */
+function withTurnTimeout(promise, label) {
+  if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return promise
+  let timer
+  const guard = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => {
+        const error = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)
+        error.code = 'KERSOR_TURN_TIMEOUT'
+        error.retryable = false
+        reject(error)
+      },
+      TURN_TIMEOUT_MS)
+  })
+  return Promise.race([promise, guard]).finally(() => {
+    if (typeof clearTimeout === 'function') clearTimeout(timer)
+  })
+}
+
+// Broker timeouts and this watchdog are the only timeout classifications.
+// Permission, schema, transport, and task-evidence failures keep their identity.
+function isTurnTimeout(error) {
+  return ['KERSOR_TURN_TIMEOUT', 'KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
+}
+// --- END inlined turn-timeout scaffolding ---
 
 // --- BEGIN inlined runtime-safe-point scaffolding (from _meta/scaffolding/runtime-safe-point.js) ---
 async function __workflowRuntimeSafePoint(ctx) {
@@ -779,7 +813,6 @@ const MAX_TURNS = args.max_turns || 15
 // (no new genome.jsonl row, task stuck in_progress) stalled the whole run for 40+ min
 // before an orchestrator manually killed it. TURN_TIMEOUT_MS bounds each doer turn;
 // the stagnation/dry guards stop a converged-but-not-target or no-progress loop early.
-const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn wall-clock cap
 const STAGNATION_EPS = 0.02                       // < 2% best-speedup gain counts as no progress
 const STAGNATION_LIMIT = args.stagnation_limit || 3  // consecutive stagnant turns -> stop (stalled)
 const DRY_LIMIT = args.dry_limit || 4             // consecutive turns with no correct measured result -> stop
@@ -869,7 +902,7 @@ function bestKernelPath() {
 phase('Setup')
 
 if (INPUT_MODE === 'generate_then_optimize') {
-  const generated = await agentRetry(() => agent(args.task_result_command ? `${__taskContractBlock()}Generate ${SEED_CANDIDATES} complete independent ${LANGUAGE} Python implementations from frozen specification ${PROBLEM_PATH}; no historical seed. Preserve the task run ABI and all official workloads/tolerances. Write source i to ${EXP_DIR}/generated/initial_<index>.py. For every index0..${SEED_CANDIDATES-1}, run exactly once serially: ${args.task_result_command.replaceAll('{kernel_path}',EXP_DIR+'/generated/initial_<index>.py').replaceAll('{result_path}',EXP_DIR+'/generated/initial_<index>.json')}. Await terminal and read each JSON. Return initial_candidates containing verbatim test_result_path/test_result_json for all candidates including failures. generated_kernel_path and initial_generation_result are compatibility fields; selection is deterministic from full evidence.` : `${__taskContractBlock()}No kernel_path was provided. Generate and verify an initial PyTorch model plus CUDA kernel scaffold before CUDAAgent optimization.
+  const generated = await agentRetry(() => agent(args.task_result_command ? `${__taskContractBlock()}Generate ${SEED_CANDIDATES} complete independent ${LANGUAGE} Python implementations from frozen specification ${PROBLEM_PATH}; no historical seed. Preserve the task run ABI and all official workloads/tolerances. Write source files only: one complete source at ${EXP_DIR}/generated/initial_<index>.py for every index 0..${SEED_CANDIDATES-1}. Return initial_candidates with each exact variant_path. Do not run the task command, create result slots, or report candidate measurements in this activation. The workflow evaluates this fixed seed set serially after generation completes. Follow all selected task skills for authorized diagnostics.` : `${__taskContractBlock()}No kernel_path was provided. Generate and verify an initial PyTorch model plus CUDA kernel scaffold before CUDAAgent optimization.
 
 # Problem Input
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
@@ -888,7 +921,11 @@ if (INPUT_MODE === 'generate_then_optimize') {
 Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run available commands using {kernel_path}/{result_path}. Return the best verified generated source path.`, {
     label: 'generate-initial-kernel',
     phase: 'Setup',
-    schema: {
+    schema: args.task_result_command ? {
+      type: 'object', properties: {initial_candidates: {type: 'array', items: {
+        type: 'object', properties: {variant_path: {type: 'string'}}, required: ['variant_path'],
+      }}}, required: ['initial_candidates'],
+    } : {
       type: 'object',
       properties: {
         generated_kernel_path: { type: 'string' },
@@ -897,19 +934,23 @@ Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run
       },
       required: ['generated_kernel_path', 'initial_candidates', 'initial_generation_result'],
     },
-  }), { retries: 5 })
+  }), { retries: args.task_result_command ? 0 : 5 })
   initialCandidates = generated.initial_candidates || []
   initialGenerationResult = generated.initial_generation_result || { verified: false }
   generatedKernelPath = generated.generated_kernel_path || ''
   if (args.task_result_command) {
+    const sources = initialCandidates.map(candidate => candidate?.variant_path)
+    const expectedSources = Array.from({length: SEED_CANDIDATES}, (_, i) => `${EXP_DIR}/generated/initial_${i}.py`)
+    if (sources.length !== SEED_CANDIDATES || new Set(sources).size !== SEED_CANDIDATES
+        || expectedSources.some(source => !sources.includes(source)))
+      throw new Error('Generated initial candidate set must cover every declared seed exactly once')
     const resolved=[]
-    const resultPaths = new Set()
-    for (let i=0;i<initialCandidates.length;i++) {
-      const resultPath=__generatedTaskResultPath(initialCandidates[i],`${EXP_DIR}/generated`)
-      if (resultPaths.has(resultPath)) __taskHold('duplicate initial candidate result identity')
-      resultPaths.add(resultPath)
-      resolved.push(await __taskResultWithReadback({resultPath,workloadCount:args.task_workload_count,label:`initial-${i}`},initialCandidates[i]))
+    for (let i=0;i<SEED_CANDIDATES;i++) {
+      resolved.push(await __nativeTaskEvaluate({candidatePath:expectedSources[i],
+        resultPath:`${EXP_DIR}/generated/initial_${i}.json`,command:args.task_result_command,
+        workloadCount:args.task_workload_count,label:`initial-${i}`}))
     }
+    initialCandidates = resolved.map((measured, i) => ({...measured, variant_path:expectedSources[i]}))
     const measured=resolved.filter(c=>c?.is_valid)
     measured.sort((a,b)=>a.latency_ms-b.latency_ms);taskInitialMeasurement=measured[0] || null
     if (!taskInitialMeasurement) throw new Error('No generated initial task candidate passed complete official evidence')
@@ -1157,22 +1198,6 @@ let stagnantRounds = 0
 let dryRounds = 0
 let convergenceStatus = null  // 'timeout' | 'stalled' when the loop exits early
 
-// Per-turn wall-clock watchdog. Wraps a doer agent() call so a hung turn rejects
-// instead of stalling the run forever. Degrades to a passthrough when the runtime has
-// no timers (TURN_TIMEOUT_MS<=0 disables it). On reject the loop catches it and exits
-// with convergence_status=timeout rather than hanging.
-function withTurnTimeout(promise, label) {
-  if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return promise
-  let timer
-  const guard = new Promise((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)),
-      TURN_TIMEOUT_MS)
-  })
-  return Promise.race([promise, guard]).finally(() => {
-    if (typeof clearTimeout === 'function') clearTimeout(timer)
-  })
-}
 
 for (currentAttempt = 0; currentAttempt < MAX_TURNS && !targetMet; currentAttempt++) {
 
@@ -1211,7 +1236,7 @@ for (currentAttempt = 0; currentAttempt < MAX_TURNS && !targetMet; currentAttemp
 
   let implResult
   try {
-  implResult = await withTurnTimeout(agentRetry(() => agent(args.task_result_command ? `${__taskContractBlock()}Implement the CUDAAgent optimization strategy ${profileResult.optimization_strategy} in complete ${LANGUAGE} Python source. Read the FULL current tested artifact ${bestBoundSourcePath}; preserve exact frozen task signature and correctness. Prior feedback: ${JSON.stringify(history.slice(-3).map(h => h.task_result_path ? {...h,error:undefined,read_complete_diagnostics:h.task_result_path} : h))}. Write the COMPLETE new source to ${EXP_DIR}/task_attempt_${currentAttempt}.py and return variant_path plus kernel_code (display only), implementation_notes. Do not modify the incumbent or benchmark; serial task verification follows. Read all selected task skills for genuine diagnostics.` : `${__taskContractBlock()}You are a CUDA kernel developer. Implement an optimized CUDA kernel for this PyTorch model.
+  implResult = await withTurnTimeout(agentRetry(() => agent(args.task_result_command ? `${__taskContractBlock()}Implement the CUDAAgent optimization strategy ${profileResult.optimization_strategy} in complete ${LANGUAGE} Python source. Read the FULL current tested artifact ${bestBoundSourcePath}; preserve exact frozen task signature and correctness. Prior feedback: ${JSON.stringify(history.slice(-3).map(h => h.task_result_path ? {...h,error:undefined,read_complete_diagnostics:h.task_result_path} : h))}. Write the COMPLETE new source to ${EXP_DIR}/task_attempt_${currentAttempt}.py and return variant_path and implementation_notes. The source file is authoritative; do not repeat its contents in the reply. Do not modify the incumbent or benchmark; serial task verification follows. Read all selected task skills for genuine diagnostics.` : `${__taskContractBlock()}You are a CUDA kernel developer. Implement an optimized CUDA kernel for this PyTorch model.
 
 # Model to Optimize:
 \`\`\`python
@@ -1282,7 +1307,7 @@ Then append (this is optimization attempt ${currentAttempt}):
         model_new_code: { type: 'string' },
         implementation_notes: { type: 'string' },
       },
-      required: args.task_result_command ? ['kernel_code','variant_path'] : ['kernel_code', 'binding_code', 'model_new_code'],
+      required: args.task_result_command ? ['variant_path'] : ['kernel_code', 'binding_code', 'model_new_code'],
     },
   // The host broker timeout is intentionally TURN_TIMEOUT_MS-5s. Retrying here
   // would launch a second Codex process in that five-second window; the outer
@@ -1291,6 +1316,7 @@ Then append (this is optimization attempt ${currentAttempt}):
   // recovery boundary after a completed validation, not an overlapping retry.
   }), { retries: 0 }), `Implement turn ${currentAttempt + 1}`)
   } catch (e) {
+    if (!isTurnTimeout(e)) throw e
     log(`  Turn ${currentAttempt + 1}: Implement watchdog tripped — stopping (${e.message})`)
     convergenceStatus = 'timeout'
     terminationReason = 'turn_timeout'
@@ -1521,7 +1547,7 @@ Then append, using the values you just measured (status="done" if correctness pa
   // otherwise a retry can outlive the completed workflow and leak a process/GPU.
   }), { retries: 0 }), `Verify turn ${currentAttempt + 1}`)
   } catch (e) {
-    if (e?.code === 'TASK_RESULT_HOLD') throw e
+    if (!isTurnTimeout(e)) throw e
     log(`  Turn ${currentAttempt + 1}: Verify watchdog tripped — stopping (${e.message})`)
     convergenceStatus = 'timeout'
     terminationReason = 'turn_timeout'
@@ -1564,7 +1590,7 @@ Then append, using the values you just measured (status="done" if correctness pa
   )
   const candidateGain = args.task_result_command ? verifyResult.speedup_vs_generated_initial || 0 : IS_SOL ? verifyResult.speedup_vs_seed || 0 : verifyResult.speedup_vs_compile || 0
   if (verifyResult.correct && boundSourceReady && candidateGain > prevBest) {
-    bestKernelCode = implResult.kernel_code
+    bestKernelCode = implResult.kernel_code || ''
     bestBindingCode = implResult.binding_code
     bestModelNew = implResult.model_new_code
     bestSpeedup = args.task_result_command ? candidateGain : verifyResult.speedup_vs_compile || 0

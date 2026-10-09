@@ -13,7 +13,7 @@ export const meta = {
 }
 // --- BEGIN inlined task-result scaffolding (from _meta/scaffolding/task-result.js) ---
 // Native task-result compatibility: task command is the measurement authority.
-function __taskHold(reason, taskResult = null) {
+function __taskHold(reason, taskResult = null, cause = null) {
   // The supervising agent must receive the complete diagnostic evidence even
   // when the method cannot safely submit another GPU/model request. Native
   // runtimes may serialize only the message, so retain it there as well.
@@ -23,6 +23,7 @@ function __taskHold(reason, taskResult = null) {
   error.retryable = false
   error.outcome_state = 'unknown'
   if (taskResult) error.task_result = taskResult
+  if (cause) error.cause = cause
   throw error
 }
 function __parseTaskResultJSON(raw) {
@@ -152,7 +153,7 @@ ${__nativeTaskDelivery(ctx.resultPath)}`, {
         label:(ctx.label || 'task')+'-read-result',phase:'ReadResult',
         schema:{type:'object',properties:{test_result_path:{type:'string'},test_result_json:{anyOf:[{type:'object',additionalProperties:true},{type:'string'}]}},required:['test_result_path','test_result_json']},
       }), {retries:0}) } catch (readError) {
-        return __taskHold('read-only result delivery unavailable: '+(readError?.message || String(readError)), raw)
+        return __taskHold('read-only result delivery unavailable: '+(readError?.message || String(readError)), raw, readError)
       }
     }
     // A second invalid delivery remains HOLD. This is not an unbounded retry.
@@ -171,21 +172,20 @@ async function __nativeTaskEvaluate(ctx) {
     try {
       execution = await evaluate({protocol:'command-v1', label:ctx.label, phase:'Evaluate', filesystem_policy:'workspace-write',
         argv:['/bin/sh', '-c', `(\n${command}\n) >&2\nstatus=$?\ncat -- "$1"\nexit "$status"`, 'kersor-task-result', ctx.resultPath]})
-    } catch (error) { return __taskHold('command result unavailable: ' + (error?.message || String(error))) }
+    } catch (error) { return __taskHold('command result unavailable: ' + (error?.message || String(error)), null, error) }
     if (execution?.timed_out || execution?.stage !== 'complete' || ![0, 1].includes(execution?.exit_code)) return __taskHold('command execution incomplete or unknown', execution?.stdout_json || null)
     const measured = __taskResult({test_result_path:ctx.resultPath, test_result_json:execution.stdout_json}, ctx.resultPath, ctx.workloadCount)
     if (execution.exit_code !== (measured.is_valid ? 0 : 1)) return __taskHold('command exit differs from raw task outcome')
     return measured
   }
   let output
-  try { output = await agentRetry(() => agent(`Use the explicitly declared candidate file at ${ctx.candidatePath}. If it is absent, write the COMPLETE returned source below to that exact path. Never rewrite an existing declared file or select another directory entry.
-${ctx.candidateSource || ''}
+  try { output = await agentRetry(() => agent(`Use the explicitly declared existing candidate file at ${ctx.candidatePath}. If it is absent, report the missing file without running the task command. Never reconstruct, rewrite, or select another source; the producer owns candidate creation.
 Run the trusted task command once in the foreground: ${command}
 If Bash returns a running session, wait for that session to terminate. Do not detach with nohup or &, return a pending summary, or launch another command for this slot. Never rename/delete its artifact directory, change the result path, or optimize the declared source during evaluation. An unknown or failed result must be returned unchanged.
 ${__nativeTaskDelivery(ctx.resultPath)}`, {
     label:ctx.label, phase:'Evaluate',
     schema:{type:'object', properties:{test_result_path:{type:'string'},test_result_json:{anyOf:[{type:'object',additionalProperties:true},{type:'string'}]}}, required:['test_result_path','test_result_json']},
-  }), {retries:0}) } catch (error) { return __taskHold('agent/transport result unavailable: ' + (error?.message || String(error))) }
+  }), {retries:0}) } catch (error) { return __taskHold('agent/transport result unavailable: ' + (error?.message || String(error)), null, error) }
   return await __taskResultWithReadback(ctx, output)
     || __taskHold('missing task result')
 }
@@ -426,7 +426,8 @@ function __taskContractBlock() {
     + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
     + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
     + (args.task_result_command ? 'Read the task directory agent.md or AGENTS.md and all selected task skills. Follow its per-workload objective and GPU Infra broker requirement.\n' : '')
-    + (args.task_result_command ? `Task measurement ownership: use the declared task_result_command for all candidate tests: ${args.task_result_command}\nOnly that command creates the result file and its .artifact directory. Never pre-create, rename, delete, or write a result slot. Never run selftest.py or verify.py directly as a substitute for the declared command. Producers write candidate source files only; the task command freezes and evaluates them. Return the resulting complete contract object, including rejected candidates. Existing unknown slots require original-evidence reconciliation, not another GPU submission.\n` : '')
+    + (args.task_result_command ? `Task measurement ownership: use the declared task_result_command for all scored candidate measurements: ${args.task_result_command}\nOnly that command creates the result file and its .artifact directory. Never pre-create, rename, delete, or write a result slot. Never run selftest.py or verify.py directly as a substitute for the declared command. Producers write candidate source files only; the task command freezes and evaluates them. Existing unknown slots require original-evidence reconciliation, not another GPU submission. Diagnostic compilation, debugging, and profiling remain permitted when the task authorizes them; follow its GPU Infra broker rules and retain raw evidence. Diagnostic results do not replace scored measurements or authorize writing a task result slot.\n` : '')
+    + (args.task_result_command && args.native_task_result_file_handoff !== true ? 'Evaluation activations return the complete canonical result object, including rejected candidates; source-generation activations return candidate file references.\n' : '')
     + (args.native_task_result_file_handoff === true ? 'Native result delivery is file-backed: return each exact test_result_path with test_result_json={} and let the qualified StructuredOutput hook load the full canonical record. Do not copy or invent measurements.\n' : '')
     + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
 }
@@ -586,12 +587,23 @@ function withTurnTimeout(promise, label) {
   let timer
   const guard = new Promise((_, reject) => {
     timer = setTimeout(
-      () => reject(new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)),
+      () => {
+        const error = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)
+        error.code = 'KERSOR_TURN_TIMEOUT'
+        error.retryable = false
+        reject(error)
+      },
       TURN_TIMEOUT_MS)
   })
   return Promise.race([promise, guard]).finally(() => {
     if (typeof clearTimeout === 'function') clearTimeout(timer)
   })
+}
+
+// Broker timeouts and this watchdog are the only timeout classifications.
+// Permission, schema, transport, and task-evidence failures keep their identity.
+function isTurnTimeout(error) {
+  return ['KERSOR_TURN_TIMEOUT', 'KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
 }
 // --- END inlined turn-timeout scaffolding ---
 // --- genome self-report: INLINE (rich, doer-written) ---
@@ -1032,10 +1044,17 @@ function driverGenerateSeedPrompt() {
 async function resolveInitialKernelFromProblem() {
   if (INPUT_MODE !== 'generate_then_optimize') return ''
 
-  const generated = await agentRetry(() => agent(args.task_result_command ? `Generate ${SEED_CANDIDATES} independent complete ${args.language} Python kernels from frozen task specification ${PROBLEM_PATH}. No historical implementation is supplied. Preserve the task run callable, exact tolerances and all workloads. Write each source to ${EXP_DIR}/generated/initial_<index>.py. For every index0..${SEED_CANDIDATES-1}, run the trusted command once, serially: ${args.task_result_command.replaceAll('{kernel_path}', EXP_DIR+'/generated/initial_<index>.py').replaceAll('{result_path}',EXP_DIR+'/generated/initial_<index>.json')}. If Bash returns a running session, keep waiting for that session; do not detach with nohup or &, launch a duplicate, or return a pending summary. Never change result paths or rename/delete artifact directories. Await terminal and read each JSON, including unknown results unchanged. Return initial_candidates containing verbatim test_result_path/test_result_json for every candidate, including failures. Do not invent scores or declare verification yourself. generated_kernel_path and initial_generation_result are compatibility fields; the workflow deterministically selects from full evidence.` : (USE_DRIVER ? driverGenerateSeedPrompt() : legacyGenerateSeedPrompt()), {
+  const generated = await agentRetry(() => agent(args.task_result_command ? `${__taskContractBlock()}Generate ${SEED_CANDIDATES} independent complete ${args.language} Python kernels from frozen task specification ${PROBLEM_PATH}. No historical implementation is supplied. Preserve the task run callable, exact tolerances and all workloads. Write source index 0 through ${SEED_CANDIDATES-1} to ${EXP_DIR}/generated/initial_<index>.py and return initial_candidates with each exact variant_path. You may discover and run task-permitted diagnostic tests and profiling under the frozen broker contract, retaining raw evidence. The workflow will freeze and measure the final sources serially after this call; do not create its generated/initial_<index>.json result slots. Return source paths, not copied measurements or a selected winner.` : (USE_DRIVER ? driverGenerateSeedPrompt() : legacyGenerateSeedPrompt()), {
     label: 'generate-initial-kernel',
     phase: 'Setup',
-    schema: {
+    schema: args.task_result_command ? {
+      type: 'object',
+      properties: {
+        initial_candidates: {type:'array', minItems:SEED_CANDIDATES, maxItems:SEED_CANDIDATES,
+          items:{type:'object', properties:{variant_path:{type:'string'}}, required:['variant_path']}},
+      },
+      required: ['initial_candidates'],
+    } : {
       type: 'object',
       properties: {
         generated_kernel_path: { type: 'string' },
@@ -1044,14 +1063,25 @@ async function resolveInitialKernelFromProblem() {
       },
       required: ['generated_kernel_path', 'initial_candidates', 'initial_generation_result'],
     },
-  }), { retries: 5 })
+  }), { retries: args.task_result_command ? 0 : 5 })
 
   initialCandidates = generated.initial_candidates || []
   initialGenerationResult = generated.initial_generation_result || { verified: false }
   generatedKernelPath = generated.generated_kernel_path || ''
   if (args.task_result_command) {
-    const resolved=[]
-    for (let i=0;i<initialCandidates.length;i++) resolved.push(await __taskResultWithReadback({resultPath:`${EXP_DIR}/generated/initial_${i}.json`,workloadCount:args.task_workload_count,label:`initial-${i}`},initialCandidates[i]))
+    const expectedPaths = Array.from({length:SEED_CANDIDATES}, (_, i) => `${EXP_DIR}/generated/initial_${i}.py`)
+    const returnedPaths = initialCandidates.map(candidate => candidate?.variant_path)
+    if (initialCandidates.length !== SEED_CANDIDATES || new Set(returnedPaths).size !== SEED_CANDIDATES
+      || expectedPaths.some(candidatePath => !returnedPaths.includes(candidatePath))) {
+      throw new Error('Native initial candidate sources must name the complete declared seed set exactly once')
+    }
+    const resolved = []
+    for (let i=0; i<SEED_CANDIDATES; i++) {
+      resolved.push(await __nativeTaskEvaluate({candidatePath:expectedPaths[i],
+        resultPath:`${EXP_DIR}/generated/initial_${i}.json`, command:args.task_result_command,
+        workloadCount:args.task_workload_count, label:`initial-${i}`}))
+    }
+    initialCandidates = resolved.map((measurement, i) => ({...measurement, variant_path:expectedPaths[i]}))
     const measured=resolved.filter(c=>c?.is_valid)
     measured.sort((a,b)=>a.latency_ms-b.latency_ms)
     taskSeedMeasurement = measured[0] || null
@@ -1423,7 +1453,7 @@ if (USE_DRIVER_STANDALONE) {
     _coverage: [],
   }
 } else {
-  ncuSetup = await agentRetry(() => agent(args.task_result_command ? `Diagnose the already-correct task candidate ${KERNEL_PATH}. Read the task profiling instructions and ncu-report-skill. Use the explicit profiler command ${args.profile_command || args.ncu_command || '(missing)'} with an actual candidate-bound launcher and request, allowedGpuIds=[6,7], requireNcu=true, exclusive broker. Preserve admission/terminal/native report and read its metrics. If no runnable contract is available, return ncu_available=false and explain; never fabricate metrics. latency_ms is diagnostic only, never the official task timing. Return bottleneck diagnosis and report provenance.` : legacyNcuBaselinePrompt(baselineKernel), { model: MODEL.profile,
+  ncuSetup = await agentRetry(() => agent(args.task_result_command ? `${__taskContractBlock()}Diagnose the already-correct task candidate ${KERNEL_PATH}. Read the task profiling instructions and ncu-report-skill. Use the explicit profiler command ${args.profile_command || args.ncu_command || '(missing)'} with an actual candidate-bound launcher and request, deriving the physical GPU allowlist and profiler settings from the frozen task site contract. Keep the run inside its exclusive broker lease. Preserve admission/terminal/native report and read its metrics. If no runnable contract is available, return ncu_available=false and explain; never fabricate metrics. latency_ms is diagnostic only, never the official task timing. Return bottleneck diagnosis and report provenance.` : legacyNcuBaselinePrompt(baselineKernel), { model: MODEL.profile,
     label: 'ncu-baseline',
     phase: 'Setup',
     schema: args.task_result_command ? {type:'object',properties:{bottleneck_diagnosis:{type:'string'},profile_summary:{type:'string'},ncu_available:{type:'boolean'},latency_ms:{type:'number'},report_path:{type:'string'}},required:['bottleneck_diagnosis','profile_summary','ncu_available']} : LEGACY_NCU_BASELINE_SCHEMA,
@@ -1529,7 +1559,30 @@ for (let iter = 0; iter < ITERATIONS; iter++) {
 
   const planAngles = IDIOMS.plan_angles
 
-  const planPromptBase = USE_DRIVER
+  const nativeProfileContext = ncuSetup.ncu_available === true && ncuSetup.report_path
+    ? `Read the complete profiling report at ${ncuSetup.report_path}. Cite only metrics actually present in that report. Bind its diagnosis to the tested source; a profile of an earlier incumbent is historical evidence.`
+    : 'Measured profiling evidence is unavailable or not verified. State optimization hypotheses as hypotheses, identify the missing evidence, and use task-permitted diagnostics to test them. Do not claim NCU measurements or invent metric values.'
+  const planPromptBase = args.task_result_command
+    ? `You are an AccelOpt kernel optimization planner. Generate ONE specific optimization plan.
+
+# Operation: ${OP_DESC} (${opType})
+# Current measured implementation: ${bestCandidateBinding.candidate_path}
+Read its COMPLETE source and official result at ${bestCandidateBinding.test_result_path}; inspect the original per-workload traces before planning.
+# Profiling evidence
+${nativeProfileContext}
+${ncuSetup.profile_summary || ncuSetup.bottleneck_diagnosis || ''}
+# Current official performance
+- Latency: ${bestLatency}ms
+- Speedup vs original baseline: ${(baselineLatency / bestLatency).toFixed(2)}x
+${beamSection}
+${experienceSection}
+# Optimization Plan Requirements
+1. Identify the exact code region and transformation, with measured evidence or an explicit hypothesis.
+2. Prefer STRUCTURAL changes over parameter tuning and preserve the task precision and tolerances.
+3. Explain expected impact as a prediction, not an accepted score.
+4. If the candidate beam shows multiple approaches, consider COMBINING their strengths.
+5. You may discover and run diagnostics or profiling under the frozen task broker contract; preserve complete reports and receipts.`
+    : USE_DRIVER
     ? `You are a ${BACKEND} kernel optimization expert. You have REAL ${IDIOMS.profiler_name || 'profiler'} profiling data for this kernel. Use it to generate ONE specific, evidence-based optimization plan.
 
 # Operation: ${OP_DESC} (${opType})
@@ -1587,7 +1640,7 @@ ${IDIOMS.read_metric_guide}
 5. Estimate expected speedup based on the NCU data (e.g., "NCU reports sectors/request=8.2; fixing to 4.0 should cut load time ~2x on those lines")
 6. If candidate beam shows multiple approaches, consider COMBINING strengths from different candidates`
 
-  const planSchema = USE_DRIVER
+  const planSchema = (args.task_result_command || USE_DRIVER)
     ? {
         type: 'object',
         properties: {
@@ -1648,7 +1701,7 @@ Then append (this is iteration ${iter}, planner ${i}):
     (plan) => parallel(
       Array.from({length: SAMPLES_PER_PLAN}, (_, sampleIdx) => () =>
         agentRetry(() => agent(args.task_result_command
-          ? `Implement this AccelOpt plan in complete ${args.language} Python source: ${JSON.stringify(plan)}. Read the FULL measured incumbent file ${bestCandidateBinding.candidate_path}; preserve task callable, exact semantics and tolerances. Write the COMPLETE new candidate to ${EXP_DIR}/iter_${iter}_plan_${validPlans.indexOf(plan)}_sample_${sampleIdx}.py and return variant_path plus code (display only). Do not rewrite the incumbent or test yet; serial task evaluation follows. Read all selected task skills for diagnostics when useful.`
+          ? `${__taskContractBlock()}Implement this AccelOpt plan in complete ${args.language} Python source: ${JSON.stringify(plan)}. Read the FULL measured incumbent file ${bestCandidateBinding.candidate_path}; preserve task callable, exact semantics and tolerances. Write the COMPLETE new candidate to ${EXP_DIR}/iter_${iter}_plan_${validPlans.indexOf(plan)}_sample_${sampleIdx}.py and return variant_path plus code (display only). Preserve the incumbent. You may discover and run task-permitted diagnostic tests and profiling under its broker contract; preserve raw evidence. Serial official task evaluation follows the final source handoff. Read all selected task skills for diagnostics when useful.`
           : USE_DRIVER
           ? `You are an expert ${BACKEND} kernel developer. Implement this profiler-informed optimization plan as a complete, compilable kernel.
 
@@ -1684,7 +1737,7 @@ Then append (iteration ${iter}, plan "${plan.title}", sample ${sampleIdx}):
               variant_path: { type: 'string' },
               implementation_notes: { type: 'string' },
             },
-            required: ['code'],
+            required: args.task_result_command ? ['code', 'variant_path'] : ['code'],
           },
         }), { retries: 5 })
       )

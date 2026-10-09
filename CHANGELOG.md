@@ -16,6 +16,13 @@ for the versioning policy.
 
 ### Fixed
 
+- Separate native CUDAAgent and AccelOpt seed-source generation from serial authoritative measurement, with fixed source identities and no retry of the entire generation/test batch. Keep seed counts, method selection and raw diagnostic files; use file-backed candidate/result references (`CUDAAgent/cuda-agent-kernel-optimization.js`, `AccelOpt/accelopt-kernel-optimization.js`, execution-boundary regressions).
+- Preserve non-timeout Implement/Verify errors in CUDAAgent. Emit a typed shared watchdog timeout and support canonical helper refresh instead of editing generated copies (`_meta/scaffolding/turn-timeout.js`, `scripts/patch-turn-timeout.js`, regenerated workflows).
+- Distinguish authorized diagnostics from scored measurements, honor qualified native file handoff, retain original error causes, and require evaluators to consume existing source files (`_meta/scaffolding/task-result.js`, `_meta/scaffolding/typed-args.js`, regenerated workflows).
+- Correct native AccelOpt profiling plans when metrics are missing, derive GPU scope from the frozen site, require native producer source paths, and remove KernelFoundry's unused native baseline estimate while preserving legacy prompt contracts (`AccelOpt/accelopt-kernel-optimization.js`, `KernelFoundry/kernelfoundry-kernel-optimization.js`, native prompt-boundary regressions).
+
+### Fixed
+
 - Bind CUDAAgent generated candidates to explicit canonical result files instead of array positions; preserve extra attempts and reject duplicate or escaped references.
 
 ### Added

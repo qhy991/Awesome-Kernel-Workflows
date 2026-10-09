@@ -14,6 +14,13 @@
 
 ### Fixed
 
+- 分离 CUDAAgent、AccelOpt 原生初始候选的源码生成与串行权威测量，固定源码身份，不再重试整个生成/测试批次；保持候选数量、方法选择和完整诊断文件，并使用源码及结果文件引用（`CUDAAgent/cuda-agent-kernel-optimization.js`、`AccelOpt/accelopt-kernel-optimization.js` 及执行边界回归测试）。
+- CUDAAgent 保留 Implement/Verify 的非超时错误；共享 watchdog 返回明确超时码，同步脚本支持按单一来源刷新，避免手改生成副本（`_meta/scaffolding/turn-timeout.js`、`scripts/patch-turn-timeout.js` 及同步 workflow）。
+- 明确区分允许的诊断与计分测量，遵循已验证的 native 文件交接，保留原始错误原因，并要求评测阶段使用已存在的源码文件（`_meta/scaffolding/task-result.js`、`_meta/scaffolding/typed-args.js` 及同步 workflow）。
+- 修正 AccelOpt 缺少 profiling 指标时的原生规划，从冻结站点获取 GPU 范围，要求原生 producer 返回源码路径，并移除 KernelFoundry 未使用的原生 baseline 估计，同时保持旧路径 prompt 合同（`AccelOpt/accelopt-kernel-optimization.js`、`KernelFoundry/kernelfoundry-kernel-optimization.js` 及原生提示边界回归测试）。
+
+### Fixed
+
 - CUDAAgent 按显式结果文件识别初始候选，不再按数组位置推算；保留额外尝试，拒绝重复或越界引用。
 
 ### Added

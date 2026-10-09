@@ -14,7 +14,7 @@ export const meta = {
 }
 // --- BEGIN inlined task-result scaffolding (from _meta/scaffolding/task-result.js) ---
 // Native task-result compatibility: task command is the measurement authority.
-function __taskHold(reason, taskResult = null) {
+function __taskHold(reason, taskResult = null, cause = null) {
   // The supervising agent must receive the complete diagnostic evidence even
   // when the method cannot safely submit another GPU/model request. Native
   // runtimes may serialize only the message, so retain it there as well.
@@ -24,6 +24,7 @@ function __taskHold(reason, taskResult = null) {
   error.retryable = false
   error.outcome_state = 'unknown'
   if (taskResult) error.task_result = taskResult
+  if (cause) error.cause = cause
   throw error
 }
 function __parseTaskResultJSON(raw) {
@@ -153,7 +154,7 @@ ${__nativeTaskDelivery(ctx.resultPath)}`, {
         label:(ctx.label || 'task')+'-read-result',phase:'ReadResult',
         schema:{type:'object',properties:{test_result_path:{type:'string'},test_result_json:{anyOf:[{type:'object',additionalProperties:true},{type:'string'}]}},required:['test_result_path','test_result_json']},
       }), {retries:0}) } catch (readError) {
-        return __taskHold('read-only result delivery unavailable: '+(readError?.message || String(readError)), raw)
+        return __taskHold('read-only result delivery unavailable: '+(readError?.message || String(readError)), raw, readError)
       }
     }
     // A second invalid delivery remains HOLD. This is not an unbounded retry.
@@ -172,21 +173,20 @@ async function __nativeTaskEvaluate(ctx) {
     try {
       execution = await evaluate({protocol:'command-v1', label:ctx.label, phase:'Evaluate', filesystem_policy:'workspace-write',
         argv:['/bin/sh', '-c', `(\n${command}\n) >&2\nstatus=$?\ncat -- "$1"\nexit "$status"`, 'kersor-task-result', ctx.resultPath]})
-    } catch (error) { return __taskHold('command result unavailable: ' + (error?.message || String(error))) }
+    } catch (error) { return __taskHold('command result unavailable: ' + (error?.message || String(error)), null, error) }
     if (execution?.timed_out || execution?.stage !== 'complete' || ![0, 1].includes(execution?.exit_code)) return __taskHold('command execution incomplete or unknown', execution?.stdout_json || null)
     const measured = __taskResult({test_result_path:ctx.resultPath, test_result_json:execution.stdout_json}, ctx.resultPath, ctx.workloadCount)
     if (execution.exit_code !== (measured.is_valid ? 0 : 1)) return __taskHold('command exit differs from raw task outcome')
     return measured
   }
   let output
-  try { output = await agentRetry(() => agent(`Use the explicitly declared candidate file at ${ctx.candidatePath}. If it is absent, write the COMPLETE returned source below to that exact path. Never rewrite an existing declared file or select another directory entry.
-${ctx.candidateSource || ''}
+  try { output = await agentRetry(() => agent(`Use the explicitly declared existing candidate file at ${ctx.candidatePath}. If it is absent, report the missing file without running the task command. Never reconstruct, rewrite, or select another source; the producer owns candidate creation.
 Run the trusted task command once in the foreground: ${command}
 If Bash returns a running session, wait for that session to terminate. Do not detach with nohup or &, return a pending summary, or launch another command for this slot. Never rename/delete its artifact directory, change the result path, or optimize the declared source during evaluation. An unknown or failed result must be returned unchanged.
 ${__nativeTaskDelivery(ctx.resultPath)}`, {
     label:ctx.label, phase:'Evaluate',
     schema:{type:'object', properties:{test_result_path:{type:'string'},test_result_json:{anyOf:[{type:'object',additionalProperties:true},{type:'string'}]}}, required:['test_result_path','test_result_json']},
-  }), {retries:0}) } catch (error) { return __taskHold('agent/transport result unavailable: ' + (error?.message || String(error))) }
+  }), {retries:0}) } catch (error) { return __taskHold('agent/transport result unavailable: ' + (error?.message || String(error)), null, error) }
   return await __taskResultWithReadback(ctx, output)
     || __taskHold('missing task result')
 }
@@ -411,7 +411,8 @@ function __taskContractBlock() {
     + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
     + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
     + (args.task_result_command ? 'Read the task directory agent.md or AGENTS.md and all selected task skills. Follow its per-workload objective and GPU Infra broker requirement.\n' : '')
-    + (args.task_result_command ? `Task measurement ownership: use the declared task_result_command for all candidate tests: ${args.task_result_command}\nOnly that command creates the result file and its .artifact directory. Never pre-create, rename, delete, or write a result slot. Never run selftest.py or verify.py directly as a substitute for the declared command. Producers write candidate source files only; the task command freezes and evaluates them. Return the resulting complete contract object, including rejected candidates. Existing unknown slots require original-evidence reconciliation, not another GPU submission.\n` : '')
+    + (args.task_result_command ? `Task measurement ownership: use the declared task_result_command for all scored candidate measurements: ${args.task_result_command}\nOnly that command creates the result file and its .artifact directory. Never pre-create, rename, delete, or write a result slot. Never run selftest.py or verify.py directly as a substitute for the declared command. Producers write candidate source files only; the task command freezes and evaluates them. Existing unknown slots require original-evidence reconciliation, not another GPU submission. Diagnostic compilation, debugging, and profiling remain permitted when the task authorizes them; follow its GPU Infra broker rules and retain raw evidence. Diagnostic results do not replace scored measurements or authorize writing a task result slot.\n` : '')
+    + (args.task_result_command && args.native_task_result_file_handoff !== true ? 'Evaluation activations return the complete canonical result object, including rejected candidates; source-generation activations return candidate file references.\n' : '')
     + (args.native_task_result_file_handoff === true ? 'Native result delivery is file-backed: return each exact test_result_path with test_result_json={} and let the qualified StructuredOutput hook load the full canonical record. Do not copy or invent measurements.\n' : '')
     + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
 }
@@ -608,24 +609,35 @@ ${JSON.stringify(ctx.checkpoint)}
 // --- END inlined runtime-safe-point scaffolding ---
 
 // --- BEGIN inlined turn-timeout scaffolding (from _meta/scaffolding/turn-timeout.js) ---
-// Per-turn wall-clock watchdog (parity with CUDAAgent #12/#14). KSearch already
-// bounds the *eval* step with EVAL_TIMEOUT_SEC (shell `timeout Ns`), but a hung
-// non-eval agent() turn (propose/select/generate stalled in_progress) had no
-// wall-clock cap and could stall the search indefinitely. Wrapping the generate
-// doer turn bounds it; on expiry the attempt loop breaks (treated like
-// stagnation) and the search continues with the next cycle rather than hanging.
 const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn wall-clock cap
+
+/**
+ * Wrap a doer-turn promise with a wall-clock cap. On expiry the returned
+ * promise rejects with `turn-timeout: <label> exceeded Ns`. Degrades to a
+ * passthrough when the runtime has no timers or TURN_TIMEOUT_MS <= 0.
+ */
 function withTurnTimeout(promise, label) {
   if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return promise
   let timer
   const guard = new Promise((_, reject) => {
     timer = setTimeout(
-      () => reject(new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)),
+      () => {
+        const error = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)
+        error.code = 'KERSOR_TURN_TIMEOUT'
+        error.retryable = false
+        reject(error)
+      },
       TURN_TIMEOUT_MS)
   })
   return Promise.race([promise, guard]).finally(() => {
     if (typeof clearTimeout === 'function') clearTimeout(timer)
   })
+}
+
+// Broker timeouts and this watchdog are the only timeout classifications.
+// Permission, schema, transport, and task-evidence failures keep their identity.
+function isTurnTimeout(error) {
+  return ['KERSOR_TURN_TIMEOUT', 'KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
 }
 // --- END inlined turn-timeout scaffolding ---
 // --- genome self-report: INLINE (rich, doer-written) ---
