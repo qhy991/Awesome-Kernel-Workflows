@@ -28,39 +28,10 @@
 // (`typeof setTimeout !== 'function'`) or when TURN_TIMEOUT_MS <= 0, so a host
 // without timers still runs (just without the wall-clock bound).
 //
-// USAGE (inline at the top of a workflow, right after the agent-retry scaffolding,
-// before the first doer turn):
-//
-//   // --- BEGIN inlined turn-timeout scaffolding (from _meta/scaffolding/turn-timeout.js) ---
-//   const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn wall-clock cap
-//   function withTurnTimeout(promise, label) {
-//     if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return promise
-//     let timer
-//     const guard = new Promise((_, reject) => {
-//       timer = setTimeout(
-//         () => reject(new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)),
-//         TURN_TIMEOUT_MS)
-//     })
-//     return Promise.race([promise, guard]).finally(() => {
-//       if (typeof clearTimeout === 'function') clearTimeout(timer)
-//     })
-//   }
-//   // --- END inlined turn-timeout scaffolding ---
-//
-//   // Then wrap a doer turn and translate a timeout into an early, recorded exit:
-//   try {
-//     const implResult = await withTurnTimeout(
-//       agentRetry(() => agent(`...`, { label: 'impl', phase: 'Implement', schema: IMPL_SCHEMA }),
-//                  { retries: 5 }),
-//       `Implement turn ${currentAttempt + 1}`)
-//   } catch (e) {
-//     log(`  Implement watchdog tripped — stopping (${e.message})`)
-//     convergenceStatus = 'timeout'
-//     break
-//   }
-//
-//   // In a linear pipeline (no loop), let the timeout reject propagate — the
-//   `turn-timeout:` error is attributable and aborts the round cleanly (#20-style).
+// Run scripts/patch-turn-timeout.js --all --refresh after changing this helper.
+// Wrap each doer activation with withTurnTimeout(agentRetry(..., {retries:0}), label).
+// Only isTurnTimeout(error) may be translated into convergence_status='timeout';
+// all other errors must retain their original identity.
 
 const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn wall-clock cap
 
@@ -74,10 +45,21 @@ function withTurnTimeout(promise, label) {
   let timer
   const guard = new Promise((_, reject) => {
     timer = setTimeout(
-      () => reject(new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)),
+      () => {
+        const error = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)
+        error.code = 'KERSOR_TURN_TIMEOUT'
+        error.retryable = false
+        reject(error)
+      },
       TURN_TIMEOUT_MS)
   })
   return Promise.race([promise, guard]).finally(() => {
     if (typeof clearTimeout === 'function') clearTimeout(timer)
   })
+}
+
+// Broker timeouts and this watchdog are the only timeout classifications.
+// Permission, schema, transport, and task-evidence failures keep their identity.
+function isTurnTimeout(error) {
+  return ['KERSOR_TURN_TIMEOUT', 'KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
 }

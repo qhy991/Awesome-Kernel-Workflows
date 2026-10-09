@@ -1,5 +1,5 @@
 // Native task-result compatibility: task command is the measurement authority.
-function __taskHold(reason, taskResult = null) {
+function __taskHold(reason, taskResult = null, cause = null) {
   // The supervising agent must receive the complete diagnostic evidence even
   // when the method cannot safely submit another GPU/model request. Native
   // runtimes may serialize only the message, so retain it there as well.
@@ -9,6 +9,7 @@ function __taskHold(reason, taskResult = null) {
   error.retryable = false
   error.outcome_state = 'unknown'
   if (taskResult) error.task_result = taskResult
+  if (cause) error.cause = cause
   throw error
 }
 function __parseTaskResultJSON(raw) {
@@ -138,7 +139,7 @@ ${__nativeTaskDelivery(ctx.resultPath)}`, {
         label:(ctx.label || 'task')+'-read-result',phase:'ReadResult',
         schema:{type:'object',properties:{test_result_path:{type:'string'},test_result_json:{anyOf:[{type:'object',additionalProperties:true},{type:'string'}]}},required:['test_result_path','test_result_json']},
       }), {retries:0}) } catch (readError) {
-        return __taskHold('read-only result delivery unavailable: '+(readError?.message || String(readError)), raw)
+        return __taskHold('read-only result delivery unavailable: '+(readError?.message || String(readError)), raw, readError)
       }
     }
     // A second invalid delivery remains HOLD. This is not an unbounded retry.
@@ -157,21 +158,20 @@ async function __nativeTaskEvaluate(ctx) {
     try {
       execution = await evaluate({protocol:'command-v1', label:ctx.label, phase:'Evaluate', filesystem_policy:'workspace-write',
         argv:['/bin/sh', '-c', `(\n${command}\n) >&2\nstatus=$?\ncat -- "$1"\nexit "$status"`, 'kersor-task-result', ctx.resultPath]})
-    } catch (error) { return __taskHold('command result unavailable: ' + (error?.message || String(error))) }
+    } catch (error) { return __taskHold('command result unavailable: ' + (error?.message || String(error)), null, error) }
     if (execution?.timed_out || execution?.stage !== 'complete' || ![0, 1].includes(execution?.exit_code)) return __taskHold('command execution incomplete or unknown', execution?.stdout_json || null)
     const measured = __taskResult({test_result_path:ctx.resultPath, test_result_json:execution.stdout_json}, ctx.resultPath, ctx.workloadCount)
     if (execution.exit_code !== (measured.is_valid ? 0 : 1)) return __taskHold('command exit differs from raw task outcome')
     return measured
   }
   let output
-  try { output = await agentRetry(() => agent(`Use the explicitly declared candidate file at ${ctx.candidatePath}. If it is absent, write the COMPLETE returned source below to that exact path. Never rewrite an existing declared file or select another directory entry.
-${ctx.candidateSource || ''}
+  try { output = await agentRetry(() => agent(`Use the explicitly declared existing candidate file at ${ctx.candidatePath}. If it is absent, report the missing file without running the task command. Never reconstruct, rewrite, or select another source; the producer owns candidate creation.
 Run the trusted task command once in the foreground: ${command}
 If Bash returns a running session, wait for that session to terminate. Do not detach with nohup or &, return a pending summary, or launch another command for this slot. Never rename/delete its artifact directory, change the result path, or optimize the declared source during evaluation. An unknown or failed result must be returned unchanged.
 ${__nativeTaskDelivery(ctx.resultPath)}`, {
     label:ctx.label, phase:'Evaluate',
     schema:{type:'object', properties:{test_result_path:{type:'string'},test_result_json:{anyOf:[{type:'object',additionalProperties:true},{type:'string'}]}}, required:['test_result_path','test_result_json']},
-  }), {retries:0}) } catch (error) { return __taskHold('agent/transport result unavailable: ' + (error?.message || String(error))) }
+  }), {retries:0}) } catch (error) { return __taskHold('agent/transport result unavailable: ' + (error?.message || String(error)), null, error) }
   return await __taskResultWithReadback(ctx, output)
     || __taskHold('missing task result')
 }

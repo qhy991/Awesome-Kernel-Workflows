@@ -150,7 +150,8 @@ function __taskContractBlock() {
     + (taskPath ? `Read the complete original task at ${taskPath} before acting, including its required skills and profiling instructions. Do not rely only on a prior agent summary.\n` : '')
     + (inlineTask ? `Complete caller-supplied problem definition:\n${typeof inlineTask === 'string' ? inlineTask : JSON.stringify(inlineTask, null, 2)}\n` : '')
     + (args.task_result_command ? 'Read the task directory agent.md or AGENTS.md and all selected task skills. Follow its per-workload objective and GPU Infra broker requirement.\n' : '')
-    + (args.task_result_command ? `Task measurement ownership: use the declared task_result_command for all candidate tests: ${args.task_result_command}\nOnly that command creates the result file and its .artifact directory. Never pre-create, rename, delete, or write a result slot. Never run selftest.py or verify.py directly as a substitute for the declared command. Producers write candidate source files only; the task command freezes and evaluates them. Return the resulting complete contract object, including rejected candidates. Existing unknown slots require original-evidence reconciliation, not another GPU submission.\n` : '')
+    + (args.task_result_command ? `Task measurement ownership: use the declared task_result_command for all scored candidate measurements: ${args.task_result_command}\nOnly that command creates the result file and its .artifact directory. Never pre-create, rename, delete, or write a result slot. Never run selftest.py or verify.py directly as a substitute for the declared command. Producers write candidate source files only; the task command freezes and evaluates them. Existing unknown slots require original-evidence reconciliation, not another GPU submission. Diagnostic compilation, debugging, and profiling remain permitted when the task authorizes them; follow its GPU Infra broker rules and retain raw evidence. Diagnostic results do not replace scored measurements or authorize writing a task result slot.\n` : '')
+    + (args.task_result_command && args.native_task_result_file_handoff !== true ? 'Evaluation activations return the complete canonical result object, including rejected candidates; source-generation activations return candidate file references.\n' : '')
     + (args.native_task_result_file_handoff === true ? 'Native result delivery is file-backed: return each exact test_result_path with test_result_json={} and let the qualified StructuredOutput hook load the full canonical record. Do not copy or invent measurements.\n' : '')
     + 'Retain all task constraints. Missing tools or unavailable task files must be reported explicitly; do not silently replace a required profiler.\n\n'
 }
@@ -309,12 +310,23 @@ function withTurnTimeout(promise, label) {
   let timer
   const guard = new Promise((_, reject) => {
     timer = setTimeout(
-      () => reject(new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)),
+      () => {
+        const error = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)
+        error.code = 'KERSOR_TURN_TIMEOUT'
+        error.retryable = false
+        reject(error)
+      },
       TURN_TIMEOUT_MS)
   })
   return Promise.race([promise, guard]).finally(() => {
     if (typeof clearTimeout === 'function') clearTimeout(timer)
   })
+}
+
+// Broker timeouts and this watchdog are the only timeout classifications.
+// Permission, schema, transport, and task-evidence failures keep their identity.
+function isTurnTimeout(error) {
+  return ['KERSOR_TURN_TIMEOUT', 'KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
 }
 // --- END inlined turn-timeout scaffolding ---
 // --- genome self-report: INLINE (rich, doer-written) ---
