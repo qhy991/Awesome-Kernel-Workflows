@@ -1972,7 +1972,7 @@ Then append (iteration ${iter}, variant ${variant.id}; status="done" if correct 
   if (args.task_result_command) {
     for (let i=0;i<allVariants.length;i++) {
       const v=allVariants[i]
-      const measured=await __nativeTaskEvaluate({candidatePath:v.variant_path || `${EXP_DIR}/${v.id}.py`, candidateSource:v.code,resultPath:`${EXP_DIR}/${v.id}.task.json`,command:args.task_result_command,workloadCount:args.task_workload_count,label:`task-eval-${v.id}`})
+      const measured=await __nativeTaskEvaluate({candidatePath:`${EXP_DIR}/${v.id}.py`, candidateSource:v.code,resultPath:`${EXP_DIR}/${v.id}.task.json`,command:args.task_result_command,workloadCount:args.task_workload_count,label:`task-eval-${v.id}`})
       const e=evaluations[i];e.is_correct=measured.correct;e.is_compilable=measured.compiled === true && measured.is_valid
       e.estimated_latency_ms=measured.latency_ms;e.estimated_speedup=measured.is_valid ? baselineLatency/measured.latency_ms : 0
       e.task_reference_speedup=measured.speedup

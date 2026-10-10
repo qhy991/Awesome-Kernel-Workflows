@@ -1277,7 +1277,7 @@ Then append:
     // execution tool, so "materialize the kernel and run it" cannot happen.
     // Measure on the Host first and hand the agent the evidence it was asked for.
     const __taskMeasured = args.task_result_command
-      ? await __nativeTaskEvaluate({candidatePath:generation.variant_path || cudallmCandidatePath(iteration,sample),candidateSource:generation.candidate_code,resultPath:cudallmResultPath(iteration,sample),command:args.task_result_command,workloadCount:args.task_workload_count,label:`task-eval-${iteration}-${sample}`}) : null
+      ? await __nativeTaskEvaluate({candidatePath:cudallmCandidatePath(iteration,sample),candidateSource:generation.candidate_code,resultPath:cudallmResultPath(iteration,sample),command:args.task_result_command,workloadCount:args.task_workload_count,label:`task-eval-${iteration}-${sample}`}) : null
     let __hostMeasured = null
     if (SOL_AVAILABLE && (generation.candidate_code || '').trim()) {
       __hostMeasured = await __solExecbenchEvaluate({

@@ -2,13 +2,14 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');const root=path.resolve(__dirname,'../../..'),source=fs.readFileSync(path.join(root,'CUDAAgent/cuda-agent-kernel-optimization.js'),'utf8'),run=(source,args,agents)=>require('../lib/run-workflow.js')(source,args,agents,null);
 const args={problem_path:'/fixture/task.md',exp_dir:'/fixture/exp',language:'cute-dsl',task_result_command:'trusted --candidate {kernel_path} --result {result_path}',task_workload_count:17};
 function measured(p,lat,extra={}){return {test_result_path:p,test_result_json:JSON.stringify({contract_version:'kersor-task-result-v1',test_result_path:p,compiled:true,correct:true,full_workload_set:true,measurement_valid:true,n_pass:17,n_total:17,candidate_latency_aggregate_ms:lat,speedup_vs_reference:.015/lat,candidate_path:p+'.artifact/candidate.py',source_binding:{verified:true,source_sha256:'a'.repeat(64)},...extra}),compiled:true,correct:true,speedup:123};}
-async function replay(extra={},structured=false,warm=false,repair=false){
+async function replay(extra={},structured=false,warm=false,repair=false,wrongPath=false){
  const agents={'generate-initial-kernel':{initial_candidates:[0,1,2].map(i=>({variant_path:`/fixture/exp/generated/initial_${i}.py`}))},'profile-baseline':{eager_time_ms:999,compile_time_ms:999,bottlenecks:[],optimization_strategy:'fixture'}}
  for(let i=0;i<3;i++){
   agents[`initial-${i}`]=measured(`/fixture/exp/generated/initial_${i}.json`,.020+i*.001)
   if(structured)agents[`initial-${i}`].test_result_json=JSON.parse(agents[`initial-${i}`].test_result_json)
  }
  for(let i=0;i<15;i++){agents[`impl-${i}`]={kernel_code:'DISPLAY_'+i,variant_path:`/fixture/exp/task_attempt_${i}.py`};agents[`task-verify-${i}`]=measured(`/fixture/exp/task_attempt_${i}.json`,.016,extra)}
+ if(wrongPath)for(const [label,value] of Object.entries(agents))if(label.startsWith('impl-'))value.variant_path='/transcribed/wrong.py'
  if(warm)agents['task-accepted-parent']=measured('/fixture/exp/accepted_parent.task.json',.020)
  if(repair){const item=agents['initial-2'];agents['initial-2-read-result']=JSON.parse(JSON.stringify(item));const bad=JSON.parse(item.test_result_json);bad.candidate_path='/transcribed/wrong.py';item.test_result_json=JSON.stringify(bad)}
  return run(source,{...args,...(warm?{kernel_path:'/fixture/accepted.py'}:{}),...(repair?{task_result_read_command:'reader --read-only --candidate {kernel_path} --result {result_path}'}:{})},agents)
@@ -37,4 +38,11 @@ test('initial source ordering does not change declared result identities or seed
  for(let i=0;i<3;i++)agents[`initial-${i}`]=measured(`/fixture/exp/generated/initial_${i}.json`,.020+i*.001)
  const {result,calls}=await run(source,args,agents)
  assert.equal(result.correct,true);assert.deepEqual(calls.filter(c=>/^initial-[0-9]+$/.test(c.label)).map(c=>c.label),['initial-0','initial-1','initial-2'])
+})
+
+test('assigned CUDAAgent slot survives a producer path transcription error',async()=>{
+ const {calls}=await replay({},false,false,false,true)
+ const call=calls.find(c=>c.label==='task-verify-0')
+ assert.ok(call.prompt.includes('/fixture/exp/task_attempt_0.py'))
+ assert.ok(!call.prompt.includes('/transcribed/wrong.py'))
 })

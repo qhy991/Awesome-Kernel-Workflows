@@ -1478,7 +1478,7 @@ The parse step prints one line "SPEEDUP=<aggregate> REDUCTION=<contract reductio
       }
     : args.task_result_command
     ? await (async()=>{
-      const measured=await __nativeTaskEvaluate({candidatePath:implResult.variant_path || `${EXP_DIR}/task_attempt_${currentAttempt}.py`,candidateSource:implResult.kernel_code,resultPath:`${EXP_DIR}/task_attempt_${currentAttempt}.json`,command:args.task_result_command,workloadCount:args.task_workload_count,label:`task-verify-${currentAttempt}`})
+      const measured=await __nativeTaskEvaluate({candidatePath:`${EXP_DIR}/task_attempt_${currentAttempt}.py`,candidateSource:implResult.kernel_code,resultPath:`${EXP_DIR}/task_attempt_${currentAttempt}.json`,command:args.task_result_command,workloadCount:args.task_workload_count,label:`task-verify-${currentAttempt}`})
       const gain=measured.is_valid ? taskInitialMeasurement.latency_ms/measured.latency_ms : 0
       return {...measured,kernel_time_ms:measured.latency_ms,speedup_vs_generated_initial:gain,speedup_vs_reference:measured.speedup,speedup_vs_compile:null,speedup_vs_eager:null,reward:!measured.is_valid ? -1 : TARGET_SPEEDUP !== null && gain>1 && gain>=TARGET_SPEEDUP ? 3 : gain>1 ? 1 : 0}
     })()

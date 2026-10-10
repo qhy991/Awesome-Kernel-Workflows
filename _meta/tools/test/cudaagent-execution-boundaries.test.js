@@ -17,7 +17,7 @@ for(const host of [false,true])test(`CUDAAgent source generation precedes exactl
  assert.doesNotMatch(generation.prompt,/Await terminal and read each JSON|verbatim test_result_path\/test_result_json/)
  assert.equal(result.generated_kernel_path,'/fixture/exp/generated/initial_0.json.artifact/candidate.py')
  if(host){assert.deepEqual(evaluations.map(r=>r.label),['initial-0','initial-1','task-verify-0']);assert.equal(calls.filter(c=>c.label.startsWith('initial-')).length,0)}
- else{const evals=calls.filter(c=>c.label.startsWith('initial-'));assert.deepEqual(evals.map(c=>c.label),['initial-0','initial-1']);assert.ok(evals.every(c=>c.prompt.includes('test_result_json={}')));assert.ok(evals.every(c=>c.seq>generation.seq))}
+ else{const evals=calls.filter(c=>c.label.startsWith('initial-'));assert.deepEqual(evals.map(c=>c.label),['initial-0','initial-1']);assert.ok(evals.every(c=>c.prompt.includes('call the StructuredOutput tool exactly once') && c.prompt.includes('"test_result_json":{}')));assert.ok(evals.every(c=>c.seq>generation.seq))}
 })
 test('CUDAAgent rejects an incomplete generated seed set before any evaluation',async()=>{
  const a=agents();a['generate-initial-kernel'].initial_candidates.pop();let executions=0

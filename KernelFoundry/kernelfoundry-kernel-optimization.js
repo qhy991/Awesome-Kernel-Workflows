@@ -1363,7 +1363,7 @@ Return the parsed result.`, {
       }), { retries: 0 })
     })()
     : args.task_result_command
-    ? await __nativeTaskEvaluate({candidatePath:varyResult?.variant_path || candidatePath, candidateSource:offspringCode, resultPath:generationResultPath, command:args.task_result_command, workloadCount:args.task_workload_count, label:`task-eval-${generation}`})
+    ? await __nativeTaskEvaluate({candidatePath:candidatePath, candidateSource:offspringCode, resultPath:generationResultPath, command:args.task_result_command, workloadCount:args.task_workload_count, label:`task-eval-${generation}`})
     : await agentRetry(() => agent(`${__taskContractBlock()}You are a kernel evaluator for KernelFoundry. Evaluate the already-materialized ${langToken(LEGACY_LANG_TOKEN)} kernel.
 
 # Candidate Path:

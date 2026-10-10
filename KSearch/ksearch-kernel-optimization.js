@@ -1656,7 +1656,7 @@ Then append:
 
     // Track the LAST generated code (used in debug prompts for next attempt)
     currentRawCode = args.task_result_command ? '' : genResult.code
-    currentRawPath = genResult.variant_path || null
+    currentRawPath = args.task_result_command ? attemptPath : genResult.variant_path || null
 
     // =========================================================================
     // Phase: Evaluate
@@ -1664,7 +1664,7 @@ Then append:
     phase('Evaluate')
 
     const evalResult = args.task_result_command
-      ? await __nativeTaskEvaluate({candidatePath:genResult.variant_path,candidateSource:'',resultPath:`${EXP_DIR}/task_cycle_${cycle}_a${attempt}.json`,command:args.task_result_command,workloadCount:args.task_workload_count,label:`task-eval-${cycle}-${attempt}`})
+      ? await __nativeTaskEvaluate({candidatePath:attemptPath,candidateSource:'',resultPath:`${EXP_DIR}/task_cycle_${cycle}_a${attempt}.json`,command:args.task_result_command,workloadCount:args.task_workload_count,label:`task-eval-${cycle}-${attempt}`})
       : IS_SOL
       ? await (async () => {
         const variant = `ksearch_c${cycle}_a${attempt}`.replace(/[^A-Za-z0-9_]/g, '_')

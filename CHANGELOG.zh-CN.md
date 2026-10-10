@@ -18,6 +18,8 @@
 
 ### Fixed
 
+- CUDAAgent、AccelOpt、CUDALLM-FSR、KernelFoundry、KSearch 的任务评测使用 workflow 预先分配的候选文件，模型回传路径的转录错误不再改变槽位；保留文件/证据缺失门禁并新增五个完整流程回归（`docs/audits/2026-10-10-workflow-owned-candidate-paths.md`）。
+
 - 分离 CUDAAgent、AccelOpt 原生初始候选的源码生成与串行权威测量，固定源码身份，不再重试整个生成/测试批次；保持候选数量、方法选择和完整诊断文件，并使用源码及结果文件引用（`CUDAAgent/cuda-agent-kernel-optimization.js`、`AccelOpt/accelopt-kernel-optimization.js` 及执行边界回归测试）。
 - CUDAAgent 保留 Implement/Verify 的非超时错误；共享 watchdog 返回明确超时码，同步脚本支持按单一来源刷新，避免手改生成副本（`_meta/scaffolding/turn-timeout.js`、`scripts/patch-turn-timeout.js` 及同步 workflow）。
 - 明确区分允许的诊断与计分测量，遵循已验证的 native 文件交接，保留原始错误原因，并要求评测阶段使用已存在的源码文件（`_meta/scaffolding/task-result.js`、`_meta/scaffolding/typed-args.js` 及同步 workflow）。
