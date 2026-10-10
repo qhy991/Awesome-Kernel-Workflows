@@ -54,9 +54,8 @@ test('AccelOpt native initialization produces sources then measures each fixed s
   assert.ok(result.initial_candidates.every(c => c.source_binding.verified && c.host_candidate_path === c.test_result_path + '.artifact/candidate.py'))
   assert.ok(calls.find(c => c.label === 'impl-0-p-v0').schema.required.includes('variant_path'))
 })
-test('AccelOpt rejects incomplete or foreign seed identities before submitting any measurement', async () => {
-  for (const candidates of [[{variant_path:'/foreign.py'}],
-    [0,0,2].map(i => ({variant_path:`/fixture/exp/generated/initial_${i}.py`}))]) {
+test('AccelOpt rejects incomplete seed counts before submitting any measurement', async () => {
+  for (const candidates of [[], [{variant_path:'/foreign.py'}]]) {
     const agents = accelAgents(), seen = []
     agents['generate-initial-kernel'] = {initial_candidates:candidates}
     await assert.rejects(run(accel, args, agents, accelEvaluations({}, seen)), /initial candidate|seed/i)

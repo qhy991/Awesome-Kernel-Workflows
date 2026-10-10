@@ -12,6 +12,8 @@
 
 ## [Unreleased]
 
+- CUDAAgent与AccelOpt初始种子使用workflow已分配槽位，不再把模型回传路径作为身份权威；保留种子数量、文件存在和源码绑定测量检查，覆盖native/Host下日期转录、重复回传、缺文件及缺绑定反例。
+
 - 即使外层消息为缺少StructuredOutput，显式模型未知或政策拒绝标记仍禁止进入只读交接恢复。
 
 - 合格native缺少StructuredOutput时，限一次通过已声明的只读读取器恢复交接；不重跑评估，不重试传输、拒绝或模型未知。共享helper在原块位置同步，兼容纯native工作流。

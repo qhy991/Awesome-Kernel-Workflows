@@ -1083,11 +1083,10 @@ async function resolveInitialKernelFromProblem() {
   generatedKernelPath = generated.generated_kernel_path || ''
   if (args.task_result_command) {
     const expectedPaths = Array.from({length:SEED_CANDIDATES}, (_, i) => `${EXP_DIR}/generated/initial_${i}.py`)
-    const returnedPaths = initialCandidates.map(candidate => candidate?.variant_path)
-    if (initialCandidates.length !== SEED_CANDIDATES || new Set(returnedPaths).size !== SEED_CANDIDATES
-      || expectedPaths.some(candidatePath => !returnedPaths.includes(candidatePath))) {
-      throw new Error('Native initial candidate sources must name the complete declared seed set exactly once')
-    }
+    if (initialCandidates.length !== SEED_CANDIDATES)
+      throw new Error('Native initial candidate count differs from the declared seed count')
+    // The declared slots own identity; each file still needs bound task evidence.
+    // Echoed model paths cannot redirect or invalidate an existing assigned slot.
     const resolved = []
     for (let i=0; i<SEED_CANDIDATES; i++) {
       resolved.push(await __nativeTaskEvaluate({candidatePath:expectedPaths[i],

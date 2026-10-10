@@ -14,6 +14,8 @@ for the versioning policy.
 
 ## [Unreleased]
 
+- Use workflow-assigned initial seed slots in CUDAAgent and AccelOpt instead of model-echoed path identity. Preserve the declared seed count, per-slot existence and source-bound measurement gates; cover date typos, duplicate echoes, missing files and unbound results in native and Host execution.
+
 - Keep explicit unknown-model and policy-refusal flags outside native readback recovery, even if the outer message reports missing StructuredOutput.
 
 - Repair qualified native missing-StructuredOutput delivery once via the declared read-only reader; do not replay evaluation, transport, refusal or model-unknown failures. Refresh shared helper blocks in place for native-only workflows.

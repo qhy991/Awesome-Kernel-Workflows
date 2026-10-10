@@ -952,11 +952,11 @@ Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run
   initialGenerationResult = generated.initial_generation_result || { verified: false }
   generatedKernelPath = generated.generated_kernel_path || ''
   if (args.task_result_command) {
-    const sources = initialCandidates.map(candidate => candidate?.variant_path)
     const expectedSources = Array.from({length: SEED_CANDIDATES}, (_, i) => `${EXP_DIR}/generated/initial_${i}.py`)
-    if (sources.length !== SEED_CANDIDATES || new Set(sources).size !== SEED_CANDIDATES
-        || expectedSources.some(source => !sources.includes(source)))
-      throw new Error('Generated initial candidate set must cover every declared seed exactly once')
+    if (initialCandidates.length !== SEED_CANDIDATES)
+      throw new Error('Generated initial candidate count differs from the declared seed count')
+    // The declared slots own identity; each file still needs bound task evidence.
+    // Echoed model paths cannot redirect or invalidate an existing assigned slot.
     const resolved=[]
     for (let i=0;i<SEED_CANDIDATES;i++) {
       resolved.push(await __nativeTaskEvaluate({candidatePath:expectedSources[i],
