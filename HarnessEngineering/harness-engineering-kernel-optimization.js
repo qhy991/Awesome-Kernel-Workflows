@@ -168,6 +168,7 @@ async function agentRetry(fn, opts) {
       // budget, or undo cancellation. Preserve the original Host diagnostic.
       if (e && (e.retryable === false || e.name === 'AbortError'
         || /(?:PERMISSION|CONFIG_INVALID|REQUEST_INVALID|UNSUPPORTED|DISABLED|BUDGET|QUOTA|AUTH|FILESYSTEM_SANDBOX|WORKFLOW_INTERRUPTED|ABORT_ERR)/.test(String(e.code || '')))) throw e
+      if (opts && typeof opts.mayRetryError === 'function' && !opts.mayRetryError(e)) throw e
       lastError = e
     }
   }
@@ -213,33 +214,35 @@ function guard(obj, field, fallback) {
 // --- END inlined agent-retry scaffolding ---
 
 // --- BEGIN inlined turn-timeout scaffolding (from _meta/scaffolding/turn-timeout.js) ---
-const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn wall-clock cap
+const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // stop admitting attempts at this deadline
 
-/**
- * Wrap a doer-turn promise with a wall-clock cap. On expiry the returned
- * promise rejects with `turn-timeout: <label> exceeded Ns`. Degrades to a
- * passthrough when the runtime has no timers or TURN_TIMEOUT_MS <= 0.
- */
-function withTurnTimeout(promise, label) {
-  if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return promise
-  let timer
-  const guard = new Promise((_, reject) => {
-    timer = setTimeout(
-      () => {
-        const error = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)
-        error.code = 'KERSOR_TURN_TIMEOUT'
-        error.retryable = false
-        reject(error)
-      },
-      TURN_TIMEOUT_MS)
-  })
-  return Promise.race([promise, guard]).finally(() => {
+async function withTurnTimeout(fn, label, retryOptions) {
+  if (typeof fn !== 'function') {
+    const error = new TypeError('withTurnTimeout requires an agent thunk, not a started promise')
+    error.code = 'KERSOR_REQUEST_INVALID'
+    error.retryable = false
+    throw error
+  }
+  if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return agentRetry(fn, retryOptions)
+  let expired = null
+  const timer = setTimeout(() => {
+    expired = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)
+    expired.code = 'KERSOR_TURN_TIMEOUT'
+    expired.retryable = false
+  }, TURN_TIMEOUT_MS)
+  try {
+    return await agentRetry(async () => {
+      if (expired) throw expired
+      const result = await fn()
+      if (expired) throw expired
+      return result
+    }, {...retryOptions, mayRetryError: () => !expired})
+  } finally {
     if (typeof clearTimeout === 'function') clearTimeout(timer)
-  })
+  }
 }
 
 // Broker timeouts and this watchdog are the only timeout classifications.
-// Permission, schema, transport, and task-evidence failures keep their identity.
 function isTurnTimeout(error) {
   return ['KERSOR_TURN_TIMEOUT', 'KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
 }
@@ -311,8 +314,7 @@ function measuredSpeedup(baseline, candidate) {
 }
 
 log('Phase 1/6: Freeze Contract')
-const setup = await withTurnTimeout(agentRetry(
-  () => agent(`${__taskContractBlock()}
+const setup = await withTurnTimeout(() => agent(`${__taskContractBlock()}
 You are freezing a Harness Engineering run contract.
 
 Harness root: ${HARNESS_ROOT}
@@ -325,25 +327,20 @@ Experiment directory: ${EXP_DIR}
 Inspect the harness and baseline without modifying either. Create ${EXP_DIR}, copy the baseline into ${EXP_DIR}/baseline/candidate, and write ${EXP_DIR}/contract.json containing the exact paths, commands, placeholders, verification profile, backend, and promotion rule. Reject ambiguous or missing paths. All later writes must stay under ${EXP_DIR}.
 ${__experienceBlock()}${__attemptBlock()}
 Return the materialized baseline_candidate_path, contract_path, and any harness notes.
-`, { label: 'harness-freeze-contract', phase: 'Freeze Contract', model: MODEL, schema: ANY_OBJECT }),
-  { retries: 5, label: 'harness-freeze-contract' },
-), 'Harness Engineering freeze contract')
+`, { label: 'harness-freeze-contract', phase: 'Freeze Contract', model: MODEL, schema: ANY_OBJECT }), 'Harness Engineering freeze contract', { retries: 5, label: 'harness-freeze-contract' })
 
 const baselineCandidate = guard(setup, 'baseline_candidate_path', '')
 if (!baselineCandidate) return { ok: false, error: 'contract_materialization_failed', setup }
 
 log('Phase 2/6: Baseline')
-const baseline = await withTurnTimeout(agentRetry(
-  () => agent(`${__taskContractBlock()}
+const baseline = await withTurnTimeout(() => agent(`${__taskContractBlock()}
 Establish authoritative baseline evidence for a frozen Harness Engineering contract.
 
 ${commandContract(baselineCandidate, `${EXP_DIR}/baseline`)}
 Verification profile: ${VERIFICATION_PROFILE}. Its semantics are documented in _substrate/verification/README.md; the supplied command remains the sole verdict owner.
 
 Write canonical evidence to ${EXP_DIR}/baseline/evidence.json and retain raw stdout/stderr plus generated artifacts under ${EXP_DIR}/baseline. Report false/null on failure; never infer a pass or timing value.
-`, { label: 'harness-baseline', phase: 'Baseline', model: MODEL, schema: EVIDENCE_SCHEMA }),
-  { retries: 5, label: 'harness-baseline' },
-), 'Harness Engineering baseline')
+`, { label: 'harness-baseline', phase: 'Baseline', model: MODEL, schema: EVIDENCE_SCHEMA }), 'Harness Engineering baseline', { retries: 5, label: 'harness-baseline' })
 
 if (!evidenceIsPromotable(baseline)) {
   return { ok: false, error: 'invalid_baseline', best_kernel_path: baselineCandidate, baseline_evidence: baseline, verification_profile: VERIFICATION_PROFILE }
@@ -357,8 +354,7 @@ const history = []
 for (let round = 1; round <= ITERATIONS; round++) {
   const roundDir = `${EXP_DIR}/round-${round}`
   log(`Phase 3/6: Profile and Decide — round ${round}/${ITERATIONS}`)
-  const decision = await withTurnTimeout(agentRetry(
-    () => agent(`${__taskContractBlock()}
+  const decision = await withTurnTimeout(() => agent(`${__taskContractBlock()}
 Act as the profile-backed controller for Harness Engineering round ${round}.
 
 Current incumbent: ${bestCandidate}
@@ -369,13 +365,10 @@ ${commandContract(bestCandidate, roundDir)}
 If profile_command is supplied, execute it on the incumbent and retain raw artifacts under ${roundDir}/profile. Otherwise reason only from measured harness evidence and source inspection, explicitly marking missing profile evidence. Select exactly one bounded optimization hypothesis. Do not modify the incumbent or harness. Do not re-propose these failed strategy ids: ${FAILED_STRATEGY_IDS.join(', ') || '(none)'}.
 ${__experienceBlock()}${__attemptBlock()}
 Save your complete decision JSON to ${roundDir}/decision.json before returning strategy_id, hypothesis, expected_bottleneck, supporting_artifacts, and implementation_constraints.
-`, { label: `harness-decide-${round}`, phase: 'Profile and Decide', model: MODEL, schema: ANY_OBJECT }),
-    { retries: 5, label: `harness-decide-${round}` },
-  ), `Harness Engineering decision ${round}`)
+`, { label: `harness-decide-${round}`, phase: 'Profile and Decide', model: MODEL, schema: ANY_OBJECT }), `Harness Engineering decision ${round}`, { retries: 5, label: `harness-decide-${round}` })
 
   log(`Phase 4/6: Implement — round ${round}/${ITERATIONS}`)
-  const implementation = await withTurnTimeout(agentRetry(
-    () => agent(`${__taskContractBlock()}
+  const implementation = await withTurnTimeout(() => agent(`${__taskContractBlock()}
 Implement exactly one Harness Engineering candidate.
 
 Incumbent: ${bestCandidate}
@@ -386,9 +379,7 @@ Backend: ${BACKEND}
 Copy the incumbent and make only the selected bounded change under the destination. Never modify ${KERNEL_PATH}, ${HARNESS_ROOT}, or any path outside ${EXP_DIR}. Do not run the benchmark or claim correctness. Preserve the harness entrypoint and output contract.
 
 Save your complete implementation metadata JSON to ${roundDir}/implementation.json before returning candidate_path, strategy_id, change_summary, and modified_files.
-`, { label: `harness-implement-${round}`, phase: 'Implement', model: MODEL, schema: ANY_OBJECT }),
-    { retries: 5, label: `harness-implement-${round}` },
-  ), `Harness Engineering implementation ${round}`)
+`, { label: `harness-implement-${round}`, phase: 'Implement', model: MODEL, schema: ANY_OBJECT }), `Harness Engineering implementation ${round}`, { retries: 5, label: `harness-implement-${round}` })
 
   const candidatePath = guard(implementation, 'candidate_path', '')
   if (!candidatePath || !candidatePath.startsWith(EXP_DIR + '/')) {
@@ -397,17 +388,14 @@ Save your complete implementation metadata JSON to ${roundDir}/implementation.js
   }
 
   log(`Phase 5/6: Official Gate — round ${round}/${ITERATIONS}`)
-  const evidence = await withTurnTimeout(agentRetry(
-    () => agent(`${__taskContractBlock()}
+  const evidence = await withTurnTimeout(() => agent(`${__taskContractBlock()}
 Evaluate one Harness Engineering candidate with the frozen contract.
 
 ${commandContract(candidatePath, roundDir)}
 Verification profile: ${VERIFICATION_PROFILE}
 
 Write ${roundDir}/evidence.json, retain raw command outputs, and bind the evidence to the exact candidate path and artifact files. Never benchmark a failed candidate. Never infer fields from prose. Return false/null for absent evidence.
-`, { label: `harness-gate-${round}`, phase: 'Official Gate', model: MODEL, schema: EVIDENCE_SCHEMA }),
-    { retries: 5, label: `harness-gate-${round}` },
-  ), `Harness Engineering official gate ${round}`)
+`, { label: `harness-gate-${round}`, phase: 'Official Gate', model: MODEL, schema: EVIDENCE_SCHEMA }), `Harness Engineering official gate ${round}`, { retries: 5, label: `harness-gate-${round}` })
 
   const candidateSpeedup = measuredSpeedup(baseline, evidence)
   const incumbentSpeedup = measuredSpeedup(baseline, bestEvidence)
@@ -422,8 +410,7 @@ Write ${roundDir}/evidence.json, retain raw command outputs, and bind the eviden
 }
 
 log('Phase 6/6: Audit and Report')
-const report = await withTurnTimeout(agentRetry(
-  () => agent(`${__taskContractBlock()}
+const report = await withTurnTimeout(() => agent(`${__taskContractBlock()}
 Audit and report this Harness Engineering run.
 
 Contract: ${guard(setup, 'contract_path', `${EXP_DIR}/contract.json`)}
@@ -436,9 +423,7 @@ History: ${JSON.stringify(history.map(h=>h.evidence_path ? {round:h.round,strate
 Verify that every timing result is paired with compiled=true, correct=true, and any required verified=true verdict; that candidate/evidence paths stay under ${EXP_DIR}; and that rejected candidates were not silently promoted. Write ${EXP_DIR}/report.md and append one final run record to ${EXP_DIR}/genome.jsonl. State the fidelity boundary: workflow adaptation, not reproduction of contest infrastructure or hidden tests.
 
 Return report_path, audit_ok, and audit_notes.
-`, { label: 'harness-audit-report', phase: 'Audit and Report', model: MODEL, schema: ANY_OBJECT }),
-  { retries: 5, label: 'harness-audit-report' },
-), 'Harness Engineering audit')
+`, { label: 'harness-audit-report', phase: 'Audit and Report', model: MODEL, schema: ANY_OBJECT }), 'Harness Engineering audit', { retries: 5, label: 'harness-audit-report' })
 
 return {
   ok: evidenceIsPromotable(bestEvidence) && bestSpeedup >= MIN_SPEEDUP && guard(report, 'audit_ok', false),

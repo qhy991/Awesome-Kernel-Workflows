@@ -544,6 +544,7 @@ async function agentRetry(fn, opts) {
       // budget, or undo cancellation. Preserve the original Host diagnostic.
       if (e && (e.retryable === false || e.name === 'AbortError'
         || /(?:PERMISSION|CONFIG_INVALID|REQUEST_INVALID|UNSUPPORTED|DISABLED|BUDGET|QUOTA|AUTH|FILESYSTEM_SANDBOX|WORKFLOW_INTERRUPTED|ABORT_ERR)/.test(String(e.code || '')))) throw e
+      if (opts && typeof opts.mayRetryError === 'function' && !opts.mayRetryError(e)) throw e
       lastError = e
     }
   }
@@ -589,33 +590,35 @@ function guard(obj, field, fallback) {
 // --- END inlined agent-retry scaffolding ---
 
 // --- BEGIN inlined turn-timeout scaffolding (from _meta/scaffolding/turn-timeout.js) ---
-const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn wall-clock cap
+const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // stop admitting attempts at this deadline
 
-/**
- * Wrap a doer-turn promise with a wall-clock cap. On expiry the returned
- * promise rejects with `turn-timeout: <label> exceeded Ns`. Degrades to a
- * passthrough when the runtime has no timers or TURN_TIMEOUT_MS <= 0.
- */
-function withTurnTimeout(promise, label) {
-  if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return promise
-  let timer
-  const guard = new Promise((_, reject) => {
-    timer = setTimeout(
-      () => {
-        const error = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)
-        error.code = 'KERSOR_TURN_TIMEOUT'
-        error.retryable = false
-        reject(error)
-      },
-      TURN_TIMEOUT_MS)
-  })
-  return Promise.race([promise, guard]).finally(() => {
+async function withTurnTimeout(fn, label, retryOptions) {
+  if (typeof fn !== 'function') {
+    const error = new TypeError('withTurnTimeout requires an agent thunk, not a started promise')
+    error.code = 'KERSOR_REQUEST_INVALID'
+    error.retryable = false
+    throw error
+  }
+  if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return agentRetry(fn, retryOptions)
+  let expired = null
+  const timer = setTimeout(() => {
+    expired = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)
+    expired.code = 'KERSOR_TURN_TIMEOUT'
+    expired.retryable = false
+  }, TURN_TIMEOUT_MS)
+  try {
+    return await agentRetry(async () => {
+      if (expired) throw expired
+      const result = await fn()
+      if (expired) throw expired
+      return result
+    }, {...retryOptions, mayRetryError: () => !expired})
+  } finally {
     if (typeof clearTimeout === 'function') clearTimeout(timer)
-  })
+  }
 }
 
 // Broker timeouts and this watchdog are the only timeout classifications.
-// Permission, schema, transport, and task-evidence failures keep their identity.
 function isTurnTimeout(error) {
   return ['KERSOR_TURN_TIMEOUT', 'KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
 }
@@ -1249,7 +1252,7 @@ for (currentAttempt = 0; currentAttempt < MAX_TURNS && !targetMet; currentAttemp
 
   let implResult
   try {
-  implResult = await withTurnTimeout(agentRetry(() => agent(args.task_result_command ? `${__taskContractBlock()}Implement the CUDAAgent optimization strategy ${profileResult.optimization_strategy} in complete ${LANGUAGE} Python source. Read the FULL current tested artifact ${bestBoundSourcePath}; preserve exact frozen task signature and correctness. Prior feedback: ${JSON.stringify(history.slice(-3).map(h => h.task_result_path ? {...h,error:undefined,read_complete_diagnostics:h.task_result_path} : h))}. Write the COMPLETE new source to ${EXP_DIR}/task_attempt_${currentAttempt}.py and return variant_path and implementation_notes. The source file is authoritative; do not repeat its contents in the reply. Do not modify the incumbent or benchmark; serial task verification follows. Read all selected task skills for genuine diagnostics.` : `${__taskContractBlock()}You are a CUDA kernel developer. Implement an optimized CUDA kernel for this PyTorch model.
+  implResult = await withTurnTimeout(() => agent(args.task_result_command ? `${__taskContractBlock()}Implement the CUDAAgent optimization strategy ${profileResult.optimization_strategy} in complete ${LANGUAGE} Python source. Read the FULL current tested artifact ${bestBoundSourcePath}; preserve exact frozen task signature and correctness. Prior feedback: ${JSON.stringify(history.slice(-3).map(h => h.task_result_path ? {...h,error:undefined,read_complete_diagnostics:h.task_result_path} : h))}. Write the COMPLETE new source to ${EXP_DIR}/task_attempt_${currentAttempt}.py and return variant_path and implementation_notes. The source file is authoritative; do not repeat its contents in the reply. Do not modify the incumbent or benchmark; serial task verification follows. Read all selected task skills for genuine diagnostics.` : `${__taskContractBlock()}You are a CUDA kernel developer. Implement an optimized CUDA kernel for this PyTorch model.
 
 # Model to Optimize:
 \`\`\`python
@@ -1327,7 +1330,7 @@ Then append (this is optimization attempt ${currentAttempt}):
   // watchdog would then return while the retry kept running in the background.
   // A timed doer turn is one bounded attempt. The next workflow turn is the
   // recovery boundary after a completed validation, not an overlapping retry.
-  }), { retries: 0 }), `Implement turn ${currentAttempt + 1}`)
+  }), `Implement turn ${currentAttempt + 1}`, { retries: 0 })
   } catch (e) {
     if (!isTurnTimeout(e)) throw e
     log(`  Turn ${currentAttempt + 1}: Implement watchdog tripped — stopping (${e.message})`)
@@ -1482,7 +1485,7 @@ The parse step prints one line "SPEEDUP=<aggregate> REDUCTION=<contract reductio
       const gain=measured.is_valid ? taskInitialMeasurement.latency_ms/measured.latency_ms : 0
       return {...measured,kernel_time_ms:measured.latency_ms,speedup_vs_generated_initial:gain,speedup_vs_reference:measured.speedup,speedup_vs_compile:null,speedup_vs_eager:null,reward:!measured.is_valid ? -1 : TARGET_SPEEDUP !== null && gain>1 && gain>=TARGET_SPEEDUP ? 3 : gain>1 ? 1 : 0}
     })()
-    : await withTurnTimeout(agentRetry(() => agent(`${__taskContractBlock()}You are a CUDA kernel validator. Compile, verify, and benchmark this kernel implementation.${embeddedEvalBlock}${solEvalBlock}
+    : await withTurnTimeout(() => agent(`${__taskContractBlock()}You are a CUDA kernel validator. Compile, verify, and benchmark this kernel implementation.${embeddedEvalBlock}${solEvalBlock}
 
 # Kernel Code (kernel.cu):
 \`\`\`cuda
@@ -1558,7 +1561,7 @@ Then append, using the values you just measured (status="done" if correctness pa
     },
   // Keep the broker timeout and workflow watchdog as one cancellation domain;
   // otherwise a retry can outlive the completed workflow and leak a process/GPU.
-  }), { retries: 0 }), `Verify turn ${currentAttempt + 1}`)
+  }), `Verify turn ${currentAttempt + 1}`, { retries: 0 })
   } catch (e) {
     if (!isTurnTimeout(e)) throw e
     log(`  Turn ${currentAttempt + 1}: Verify watchdog tripped — stopping (${e.message})`)

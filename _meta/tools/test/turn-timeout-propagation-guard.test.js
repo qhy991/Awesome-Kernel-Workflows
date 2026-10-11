@@ -35,7 +35,7 @@ const CANON = canonBlock()
 
 test('SSOT: turn-timeout.js defines TURN_TIMEOUT_MS + withTurnTimeout', () => {
   assert.match(SSOT, /const TURN_TIMEOUT_MS =/, 'SSOT must define TURN_TIMEOUT_MS')
-  assert.match(SSOT, /function withTurnTimeout\(promise, label\)/, 'SSOT must define withTurnTimeout')
+  assert.match(SSOT, /function withTurnTimeout\(fn, label, retryOptions\)/, 'SSOT must define withTurnTimeout')
 })
 
 test('every workflow with agent-retry has withTurnTimeout (capability propagated)', () => {

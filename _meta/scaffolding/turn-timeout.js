@@ -1,65 +1,47 @@
-// turn-timeout.js — CANONICAL default-scaffolding snippet for `agent()`-based workflows.
-//
-// This is NOT a runnable workflow. It is the single source of truth for the
-// per-turn wall-clock watchdog that every `agent()`-based workflow inlines
-// (workflow .js files run in the Claude Code Workflow sandbox and cannot `import`,
-// so the helper is copied verbatim into each file — the same convention already
-// used for the inlined arg_guard and agent-retry scaffolding).
-//
-// WHY: a workflow loop bounded ONLY by MAX_TURNS / MAX_CYCLES can stall forever
-// if a single doer `agent()` turn hangs (a subagent stuck in_progress, a model
-// not responding, a shell step wedged behind a step the runtime cannot observe).
-// On-host evidence (CUDAAgent issue #12 / PR #14) showed a single hung
-// Implement/Verify turn stalling the whole run for 40+ minutes before an
-// orchestrator manually killed it. TURN_TIMEOUT_MS bounds each doer turn; on
-// expiry the wrapped promise rejects with `turn-timeout: <label> exceeded Ns`
-// and the caller exits the loop with convergence_status='timeout' (or, for a
-// linear pipeline, aborts the round cleanly) instead of hanging.
-//
-// PARITY: CUDAAgent has carried this guard since #12/#14. Issues #30 propagates
-// the same guard to ARGUS and KSearch, which lacked it (KSearch already had
-// EVAL_TIMEOUT_SEC — a shell-level `timeout Ns` on eval commands — but no
-// agent-turn wall-clock cap, so a hung non-eval agent() call still stalled).
-//
-// CONSTRAINT: the Workflow runtime forbids `Date.now()` / `Math.random()` /
-// argless `new Date()` (they throw and would break resume). This guard uses
-// `setTimeout` / `clearTimeout` / `Promise.race` only — no forbidden APIs. It
-// degrades to a passthrough when the runtime exposes no timers
-// (`typeof setTimeout !== 'function'`) or when TURN_TIMEOUT_MS <= 0, so a host
-// without timers still runs (just without the wall-clock bound).
-//
+// Canonical per-turn deadline and child-settlement boundary.
 // Run scripts/patch-turn-timeout.js --all --refresh after changing this helper.
-// Wrap each doer activation with withTurnTimeout(agentRetry(..., {retries:0}), label).
-// Only isTurnTimeout(error) may be translated into convergence_status='timeout';
-// all other errors must retain their original identity.
+//
+// A deadline stops further attempts. It cannot cancel the native agent. The
+// active invocation must settle before a workflow may handle the timeout or
+// start its next turn. A stuck invocation remains under the existing outer
+// controller deadline; this helper does not extend that budget or prove release.
+//
+// Pass the agent thunk, label and existing retry options. The helper owns the
+// retry scope so no retry can start after expiry. Do not pass a started promise.
+// Example: withTurnTimeout(() => agent(prompt, options), 'Implement', {retries: 0}).
+// Only isTurnTimeout(error) may become convergence_status='timeout'. Original
+// permission, policy, schema and transport failures retain their error identity.
+// No clock reads, random values, imports or runtime cancellation API are used.
 
-const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn wall-clock cap
+const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // stop admitting attempts at this deadline
 
-/**
- * Wrap a doer-turn promise with a wall-clock cap. On expiry the returned
- * promise rejects with `turn-timeout: <label> exceeded Ns`. Degrades to a
- * passthrough when the runtime has no timers or TURN_TIMEOUT_MS <= 0.
- */
-function withTurnTimeout(promise, label) {
-  if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return promise
-  let timer
-  const guard = new Promise((_, reject) => {
-    timer = setTimeout(
-      () => {
-        const error = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)
-        error.code = 'KERSOR_TURN_TIMEOUT'
-        error.retryable = false
-        reject(error)
-      },
-      TURN_TIMEOUT_MS)
-  })
-  return Promise.race([promise, guard]).finally(() => {
+async function withTurnTimeout(fn, label, retryOptions) {
+  if (typeof fn !== 'function') {
+    const error = new TypeError('withTurnTimeout requires an agent thunk, not a started promise')
+    error.code = 'KERSOR_REQUEST_INVALID'
+    error.retryable = false
+    throw error
+  }
+  if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return agentRetry(fn, retryOptions)
+  let expired = null
+  const timer = setTimeout(() => {
+    expired = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)
+    expired.code = 'KERSOR_TURN_TIMEOUT'
+    expired.retryable = false
+  }, TURN_TIMEOUT_MS)
+  try {
+    return await agentRetry(async () => {
+      if (expired) throw expired
+      const result = await fn()
+      if (expired) throw expired
+      return result
+    }, {...retryOptions, mayRetryError: () => !expired})
+  } finally {
     if (typeof clearTimeout === 'function') clearTimeout(timer)
-  })
+  }
 }
 
 // Broker timeouts and this watchdog are the only timeout classifications.
-// Permission, schema, transport, and task-evidence failures keep their identity.
 function isTurnTimeout(error) {
   return ['KERSOR_TURN_TIMEOUT', 'KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
 }

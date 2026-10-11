@@ -12,6 +12,8 @@
 
 ## [Unreleased]
 
+- 限时 agent 在返回控制权前等待当前调用终态，期限之后停止重试，并保留迟到错误的原身份。将 17 处限时调用迁移为延迟执行函数，保留各方法原重试次数；重新生成 35 个 workflow 的共享 retry/timeout helper，继续检查可空结果的安全使用。watchdog 不冒充子任务取消或资源释放。（`_meta/scaffolding/`、helper codemod、生命周期测试及 `docs/turn-deadline-lifecycle.md`）。
+
 - CUDAAgent与AccelOpt初始种子使用workflow已分配槽位，不再把模型回传路径作为身份权威；保留种子数量、文件存在和源码绑定测量检查，覆盖native/Host下日期转录、重复回传、缺文件及缺绑定反例。
 
 - 即使外层消息为缺少StructuredOutput，显式模型未知或政策拒绝标记仍禁止进入只读交接恢复。

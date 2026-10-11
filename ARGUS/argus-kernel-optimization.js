@@ -319,6 +319,7 @@ async function agentRetry(fn, opts) {
       // budget, or undo cancellation. Preserve the original Host diagnostic.
       if (e && (e.retryable === false || e.name === 'AbortError'
         || /(?:PERMISSION|CONFIG_INVALID|REQUEST_INVALID|UNSUPPORTED|DISABLED|BUDGET|QUOTA|AUTH|FILESYSTEM_SANDBOX|WORKFLOW_INTERRUPTED|ABORT_ERR)/.test(String(e.code || '')))) throw e
+      if (opts && typeof opts.mayRetryError === 'function' && !opts.mayRetryError(e)) throw e
       lastError = e
     }
   }
@@ -364,33 +365,35 @@ function guard(obj, field, fallback) {
 // --- END inlined agent-retry scaffolding ---
 
 // --- BEGIN inlined turn-timeout scaffolding (from _meta/scaffolding/turn-timeout.js) ---
-const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn wall-clock cap
+const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // stop admitting attempts at this deadline
 
-/**
- * Wrap a doer-turn promise with a wall-clock cap. On expiry the returned
- * promise rejects with `turn-timeout: <label> exceeded Ns`. Degrades to a
- * passthrough when the runtime has no timers or TURN_TIMEOUT_MS <= 0.
- */
-function withTurnTimeout(promise, label) {
-  if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return promise
-  let timer
-  const guard = new Promise((_, reject) => {
-    timer = setTimeout(
-      () => {
-        const error = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)
-        error.code = 'KERSOR_TURN_TIMEOUT'
-        error.retryable = false
-        reject(error)
-      },
-      TURN_TIMEOUT_MS)
-  })
-  return Promise.race([promise, guard]).finally(() => {
+async function withTurnTimeout(fn, label, retryOptions) {
+  if (typeof fn !== 'function') {
+    const error = new TypeError('withTurnTimeout requires an agent thunk, not a started promise')
+    error.code = 'KERSOR_REQUEST_INVALID'
+    error.retryable = false
+    throw error
+  }
+  if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return agentRetry(fn, retryOptions)
+  let expired = null
+  const timer = setTimeout(() => {
+    expired = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)
+    expired.code = 'KERSOR_TURN_TIMEOUT'
+    expired.retryable = false
+  }, TURN_TIMEOUT_MS)
+  try {
+    return await agentRetry(async () => {
+      if (expired) throw expired
+      const result = await fn()
+      if (expired) throw expired
+      return result
+    }, {...retryOptions, mayRetryError: () => !expired})
+  } finally {
     if (typeof clearTimeout === 'function') clearTimeout(timer)
-  })
+  }
 }
 
 // Broker timeouts and this watchdog are the only timeout classifications.
-// Permission, schema, transport, and task-evidence failures keep their identity.
 function isTurnTimeout(error) {
   return ['KERSOR_TURN_TIMEOUT', 'KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
 }
@@ -788,7 +791,7 @@ bestKernelCode = setupResult.kernel_code
 const computationType = setupResult.computation_type
 
 // Run baseline benchmark if available
-const baselineResult = await withTurnTimeout(agentRetry(() => agent(`${__taskContractBlock()}You are a GPU kernel validator. Run the baseline kernel to establish performance.
+const baselineResult = await withTurnTimeout(() => agent(`${__taskContractBlock()}You are a GPU kernel validator. Run the baseline kernel to establish performance.
 
 # Kernel: ${KERNEL_PATH}
 # Test command: ${TEST_CMD || '(not provided; do not infer from project structure)'}
@@ -818,7 +821,7 @@ Return baseline metrics.`, {
     },
     required: ['throughput_tflops'],
   },
-}), { retries: 5 }), 'baseline-eval')
+}), 'baseline-eval', { retries: 5 })
 
 bestThroughput = baselineResult.throughput_tflops || 0
 candidateBeam = [{ code: bestKernelCode, throughput: bestThroughput, label: 'baseline' }]
@@ -1167,7 +1170,7 @@ The parse step prints one line "SPEEDUP=<aggregate> REDUCTION=<contract reductio
     }
   }
 
-  const validateResult = await withTurnTimeout(agentRetry(() => agent(`${__taskContractBlock()}You are the ARGUS Validator Agent (Section 6).
+  const validateResult = await withTurnTimeout(() => agent(`${__taskContractBlock()}You are the ARGUS Validator Agent (Section 6).
 Validate the transformed kernel through invariant checking, unit tests, and profiling.
 
 # Transformed Kernel:
@@ -1323,7 +1326,7 @@ Then append, using the values you just measured (status="done" if invariants sat
       },
       required: ['invariants_satisfied', 'tests_pass', 'throughput_tflops', 'reward'],
     },
-  }), { retries: 5 }), 'validate')
+  }), 'validate', { retries: 5 })
 
   // Record results
   const succeeded = validateResult.invariants_satisfied && validateResult.tests_pass

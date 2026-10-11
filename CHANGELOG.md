@@ -14,6 +14,8 @@ for the versioning policy.
 
 ## [Unreleased]
 
+- Drain an active timed agent before returning control, stop retries after the deadline, and preserve late error identity. Migrate 17 timed call sites to deferred thunks without changing method retry counts; regenerate the canonical retry/timeout helpers in 35 workflows and retain null-safety enforcement. The watchdog does not cancel children or prove resource release. (`_meta/scaffolding/`, helper codemods, lifecycle tests and `docs/turn-deadline-lifecycle.md`).
+
 - Use workflow-assigned initial seed slots in CUDAAgent and AccelOpt instead of model-echoed path identity. Preserve the declared seed count, per-slot existence and source-bound measurement gates; cover date typos, duplicate echoes, missing files and unbound results in native and Host execution.
 
 - Keep explicit unknown-model and policy-refusal flags outside native readback recovery, even if the outer message reports missing StructuredOutput.

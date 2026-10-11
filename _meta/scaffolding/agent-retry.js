@@ -55,6 +55,8 @@
  *   - throws an attributable "returned null" error (the default), UNLESS
  *     `opts.allowNull === true`, in which case it returns null for the caller to
  *     null-guard explicitly (use `guard()` / `(x && x.field) || fallback`).
+ * An owning deadline scope may pass mayRetryError(error) to stop retries while
+ * retaining the original error. This gate cannot override nonretryable errors.
  * The default-throw is deliberate: a silent null would be dereferenced later and
  * crash the run with a cryptic TypeError (issue #20). Opt out ONLY where the
  * caller intentionally degrades on a missing result.
@@ -72,6 +74,7 @@ async function agentRetry(fn, opts) {
       // budget, or undo cancellation. Preserve the original Host diagnostic.
       if (e && (e.retryable === false || e.name === 'AbortError'
         || /(?:PERMISSION|CONFIG_INVALID|REQUEST_INVALID|UNSUPPORTED|DISABLED|BUDGET|QUOTA|AUTH|FILESYSTEM_SANDBOX|WORKFLOW_INTERRUPTED|ABORT_ERR)/.test(String(e.code || '')))) throw e
+      if (opts && typeof opts.mayRetryError === 'function' && !opts.mayRetryError(e)) throw e
       lastError = e
     }
   }

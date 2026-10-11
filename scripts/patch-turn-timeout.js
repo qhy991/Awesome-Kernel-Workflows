@@ -11,7 +11,7 @@
 //   3. Else -> skip (no agent-retry; turn-timeout is meaningless without it).
 //
 // Declaring the function is HARMLESS: it's defined but not invoked until a
-// workflow wraps its doer agent() calls with `withTurnTimeout(agentRetry(...), label)`.
+// workflow wraps its doer agent() calls with `withTurnTimeout(() => agent(...), label, retryOptions)`.
 // That call-site wrapping is a per-workflow follow-up (the 3 that already have it
 // — ARGUS, CUDAAgent, KSearch — also call it in their loops). This codemod makes
 // the CAPABILITY available everywhere; activation is per-workflow.
@@ -20,6 +20,7 @@
 
 const fs = require('fs')
 const path = require('path')
+const {buildCodeMask, buildPairMaps} = require('./add-agent-retry-scaffolding.js')
 
 const REPO = path.resolve(__dirname, '..')
 const SSOT = path.join(REPO, '_meta', 'scaffolding', 'turn-timeout.js')
@@ -53,6 +54,38 @@ function transform(src, block, refresh = false) {
   return { src: src.slice(0, insertAt) + '\n\n' + inlined + src.slice(insertAt), status: 'inserted' }
 }
 
+// Migrate only the known canonical call shape. The existing code mask and
+// delimiter map preserve prompt templates, nested expressions and retry options.
+function migrateCalls(src) {
+  const mask = buildCodeMask(src)
+  const pairs = buildPairMaps(src, mask).openToClose
+  const calls = []
+  const pattern = /\bwithTurnTimeout\s*\(\s*agentRetry\s*\(/g
+  for (const match of src.matchAll(pattern)) {
+    if (!mask[match.index]) continue
+    const outer = src.indexOf('(', match.index)
+    const inner = match.index + match[0].lastIndexOf('(')
+    const innerEnd = pairs.get(inner), outerEnd = pairs.get(outer)
+    if (innerEnd == null || outerEnd == null) throw new Error('unbalanced timed agent call')
+    const thunk = src.slice(inner+1, innerEnd).match(/^\s*\(\s*\)\s*=>\s*agent\s*\(/)
+    if (!thunk) throw new Error('timed call migration requires () => agent(...)')
+    const agentOpen = inner + 1 + thunk[0].lastIndexOf('(')
+    const agentEnd = pairs.get(agentOpen)
+    if (agentEnd == null || agentEnd >= innerEnd) throw new Error('unbalanced timed agent thunk')
+    const options = src.slice(agentEnd+1, innerEnd).trim()
+    const label = src.slice(innerEnd+1, outerEnd).trim()
+    if (!options.startsWith(',') || !label.startsWith(',')) throw new Error('timed call arguments differ')
+    const clean = value => value.slice(1).trim().replace(/,\s*$/, '')
+    calls.push({start:match.index, end:outerEnd+1,
+      value:`withTurnTimeout(${src.slice(inner+1,agentEnd+1).trim()}, ${clean(label)}, ${clean(options)})`})
+  }
+  for (let i=calls.length-1; i>=0; i--) {
+    if (i && calls[i-1].end > calls[i].start) throw new Error('nested timed-call migration requires review')
+    src=src.slice(0,calls[i].start)+calls[i].value+src.slice(calls[i].end)
+  }
+  return {src, count:calls.length}
+}
+
 function workflowFiles() {
   return fs.readdirSync(REPO).filter((d) => {
     const dir = path.join(REPO, d)
@@ -68,14 +101,16 @@ function main() {
   for (const f of targets) {
     const orig = fs.readFileSync(f, 'utf8')
     const rel = path.relative(REPO, f)
-    const r = transform(orig, block, process.argv.includes('--refresh'))
+    const migrated = process.argv.includes('--migrate-calls') ? migrateCalls(orig) : {src:orig,count:0}
+    const r = transform(migrated.src, block, process.argv.includes('--refresh'))
     counts[r.status] = (counts[r.status] || 0) + 1
     if (r.src !== orig) {
       fs.writeFileSync(f, r.src)
-      console.log(`  ${rel}: ${r.status}`)
+      console.log(`  ${rel}: ${r.status}; migrated ${migrated.count} call(s)`)
     }
   }
   console.log(JSON.stringify(counts))
 }
 
-main()
+module.exports = {migrateCalls}
+if (require.main === module) main()
