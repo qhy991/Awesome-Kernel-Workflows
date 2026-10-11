@@ -577,6 +577,7 @@ async function agentRetry(fn, opts) {
       // budget, or undo cancellation. Preserve the original Host diagnostic.
       if (e && (e.retryable === false || e.name === 'AbortError'
         || /(?:PERMISSION|CONFIG_INVALID|REQUEST_INVALID|UNSUPPORTED|DISABLED|BUDGET|QUOTA|AUTH|FILESYSTEM_SANDBOX|WORKFLOW_INTERRUPTED|ABORT_ERR)/.test(String(e.code || '')))) throw e
+      if (opts && typeof opts.mayRetryError === 'function' && !opts.mayRetryError(e)) throw e
       lastError = e
     }
   }
@@ -672,42 +673,45 @@ ${JSON.stringify(ctx.checkpoint)}
 // --- END inlined runtime-safe-point scaffolding ---
 
 // --- BEGIN inlined turn-timeout scaffolding (from _meta/scaffolding/turn-timeout.js) ---
-const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn wall-clock cap
+const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // stop admitting attempts at this deadline
 
-/**
- * Wrap a doer-turn promise with a wall-clock cap. On expiry the returned
- * promise rejects with KERSOR_TURN_UNSETTLED. This is not a child terminal or
- * resource-release receipt. The site must settle exact owned processes and
- * broker jobs before any reviewed recovery. Degrades to a
- * passthrough when the runtime has no timers or TURN_TIMEOUT_MS <= 0.
- */
-function withTurnTimeout(promise, label) {
-  if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return promise
-  let timer
-  const guard = new Promise((_, reject) => {
-    timer = setTimeout(
-      () => {
-        const error = new Error(`KERSOR_TURN_UNSETTLED: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s; child terminal and resource release are unverified`)
-        error.code = 'KERSOR_TURN_UNSETTLED'
-        error.retryable = false
-        error.outcome_state = 'unknown'
-        error.child_terminal_verified = false
-        error.resources_released = false
-        error.phase_label = label
-        reject(error)
-      },
-      TURN_TIMEOUT_MS)
-  })
-  return Promise.race([promise, guard]).finally(() => {
+async function withTurnTimeout(fn, label, retryOptions) {
+  if (typeof fn !== 'function') {
+    const error = new TypeError('withTurnTimeout requires an agent thunk, not a started promise')
+    error.code = 'KERSOR_REQUEST_INVALID'
+    error.retryable = false
+    throw error
+  }
+  if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return agentRetry(fn, retryOptions)
+  let expired = false
+  const timer = setTimeout(() => { expired = true }, TURN_TIMEOUT_MS)
+  function expiredAfterSettlement() {
+    if (!expired) return
+    const error = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s; invocation settled`)
+    error.code = 'KERSOR_TURN_DRAINED'
+    error.retryable = false
+    error.invocation_settled = true
+    error.resource_release_verified = false
+    error.phase_label = label
+    throw error
+  }
+  try {
+    return await agentRetry(async () => {
+      expiredAfterSettlement()
+      const result = await fn()
+      expiredAfterSettlement()
+      return result
+    }, {...retryOptions, mayRetryError: () => !expired})
+  } finally {
     if (typeof clearTimeout === 'function') clearTimeout(timer)
-  })
+  }
 }
 
-// Broker process timeouts settle their child before rejecting. A local watchdog
-// (including the old KERSOR_TURN_TIMEOUT code) cannot establish that fact.
-// Permission, schema, transport, and task-evidence failures keep their identity.
+// Legacy watchdog codes have no settlement proof. Only this drained invocation
+// and settled broker timeouts may use the ordinary timeout path.
 function isTurnTimeout(error) {
-  return ['KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
+  return (error?.code === 'KERSOR_TURN_DRAINED' && error.invocation_settled === true)
+    || ['KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
 }
 // --- END inlined turn-timeout scaffolding ---
 // --- genome self-report: INLINE (rich, doer-written) ---
@@ -1571,7 +1575,7 @@ Then append:
       const diversityDirective = SEED_CANDIDATES > 1
         ? `\n\n# Parallel seed branch: ${attempt + 1}/${SEED_CANDIDATES}\nChoose a materially distinct implementation strategy from the other branches while preserving the selected world-model action.`
         : ''
-      return withTurnTimeout(agentRetry(() => agent(`${__taskContractBlock()}You are an expert ${langToken(LANGUAGE)} kernel developer. Generate a high-performance kernel implementing a SPECIFIC optimization action.
+      return withTurnTimeout(() => agent(`${__taskContractBlock()}You are an expert ${langToken(LANGUAGE)} kernel developer. Generate a high-performance kernel implementing a SPECIFIC optimization action.
 
 # Operation: ${OP_DESC} (${opType})
 # Target: ${TARGET_GPU}
@@ -1621,7 +1625,7 @@ Then append:
           },
           required: args.task_result_command ? ['variant_path'] : ['variant_path', 'code'],
         },
-      }), { retries: 5, allowNull: true }), `gen-${cycle}-${attempt}`)
+      }), `gen-${cycle}-${attempt}`, { retries: 5, allowNull: true })
   }
   const seedCandidates = await parallel(seedIndexes.map((seedAttempt) => () => generateSeedCandidate(seedAttempt)))
   log(`Generated ${seedCandidates.filter(Boolean).length}/${SEED_CANDIDATES} seed candidates with bounded parallel fan-out; evaluation remains serial.`)
@@ -1651,7 +1655,7 @@ Then append:
     } else if (!hasPassedInCycle) {
       // Attempts 2+, NO passing solution yet: DEBUG prompt
       // Uses currentRawCode (last attempt's code) as the buggy code to fix
-      genResult = await withTurnTimeout(agentRetry(() => agent(`${__taskContractBlock()}You are an expert ${langToken(LANGUAGE)} kernel developer. The previous attempt has bugs or fails correctness. Debug and fix it.
+      genResult = await withTurnTimeout(() => agent(`${__taskContractBlock()}You are an expert ${langToken(LANGUAGE)} kernel developer. The previous attempt has bugs or fails correctness. Debug and fix it.
 
 # Operation: ${OP_DESC} (${opType})
 # Target: ${TARGET_GPU}
@@ -1698,11 +1702,11 @@ Then append:
           },
           required: args.task_result_command ? ['variant_path'] : ['code'],
         },
-      }), { retries: 5, allowNull: true }), `debug-${cycle}-${attempt}`)
+      }), `debug-${cycle}-${attempt}`, { retries: 5, allowNull: true })
     } else {
       // Attempts 2+, HAVE a passing solution: IMPROVE prompt
       // Focus on performance, not correctness
-      genResult = await withTurnTimeout(agentRetry(() => agent(`${__taskContractBlock()}You are an expert ${langToken(LANGUAGE)} kernel developer. You have a working solution — improve its performance.
+      genResult = await withTurnTimeout(() => agent(`${__taskContractBlock()}You are an expert ${langToken(LANGUAGE)} kernel developer. You have a working solution — improve its performance.
 
 # Operation: ${OP_DESC} (${opType})
 # Target: ${TARGET_GPU}
@@ -1749,7 +1753,7 @@ Then append:
           },
           required: args.task_result_command ? ['variant_path'] : ['code'],
         },
-      }), { retries: 5, allowNull: true }), `improve-${cycle}-${attempt}`)
+      }), `improve-${cycle}-${attempt}`, { retries: 5, allowNull: true })
     }
     } catch (e) {
       if (!isTurnTimeout(e)) throw e

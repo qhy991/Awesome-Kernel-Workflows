@@ -14,14 +14,14 @@ const SOURCE = fs.readFileSync(
 test('cudaagent: watchdog-bounded Implement does not start a background retry', () => {
   assert.match(
     SOURCE,
-    /\}\), \{ retries: 0 \}\), `Implement turn \$\{currentAttempt \+ 1\}`\)/,
+    /\}\), `Implement turn \$\{currentAttempt \+ 1\}`, \{ retries: 0 \}\)/,
   )
 })
 
 test('cudaagent: watchdog-bounded Verify does not start a background retry', () => {
   assert.match(
     SOURCE,
-    /\}\), \{ retries: 0 \}\), `Verify turn \$\{currentAttempt \+ 1\}`\)/,
+    /\}\), `Verify turn \$\{currentAttempt \+ 1\}`, \{ retries: 0 \}\)/,
   )
 })
 

@@ -256,6 +256,7 @@ async function agentRetry(fn, opts) {
       // budget, or undo cancellation. Preserve the original Host diagnostic.
       if (e && (e.retryable === false || e.name === 'AbortError'
         || /(?:PERMISSION|CONFIG_INVALID|REQUEST_INVALID|UNSUPPORTED|DISABLED|BUDGET|QUOTA|AUTH|FILESYSTEM_SANDBOX|WORKFLOW_INTERRUPTED|ABORT_ERR)/.test(String(e.code || '')))) throw e
+      if (opts && typeof opts.mayRetryError === 'function' && !opts.mayRetryError(e)) throw e
       lastError = e
     }
   }
@@ -301,42 +302,45 @@ function guard(obj, field, fallback) {
 // --- END inlined agent-retry scaffolding ---
 
 // --- BEGIN inlined turn-timeout scaffolding (from _meta/scaffolding/turn-timeout.js) ---
-const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn wall-clock cap
+const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // stop admitting attempts at this deadline
 
-/**
- * Wrap a doer-turn promise with a wall-clock cap. On expiry the returned
- * promise rejects with KERSOR_TURN_UNSETTLED. This is not a child terminal or
- * resource-release receipt. The site must settle exact owned processes and
- * broker jobs before any reviewed recovery. Degrades to a
- * passthrough when the runtime has no timers or TURN_TIMEOUT_MS <= 0.
- */
-function withTurnTimeout(promise, label) {
-  if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return promise
-  let timer
-  const guard = new Promise((_, reject) => {
-    timer = setTimeout(
-      () => {
-        const error = new Error(`KERSOR_TURN_UNSETTLED: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s; child terminal and resource release are unverified`)
-        error.code = 'KERSOR_TURN_UNSETTLED'
-        error.retryable = false
-        error.outcome_state = 'unknown'
-        error.child_terminal_verified = false
-        error.resources_released = false
-        error.phase_label = label
-        reject(error)
-      },
-      TURN_TIMEOUT_MS)
-  })
-  return Promise.race([promise, guard]).finally(() => {
+async function withTurnTimeout(fn, label, retryOptions) {
+  if (typeof fn !== 'function') {
+    const error = new TypeError('withTurnTimeout requires an agent thunk, not a started promise')
+    error.code = 'KERSOR_REQUEST_INVALID'
+    error.retryable = false
+    throw error
+  }
+  if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return agentRetry(fn, retryOptions)
+  let expired = false
+  const timer = setTimeout(() => { expired = true }, TURN_TIMEOUT_MS)
+  function expiredAfterSettlement() {
+    if (!expired) return
+    const error = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s; invocation settled`)
+    error.code = 'KERSOR_TURN_DRAINED'
+    error.retryable = false
+    error.invocation_settled = true
+    error.resource_release_verified = false
+    error.phase_label = label
+    throw error
+  }
+  try {
+    return await agentRetry(async () => {
+      expiredAfterSettlement()
+      const result = await fn()
+      expiredAfterSettlement()
+      return result
+    }, {...retryOptions, mayRetryError: () => !expired})
+  } finally {
     if (typeof clearTimeout === 'function') clearTimeout(timer)
-  })
+  }
 }
 
-// Broker process timeouts settle their child before rejecting. A local watchdog
-// (including the old KERSOR_TURN_TIMEOUT code) cannot establish that fact.
-// Permission, schema, transport, and task-evidence failures keep their identity.
+// Legacy watchdog codes have no settlement proof. Only this drained invocation
+// and settled broker timeouts may use the ordinary timeout path.
 function isTurnTimeout(error) {
-  return ['KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
+  return (error?.code === 'KERSOR_TURN_DRAINED' && error.invocation_settled === true)
+    || ['KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
 }
 // --- END inlined turn-timeout scaffolding ---
 

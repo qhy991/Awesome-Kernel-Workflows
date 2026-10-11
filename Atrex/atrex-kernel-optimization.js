@@ -166,6 +166,7 @@ async function agentRetry(fn, opts) {
       // budget, or undo cancellation. Preserve the original Host diagnostic.
       if (e && (e.retryable === false || e.name === 'AbortError'
         || /(?:PERMISSION|CONFIG_INVALID|REQUEST_INVALID|UNSUPPORTED|DISABLED|BUDGET|QUOTA|AUTH|FILESYSTEM_SANDBOX|WORKFLOW_INTERRUPTED|ABORT_ERR)/.test(String(e.code || '')))) throw e
+      if (opts && typeof opts.mayRetryError === 'function' && !opts.mayRetryError(e)) throw e
       lastError = e
     }
   }
@@ -215,42 +216,45 @@ function guard(obj, field, fallback) {
 if (args.turn_timeout_min == null) args.turn_timeout_min = 720
 
 // --- BEGIN inlined turn-timeout scaffolding (from _meta/scaffolding/turn-timeout.js) ---
-const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn wall-clock cap
+const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // stop admitting attempts at this deadline
 
-/**
- * Wrap a doer-turn promise with a wall-clock cap. On expiry the returned
- * promise rejects with KERSOR_TURN_UNSETTLED. This is not a child terminal or
- * resource-release receipt. The site must settle exact owned processes and
- * broker jobs before any reviewed recovery. Degrades to a
- * passthrough when the runtime has no timers or TURN_TIMEOUT_MS <= 0.
- */
-function withTurnTimeout(promise, label) {
-  if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return promise
-  let timer
-  const guard = new Promise((_, reject) => {
-    timer = setTimeout(
-      () => {
-        const error = new Error(`KERSOR_TURN_UNSETTLED: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s; child terminal and resource release are unverified`)
-        error.code = 'KERSOR_TURN_UNSETTLED'
-        error.retryable = false
-        error.outcome_state = 'unknown'
-        error.child_terminal_verified = false
-        error.resources_released = false
-        error.phase_label = label
-        reject(error)
-      },
-      TURN_TIMEOUT_MS)
-  })
-  return Promise.race([promise, guard]).finally(() => {
+async function withTurnTimeout(fn, label, retryOptions) {
+  if (typeof fn !== 'function') {
+    const error = new TypeError('withTurnTimeout requires an agent thunk, not a started promise')
+    error.code = 'KERSOR_REQUEST_INVALID'
+    error.retryable = false
+    throw error
+  }
+  if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return agentRetry(fn, retryOptions)
+  let expired = false
+  const timer = setTimeout(() => { expired = true }, TURN_TIMEOUT_MS)
+  function expiredAfterSettlement() {
+    if (!expired) return
+    const error = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s; invocation settled`)
+    error.code = 'KERSOR_TURN_DRAINED'
+    error.retryable = false
+    error.invocation_settled = true
+    error.resource_release_verified = false
+    error.phase_label = label
+    throw error
+  }
+  try {
+    return await agentRetry(async () => {
+      expiredAfterSettlement()
+      const result = await fn()
+      expiredAfterSettlement()
+      return result
+    }, {...retryOptions, mayRetryError: () => !expired})
+  } finally {
     if (typeof clearTimeout === 'function') clearTimeout(timer)
-  })
+  }
 }
 
-// Broker process timeouts settle their child before rejecting. A local watchdog
-// (including the old KERSOR_TURN_TIMEOUT code) cannot establish that fact.
-// Permission, schema, transport, and task-evidence failures keep their identity.
+// Legacy watchdog codes have no settlement proof. Only this drained invocation
+// and settled broker timeouts may use the ordinary timeout path.
 function isTurnTimeout(error) {
-  return ['KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
+  return (error?.code === 'KERSOR_TURN_DRAINED' && error.invocation_settled === true)
+    || ['KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
 }
 // --- END inlined turn-timeout scaffolding ---
 
@@ -307,8 +311,7 @@ function expandedCommandContract() {
 }
 
 log('Phase 1/4: Doctor')
-const doctor = await withTurnTimeout(agentRetry(
-  () => agent(`${__taskContractBlock()}
+const doctor = await withTurnTimeout(() => agent(`${__taskContractBlock()}
 Act as a strict Atrex Kernel Agent adapter doctor.
 
 ${expandedCommandContract()}
@@ -318,17 +321,14 @@ Inspect the checkout README, docs/design.md, docs/quickstart.md, orchestrator/op
 Do not recreate Atrex's inner loop in this workflow: its supervisor owns V0/V1 establishment, clean-session episodes, profiling, optimization dropout, GPU-wiki/reference retrieval, budgets, complete-workload terminal validation, same-allocation ABBA verification, and squash promotion.
 ${__experienceBlock()}${__attemptBlock()}
 Return ready, expanded_command, contract_path, detected_version, and notes.
-`, { label: 'atrex-doctor', phase: 'Doctor', model: MODEL, schema: ANY_OBJECT }),
-  { retries: 5, label: 'atrex-doctor' },
-), 'Atrex doctor')
+`, { label: 'atrex-doctor', phase: 'Doctor', model: MODEL, schema: ANY_OBJECT }), 'Atrex doctor', { retries: 5, label: 'atrex-doctor' })
 
 if (!guard(doctor, 'ready', false)) return { ok: false, error: 'atrex_doctor_failed', doctor }
 const expandedCommand = guard(doctor, 'expanded_command', '')
 if (!expandedCommand) return { ok: false, error: 'missing_expanded_atrex_command', doctor }
 
 log('Phase 2/4: Launch Campaign')
-const launch = await withTurnTimeout(agentRetry(
-  () => agent(`${__taskContractBlock()}
+const launch = await withTurnTimeout(() => agent(`${__taskContractBlock()}
 Launch exactly one official Atrex Kernel Agent campaign.
 
 Expanded command: ${expandedCommand}
@@ -337,15 +337,12 @@ Experiment directory: ${EXP_DIR}
 Execute the command exactly once and let orchestrator/optimize.py own every inner decision. Do not edit candidates yourself, do not launch long_horizon/ directly, do not override its budgets or promotion gates, and do not treat memory/live.json as canonical evidence. Preserve stdout, stderr, return code, and campaign paths under ${EXP_DIR}/adapter-launch.
 
 Return command, exit_code, campaign_root, stdout_path, stderr_path, and terminal_summary. A failed command remains a failed campaign; do not fabricate recovery evidence.
-`, { label: 'atrex-launch-campaign', phase: 'Launch Campaign', model: MODEL, schema: ANY_OBJECT }),
-  // Campaign launch is non-idempotent: wrap for the universal null guard, but
+`, { label: 'atrex-launch-campaign', phase: 'Launch Campaign', model: MODEL, schema: ANY_OBJECT }), 'Atrex official campaign', // Campaign launch is non-idempotent: wrap for the universal null guard, but
   // never replay the command after a terminal/null return.
-  { retries: 0, label: 'atrex-launch-campaign' },
-), 'Atrex official campaign')
+  { retries: 0, label: 'atrex-launch-campaign' })
 
 log('Phase 3/4: Evidence Audit')
-const audit = await withTurnTimeout(agentRetry(
-  () => agent(`${__taskContractBlock()}
+const audit = await withTurnTimeout(() => agent(`${__taskContractBlock()}
 Audit the completed Atrex campaign without changing it.
 
 Atrex root: ${ATREX_ROOT}
@@ -355,13 +352,10 @@ Experiment directory: ${EXP_DIR}
 Follow the official schemas and identify the latest canonical memory/v<N>.json, episode journals, terminal handoff/validation, same-allocation ABBA evidence, aggregation provenance, policy/protected-path verdict, and squash-promoted artifact. memory/live.json is observability only and must never be used as promotion evidence. Validate the complete workload set, not a single friendly shape. A promoted result is valid only when the official supervisor records correctness and a strict ABBA improvement.
 
 Return exact existing paths and verdicts. Use false/null/empty strings for absent evidence; do not infer success from process exit alone.
-`, { label: 'atrex-evidence-audit', phase: 'Evidence Audit', model: MODEL, schema: AUDIT_SCHEMA }),
-  { retries: 5, label: 'atrex-evidence-audit' },
-), 'Atrex evidence audit')
+`, { label: 'atrex-evidence-audit', phase: 'Evidence Audit', model: MODEL, schema: AUDIT_SCHEMA }), 'Atrex evidence audit', { retries: 5, label: 'atrex-evidence-audit' })
 
 log('Phase 4/4: Report')
-const report = await withTurnTimeout(agentRetry(
-  () => agent(`${__taskContractBlock()}
+const report = await withTurnTimeout(() => agent(`${__taskContractBlock()}
 Write the strict-adapter report for one Atrex campaign.
 
 Doctor: ${JSON.stringify(doctor)}
@@ -371,9 +365,7 @@ Audit: ${JSON.stringify(audit)}
 Write ${EXP_DIR}/adapter-report.md and append one run record to ${EXP_DIR}/genome.jsonl. Distinguish official canonical evidence from adapter observations. Document whether V0/V1, complete-workload validation, ABBA verification, and squash promotion were present. State that Atrex's profile-driven measure-revise loop, optimization dropout, knowledge base, hidden workload handling, and supervisor were delegated to the official checkout rather than reimplemented here.
 
 Return report_path and report_complete.
-`, { label: 'atrex-report', phase: 'Report', model: MODEL, schema: ANY_OBJECT }),
-  { retries: 5, label: 'atrex-report' },
-), 'Atrex report')
+`, { label: 'atrex-report', phase: 'Report', model: MODEL, schema: ANY_OBJECT }), 'Atrex report', { retries: 5, label: 'atrex-report' })
 
 const speedup = Number(guard(audit, 'best_speedup', 0))
 const bestKernelPath = guard(audit, 'best_kernel_path', '')

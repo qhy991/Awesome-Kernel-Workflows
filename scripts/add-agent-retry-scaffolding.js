@@ -174,7 +174,7 @@ function findAgentSites(src, mask) {
     if (closeParen === undefined) continue
     // already wrapped? look back ~40 code chars for `agentRetry(()=>`
     const look = src.slice(Math.max(0, i - 40), i)
-    if (/agentRetry\s*\(\s*\(\s*\)\s*=>\s*$/.test(look)) continue
+    if (/(?:agentRetry|withTurnTimeout)\s*\(\s*\(\s*\)\s*=>\s*$/.test(look)) continue
     sites.push({ callStart: i, openParen, closeParen })
   }
   return sites
@@ -303,14 +303,16 @@ function usedNullTolerant(src, mask, afterIndex, varName) {
 function findAgentRetryAssignSites(src, mask, maps) {
   const sites = []
   for (let i = 0; i < src.length; i++) {
-    if (src.substr(i, 10) !== 'agentRetry') continue
-    if (src[i + 10] !== '(') continue
+    const name = src.startsWith('agentRetry(', i) ? 'agentRetry'
+      : src.startsWith('withTurnTimeout(', i) ? 'withTurnTimeout' : null
+    if (!name) continue
     if (/[A-Za-z0-9_$]/.test(src[i - 1] || '') || src[i - 1] === '.') continue
     if (!mask[i]) continue
-    const openParen = i + 10
+    const openParen = i + name.length
     const closeParen = maps.openToClose.get(openParen)
     if (closeParen === undefined) continue
-    // Only DIRECT assignments: 'X = await agentRetry(' or 'X = agentRetry('.
+    // Both retry owners put their options last; timeout labels precede options.
+    // Only direct assignments can be checked for later null guards.
     const look = src.slice(Math.max(0, i - 80), i)
     const m = look.match(/([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:await\s+)?$/)
     if (!m) continue // inside `() =>` / returned / etc — not a named local; skip

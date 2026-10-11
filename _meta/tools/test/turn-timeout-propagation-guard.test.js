@@ -35,7 +35,7 @@ const CANON = canonBlock()
 
 test('SSOT: turn-timeout.js defines TURN_TIMEOUT_MS + withTurnTimeout', () => {
   assert.match(SSOT, /const TURN_TIMEOUT_MS =/, 'SSOT must define TURN_TIMEOUT_MS')
-  assert.match(SSOT, /function withTurnTimeout\(promise, label\)/, 'SSOT must define withTurnTimeout')
+  assert.match(SSOT, /function withTurnTimeout\(fn, label, retryOptions\)/, 'SSOT must define withTurnTimeout')
 })
 
 test('every workflow with agent-retry has withTurnTimeout (capability propagated)', () => {
@@ -64,5 +64,13 @@ test('every inlined turn-timeout block has the canonical const + function (no mi
     const block = src.slice(bi, ei)
     assert.match(block, /const TURN_TIMEOUT_MS =/, `${rel}: turn-timeout block must include TURN_TIMEOUT_MS`)
     assert.match(block, /function withTurnTimeout\(/, `${rel}: turn-timeout block must include withTurnTimeout`)
+  }
+})
+
+test('generated helpers never retain the pre-started promise call contract', () => {
+  const {migrateCalls} = require('../../../scripts/patch-turn-timeout.js')
+  for (const file of workflowFiles()) {
+    assert.equal(migrateCalls(fs.readFileSync(file,'utf8')).count,0,
+      path.relative(ROOT,file)+': refresh the helper and timed calls together')
   }
 })

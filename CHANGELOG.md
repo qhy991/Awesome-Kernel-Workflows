@@ -16,6 +16,14 @@ for the versioning policy.
 
 ### Fixed
 
+- Reconcile with main 9d23aa9 while preserving its failure/checkpoint evidence and recovery stops. Distinguish a drained invocation (`KERSOR_TURN_DRAINED` plus its settlement flag) from legacy/unsettled watchdog errors; retain the latter as unverified. (`_meta/scaffolding/turn-timeout.js`, generated helpers, lifecycle guards).
+
+- Refresh or insert timeout helpers and migrate their call sites as one operation; reject lingering started-promise calls in CI so a helper-only update cannot silently leave an incompatible method body. (`scripts/patch-turn-timeout.js`, timeout guards).
+
+- Run the native turn lifecycle, generated-helper/null-safety guards and method fidelity checks in CI; manifest coverage alone did not exercise the timeout contract. (`.github/workflows/ci.yml`).
+
+- Drain an active timed agent before returning control, stop retries after the deadline, and preserve late error identity. Migrate 17 timed call sites to deferred thunks without changing method retry counts; regenerate the canonical retry/timeout helpers in 35 workflows and retain null-safety enforcement. The watchdog does not cancel children or prove resource release. (`_meta/scaffolding/`, helper codemods, lifecycle tests and `docs/turn-deadline-lifecycle.md`).
+
 - Preserve non-timeout KSearch errors and choose native frontier parents from measured library records; checkpoint failed KernelFoundry iterations before stop decisions and require integer behavior cells. Feed AccelOpt failed-candidate evidence into planning and add natural-boundary checkpoints/stops to AccelOpt and CUDALLM-FSR without expanding their search budgets.
 - Return a source-bound `no_valid_candidate / seed_exhausted` terminal for fully measured CUDAAgent/AccelOpt seed failures. Missing or unknown evidence remains HOLD. A local turn watchdog now raises `KERSOR_TURN_UNSETTLED`, never claiming that its uncancelled child or external GPU lease has ended; regenerate all shared scaffolding copies.
 - Preserve the full malformed task-result delivery, original paths and parse error for HOLD diagnosis instead of discarding them in a generic error. Shared helpers remain generated from `_meta/scaffolding/task-result.js` and `turn-timeout.js`; workflow changes are covered in the five method directories and `_meta/tools/test/`.
