@@ -37,7 +37,8 @@ node scripts/add-agent-retry-scaffolding.js --all --refresh
 node scripts/patch-turn-timeout.js --all --refresh --migrate-calls
 ```
 
-The codemod preserves the original agent thunk, label and retry options. It
+Refreshing or inserting the helper also migrates its call sites in the same
+operation. The codemod preserves the original agent thunk, label and retry options. It
 refuses unknown call shapes and is idempotent. The null-safety guard recognizes
 timeout-owned retries and still requires guarding `allowNull: true` results.
 

@@ -12,6 +12,8 @@
 
 ## [Unreleased]
 
+- 将 timeout helper 刷新/插入与调用点迁移合为一次操作；CI 拒绝残留的已启动 Promise 调用，防止仅更新 helper 后留下不兼容的方法主体。（`scripts/patch-turn-timeout.js`、timeout guards）。
+
 - 将原生 turn 生命周期、共享 helper/可空结果保护和方法保真检查纳入 CI；仅检查 manifest 覆盖不足以验证超时合同。（`.github/workflows/ci.yml`）。
 
 - 限时 agent 在返回控制权前等待当前调用终态，期限之后停止重试，并保留迟到错误的原身份。将 17 处限时调用迁移为延迟执行函数，保留各方法原重试次数；重新生成 35 个 workflow 的共享 retry/timeout helper，继续检查可空结果的安全使用。watchdog 不冒充子任务取消或资源释放。（`_meta/scaffolding/`、helper codemod、生命周期测试及 `docs/turn-deadline-lifecycle.md`）。

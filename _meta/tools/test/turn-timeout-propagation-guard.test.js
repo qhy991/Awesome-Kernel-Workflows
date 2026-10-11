@@ -66,3 +66,11 @@ test('every inlined turn-timeout block has the canonical const + function (no mi
     assert.match(block, /function withTurnTimeout\(/, `${rel}: turn-timeout block must include withTurnTimeout`)
   }
 })
+
+test('generated helpers never retain the pre-started promise call contract', () => {
+  const {migrateCalls} = require('../../../scripts/patch-turn-timeout.js')
+  for (const file of workflowFiles()) {
+    assert.equal(migrateCalls(fs.readFileSync(file,'utf8')).count,0,
+      path.relative(ROOT,file)+': refresh the helper and timed calls together')
+  }
+})

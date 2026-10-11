@@ -101,8 +101,9 @@ function main() {
   for (const f of targets) {
     const orig = fs.readFileSync(f, 'utf8')
     const rel = path.relative(REPO, f)
-    const migrated = process.argv.includes('--migrate-calls') ? migrateCalls(orig) : {src:orig,count:0}
-    const r = transform(migrated.src, block, process.argv.includes('--refresh'))
+    const r = transform(orig, block, process.argv.includes('--refresh') || process.argv.includes('--migrate-calls'))
+    const migrated = ['refreshed','inserted'].includes(r.status) ? migrateCalls(r.src) : {src:r.src,count:0}
+    r.src = migrated.src
     counts[r.status] = (counts[r.status] || 0) + 1
     if (r.src !== orig) {
       fs.writeFileSync(f, r.src)
