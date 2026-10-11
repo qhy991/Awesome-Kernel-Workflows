@@ -21,3 +21,22 @@ jobs:
         run: |
           pip install pyyaml --quiet
           ./scripts/validate-manifests.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Native turn lifecycle and helper guards
+        run: |
+          node --test \
+            _meta/tools/test/turn-timeout-settlement.test.js \
+            _meta/tools/test/turn-timeout-call-migration.test.js \
+            _meta/tools/test/turn-timeout-propagation-guard.test.js \
+            _meta/tools/test/argus-turn-timeout-guard.test.js \
+            _meta/tools/test/ksearch-turn-timeout-guard.test.js \
+            _meta/tools/test/cudaagent-watchdog-retry-guard.test.js \
+            _meta/tools/test/patch-turn-timeout-refresh.test.js \
+            _meta/tools/test/agent-retry-null-safety.test.js \
+            _meta/tools/test/agent-retry-guard-lint.test.js \
+            _meta/tools/test/scaffolding-ssot-debt-guard.test.js
+          node scripts/check-fidelity-contracts.js
