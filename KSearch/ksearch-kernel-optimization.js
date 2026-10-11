@@ -46,17 +46,23 @@ function __parseTaskResultJSON(raw) {
       else if (character === '"') quoted = !quoted
     }
     if (text === raw) throw original
-    return JSON.parse(text)
+    try { return JSON.parse(text) } catch (error) {
+      error.cause = original
+      throw error
+    }
   }
 }
 function __taskResult(output, expectedPath, expectedCount) {
   let result
+  const raw = output?.test_result_json
   try {
-    const raw = output?.test_result_json
     result = typeof raw === 'string' ? __parseTaskResultJSON(raw)
       : raw && typeof raw === 'object' && !Array.isArray(raw) ? JSON.parse(JSON.stringify(raw))
       : __taskHold('missing/malformed raw task result')
-  } catch { return __taskHold('missing/malformed raw task result') }
+  } catch (error) { return __taskHold('missing/malformed raw task result', {
+    test_result_path:expectedPath, returned_test_result_path:output?.test_result_path ?? null,
+    test_result_json:raw ?? null,
+  }, error) }
   // The caller owns the slot. Duplicated delivery paths are descriptive, not
   // candidate identity: source binding and canonical candidate_path below remain mandatory.
   if (result?.contract_version !== 'kersor-task-result-v1') return __taskHold('task result contract mismatch', result)
@@ -89,9 +95,53 @@ function __taskResult(output, expectedPath, expectedCount) {
     source_binding:result.source_binding, host_candidate_path:result.candidate_path, test_result_path:expectedPath,
     ...(deliveryPathObservation ? {delivery_path_observation:deliveryPathObservation} : {}),
     outcome_state:valid ? 'passed' : 'candidate_failure',
+    raw_task_result:result,
     diagnostics:result.diagnostics || [], evidence:result.evidence || null,
     error_log:valid ? '' : JSON.stringify({error:result.error || 'candidate rejected',
       diagnostics:result.diagnostics || [], candidate_path:result.candidate_path, evidence:result.evidence || null})}
+}
+
+// Finite method outcome, not successful kernel acceptance or resource release.
+// Only the complete declared set of already-bound candidate failures can end here.
+function __nativeTaskSeedExhausted(ctx) {
+  const count = ctx.seedCount
+  if (!Number.isInteger(count) || count <= 0 || !Number.isInteger(ctx.workloadCount)
+      || ctx.workloadCount <= 0 || !Array.isArray(ctx.candidates) || ctx.candidates.length !== count)
+    return __taskHold('seed exhaustion lacks the complete declared candidate set')
+  const slots = Array.from({length:count}, (_, index) => ({index,
+    candidate_path:`${ctx.expDir}/generated/initial_${index}.py`,
+    test_result_path:`${ctx.expDir}/generated/initial_${index}.json`}))
+  for (let i = 0; i < count; i++) {
+    const item = ctx.candidates[i], slot = slots[i]
+    const raw = item?.raw_task_result
+    const measured = __taskResult({test_result_path:slot.test_result_path,test_result_json:raw},
+      slot.test_result_path, ctx.workloadCount)
+    if (measured.is_valid || raw?.outcome_state !== 'candidate_failure'
+        || raw?.failure_origin !== 'candidate' || raw?.correct !== false || raw?.measurement_valid !== false
+        || !(raw?.compiled === null || typeof raw?.compiled === 'boolean')
+        || item.variant_path !== slot.candidate_path || item.test_result_path !== slot.test_result_path
+        || item.host_candidate_path !== measured.host_candidate_path
+        || item.source_binding?.verified !== true
+        || item.source_binding?.source_sha256 !== measured.source_binding.source_sha256
+        || item.compiled !== measured.compiled || item.correct !== false
+        || item.is_valid !== false || item.measurement_valid !== false || item.outcome_state !== 'candidate_failure')
+      return __taskHold('seed exhaustion requires only source-bound candidate failures in every declared slot', raw)
+  }
+  const compiled = ctx.candidates.some(c => c.compiled === true) ? true
+    : ctx.candidates.every(c => c.compiled === false) ? false : null
+  return {
+    workflow:ctx.workflow, status:'no_valid_candidate', outcome_state:'no_valid_candidate',
+    stop_reason:'seed_exhausted', termination_reason:'seed_exhausted',
+    compiled, correct:false, is_valid:false, measurement_valid:false,
+    seed_scope:{exp_dir:ctx.expDir,workload_count:ctx.workloadCount},
+    seed_budget:{declared:count,evaluated:count,remaining:0}, declared_seed_slots:slots,
+    initial_candidates:ctx.candidates,
+    initial_generation_result:{verified:false,reason:'seed_exhausted'},
+    generated_kernel_path:'',best_kernel_path:null,best_kernel_code:'',
+    best_candidate_binding:null,source_binding:null,canonical_metric:null,
+    overall_speedup:null,best_speedup:null,speedup_vs_reference:null,
+    iterations_completed:0,turns_used:0,target_met:false,report:null,
+  }
 }
 
 // A generated candidate owns a file identity, not an array position.
@@ -626,7 +676,9 @@ const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn w
 
 /**
  * Wrap a doer-turn promise with a wall-clock cap. On expiry the returned
- * promise rejects with `turn-timeout: <label> exceeded Ns`. Degrades to a
+ * promise rejects with KERSOR_TURN_UNSETTLED. This is not a child terminal or
+ * resource-release receipt. The site must settle exact owned processes and
+ * broker jobs before any reviewed recovery. Degrades to a
  * passthrough when the runtime has no timers or TURN_TIMEOUT_MS <= 0.
  */
 function withTurnTimeout(promise, label) {
@@ -635,9 +687,13 @@ function withTurnTimeout(promise, label) {
   const guard = new Promise((_, reject) => {
     timer = setTimeout(
       () => {
-        const error = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)
-        error.code = 'KERSOR_TURN_TIMEOUT'
+        const error = new Error(`KERSOR_TURN_UNSETTLED: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s; child terminal and resource release are unverified`)
+        error.code = 'KERSOR_TURN_UNSETTLED'
         error.retryable = false
+        error.outcome_state = 'unknown'
+        error.child_terminal_verified = false
+        error.resources_released = false
+        error.phase_label = label
         reject(error)
       },
       TURN_TIMEOUT_MS)
@@ -647,10 +703,11 @@ function withTurnTimeout(promise, label) {
   })
 }
 
-// Broker timeouts and this watchdog are the only timeout classifications.
+// Broker process timeouts settle their child before rejecting. A local watchdog
+// (including the old KERSOR_TURN_TIMEOUT code) cannot establish that fact.
 // Permission, schema, transport, and task-evidence failures keep their identity.
 function isTurnTimeout(error) {
-  return ['KERSOR_TURN_TIMEOUT', 'KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
+  return ['KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
 }
 // --- END inlined turn-timeout scaffolding ---
 // --- genome self-report: INLINE (rich, doer-written) ---
@@ -1245,6 +1302,39 @@ function ksearchCheckpointSolution(solution) {
   return {...record, path:sourcePath}
 }
 
+function ksearchTaskSelection(tree, solutions, acceptedParent, baseline, maxDifficulty) {
+  const frontier = []
+  for (const [id, node] of Object.entries(tree)) {
+    if (node?.status !== 'open' || !node.action?.title) continue
+    const action = node.action
+    if (!Number.isInteger(action.difficulty_1_to_5) || action.difficulty_1_to_5 < 1 || action.difficulty_1_to_5 > 5
+        || !Number.isFinite(action.score_0_to_1) || action.score_0_to_1 < 0 || action.score_0_to_1 > 1)
+      __taskHold('KSearch frontier action has an invalid difficulty or score')
+    if (action.difficulty_1_to_5 > maxDifficulty) continue
+    const isRoot = node.parent_id === 'root'
+    const parentNode = tree[node.parent_id]
+    if (!isRoot && !parentNode?.solution_id) continue
+    const parent = isRoot ? acceptedParent : solutions.find(s => s.id === parentNode.solution_id
+      && s.node_id === node.parent_id && s.eval?.is_valid === true)?.eval
+    if (!isRoot && (!parent || !Number.isFinite(parent.metric_value) || parent.metric_value <= 0
+        || typeof parent.host_candidate_path !== 'string' || !parent.host_candidate_path))
+      __taskHold('KSearch frontier parent has no bound passing measurement')
+    frontier.push({id, node, parent, isRoot})
+  }
+  frontier.sort((a,b) => b.node.action.score_0_to_1 - a.node.action.score_0_to_1
+    || a.node.action.difficulty_1_to_5 - b.node.action.difficulty_1_to_5
+    || (Number.isFinite(b.node.overall_rating_0_to_10) ? b.node.overall_rating_0_to_10 : 0)
+      - (Number.isFinite(a.node.overall_rating_0_to_10) ? a.node.overall_rating_0_to_10 : 0)
+    || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  const selected = frontier[0]
+  if (!selected) return null
+  return {selected_node_id:selected.id, action_title:selected.node.action.title,
+    action_description:selected.node.action.description || '', action_score:selected.node.action.score_0_to_1,
+    action_difficulty:selected.node.action.difficulty_1_to_5, parent_is_root:selected.isRoot,
+    parent_solution_path:selected.parent?.host_candidate_path || '',
+    parent_metric:selected.parent?.metric_value ?? baseline}
+}
+
 const ksearchCheckpointReadProgram = `import hashlib, json, os, sys
 try:
     filename = sys.argv[1]
@@ -1355,7 +1445,18 @@ Return the (possibly updated) tree and a count of open frontier nodes.`, {
   // Hard constraint: only executable frontier nodes with difficulty <= MAX_DIFFICULTY
   // ===========================================================================
 
-  const selection = await agentRetry(() => agent(`${__taskContractBlock()}You are a search strategy expert implementing the K-Search action selection algorithm.
+  const taskSelection = args.task_result_command
+    ? ksearchTaskSelection(decisionTree, solutionDb, taskParentMeasurement, baselineMetric, MAX_DIFFICULTY) : null
+  if (args.task_result_command && !taskSelection) {
+    log('No executable action satisfies the declared difficulty cap — search exhausted.')
+    break
+  }
+  const selectionAdvice = await agentRetry(() => agent(args.task_result_command
+    ? `${__taskContractBlock()}Explain the selected K-Search frontier action. The workflow has applied the declared deterministic sort and hard difficulty cap. Node, parent source and parent metric below are authoritative; do not select another node or replace a measurement.
+Selected action: ${JSON.stringify(taskSelection)}
+Decision tree: ${JSON.stringify(decisionTree)}
+Return context_for_generation with the ancestor decisions and relevant sibling outcomes, and reasoning. Source and result files retain complete evidence.`
+    : `${__taskContractBlock()}You are a search strategy expert implementing the K-Search action selection algorithm.
 
 # Decision Tree (current state):
 ${JSON.stringify(decisionTree, null, 2)}
@@ -1389,7 +1490,7 @@ Then append:
 {"workflow":"${WORKFLOW_NAME}","phase":"Select","ts":"<ts>","status":"done","candidate_id":"cycle-${cycle}","technique":"frontier_selection","speedup":null,"note":"<selected node_id + action_title + score + difficulty, one line>"}`, {
     label: `select-${cycle}`,
     phase: 'Select',
-    schema: {
+    schema: args.task_result_command ? {type:'object',properties:{context_for_generation:{type:'object'},reasoning:{type:'string'}},required:['context_for_generation','reasoning']} : {
       type: 'object',
       properties: {
         selected_node_id: { type: ['string', 'null'] },
@@ -1407,6 +1508,9 @@ Then append:
       required: ['selected_node_id', 'action_title'],
     },
   }), { retries: 5, allowNull: true })
+  const selection = args.task_result_command
+    ? {...taskSelection, context_for_generation:selectionAdvice?.context_for_generation || {}, reasoning:selectionAdvice?.reasoning || ''}
+    : selectionAdvice
 
   if (!selection || !selection.selected_node_id ||
       ['null', 'search_exhausted'].includes(String(selection.selected_node_id).toLowerCase())) {
@@ -1648,6 +1752,7 @@ Then append:
       }), { retries: 5, allowNull: true }), `improve-${cycle}-${attempt}`)
     }
     } catch (e) {
+      if (!isTurnTimeout(e)) throw e
       log(`  Cycle ${cycle + 1} attempt ${attempt + 1}: turn watchdog tripped — ending cycle (${e && e.message ? e.message : e})`)
       break
     }

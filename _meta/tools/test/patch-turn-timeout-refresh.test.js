@@ -12,7 +12,9 @@ test('timeout refresh replaces old generated code, preserves method body, and is
   refresh();const once=fs.readFileSync(file,'utf8');refresh();assert.equal(fs.readFileSync(file,'utf8'),once)
   assert.ok(once.startsWith(prefix+begin));assert.ok(once.endsWith(end+suffix))
   const isTimeout=vm.runInNewContext(once+';isTurnTimeout',{args:{}})
-  assert.equal(isTimeout({code:'KERSOR_TURN_TIMEOUT'}),true)
+  assert.equal(isTimeout({code:'KERSOR_TURN_TIMEOUT'}),false)
+  assert.equal(isTimeout({code:'KERSOR_TURN_UNSETTLED'}),false)
+  assert.equal(isTimeout({code:'KERSOR_CLAUDE_TIMEOUT'}),true)
   assert.equal(isTimeout({code:'KERSOR_PERMISSION_DENIED'}),false)
  }finally{fs.rmSync(dir,{recursive:true,force:true})}
 })

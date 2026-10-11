@@ -129,6 +129,33 @@ Workflow({name: 'accelopt-kernel-optimization', args: {
 
 ## Parameters
 
+Native `task_result_command` runs preserve a separate failure-evidence index:
+candidate source path/hash, complete task-result path, and typed compile/correctness
+verdict. The next planner and implementer read those original files, including
+linked diagnostic traces. Failed candidates never become performance-learning
+pairs or acquire invented slowdown scores. The original beam, learning thresholds,
+seed count, and search budget are unchanged. After an incumbent changes, its initial
+profile is explicitly historical until a profile bound to the new source is available.
+
+Native runs atomically write `exp_dir/checkpoint.json` after each complete iteration,
+including beam/source bindings, initial measurement, failure references, experience,
+completed iterations, and the original arguments. Optional `termination_file` and
+`deadline_epoch` also enable these safe points on legacy paths. Stop is cooperative:
+the current iteration finishes evaluation and learning before returning, with actual
+`iterations_completed`, `termination_reason`, and `checkpoint_path`; it skips the
+optional final-report agent. These checkpoints are audit snapshots for the same
+native Workflow activation and its existing replay identity/budget. They are **not**
+an independently loadable resume format. Starting a new activation from a copied
+checkpoint is unsupported; no extra search budget or accepted source is implied.
+
+If every declared native seed is a complete, source-bound `candidate_failure`,
+the fixed seed budget ends with `status`/`outcome_state = no_valid_candidate` and
+`stop_reason`/`termination_reason = seed_exhausted`. The return preserves every
+declared slot and its full canonical result; best-candidate fields and performance
+metrics remain empty. It dispatches no planner, profiler or replacement seed.
+Missing evidence, permission failures and unknown observations still HOLD. This
+is a finite search outcome, not an accepted kernel or proof of released resources.
+
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `kernel_path` | (required) | Path to the CUDA kernel `.cu` file |
@@ -146,6 +173,8 @@ Workflow({name: 'accelopt-kernel-optimization', args: {
 | `min_threshold` | `1.05` | Slowdown threshold for negative learning pairs |
 | `topk_learn` | `5` | Total pairs sent to summarizer per iteration |
 | `ncu_binary` | `'ncu'` | Path to Nsight Compute CLI |
+| `termination_file` | unset | Non-empty file requests stop at the next complete iteration boundary |
+| `deadline_epoch` | unset | Positive Unix epoch deadline, checked at the same boundary |
 
 ## Architecture
 

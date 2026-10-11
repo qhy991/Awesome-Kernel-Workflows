@@ -14,6 +14,12 @@ for the versioning policy.
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve non-timeout KSearch errors and choose native frontier parents from measured library records; checkpoint failed KernelFoundry iterations before stop decisions and require integer behavior cells. Feed AccelOpt failed-candidate evidence into planning and add natural-boundary checkpoints/stops to AccelOpt and CUDALLM-FSR without expanding their search budgets.
+- Return a source-bound `no_valid_candidate / seed_exhausted` terminal for fully measured CUDAAgent/AccelOpt seed failures. Missing or unknown evidence remains HOLD. A local turn watchdog now raises `KERSOR_TURN_UNSETTLED`, never claiming that its uncancelled child or external GPU lease has ended; regenerate all shared scaffolding copies.
+- Preserve the full malformed task-result delivery, original paths and parse error for HOLD diagnosis instead of discarding them in a generic error. Shared helpers remain generated from `_meta/scaffolding/task-result.js` and `turn-timeout.js`; workflow changes are covered in the five method directories and `_meta/tools/test/`.
+
 - Use workflow-assigned initial seed slots in CUDAAgent and AccelOpt instead of model-echoed path identity. Preserve the declared seed count, per-slot existence and source-bound measurement gates; cover date typos, duplicate echoes, missing files and unbound results in native and Host execution.
 
 - Keep explicit unknown-model and policy-refusal flags outside native readback recovery, even if the outer message reports missing StructuredOutput.

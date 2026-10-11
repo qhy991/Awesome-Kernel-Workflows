@@ -407,7 +407,9 @@ const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn w
 
 /**
  * Wrap a doer-turn promise with a wall-clock cap. On expiry the returned
- * promise rejects with `turn-timeout: <label> exceeded Ns`. Degrades to a
+ * promise rejects with KERSOR_TURN_UNSETTLED. This is not a child terminal or
+ * resource-release receipt. The site must settle exact owned processes and
+ * broker jobs before any reviewed recovery. Degrades to a
  * passthrough when the runtime has no timers or TURN_TIMEOUT_MS <= 0.
  */
 function withTurnTimeout(promise, label) {
@@ -416,9 +418,13 @@ function withTurnTimeout(promise, label) {
   const guard = new Promise((_, reject) => {
     timer = setTimeout(
       () => {
-        const error = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)
-        error.code = 'KERSOR_TURN_TIMEOUT'
+        const error = new Error(`KERSOR_TURN_UNSETTLED: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s; child terminal and resource release are unverified`)
+        error.code = 'KERSOR_TURN_UNSETTLED'
         error.retryable = false
+        error.outcome_state = 'unknown'
+        error.child_terminal_verified = false
+        error.resources_released = false
+        error.phase_label = label
         reject(error)
       },
       TURN_TIMEOUT_MS)
@@ -428,10 +434,11 @@ function withTurnTimeout(promise, label) {
   })
 }
 
-// Broker timeouts and this watchdog are the only timeout classifications.
+// Broker process timeouts settle their child before rejecting. A local watchdog
+// (including the old KERSOR_TURN_TIMEOUT code) cannot establish that fact.
 // Permission, schema, transport, and task-evidence failures keep their identity.
 function isTurnTimeout(error) {
-  return ['KERSOR_TURN_TIMEOUT', 'KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
+  return ['KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
 }
 // --- END inlined turn-timeout scaffolding ---
 // --- genome self-report: INLINE (rich, doer-written) ---

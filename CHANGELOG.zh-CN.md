@@ -12,6 +12,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- task-result JSON 损坏时保留完整原始交付、原路径与解析错误，供 HOLD 诊断使用。共享辅助代码仍从 `_meta/scaffolding/task-result.js` 与 `turn-timeout.js` 生成；本次五种方法的修改及回归位于各方法目录与 `_meta/tools/test/`。
+- KSearch 保留非超时错误，原生 frontier 父本来自已测 library；KernelFoundry 失败迭代先 checkpoint 再检查停止，行为格严格限定整数。AccelOpt 把失败候选完整证据索引反馈规划，AccelOpt 与 CUDALLM-FSR 增加自然边界 checkpoint/停止，不扩展搜索预算。
+- CUDAAgent/AccelOpt 全部种子已测失败时返回源码绑定的 `no_valid_candidate / seed_exhausted` 终态；缺失或未知证据仍 HOLD。本地轮次计时器现在抛 `KERSOR_TURN_UNSETTLED`，不把未取消子任务或外部 GPU 租约说成已结束；所有共享代码副本由生成器同步。
+
 - CUDAAgent与AccelOpt初始种子使用workflow已分配槽位，不再把模型回传路径作为身份权威；保留种子数量、文件存在和源码绑定测量检查，覆盖native/Host下日期转录、重复回传、缺文件及缺绑定反例。
 
 - 即使外层消息为缺少StructuredOutput，显式模型未知或政策拒绝标记仍禁止进入只读交接恢复。

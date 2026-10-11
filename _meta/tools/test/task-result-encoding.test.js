@@ -30,6 +30,22 @@ test('structural corruption and unknown outcomes are never repaired into a score
  }
 })
 
+test('malformed raw delivery remains complete in HOLD with its declared slot and parse cause',()=>{
+ const parse=vm.runInNewContext(source+';__taskResult')
+ const complete=JSON.stringify({...raw,diagnostics:[{error:'x'.repeat(100000)+'\u001b[91mTAIL_EVIDENCE'}]})
+ for(const malformed of [complete.slice(0,-1),complete.replaceAll('\\u001b','\u001b').slice(0,-1)]) {
+  assert.throws(()=>parse({test_result_path:'/returned/alias.json',test_result_json:malformed},p,17),error=>{
+   assert.equal(error.code,'TASK_RESULT_HOLD');assert.equal(error.retryable,false)
+   assert.equal(error.task_result.test_result_path,p)
+   assert.equal(error.task_result.returned_test_result_path,'/returned/alias.json')
+   assert.equal(error.task_result.test_result_json,malformed)
+   assert.equal(error.cause.name,'SyntaxError')
+   assert.ok(error.message.includes(JSON.stringify(malformed)))
+   return true
+  })
+ }
+})
+
 test('native delivery schema admits both encodings accepted by the parser', async()=>{
  const helper=fs.readFileSync(path.resolve(__dirname,'../../scaffolding/task-result.js'),'utf8')
  let schema

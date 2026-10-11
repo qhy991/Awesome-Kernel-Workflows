@@ -53,7 +53,7 @@ test('ksearch: all three Generate doer-turn variants are wrapped with withTurnTi
 test('ksearch: Generate chain translates a turn timeout into an early cycle exit', () => {
   // A timeout must not crash the run; it must break the attempt loop (treated
   // like stagnation) so the search continues with the next cycle.
-  assert.match(SOURCE, /} catch \(e\) \{\s*\n\s*log\(`  Cycle \$\{cycle \+ 1\} attempt \$\{attempt \+ 1\}: turn watchdog tripped — ending cycle/,
+  assert.match(SOURCE, /} catch \(e\) \{\s*\n\s*if \(!isTurnTimeout\(e\)\) throw e\s*\n\s*log\(`  Cycle \$\{cycle \+ 1\} attempt \$\{attempt \+ 1\}: turn watchdog tripped — ending cycle/,
     'a turn-timeout reject must be caught and logged')
   assert.match(SOURCE, /turn watchdog tripped — ending cycle[\s\S]*?break/,
     'a turn timeout must break out of the attempt loop')

@@ -120,3 +120,5 @@ benchmark、依赖反馈的 debug/improve 以及决策树更新仍保持串行�
 ### Native 任务自测资格
 
 可选 `task_result_command`、`task_workload_count` 启用冻结任务 Python/CuTe 路径。快照明确选择的文件，经 broker 执行完整官方测试并归约匹配的原始任务/终态记录。只有完整正确且实测的结果可评分；NCU 仅诊断。保留有限原生拓扑及默认值。CUDAAgent/AccelOpt 比较本轮自行生成初始实现；KernelFoundry/KSearch/CUDALLM 报告 official reference 分数。返回实测快照，不重写显示源码。Native agent JSON 传输须核对原始文件及外部终验，不冒充 process Host evaluate 回执或正式消融权威。
+
+此路径由 workflow 代码在 `max_difficulty` 内，按分数、难度、评级及节点 ID 确定性选择 frontier。父本路径和分数来自与父节点绑定的通过测量；选择 agent 只补充上下文和理由。权限、预算、transport 及子任务尚未结算的错误原样上抛给运行时，不进入回溯或派发后续候选。已经结算的具名 turn timeout 保留有界周期收尾行为。这些 CPU 回归只证明控制边界，不代表设备资格或研究收益。

@@ -13,8 +13,9 @@
 // Implement/Verify turn stalling the whole run for 40+ minutes before an
 // orchestrator manually killed it. TURN_TIMEOUT_MS bounds each doer turn; on
 // expiry the wrapped promise rejects with `turn-timeout: <label> exceeded Ns`
-// and the caller exits the loop with convergence_status='timeout' (or, for a
-// linear pipeline, aborts the round cleanly) instead of hanging.
+// and the caller fails closed with an unresolved-child HOLD. Promise.race does
+// not cancel the child: returning an incumbent or starting another cycle could
+// overlap work or seal a source that the abandoned child is still modifying.
 //
 // PARITY: CUDAAgent has carried this guard since #12/#14. Issues #30 propagates
 // the same guard to ARGUS and KSearch, which lacked it (KSearch already had
@@ -37,7 +38,9 @@ const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // per-turn w
 
 /**
  * Wrap a doer-turn promise with a wall-clock cap. On expiry the returned
- * promise rejects with `turn-timeout: <label> exceeded Ns`. Degrades to a
+ * promise rejects with KERSOR_TURN_UNSETTLED. This is not a child terminal or
+ * resource-release receipt. The site must settle exact owned processes and
+ * broker jobs before any reviewed recovery. Degrades to a
  * passthrough when the runtime has no timers or TURN_TIMEOUT_MS <= 0.
  */
 function withTurnTimeout(promise, label) {
@@ -46,9 +49,13 @@ function withTurnTimeout(promise, label) {
   const guard = new Promise((_, reject) => {
     timer = setTimeout(
       () => {
-        const error = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)
-        error.code = 'KERSOR_TURN_TIMEOUT'
+        const error = new Error(`KERSOR_TURN_UNSETTLED: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s; child terminal and resource release are unverified`)
+        error.code = 'KERSOR_TURN_UNSETTLED'
         error.retryable = false
+        error.outcome_state = 'unknown'
+        error.child_terminal_verified = false
+        error.resources_released = false
+        error.phase_label = label
         reject(error)
       },
       TURN_TIMEOUT_MS)
@@ -58,8 +65,9 @@ function withTurnTimeout(promise, label) {
   })
 }
 
-// Broker timeouts and this watchdog are the only timeout classifications.
+// Broker process timeouts settle their child before rejecting. A local watchdog
+// (including the old KERSOR_TURN_TIMEOUT code) cannot establish that fact.
 // Permission, schema, transport, and task-evidence failures keep their identity.
 function isTurnTimeout(error) {
-  return ['KERSOR_TURN_TIMEOUT', 'KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
+  return ['KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
 }

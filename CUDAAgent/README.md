@@ -6,6 +6,15 @@ Skill-integrated multi-turn kernel optimization with profiling-driven iterative 
 
 ## Overview
 
+On the native `task_result_command` path, exhausting the declared seed slots with
+complete source-bound `candidate_failure` results returns the finite outcome
+`status`/`outcome_state = no_valid_candidate` and `stop_reason`/`termination_reason =
+seed_exhausted`. It preserves every declared slot and full original result, reports
+compile status from those results, and leaves best-source and performance fields
+empty. No workspace setup, profiling, refinement or replacement seed is dispatched.
+Missing evidence, unknown observations and permission/infrastructure errors still
+HOLD. Kernel acceptance, model identity and resource release remain external checks.
+
 CUDA Agent defines a structured **skill-based workflow** (SKILL.md) for CUDA kernel optimization that iterates through profile → implement → verify → refine cycles until a speedup target over `torch.compile` is achieved.
 
 ### Results (from paper)
