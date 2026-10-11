@@ -68,6 +68,12 @@ routing:
 args:
   required: []
   optional:
+  - name: termination_file
+    type: string
+    description: Optional cooperative-stop request file; checked after each complete Plan-Execute-Profile-Learn iteration. Native task runs checkpoint every iteration even without a stop request.
+  - name: deadline_epoch
+    type: number
+    description: Optional Unix epoch stop deadline, observed at iteration boundaries. Does not cancel an in-flight build or evaluation.
   - name: native_task_result_file_handoff
     type: boolean
     description: Enable only after the native StructuredOutput canonical-file hook is installed and qualified. Return result references instead of model-transcribed measurements. Default false.

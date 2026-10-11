@@ -12,11 +12,19 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- 合入 main 9d23aa9 并保留其失败/checkpoint 证据与恢复停止规则。用独立的 `KERSOR_TURN_DRAINED` 及调用终态标记区分已等待结束的调用；旧 watchdog 和未收尾错误继续保持未验证。（共享 timeout helper、生成副本及生命周期检查）。
+
 - 将 timeout helper 刷新/插入与调用点迁移合为一次操作；CI 拒绝残留的已启动 Promise 调用，防止仅更新 helper 后留下不兼容的方法主体。（`scripts/patch-turn-timeout.js`、timeout guards）。
 
 - 将原生 turn 生命周期、共享 helper/可空结果保护和方法保真检查纳入 CI；仅检查 manifest 覆盖不足以验证超时合同。（`.github/workflows/ci.yml`）。
 
 - 限时 agent 在返回控制权前等待当前调用终态，期限之后停止重试，并保留迟到错误的原身份。将 17 处限时调用迁移为延迟执行函数，保留各方法原重试次数；重新生成 35 个 workflow 的共享 retry/timeout helper，继续检查可空结果的安全使用。watchdog 不冒充子任务取消或资源释放。（`_meta/scaffolding/`、helper codemod、生命周期测试及 `docs/turn-deadline-lifecycle.md`）。
+
+- task-result JSON 损坏时保留完整原始交付、原路径与解析错误，供 HOLD 诊断使用。共享辅助代码仍从 `_meta/scaffolding/task-result.js` 与 `turn-timeout.js` 生成；本次五种方法的修改及回归位于各方法目录与 `_meta/tools/test/`。
+- KSearch 保留非超时错误，原生 frontier 父本来自已测 library；KernelFoundry 失败迭代先 checkpoint 再检查停止，行为格严格限定整数。AccelOpt 把失败候选完整证据索引反馈规划，AccelOpt 与 CUDALLM-FSR 增加自然边界 checkpoint/停止，不扩展搜索预算。
+- CUDAAgent/AccelOpt 全部种子已测失败时返回源码绑定的 `no_valid_candidate / seed_exhausted` 终态；缺失或未知证据仍 HOLD。本地轮次计时器现在抛 `KERSOR_TURN_UNSETTLED`，不把未取消子任务或外部 GPU 租约说成已结束；所有共享代码副本由生成器同步。
 
 - CUDAAgent与AccelOpt初始种子使用workflow已分配槽位，不再把模型回传路径作为身份权威；保留种子数量、文件存在和源码绑定测量检查，覆盖native/Host下日期转录、重复回传、缺文件及缺绑定反例。
 

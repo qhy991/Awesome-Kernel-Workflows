@@ -45,17 +45,23 @@ function __parseTaskResultJSON(raw) {
       else if (character === '"') quoted = !quoted
     }
     if (text === raw) throw original
-    return JSON.parse(text)
+    try { return JSON.parse(text) } catch (error) {
+      error.cause = original
+      throw error
+    }
   }
 }
 function __taskResult(output, expectedPath, expectedCount) {
   let result
+  const raw = output?.test_result_json
   try {
-    const raw = output?.test_result_json
     result = typeof raw === 'string' ? __parseTaskResultJSON(raw)
       : raw && typeof raw === 'object' && !Array.isArray(raw) ? JSON.parse(JSON.stringify(raw))
       : __taskHold('missing/malformed raw task result')
-  } catch { return __taskHold('missing/malformed raw task result') }
+  } catch (error) { return __taskHold('missing/malformed raw task result', {
+    test_result_path:expectedPath, returned_test_result_path:output?.test_result_path ?? null,
+    test_result_json:raw ?? null,
+  }, error) }
   // The caller owns the slot. Duplicated delivery paths are descriptive, not
   // candidate identity: source binding and canonical candidate_path below remain mandatory.
   if (result?.contract_version !== 'kersor-task-result-v1') return __taskHold('task result contract mismatch', result)
@@ -88,9 +94,53 @@ function __taskResult(output, expectedPath, expectedCount) {
     source_binding:result.source_binding, host_candidate_path:result.candidate_path, test_result_path:expectedPath,
     ...(deliveryPathObservation ? {delivery_path_observation:deliveryPathObservation} : {}),
     outcome_state:valid ? 'passed' : 'candidate_failure',
+    raw_task_result:result,
     diagnostics:result.diagnostics || [], evidence:result.evidence || null,
     error_log:valid ? '' : JSON.stringify({error:result.error || 'candidate rejected',
       diagnostics:result.diagnostics || [], candidate_path:result.candidate_path, evidence:result.evidence || null})}
+}
+
+// Finite method outcome, not successful kernel acceptance or resource release.
+// Only the complete declared set of already-bound candidate failures can end here.
+function __nativeTaskSeedExhausted(ctx) {
+  const count = ctx.seedCount
+  if (!Number.isInteger(count) || count <= 0 || !Number.isInteger(ctx.workloadCount)
+      || ctx.workloadCount <= 0 || !Array.isArray(ctx.candidates) || ctx.candidates.length !== count)
+    return __taskHold('seed exhaustion lacks the complete declared candidate set')
+  const slots = Array.from({length:count}, (_, index) => ({index,
+    candidate_path:`${ctx.expDir}/generated/initial_${index}.py`,
+    test_result_path:`${ctx.expDir}/generated/initial_${index}.json`}))
+  for (let i = 0; i < count; i++) {
+    const item = ctx.candidates[i], slot = slots[i]
+    const raw = item?.raw_task_result
+    const measured = __taskResult({test_result_path:slot.test_result_path,test_result_json:raw},
+      slot.test_result_path, ctx.workloadCount)
+    if (measured.is_valid || raw?.outcome_state !== 'candidate_failure'
+        || raw?.failure_origin !== 'candidate' || raw?.correct !== false || raw?.measurement_valid !== false
+        || !(raw?.compiled === null || typeof raw?.compiled === 'boolean')
+        || item.variant_path !== slot.candidate_path || item.test_result_path !== slot.test_result_path
+        || item.host_candidate_path !== measured.host_candidate_path
+        || item.source_binding?.verified !== true
+        || item.source_binding?.source_sha256 !== measured.source_binding.source_sha256
+        || item.compiled !== measured.compiled || item.correct !== false
+        || item.is_valid !== false || item.measurement_valid !== false || item.outcome_state !== 'candidate_failure')
+      return __taskHold('seed exhaustion requires only source-bound candidate failures in every declared slot', raw)
+  }
+  const compiled = ctx.candidates.some(c => c.compiled === true) ? true
+    : ctx.candidates.every(c => c.compiled === false) ? false : null
+  return {
+    workflow:ctx.workflow, status:'no_valid_candidate', outcome_state:'no_valid_candidate',
+    stop_reason:'seed_exhausted', termination_reason:'seed_exhausted',
+    compiled, correct:false, is_valid:false, measurement_valid:false,
+    seed_scope:{exp_dir:ctx.expDir,workload_count:ctx.workloadCount},
+    seed_budget:{declared:count,evaluated:count,remaining:0}, declared_seed_slots:slots,
+    initial_candidates:ctx.candidates,
+    initial_generation_result:{verified:false,reason:'seed_exhausted'},
+    generated_kernel_path:'',best_kernel_path:null,best_kernel_code:'',
+    best_candidate_binding:null,source_binding:null,canonical_metric:null,
+    overall_speedup:null,best_speedup:null,speedup_vs_reference:null,
+    iterations_completed:0,turns_used:0,target_met:false,report:null,
+  }
 }
 
 // A generated candidate owns a file identity, not an array position.
@@ -588,6 +638,56 @@ function guard(obj, field, fallback) {
 }
 // --- END inlined agent-retry scaffolding ---
 
+// --- BEGIN inlined runtime-safe-point scaffolding (from _meta/scaffolding/runtime-safe-point.js) ---
+async function __workflowRuntimeSafePoint(ctx) {
+  const checkpointPath = ctx.checkpointPath || `${ctx.expDir}/checkpoint.json`
+  const materialize = ctx.materializeBest && ctx.bestKernelPath && ctx.bestKernelSourcePath
+    ? `Atomically copy the exact bytes from immutable candidate ${ctx.bestKernelSourcePath} to ${ctx.bestKernelPath}. ` +
+      `Use a small Python program: read the source as bytes, require its SHA-256 to equal ` +
+      `${ctx.bestKernelExpectedSha256 || '<missing-required-sha256>'}, write a temporary file in the destination directory, ` +
+      `fsync it, then os.replace it. Recompute the destination SHA-256 and fail if it differs. ` +
+      `Never regenerate, reformat, or reconstruct the source from a prompt.`
+    : ctx.materializeBest && ctx.bestKernelPath && ctx.bestKernelCode
+    ? `Atomically write this exact best source to ${ctx.bestKernelPath} using a temporary file in the same directory followed by rename:\n` +
+      `\`\`\`${ctx.bestLanguage || ''}\n${ctx.bestKernelCode}\n\`\`\``
+    : (ctx.bestKernelPath
+      ? `Preserve the existing best source at ${ctx.bestKernelPath}; do not rewrite it.`
+      : 'There is no verified best source yet; do not create a best-kernel file.')
+
+  return agentRetry(() => agent(`Workflow runtime safe point.
+
+1. ${materialize}
+2. Check cooperative termination:
+   - termination file: ${ctx.terminationFile || '<none>'}
+   - deadline epoch: ${ctx.deadlineEpoch || 0}
+   A non-empty termination file requests stop. If it contains JSON, use its
+   "reason"; otherwise use "supervisor_request". A positive deadline requests
+   stop when the current epoch from \`date +%s\` is at or beyond it.
+3. Start from this exact checkpoint object:
+${JSON.stringify(ctx.checkpoint)}
+   If step 2 requests stop, set termination_requested=true and set
+   termination_reason to the observed reason. Otherwise preserve the planned
+   termination fields. Atomically write the resulting JSON to ${checkpointPath}
+   using a temporary file in the same directory followed by os.replace/rename.
+   Do not change metric.name or metric.value.
+4. Return only the termination decision and checkpoint path.
+`, {
+    model: MODEL.mechanical,
+    label: ctx.label,
+    phase: ctx.phase,
+    schema: {
+      type: 'object',
+      properties: {
+        termination_requested: { type: 'boolean' },
+        termination_reason: { type: 'string' },
+        checkpoint_path: { type: 'string' },
+      },
+      required: ['termination_requested', 'checkpoint_path'],
+    },
+  }), { retries: 5 })
+}
+// --- END inlined runtime-safe-point scaffolding ---
+
 // --- BEGIN inlined turn-timeout scaffolding (from _meta/scaffolding/turn-timeout.js) ---
 const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // stop admitting attempts at this deadline
 
@@ -599,17 +699,23 @@ async function withTurnTimeout(fn, label, retryOptions) {
     throw error
   }
   if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return agentRetry(fn, retryOptions)
-  let expired = null
-  const timer = setTimeout(() => {
-    expired = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)
-    expired.code = 'KERSOR_TURN_TIMEOUT'
-    expired.retryable = false
-  }, TURN_TIMEOUT_MS)
+  let expired = false
+  const timer = setTimeout(() => { expired = true }, TURN_TIMEOUT_MS)
+  function expiredAfterSettlement() {
+    if (!expired) return
+    const error = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s; invocation settled`)
+    error.code = 'KERSOR_TURN_DRAINED'
+    error.retryable = false
+    error.invocation_settled = true
+    error.resource_release_verified = false
+    error.phase_label = label
+    throw error
+  }
   try {
     return await agentRetry(async () => {
-      if (expired) throw expired
+      expiredAfterSettlement()
       const result = await fn()
-      if (expired) throw expired
+      expiredAfterSettlement()
       return result
     }, {...retryOptions, mayRetryError: () => !expired})
   } finally {
@@ -617,9 +723,11 @@ async function withTurnTimeout(fn, label, retryOptions) {
   }
 }
 
-// Broker timeouts and this watchdog are the only timeout classifications.
+// Legacy watchdog codes have no settlement proof. Only this drained invocation
+// and settled broker timeouts may use the ordinary timeout path.
 function isTurnTimeout(error) {
-  return ['KERSOR_TURN_TIMEOUT', 'KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
+  return (error?.code === 'KERSOR_TURN_DRAINED' && error.invocation_settled === true)
+    || ['KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
 }
 // --- END inlined turn-timeout scaffolding ---
 // --- genome self-report: INLINE (rich, doer-written) ---
@@ -823,6 +931,35 @@ let baselineLatency = null
 let baselineNcuProfile = ''
 let candidateBeam = []          // [{code, latency, speedup, ncuSummary, planTitle}]
 let bottleneckClass = 'unknown'
+let candidateEvidence = []
+let failureEvidence = []
+let iterationsCompleted = 0
+let terminationReason = ''
+let checkpointPath = null
+
+function taskCandidateEvidence(id, measurement) {
+  return {
+    candidate_id: id,
+    candidate_path: measurement.host_candidate_path,
+    test_result_path: measurement.test_result_path,
+    source_binding: measurement.source_binding,
+    compiled: measurement.compiled,
+    correct: measurement.correct,
+    measurement_valid: measurement.measurement_valid,
+    outcome_state: measurement.outcome_state,
+    latency_ms: measurement.latency_ms,
+    speedup_vs_reference: measurement.speedup,
+  }
+}
+
+function buildFailureEvidenceSection() {
+  if (!failureEvidence.length) return ''
+  return `\n# Candidate failure evidence (separate from performance learning)\n` +
+    `Read each relevant COMPLETE test_result_path, its diagnostics and linked original traces, ` +
+    `and candidate_path before proposing or implementing a repair. These are typed candidate ` +
+    `failures, not measured slowdowns and not performance-learning pairs. Keep their original files intact.\n` +
+    JSON.stringify(failureEvidence, null, 2)
+}
 
 function legacyEvaluatePrompt(variant, bestLatency, ncuSetup) {
   return `You are a CUDA kernel evaluator using Nsight Compute. Evaluate this optimized kernel variant.
@@ -1097,10 +1234,15 @@ async function resolveInitialKernelFromProblem() {
         workloadCount:args.task_workload_count, label:`initial-${i}`}))
     }
     initialCandidates = resolved.map((measurement, i) => ({...measurement, variant_path:expectedPaths[i]}))
+    for (let i = 0; i < resolved.length; i++) {
+      const evidence = taskCandidateEvidence(`initial_${i}`, resolved[i])
+      candidateEvidence.push(evidence)
+      if (!resolved[i].is_valid) failureEvidence.push(evidence)
+    }
     const measured=resolved.filter(c=>c?.is_valid)
     measured.sort((a,b)=>a.latency_ms-b.latency_ms)
     taskSeedMeasurement = measured[0] || null
-    if (!taskSeedMeasurement) throw new Error('No initial task candidate passed complete official workload evidence')
+    if (!taskSeedMeasurement) return ''
     generatedKernelPath = taskSeedMeasurement.host_candidate_path
     initialGenerationResult = {verified:true,task_result_path:taskSeedMeasurement.test_result_path,source_binding:taskSeedMeasurement.source_binding}
     return generatedKernelPath
@@ -1227,6 +1369,12 @@ if (USE_DRIVER) {
 
 if (INPUT_MODE === 'generate_then_optimize') {
   KERNEL_PATH = await resolveInitialKernelFromProblem()
+  if (args.task_result_command && !taskSeedMeasurement) {
+    return {...__nativeTaskSeedExhausted({workflow:WORKFLOW_NAME,expDir:EXP_DIR,
+      seedCount:SEED_CANDIDATES,workloadCount:args.task_workload_count,candidates:initialCandidates}),
+      input_mode:INPUT_MODE,problem_definition:PROBLEM_DEFINITION,problem_path:PROBLEM_PATH,
+      failure_evidence:failureEvidence}
+  }
 }
 if (args.task_result_command && INPUT_MODE === 'optimize_existing') {
   taskSeedMeasurement = await __nativeTaskAcceptedParent({candidatePath:KERNEL_PATH,
@@ -1479,6 +1627,7 @@ if (USE_DRIVER_STANDALONE) {
 // official seed workload measurement and the Host's bound seed-relative result.
 let solSeedMeasurement = null
 let bestCandidateBinding = args.task_result_command ? {verified:true,...taskSeedMeasurement.source_binding,candidate_path:taskSeedMeasurement.host_candidate_path,test_result_path:taskSeedMeasurement.test_result_path} : null
+const profiledCandidateBinding = bestCandidateBinding ? {...bestCandidateBinding} : null
 if (SOL_AVAILABLE) {
   solSeedMeasurement = await __solOfficialSeedBaseline({
     label: 'sol-seed-baseline', phase: 'Setup',
@@ -1574,8 +1723,10 @@ for (let iter = 0; iter < ITERATIONS; iter++) {
 
   const planAngles = IDIOMS.plan_angles
 
+  const profileMatchesIncumbent = profiledCandidateBinding?.source_sha256 === bestCandidateBinding?.source_sha256
+    && profiledCandidateBinding?.candidate_path === bestCandidateBinding?.candidate_path
   const nativeProfileContext = ncuSetup.ncu_available === true && ncuSetup.report_path
-    ? `Read the complete profiling report at ${ncuSetup.report_path}. Cite only metrics actually present in that report. Bind its diagnosis to the tested source; a profile of an earlier incumbent is historical evidence.`
+    ? `Read the complete profiling report at ${ncuSetup.report_path}. Its requested source was ${profiledCandidateBinding?.candidate_path} (SHA-256 ${profiledCandidateBinding?.source_sha256}). Verify that identity in the report before citing metrics. ${profileMatchesIncumbent ? 'The profiled source is still the incumbent.' : 'This is HISTORICAL baseline evidence. The current incumbent has no newly verified profile; do not attribute baseline counters or bottlenecks to it.'} Cite only metrics actually present in the source-bound report.`
     : 'Measured profiling evidence is unavailable or not verified. State optimization hypotheses as hypotheses, identify the missing evidence, and use task-permitted diagnostics to test them. Do not claim NCU measurements or invent metric values.'
   const planPromptBase = args.task_result_command
     ? `You are an AccelOpt kernel optimization planner. Generate ONE specific optimization plan.
@@ -1591,6 +1742,7 @@ ${ncuSetup.profile_summary || ncuSetup.bottleneck_diagnosis || ''}
 - Speedup vs original baseline: ${(baselineLatency / bestLatency).toFixed(2)}x
 ${beamSection}
 ${experienceSection}
+${buildFailureEvidenceSection()}
 # Optimization Plan Requirements
 1. Identify the exact code region and transformation, with measured evidence or an explicit hypothesis.
 2. Prefer STRUCTURAL changes over parameter tuning and preserve the task precision and tolerances.
@@ -1716,7 +1868,7 @@ Then append (this is iteration ${iter}, planner ${i}):
     (plan) => parallel(
       Array.from({length: SAMPLES_PER_PLAN}, (_, sampleIdx) => () =>
         agentRetry(() => agent(args.task_result_command
-          ? `${__taskContractBlock()}Implement this AccelOpt plan in complete ${args.language} Python source: ${JSON.stringify(plan)}. Read the FULL measured incumbent file ${bestCandidateBinding.candidate_path}; preserve task callable, exact semantics and tolerances. Write the COMPLETE new candidate to ${EXP_DIR}/iter_${iter}_plan_${validPlans.indexOf(plan)}_sample_${sampleIdx}.py and return variant_path plus code (display only). Preserve the incumbent. You may discover and run task-permitted diagnostic tests and profiling under its broker contract; preserve raw evidence. Serial official task evaluation follows the final source handoff. Read all selected task skills for diagnostics when useful.`
+          ? `${__taskContractBlock()}Implement this AccelOpt plan in complete ${args.language} Python source: ${JSON.stringify(plan)}. Read the FULL measured incumbent file ${bestCandidateBinding.candidate_path}; preserve task callable, exact semantics and tolerances. Write the COMPLETE new candidate to ${EXP_DIR}/iter_${iter}_plan_${validPlans.indexOf(plan)}_sample_${sampleIdx}.py and return variant_path plus code (display only). Preserve the incumbent. You may discover and run task-permitted diagnostic tests and profiling under its broker contract; preserve raw evidence. Serial official task evaluation follows the final source handoff. Read all selected task skills for diagnostics when useful.${buildFailureEvidenceSection()}`
           : USE_DRIVER
           ? `You are an expert ${BACKEND} kernel developer. Implement this profiler-informed optimization plan as a complete, compilable kernel.
 
@@ -1980,6 +2132,9 @@ Then append (iteration ${iter}, variant ${variant.id}; status="done" if correct 
       e.task_reference_speedup=measured.speedup
       e.host_source_binding=measured.is_valid ? {verified:true,...measured.source_binding,candidate_path:measured.host_candidate_path,test_result_path:measured.test_result_path} : null
       e.performance_analysis=measured.error_log
+      const evidence = taskCandidateEvidence(v.id, measured)
+      candidateEvidence.push(evidence)
+      if (!measured.is_valid) failureEvidence.push(evidence)
     }
   }
 
@@ -1991,7 +2146,7 @@ Then append (iteration ${iter}, variant ${variant.id}; status="done" if correct 
     results.push({
       variant: allVariants[i],
       evaluation: evalResult,
-      speedup: evalResult.estimated_speedup || 1.0,
+      speedup: args.task_result_command ? evalResult.estimated_speedup : (evalResult.estimated_speedup || 1.0),
     })
   }
 
@@ -2226,12 +2381,46 @@ Then append (iteration ${iter}, pair "${pair.plan_title}", a ${pair.type} exampl
     ? `${(baselineLatency / bestLatency).toFixed(2)}x vs baseline`
     : 'speedup unmeasured (no measured baseline)'
   log(`Iteration ${iter + 1} done. ${_ratio}. Beam size: ${candidateBeam.length}`)
+  iterationsCompleted = iter + 1
+  if (args.task_result_command || args.termination_file || args.deadline_epoch) {
+    const safePoint = await __workflowRuntimeSafePoint({
+      expDir: EXP_DIR, label: `checkpoint-${iter}`, phase: 'Iterate',
+      terminationFile: args.termination_file, deadlineEpoch: args.deadline_epoch,
+      bestKernelPath: bestCandidateBinding?.candidate_path || null,
+      checkpoint: {
+        schema_version: 1, workflow: WORKFLOW_NAME,
+        progress: {unit: 'iteration', completed: iterationsCompleted, total: ITERATIONS},
+        compiled: args.task_result_command ? true : null,
+        correct: args.task_result_command ? true : null,
+        metric: {name: args.task_result_command ? (INPUT_MODE === 'optimize_existing' ? 'speedup_vs_accepted_parent' : 'speedup_vs_generated_initial') : (SOL_AVAILABLE ? 'speedup_vs_seed' : 'speedup_vs_baseline'), value: _measured ? baselineLatency / bestLatency : null},
+        best_kernel_path: bestCandidateBinding?.candidate_path || null,
+        best_candidate_binding: bestCandidateBinding,
+        replay_binding: {mode: 'native_same_activation_only', arguments: args},
+        initial_measurement: args.task_result_command ? taskCandidateEvidence('initial_baseline', taskSeedMeasurement) : null,
+        baseline_latency_ms: baselineLatency, best_latency_ms: bestLatency,
+        candidate_beam: candidateBeam.map(c => ({plan_title:c.planTitle, latency_ms:c.latency,
+          speedup:c.speedup, reference_speedup:c.referenceSpeedup, source_binding:c.sourceBinding,
+          source_path:c.sourceBinding?.candidate_path || null, profile_summary:c.ncuSummary})),
+        candidate_evidence: candidateEvidence, failure_evidence: failureEvidence,
+        experience_patterns: experienceMemory, last_iteration_patterns: lastIterNewPatterns,
+        baseline_profile_binding: profiledCandidateBinding,
+        baseline_profile_report: ncuSetup.report_path || null,
+        termination_requested: false,
+        termination_reason: iterationsCompleted === ITERATIONS ? 'budget_exhausted' : '',
+      },
+    })
+    checkpointPath = safePoint.checkpoint_path || `${EXP_DIR}/checkpoint.json`
+    if (safePoint.termination_requested) {
+      terminationReason = safePoint.termination_reason || 'supervisor_request'
+      break
+    }
+  }
 }
 
 // =============================================================================
 // Final Report
 // =============================================================================
-const finalReport = await agentRetry(() => agent(USE_DRIVER
+const finalReport = terminationReason ? null : await agentRetry(() => agent(USE_DRIVER
   ? `Write a concise technical optimization report.
 
 # AccelOpt (${BACKEND} backend, profiler=${IDIOMS.profiler_name || 'none'})
@@ -2271,7 +2460,7 @@ Write:
 }), { retries: 5 })
 
 let evidenceEnvelope = null
-if (USE_DRIVER) {
+if (USE_DRIVER && !terminationReason) {
   const insightItems = experienceMemory.slice(0, TOPK_LEARN).map(e => ({
     kind: 'bottleneck',
     directive: 'explore',
@@ -2316,7 +2505,13 @@ return {
   baseline_latency_ms: baselineLatency,
   best_latency_ms: bestLatency,
   overall_speedup: baselineLatency / bestLatency,
-  iterations_completed: ITERATIONS,
+  iterations_completed: iterationsCompleted,
+  iterations_requested: ITERATIONS,
+  termination_requested: Boolean(terminationReason),
+  termination_reason: terminationReason || 'budget_exhausted',
+  checkpoint_path: checkpointPath,
+  candidate_evidence: candidateEvidence,
+  failure_evidence: failureEvidence,
   candidate_beam: candidateBeam.map(c => ({
     plan_title: c.planTitle,
     latency_ms: c.latency,

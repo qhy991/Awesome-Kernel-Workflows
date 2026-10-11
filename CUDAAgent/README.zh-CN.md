@@ -6,6 +6,8 @@
 
 ## 核心特点
 
+原生 `task_result_command` 路径只有在全部声明 seed 都获得完整、source-bound 的 `candidate_failure` 后，才返回有限终态 `status`/`outcome_state = no_valid_candidate`、`stop_reason`/`termination_reason = seed_exhausted`。结果保留每个声明槽及完整原始结果，按实测汇总编译状态，最佳源码和性能指标为空；不再派发工作空间初始化、profiling、refinement 或替补 seed。证据缺失、unknown、权限和基础设施错误仍 HOLD；内核验收、模型身份与资源释放继续由外部证据判断。
+
 - 多文件工作空间（`kernel.cu` / `kernel_binding.cpp` / `model_new.py`）
 - 迭代式修复与优化，直到达到相对 `torch.compile` 的加速目标
 - 采用离散奖励里程碑，降低 reward hacking 风险

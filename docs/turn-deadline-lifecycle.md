@@ -16,7 +16,7 @@ const result = await withTurnTimeout(
 The helper starts the existing timer and runs the thunk through `agentRetry`.
 At the deadline it records expiry. It continues waiting for the active invocation
 so the parent cannot proceed while that invocation may still write. A late value
-or null becomes the existing nonretryable `KERSOR_TURN_TIMEOUT` error after the
+or null becomes the nonretryable `KERSOR_TURN_DRAINED` error with `invocation_settled: true` after the
 invocation settles. A rejected invocation retains its original error, regardless
 of the remaining retry count. The deadline scope supplies `mayRetryError` to the
 retry owner so that a late rejection cannot start another attempt. Permission,
@@ -47,3 +47,8 @@ nulls and errors, nonretryable refusals, retry exhaustion, no timers and call-si
 migration. Parse the workflows with the actual Host wrapper and run method
 fidelity guards. Native site qualification remains separate; do not rewrite
 frozen workflows or claim existing pending children were cancelled.
+
+Integration with main 9d23aa9 preserves its finite candidate-failure records,
+checkpoints and recovery-stop guards. Legacy `KERSOR_TURN_TIMEOUT` and
+`KERSOR_TURN_UNSETTLED` remain unverified and cannot enter the ordinary timeout
+path. The new drained code is distinct and never asserts GPU/resource release.

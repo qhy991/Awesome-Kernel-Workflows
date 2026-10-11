@@ -18,10 +18,15 @@ function measured(cycle,attempt,score,rejected=false){
   ...(rejected?{outcome_state:'candidate_failure',failure_origin:'candidate'}:{})
  })}
 }
+function cycleTree(cycle,parentSolution){
+ const parent=cycle?`n${cycle}`:'root'
+ return {root:{},...(cycle?{[parent]:{status:'solved',solution_id:parentSolution || `cycle_${cycle-1}_attempt_1`}}:{}),
+  [`n${cycle+1}`]:{parent_id:parent,status:'open',action:{title:'tile',description:'tile action',difficulty_1_to_5:2,score_0_to_1:.8}}}
+}
 function fixture(){
- const tree={root:{},n1:{parent_id:'root',status:'open'}}
- const agents={'read-spec':{spec_text:'GEMM task',op_type:'gemm',baseline_code:'',constraints:[],design_dimensions:[]},'init-tree':{decision_tree:tree},'load-checkpoint':{present:false},'final-report':'file-backed report'}
+ const agents={'read-spec':{spec_text:'GEMM task',op_type:'gemm',baseline_code:'',constraints:[],design_dimensions:[]},'init-tree':{decision_tree:cycleTree(0)},'load-checkpoint':{present:false},'final-report':'file-backed report'}
  for(let cycle=0;cycle<4;cycle++){
+  const tree=cycleTree(cycle)
   agents[`propose-${cycle}`]={updated_tree:tree,open_frontier_count:1}
   agents[`select-${cycle}`]={selected_node_id:'n1',action_title:'tile',parent_solution_path:cycle?`/fixture/exp/task_cycle_${cycle-1}_a1.json.artifact/candidate.py`:'',parent_metric:1}
   agents[`refine-${cycle}`]={updated_tree:tree}
@@ -76,9 +81,10 @@ test('native debug and improve use frozen input paths and distinct output files 
 
 test('old inline checkpoint resumes from its next cycle and measured parent path without mutating input',async()=>{
  const agents=fixture(),evaluation=JSON.parse(measured(0,1,2).test_result_json)
- const oldRecord={id:'old-best',node_id:'n1',code:'OLD_INLINE_SOURCE'.repeat(20000),eval:{is_valid:true,metric_value:2,host_candidate_path:evaluation.candidate_path,source_binding:evaluation.source_binding}}
+ const oldRecord={id:'old-best',node_id:'n2',code:'OLD_INLINE_SOURCE'.repeat(20000),eval:{is_valid:true,metric_value:2,host_candidate_path:evaluation.candidate_path,source_binding:evaluation.source_binding}}
  const old={cycle:2,bestMetric:2,best_candidate_id:'old-best',decisionTree:{root:{},n1:{parent_id:'root'}},solutionDb:[oldRecord],bestSolution:oldRecord}
  agents['load-checkpoint']=old;agents['select-2'].parent_solution_path=evaluation.candidate_path
+ agents['propose-2']={updated_tree:cycleTree(2,'old-best')}
  const {result,calls}=await run(source,{...args,iterations:3},agents,null)
  assert.equal(calls.some(x=>x.label==='gen-0-0'),false);assert.equal(calls.some(x=>x.label==='gen-1-0'),false)
  assert.ok(calls.find(x=>x.label==='gen-2-0').prompt.includes(evaluation.candidate_path))

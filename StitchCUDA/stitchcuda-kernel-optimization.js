@@ -374,17 +374,23 @@ async function withTurnTimeout(fn, label, retryOptions) {
     throw error
   }
   if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return agentRetry(fn, retryOptions)
-  let expired = null
-  const timer = setTimeout(() => {
-    expired = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)
-    expired.code = 'KERSOR_TURN_TIMEOUT'
-    expired.retryable = false
-  }, TURN_TIMEOUT_MS)
+  let expired = false
+  const timer = setTimeout(() => { expired = true }, TURN_TIMEOUT_MS)
+  function expiredAfterSettlement() {
+    if (!expired) return
+    const error = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s; invocation settled`)
+    error.code = 'KERSOR_TURN_DRAINED'
+    error.retryable = false
+    error.invocation_settled = true
+    error.resource_release_verified = false
+    error.phase_label = label
+    throw error
+  }
   try {
     return await agentRetry(async () => {
-      if (expired) throw expired
+      expiredAfterSettlement()
       const result = await fn()
-      if (expired) throw expired
+      expiredAfterSettlement()
       return result
     }, {...retryOptions, mayRetryError: () => !expired})
   } finally {
@@ -392,9 +398,11 @@ async function withTurnTimeout(fn, label, retryOptions) {
   }
 }
 
-// Broker timeouts and this watchdog are the only timeout classifications.
+// Legacy watchdog codes have no settlement proof. Only this drained invocation
+// and settled broker timeouts may use the ordinary timeout path.
 function isTurnTimeout(error) {
-  return ['KERSOR_TURN_TIMEOUT', 'KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
+  return (error?.code === 'KERSOR_TURN_DRAINED' && error.invocation_settled === true)
+    || ['KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
 }
 // --- END inlined turn-timeout scaffolding ---
 // --- genome self-report: INLINE (rich, doer-written) ---

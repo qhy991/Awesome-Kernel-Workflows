@@ -307,6 +307,12 @@ args:
     description: Evaluator command with {kernel_path} and {result_path} substitutions
     example: <user-provided benchmark command with {kernel_path}/{result_path}>
   optional:
+  - name: termination_file
+    type: string
+    description: Optional cooperative-stop request file; checked after candidate evaluation and reinforcement. Native task runs checkpoint every candidate even without a stop request.
+  - name: deadline_epoch
+    type: number
+    description: Optional Unix epoch stop deadline, observed at candidate boundaries. Does not cancel an in-flight build or evaluation.
   - name: kernel_path
     type: string
     description: Optional independently accepted parent Python implementation for the native task_result_command path; measure and retain it before FSR search. Legacy reference-only generation remains unchanged.

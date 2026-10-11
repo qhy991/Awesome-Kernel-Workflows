@@ -31,17 +31,23 @@ function __parseTaskResultJSON(raw) {
       else if (character === '"') quoted = !quoted
     }
     if (text === raw) throw original
-    return JSON.parse(text)
+    try { return JSON.parse(text) } catch (error) {
+      error.cause = original
+      throw error
+    }
   }
 }
 function __taskResult(output, expectedPath, expectedCount) {
   let result
+  const raw = output?.test_result_json
   try {
-    const raw = output?.test_result_json
     result = typeof raw === 'string' ? __parseTaskResultJSON(raw)
       : raw && typeof raw === 'object' && !Array.isArray(raw) ? JSON.parse(JSON.stringify(raw))
       : __taskHold('missing/malformed raw task result')
-  } catch { return __taskHold('missing/malformed raw task result') }
+  } catch (error) { return __taskHold('missing/malformed raw task result', {
+    test_result_path:expectedPath, returned_test_result_path:output?.test_result_path ?? null,
+    test_result_json:raw ?? null,
+  }, error) }
   // The caller owns the slot. Duplicated delivery paths are descriptive, not
   // candidate identity: source binding and canonical candidate_path below remain mandatory.
   if (result?.contract_version !== 'kersor-task-result-v1') return __taskHold('task result contract mismatch', result)
@@ -74,9 +80,53 @@ function __taskResult(output, expectedPath, expectedCount) {
     source_binding:result.source_binding, host_candidate_path:result.candidate_path, test_result_path:expectedPath,
     ...(deliveryPathObservation ? {delivery_path_observation:deliveryPathObservation} : {}),
     outcome_state:valid ? 'passed' : 'candidate_failure',
+    raw_task_result:result,
     diagnostics:result.diagnostics || [], evidence:result.evidence || null,
     error_log:valid ? '' : JSON.stringify({error:result.error || 'candidate rejected',
       diagnostics:result.diagnostics || [], candidate_path:result.candidate_path, evidence:result.evidence || null})}
+}
+
+// Finite method outcome, not successful kernel acceptance or resource release.
+// Only the complete declared set of already-bound candidate failures can end here.
+function __nativeTaskSeedExhausted(ctx) {
+  const count = ctx.seedCount
+  if (!Number.isInteger(count) || count <= 0 || !Number.isInteger(ctx.workloadCount)
+      || ctx.workloadCount <= 0 || !Array.isArray(ctx.candidates) || ctx.candidates.length !== count)
+    return __taskHold('seed exhaustion lacks the complete declared candidate set')
+  const slots = Array.from({length:count}, (_, index) => ({index,
+    candidate_path:`${ctx.expDir}/generated/initial_${index}.py`,
+    test_result_path:`${ctx.expDir}/generated/initial_${index}.json`}))
+  for (let i = 0; i < count; i++) {
+    const item = ctx.candidates[i], slot = slots[i]
+    const raw = item?.raw_task_result
+    const measured = __taskResult({test_result_path:slot.test_result_path,test_result_json:raw},
+      slot.test_result_path, ctx.workloadCount)
+    if (measured.is_valid || raw?.outcome_state !== 'candidate_failure'
+        || raw?.failure_origin !== 'candidate' || raw?.correct !== false || raw?.measurement_valid !== false
+        || !(raw?.compiled === null || typeof raw?.compiled === 'boolean')
+        || item.variant_path !== slot.candidate_path || item.test_result_path !== slot.test_result_path
+        || item.host_candidate_path !== measured.host_candidate_path
+        || item.source_binding?.verified !== true
+        || item.source_binding?.source_sha256 !== measured.source_binding.source_sha256
+        || item.compiled !== measured.compiled || item.correct !== false
+        || item.is_valid !== false || item.measurement_valid !== false || item.outcome_state !== 'candidate_failure')
+      return __taskHold('seed exhaustion requires only source-bound candidate failures in every declared slot', raw)
+  }
+  const compiled = ctx.candidates.some(c => c.compiled === true) ? true
+    : ctx.candidates.every(c => c.compiled === false) ? false : null
+  return {
+    workflow:ctx.workflow, status:'no_valid_candidate', outcome_state:'no_valid_candidate',
+    stop_reason:'seed_exhausted', termination_reason:'seed_exhausted',
+    compiled, correct:false, is_valid:false, measurement_valid:false,
+    seed_scope:{exp_dir:ctx.expDir,workload_count:ctx.workloadCount},
+    seed_budget:{declared:count,evaluated:count,remaining:0}, declared_seed_slots:slots,
+    initial_candidates:ctx.candidates,
+    initial_generation_result:{verified:false,reason:'seed_exhausted'},
+    generated_kernel_path:'',best_kernel_path:null,best_kernel_code:'',
+    best_candidate_binding:null,source_binding:null,canonical_metric:null,
+    overall_speedup:null,best_speedup:null,speedup_vs_reference:null,
+    iterations_completed:0,turns_used:0,target_met:false,report:null,
+  }
 }
 
 // A generated candidate owns a file identity, not an array position.

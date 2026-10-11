@@ -45,17 +45,23 @@ function __parseTaskResultJSON(raw) {
       else if (character === '"') quoted = !quoted
     }
     if (text === raw) throw original
-    return JSON.parse(text)
+    try { return JSON.parse(text) } catch (error) {
+      error.cause = original
+      throw error
+    }
   }
 }
 function __taskResult(output, expectedPath, expectedCount) {
   let result
+  const raw = output?.test_result_json
   try {
-    const raw = output?.test_result_json
     result = typeof raw === 'string' ? __parseTaskResultJSON(raw)
       : raw && typeof raw === 'object' && !Array.isArray(raw) ? JSON.parse(JSON.stringify(raw))
       : __taskHold('missing/malformed raw task result')
-  } catch { return __taskHold('missing/malformed raw task result') }
+  } catch (error) { return __taskHold('missing/malformed raw task result', {
+    test_result_path:expectedPath, returned_test_result_path:output?.test_result_path ?? null,
+    test_result_json:raw ?? null,
+  }, error) }
   // The caller owns the slot. Duplicated delivery paths are descriptive, not
   // candidate identity: source binding and canonical candidate_path below remain mandatory.
   if (result?.contract_version !== 'kersor-task-result-v1') return __taskHold('task result contract mismatch', result)
@@ -88,9 +94,53 @@ function __taskResult(output, expectedPath, expectedCount) {
     source_binding:result.source_binding, host_candidate_path:result.candidate_path, test_result_path:expectedPath,
     ...(deliveryPathObservation ? {delivery_path_observation:deliveryPathObservation} : {}),
     outcome_state:valid ? 'passed' : 'candidate_failure',
+    raw_task_result:result,
     diagnostics:result.diagnostics || [], evidence:result.evidence || null,
     error_log:valid ? '' : JSON.stringify({error:result.error || 'candidate rejected',
       diagnostics:result.diagnostics || [], candidate_path:result.candidate_path, evidence:result.evidence || null})}
+}
+
+// Finite method outcome, not successful kernel acceptance or resource release.
+// Only the complete declared set of already-bound candidate failures can end here.
+function __nativeTaskSeedExhausted(ctx) {
+  const count = ctx.seedCount
+  if (!Number.isInteger(count) || count <= 0 || !Number.isInteger(ctx.workloadCount)
+      || ctx.workloadCount <= 0 || !Array.isArray(ctx.candidates) || ctx.candidates.length !== count)
+    return __taskHold('seed exhaustion lacks the complete declared candidate set')
+  const slots = Array.from({length:count}, (_, index) => ({index,
+    candidate_path:`${ctx.expDir}/generated/initial_${index}.py`,
+    test_result_path:`${ctx.expDir}/generated/initial_${index}.json`}))
+  for (let i = 0; i < count; i++) {
+    const item = ctx.candidates[i], slot = slots[i]
+    const raw = item?.raw_task_result
+    const measured = __taskResult({test_result_path:slot.test_result_path,test_result_json:raw},
+      slot.test_result_path, ctx.workloadCount)
+    if (measured.is_valid || raw?.outcome_state !== 'candidate_failure'
+        || raw?.failure_origin !== 'candidate' || raw?.correct !== false || raw?.measurement_valid !== false
+        || !(raw?.compiled === null || typeof raw?.compiled === 'boolean')
+        || item.variant_path !== slot.candidate_path || item.test_result_path !== slot.test_result_path
+        || item.host_candidate_path !== measured.host_candidate_path
+        || item.source_binding?.verified !== true
+        || item.source_binding?.source_sha256 !== measured.source_binding.source_sha256
+        || item.compiled !== measured.compiled || item.correct !== false
+        || item.is_valid !== false || item.measurement_valid !== false || item.outcome_state !== 'candidate_failure')
+      return __taskHold('seed exhaustion requires only source-bound candidate failures in every declared slot', raw)
+  }
+  const compiled = ctx.candidates.some(c => c.compiled === true) ? true
+    : ctx.candidates.every(c => c.compiled === false) ? false : null
+  return {
+    workflow:ctx.workflow, status:'no_valid_candidate', outcome_state:'no_valid_candidate',
+    stop_reason:'seed_exhausted', termination_reason:'seed_exhausted',
+    compiled, correct:false, is_valid:false, measurement_valid:false,
+    seed_scope:{exp_dir:ctx.expDir,workload_count:ctx.workloadCount},
+    seed_budget:{declared:count,evaluated:count,remaining:0}, declared_seed_slots:slots,
+    initial_candidates:ctx.candidates,
+    initial_generation_result:{verified:false,reason:'seed_exhausted'},
+    generated_kernel_path:'',best_kernel_path:null,best_kernel_code:'',
+    best_candidate_binding:null,source_binding:null,canonical_metric:null,
+    overall_speedup:null,best_speedup:null,speedup_vs_reference:null,
+    iterations_completed:0,turns_used:0,target_met:false,report:null,
+  }
 }
 
 // A generated candidate owns a file identity, not an array position.
@@ -632,17 +682,23 @@ async function withTurnTimeout(fn, label, retryOptions) {
     throw error
   }
   if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return agentRetry(fn, retryOptions)
-  let expired = null
-  const timer = setTimeout(() => {
-    expired = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)
-    expired.code = 'KERSOR_TURN_TIMEOUT'
-    expired.retryable = false
-  }, TURN_TIMEOUT_MS)
+  let expired = false
+  const timer = setTimeout(() => { expired = true }, TURN_TIMEOUT_MS)
+  function expiredAfterSettlement() {
+    if (!expired) return
+    const error = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s; invocation settled`)
+    error.code = 'KERSOR_TURN_DRAINED'
+    error.retryable = false
+    error.invocation_settled = true
+    error.resource_release_verified = false
+    error.phase_label = label
+    throw error
+  }
   try {
     return await agentRetry(async () => {
-      if (expired) throw expired
+      expiredAfterSettlement()
       const result = await fn()
-      if (expired) throw expired
+      expiredAfterSettlement()
       return result
     }, {...retryOptions, mayRetryError: () => !expired})
   } finally {
@@ -650,9 +706,11 @@ async function withTurnTimeout(fn, label, retryOptions) {
   }
 }
 
-// Broker timeouts and this watchdog are the only timeout classifications.
+// Legacy watchdog codes have no settlement proof. Only this drained invocation
+// and settled broker timeouts may use the ordinary timeout path.
 function isTurnTimeout(error) {
-  return ['KERSOR_TURN_TIMEOUT', 'KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
+  return (error?.code === 'KERSOR_TURN_DRAINED' && error.invocation_settled === true)
+    || ['KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
 }
 // --- END inlined turn-timeout scaffolding ---
 // --- genome self-report: INLINE (rich, doer-written) ---
@@ -1191,9 +1249,9 @@ Then append (this is generation ${generation}):
         memory_pattern: { type: 'string' },
         algorithm_type: { type: 'string' },
         parallelism_level: { type: 'string' },
-        d_mem: { type: 'number', minimum: 0, maximum: 3 },
-        d_algo: { type: 'number', minimum: 0, maximum: 3 },
-        d_sync: { type: 'number', minimum: 0, maximum: 3 },
+        d_mem: { type: 'integer', minimum: 0, maximum: 3 },
+        d_algo: { type: 'integer', minimum: 0, maximum: 3 },
+        d_sync: { type: 'integer', minimum: 0, maximum: 3 },
         is_templated: { type: 'boolean' },
         template_params: { type: 'array', items: { type: 'string' } },
       },
@@ -1456,7 +1514,9 @@ Then append (this is generation ${generation}; status="done" if it compiled AND 
   }
   if (args.task_result_command) {
     candidateBinding = {verified:evalResult.is_valid === true, binding_path:evalResult.test_result_path || '', candidate_sha256:evalResult.source_binding?.source_sha256 || ''}
-    evalResult.d_mem = varyResult?.d_mem || 0; evalResult.d_algo = varyResult?.d_algo || 0; evalResult.d_sync = varyResult?.d_sync || 0
+    if (evalResult.is_valid && !['d_mem','d_algo','d_sync'].every(k => Number.isInteger(varyResult?.[k]) && varyResult[k] >= 0 && varyResult[k] <= 3))
+      __taskHold('candidate behavioral descriptor unavailable', evalResult)
+    evalResult.d_mem = varyResult?.d_mem; evalResult.d_algo = varyResult?.d_algo; evalResult.d_sync = varyResult?.d_sync
   } else if (EVIDENCE_MODE === 'measured') {
     const generationBindingPath = `${EXP_DIR}/bindings/gen_${generation}.json`
     const canonicalEval = IS_SOL && typeof evaluate === 'function'
@@ -1649,57 +1709,32 @@ Run one small deterministic Python program; do not infer or repair anything:
       },
     })
     log(`Measurement rejected for generation ${generation}; no archive or fitness update`)
-    continue
-  }
-  const fitness = computeFitness(evalResult.compiled, evalResult.correct, evalResult.speedup || 0)
-  const cellKey = `${evalResult.d_mem || 0},${evalResult.d_algo || 0},${evalResult.d_sync || 0}`
+  } else {
+    const fitness = computeFitness(evalResult.compiled, evalResult.correct, evalResult.speedup || 0)
+    const cellKey = `${evalResult.d_mem || 0},${evalResult.d_algo || 0},${evalResult.d_sync || 0}`
 
-  // ===========================================================================
-  // Phase 5: Insert — Update archive if offspring improves its cell
-  // ===========================================================================
-  phase('Insert')
+    // ===========================================================================
+    // Phase 5: Insert — Update archive if offspring improves its cell
+    // ===========================================================================
+    phase('Insert')
 
-  const existingElite = archive[cellKey]
-  let outcome = 'neutral'
-  const candidateSpeedup = evalResult.speedup || 0
-  const improvesCell = (
-    !existingElite ||
-    fitness > existingElite.fitness ||
-    (fitness === existingElite.fitness && candidateSpeedup > existingElite.speedup)
-  )
+    const existingElite = archive[cellKey]
+    let outcome = 'neutral'
+    const candidateSpeedup = evalResult.speedup || 0
+    const improvesCell = (
+      !existingElite ||
+      fitness > existingElite.fitness ||
+      (fitness === existingElite.fitness && candidateSpeedup > existingElite.speedup)
+    )
 
-  if (improvesCell) {
-    archive[cellKey] = {
-      code: offspringCode,
-      fitness: fitness,
-      speedup: candidateSpeedup,
-      cell: cellKey,
-      id: `gen${generation}`,
-      strategy: varyResult?.strategy_description || '',
-      compiled: evalResult.compiled,
-      correct: evalResult.correct,
-      result_path: generationResultPath,
-      candidate_path: args.task_result_command ? evalResult.host_candidate_path : candidatePath,
-      candidate_sha256: candidateBinding.candidate_sha256,
-      measurement_sha256: candidateBinding.measurement_sha256,
-      binding_path: candidateBinding.binding_path,
-      binding_sha256: candidateBinding.binding_sha256,
-      task_path: candidateBinding.task_path,
-      task_sha256: candidateBinding.task_sha256,
-      task_fingerprint_kind: candidateBinding.task_fingerprint_kind,
-    }
-    outcome = existingElite ? 'improvement' : 'discovery'
-
-    if (
-      fitness > globalBest.fitness ||
-      (fitness === globalBest.fitness && candidateSpeedup > globalBest.speedup)
-    ) {
-      globalBest = {
+    if (improvesCell) {
+      archive[cellKey] = {
         code: offspringCode,
-        fitness,
+        fitness: fitness,
         speedup: candidateSpeedup,
         cell: cellKey,
         id: `gen${generation}`,
+        strategy: varyResult?.strategy_description || '',
         compiled: evalResult.compiled,
         correct: evalResult.correct,
         result_path: generationResultPath,
@@ -1711,25 +1746,50 @@ Run one small deterministic Python program; do not infer or repair anything:
         task_path: candidateBinding.task_path,
         task_sha256: candidateBinding.task_sha256,
         task_fingerprint_kind: candidateBinding.task_fingerprint_kind,
-        strategy: varyResult?.strategy_description || '',
       }
+      outcome = existingElite ? 'improvement' : 'discovery'
+
+      if (
+        fitness > globalBest.fitness ||
+        (fitness === globalBest.fitness && candidateSpeedup > globalBest.speedup)
+      ) {
+        globalBest = {
+          code: offspringCode,
+          fitness,
+          speedup: candidateSpeedup,
+          cell: cellKey,
+          id: `gen${generation}`,
+          compiled: evalResult.compiled,
+          correct: evalResult.correct,
+          result_path: generationResultPath,
+          candidate_path: args.task_result_command ? evalResult.host_candidate_path : candidatePath,
+          candidate_sha256: candidateBinding.candidate_sha256,
+          measurement_sha256: candidateBinding.measurement_sha256,
+          binding_path: candidateBinding.binding_path,
+          binding_sha256: candidateBinding.binding_sha256,
+          task_path: candidateBinding.task_path,
+          task_sha256: candidateBinding.task_sha256,
+          task_fingerprint_kind: candidateBinding.task_fingerprint_kind,
+          strategy: varyResult?.strategy_description || '',
+        }
+      }
+    } else {
+      outcome = fitness < existingElite.fitness ? 'regression' : 'neutral'
     }
-  } else {
-    outcome = fitness < existingElite.fitness ? 'regression' : 'neutral'
+
+    // Record transition
+    const parentCell = selectedParent?.cell || 'none'
+    transitions.push({
+      parent_cell: parentCell,
+      child_cell: cellKey,
+      delta_f: existingElite ? fitness - existingElite.fitness : fitness,
+      outcome: outcome,
+      gen: generation,
+    })
+
+    const statusIcon = outcome === 'improvement' ? '↑' : outcome === 'discovery' ? '★' : outcome === 'regression' ? '↓' : '='
+    log(`  ${statusIcon} Cell [${cellKey}] fitness=${fitness.toFixed(2)} speedup=${(evalResult.speedup || 0).toFixed(2)}x | Archive: ${Object.keys(archive).length}/64 | Best: ${globalBest.speedup.toFixed(2)}x`)
   }
-
-  // Record transition
-  const parentCell = selectedParent?.cell || 'none'
-  transitions.push({
-    parent_cell: parentCell,
-    child_cell: cellKey,
-    delta_f: existingElite ? fitness - existingElite.fitness : fitness,
-    outcome: outcome,
-    gen: generation,
-  })
-
-  const statusIcon = outcome === 'improvement' ? '↑' : outcome === 'discovery' ? '★' : outcome === 'regression' ? '↓' : '='
-  log(`  ${statusIcon} Cell [${cellKey}] fitness=${fitness.toFixed(2)} speedup=${(evalResult.speedup || 0).toFixed(2)}x | Archive: ${Object.keys(archive).length}/64 | Best: ${globalBest.speedup.toFixed(2)}x`)
 
   // ===========================================================================
   // Phase 5.5: Atomic checkpoint + cooperative termination safe point
@@ -1761,6 +1821,7 @@ Run one small deterministic Python program; do not infer or repair anything:
     generation,
     generations_completed: generationsCompleted,
     generations_requested: GENERATIONS,
+    last_evaluation: args.task_result_command ? __taskEvidencePrompt(evalResult) : null,
     compiled: globalBest.compiled === true,
     correct: globalBest.correct === true,
     metric: {
@@ -1834,6 +1895,7 @@ Run one small deterministic Python program; do not infer or repair anything:
     log(`  Target ${SPEEDUP_TARGET}x held for ${targetStreak} safe points; stopping after ${generationsCompleted} generations`)
     break
   }
+  if (evalResult.measurement_valid === false) continue
 
   // ===========================================================================
   // Phase 6: Evolve-Prompts — Meta-prompter updates evolvable sections

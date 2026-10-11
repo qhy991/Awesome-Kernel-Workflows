@@ -15,7 +15,8 @@ test('timeout refresh replaces old generated code, preserves method body, and is
   const api=vm.runInNewContext(once+';({isTurnTimeout,result})',{args:{},agent:()=> 'fixture',agentRetry:fn=>fn()})
   assert.equal(await api.result,'fixture')
   const isTimeout=api.isTurnTimeout
-  assert.equal(isTimeout({code:'KERSOR_TURN_TIMEOUT'}),true)
+  assert.equal(isTimeout({code:'KERSOR_TURN_TIMEOUT'}),false)
+  assert.equal(isTimeout({code:'KERSOR_TURN_DRAINED',invocation_settled:true}),true)
   assert.equal(isTimeout({code:'KERSOR_PERMISSION_DENIED'}),false)
  }finally{fs.rmSync(dir,{recursive:true,force:true})}
 })

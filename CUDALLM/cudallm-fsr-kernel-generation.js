@@ -47,17 +47,23 @@ function __parseTaskResultJSON(raw) {
       else if (character === '"') quoted = !quoted
     }
     if (text === raw) throw original
-    return JSON.parse(text)
+    try { return JSON.parse(text) } catch (error) {
+      error.cause = original
+      throw error
+    }
   }
 }
 function __taskResult(output, expectedPath, expectedCount) {
   let result
+  const raw = output?.test_result_json
   try {
-    const raw = output?.test_result_json
     result = typeof raw === 'string' ? __parseTaskResultJSON(raw)
       : raw && typeof raw === 'object' && !Array.isArray(raw) ? JSON.parse(JSON.stringify(raw))
       : __taskHold('missing/malformed raw task result')
-  } catch { return __taskHold('missing/malformed raw task result') }
+  } catch (error) { return __taskHold('missing/malformed raw task result', {
+    test_result_path:expectedPath, returned_test_result_path:output?.test_result_path ?? null,
+    test_result_json:raw ?? null,
+  }, error) }
   // The caller owns the slot. Duplicated delivery paths are descriptive, not
   // candidate identity: source binding and canonical candidate_path below remain mandatory.
   if (result?.contract_version !== 'kersor-task-result-v1') return __taskHold('task result contract mismatch', result)
@@ -90,9 +96,53 @@ function __taskResult(output, expectedPath, expectedCount) {
     source_binding:result.source_binding, host_candidate_path:result.candidate_path, test_result_path:expectedPath,
     ...(deliveryPathObservation ? {delivery_path_observation:deliveryPathObservation} : {}),
     outcome_state:valid ? 'passed' : 'candidate_failure',
+    raw_task_result:result,
     diagnostics:result.diagnostics || [], evidence:result.evidence || null,
     error_log:valid ? '' : JSON.stringify({error:result.error || 'candidate rejected',
       diagnostics:result.diagnostics || [], candidate_path:result.candidate_path, evidence:result.evidence || null})}
+}
+
+// Finite method outcome, not successful kernel acceptance or resource release.
+// Only the complete declared set of already-bound candidate failures can end here.
+function __nativeTaskSeedExhausted(ctx) {
+  const count = ctx.seedCount
+  if (!Number.isInteger(count) || count <= 0 || !Number.isInteger(ctx.workloadCount)
+      || ctx.workloadCount <= 0 || !Array.isArray(ctx.candidates) || ctx.candidates.length !== count)
+    return __taskHold('seed exhaustion lacks the complete declared candidate set')
+  const slots = Array.from({length:count}, (_, index) => ({index,
+    candidate_path:`${ctx.expDir}/generated/initial_${index}.py`,
+    test_result_path:`${ctx.expDir}/generated/initial_${index}.json`}))
+  for (let i = 0; i < count; i++) {
+    const item = ctx.candidates[i], slot = slots[i]
+    const raw = item?.raw_task_result
+    const measured = __taskResult({test_result_path:slot.test_result_path,test_result_json:raw},
+      slot.test_result_path, ctx.workloadCount)
+    if (measured.is_valid || raw?.outcome_state !== 'candidate_failure'
+        || raw?.failure_origin !== 'candidate' || raw?.correct !== false || raw?.measurement_valid !== false
+        || !(raw?.compiled === null || typeof raw?.compiled === 'boolean')
+        || item.variant_path !== slot.candidate_path || item.test_result_path !== slot.test_result_path
+        || item.host_candidate_path !== measured.host_candidate_path
+        || item.source_binding?.verified !== true
+        || item.source_binding?.source_sha256 !== measured.source_binding.source_sha256
+        || item.compiled !== measured.compiled || item.correct !== false
+        || item.is_valid !== false || item.measurement_valid !== false || item.outcome_state !== 'candidate_failure')
+      return __taskHold('seed exhaustion requires only source-bound candidate failures in every declared slot', raw)
+  }
+  const compiled = ctx.candidates.some(c => c.compiled === true) ? true
+    : ctx.candidates.every(c => c.compiled === false) ? false : null
+  return {
+    workflow:ctx.workflow, status:'no_valid_candidate', outcome_state:'no_valid_candidate',
+    stop_reason:'seed_exhausted', termination_reason:'seed_exhausted',
+    compiled, correct:false, is_valid:false, measurement_valid:false,
+    seed_scope:{exp_dir:ctx.expDir,workload_count:ctx.workloadCount},
+    seed_budget:{declared:count,evaluated:count,remaining:0}, declared_seed_slots:slots,
+    initial_candidates:ctx.candidates,
+    initial_generation_result:{verified:false,reason:'seed_exhausted'},
+    generated_kernel_path:'',best_kernel_path:null,best_kernel_code:'',
+    best_candidate_binding:null,source_binding:null,canonical_metric:null,
+    overall_speedup:null,best_speedup:null,speedup_vs_reference:null,
+    iterations_completed:0,turns_used:0,target_met:false,report:null,
+  }
 }
 
 // A generated candidate owns a file identity, not an array position.
@@ -603,6 +653,56 @@ function guard(obj, field, fallback) {
 }
 // --- END inlined agent-retry scaffolding ---
 
+// --- BEGIN inlined runtime-safe-point scaffolding (from _meta/scaffolding/runtime-safe-point.js) ---
+async function __workflowRuntimeSafePoint(ctx) {
+  const checkpointPath = ctx.checkpointPath || `${ctx.expDir}/checkpoint.json`
+  const materialize = ctx.materializeBest && ctx.bestKernelPath && ctx.bestKernelSourcePath
+    ? `Atomically copy the exact bytes from immutable candidate ${ctx.bestKernelSourcePath} to ${ctx.bestKernelPath}. ` +
+      `Use a small Python program: read the source as bytes, require its SHA-256 to equal ` +
+      `${ctx.bestKernelExpectedSha256 || '<missing-required-sha256>'}, write a temporary file in the destination directory, ` +
+      `fsync it, then os.replace it. Recompute the destination SHA-256 and fail if it differs. ` +
+      `Never regenerate, reformat, or reconstruct the source from a prompt.`
+    : ctx.materializeBest && ctx.bestKernelPath && ctx.bestKernelCode
+    ? `Atomically write this exact best source to ${ctx.bestKernelPath} using a temporary file in the same directory followed by rename:\n` +
+      `\`\`\`${ctx.bestLanguage || ''}\n${ctx.bestKernelCode}\n\`\`\``
+    : (ctx.bestKernelPath
+      ? `Preserve the existing best source at ${ctx.bestKernelPath}; do not rewrite it.`
+      : 'There is no verified best source yet; do not create a best-kernel file.')
+
+  return agentRetry(() => agent(`Workflow runtime safe point.
+
+1. ${materialize}
+2. Check cooperative termination:
+   - termination file: ${ctx.terminationFile || '<none>'}
+   - deadline epoch: ${ctx.deadlineEpoch || 0}
+   A non-empty termination file requests stop. If it contains JSON, use its
+   "reason"; otherwise use "supervisor_request". A positive deadline requests
+   stop when the current epoch from \`date +%s\` is at or beyond it.
+3. Start from this exact checkpoint object:
+${JSON.stringify(ctx.checkpoint)}
+   If step 2 requests stop, set termination_requested=true and set
+   termination_reason to the observed reason. Otherwise preserve the planned
+   termination fields. Atomically write the resulting JSON to ${checkpointPath}
+   using a temporary file in the same directory followed by os.replace/rename.
+   Do not change metric.name or metric.value.
+4. Return only the termination decision and checkpoint path.
+`, {
+    model: MODEL.mechanical,
+    label: ctx.label,
+    phase: ctx.phase,
+    schema: {
+      type: 'object',
+      properties: {
+        termination_requested: { type: 'boolean' },
+        termination_reason: { type: 'string' },
+        checkpoint_path: { type: 'string' },
+      },
+      required: ['termination_requested', 'checkpoint_path'],
+    },
+  }), { retries: 5 })
+}
+// --- END inlined runtime-safe-point scaffolding ---
+
 // --- BEGIN inlined turn-timeout scaffolding (from _meta/scaffolding/turn-timeout.js) ---
 const TURN_TIMEOUT_MS = (args.turn_timeout_min || 12) * 60 * 1000  // stop admitting attempts at this deadline
 
@@ -614,17 +714,23 @@ async function withTurnTimeout(fn, label, retryOptions) {
     throw error
   }
   if (typeof setTimeout !== 'function' || !(TURN_TIMEOUT_MS > 0)) return agentRetry(fn, retryOptions)
-  let expired = null
-  const timer = setTimeout(() => {
-    expired = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s`)
-    expired.code = 'KERSOR_TURN_TIMEOUT'
-    expired.retryable = false
-  }, TURN_TIMEOUT_MS)
+  let expired = false
+  const timer = setTimeout(() => { expired = true }, TURN_TIMEOUT_MS)
+  function expiredAfterSettlement() {
+    if (!expired) return
+    const error = new Error(`turn-timeout: ${label} exceeded ${Math.round(TURN_TIMEOUT_MS / 1000)}s; invocation settled`)
+    error.code = 'KERSOR_TURN_DRAINED'
+    error.retryable = false
+    error.invocation_settled = true
+    error.resource_release_verified = false
+    error.phase_label = label
+    throw error
+  }
   try {
     return await agentRetry(async () => {
-      if (expired) throw expired
+      expiredAfterSettlement()
       const result = await fn()
-      if (expired) throw expired
+      expiredAfterSettlement()
       return result
     }, {...retryOptions, mayRetryError: () => !expired})
   } finally {
@@ -632,9 +738,11 @@ async function withTurnTimeout(fn, label, retryOptions) {
   }
 }
 
-// Broker timeouts and this watchdog are the only timeout classifications.
+// Legacy watchdog codes have no settlement proof. Only this drained invocation
+// and settled broker timeouts may use the ordinary timeout path.
 function isTurnTimeout(error) {
-  return ['KERSOR_TURN_TIMEOUT', 'KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
+  return (error?.code === 'KERSOR_TURN_DRAINED' && error.invocation_settled === true)
+    || ['KERSOR_CODEX_TIMEOUT', 'KERSOR_CLAUDE_TIMEOUT'].includes(error?.code)
 }
 // --- END inlined turn-timeout scaffolding ---
 // --- genome self-report: INLINE (rich, doer-written) ---
@@ -852,18 +960,27 @@ let featureCatalog = []
 let featureScores = {}
 let candidates = []
 let bestCandidate = null
+let candidatesCompleted = 0
+let iterationsCompleted = 0
+let terminationReason = ''
+let checkpointPath = null
 
 // Task-owned files retain complete source and evidence. Selection/reinforcement
 // carry an index, not repeated source bodies or compiler output. No byte cap.
 function candidatePromptRecord(candidate) {
   if (!args.task_result_command) return candidate
+  return candidateFileRecord(candidate)
+}
+
+function candidateFileRecord(candidate) {
   const e = candidate.eval || {}
   return {
     id: candidate.id,
     selected_feature_ids: candidate.selected_feature_ids,
     implemented_feature_ids: candidate.implemented_feature_ids,
     source_path: e.host_candidate_path || candidate.path,
-    task_result_path: e.test_result_path,
+    task_result_path: e.test_result_path || null,
+    source_binding: e.source_binding || null,
     evidence_paths: e.evidence || null,
     measurement: {compiled:e.compiled,correct:e.correct,is_valid:e.is_valid,
       measurement_valid:e.measurement_valid,speedup:e.speedup,latency_ms:e.latency_ms,
@@ -1173,7 +1290,7 @@ tests = testPlan.test_cases || []
 // =============================================================================
 // Main FSR Loop
 // =============================================================================
-for (let iteration = 0; iteration < ITERATIONS; iteration++) {
+fsrLoop: for (let iteration = 0; iteration < ITERATIONS; iteration++) {
   for (let sample = 0; sample < SAMPLES_PER_FEATURE_SET; sample++) {
     log(`\n=== CUDA-LLM FSR iteration ${iteration + 1}/${ITERATIONS}, sample ${sample + 1}/${SAMPLES_PER_FEATURE_SET} ===`)
 
@@ -1536,6 +1653,38 @@ Then append:
     for (const score of reinforce.updated_scores || []) {
       if (score?.id) featureScores[score.id] = score
     }
+    candidatesCompleted += 1
+    iterationsCompleted = Math.floor(candidatesCompleted / SAMPLES_PER_FEATURE_SET)
+    if (args.task_result_command || args.termination_file || args.deadline_epoch) {
+      const safePoint = await __workflowRuntimeSafePoint({
+        expDir: EXP_DIR, label: `checkpoint-${iteration}-${sample}`, phase: 'Reinforce',
+        terminationFile: args.termination_file, deadlineEpoch: args.deadline_epoch,
+        bestKernelPath: bestCandidate?.eval?.host_candidate_path || bestCandidate?.path || null,
+        checkpoint: {
+          schema_version: 1, workflow: WORKFLOW_NAME,
+          progress: {unit:'candidate', completed:candidatesCompleted, total:ITERATIONS * SAMPLES_PER_FEATURE_SET},
+          iterations_completed: iterationsCompleted,
+          compiled: bestCandidate?.eval?.compiled === true,
+          correct: bestCandidate?.eval?.correct === true,
+          metric: {name:args.task_result_command ? 'speedup_vs_reference' : (SOL_AVAILABLE ? 'speedup_vs_seed' : 'speedup'), value:bestCandidate?.eval?.speedup || 0},
+          best_kernel_path: bestCandidate?.eval?.host_candidate_path || bestCandidate?.path || null,
+          best_candidate: bestCandidate ? candidateFileRecord(bestCandidate) : null,
+          replay_binding: {mode:'native_same_activation_only', arguments:args},
+          feature_catalog: featureCatalog, feature_scores: featureScores,
+          tests, candidate_history: candidates.map(candidateFileRecord),
+          accepted_parent: taskParentMeasurement ? candidateFileRecord({id:'accepted-parent',
+            path:taskParentMeasurement.host_candidate_path, selected_feature_ids:[],
+            implemented_feature_ids:[], eval:taskParentMeasurement}) : null,
+          termination_requested: false,
+          termination_reason: candidatesCompleted === ITERATIONS * SAMPLES_PER_FEATURE_SET ? 'budget_exhausted' : '',
+        },
+      })
+      checkpointPath = safePoint.checkpoint_path || `${EXP_DIR}/checkpoint.json`
+      if (safePoint.termination_requested) {
+        terminationReason = safePoint.termination_reason || 'supervisor_request'
+        break fsrLoop
+      }
+    }
   }
 }
 
@@ -1544,7 +1693,7 @@ Then append:
 // =============================================================================
 phase('Report')
 
-const finalReport = await agentRetry(() => agent(`${__taskContractBlock()}Write a concise CUDA-LLM FSR optimization report.
+const finalReport = terminationReason ? null : await agentRetry(() => agent(`${__taskContractBlock()}Write a concise CUDA-LLM FSR optimization report.
 
 # Task
 ${taskSpec}
@@ -1612,6 +1761,11 @@ return {
   reference_code_path: REFERENCE_CODE_PATH,
   target_gpu: TARGET_GPU,
   iterations: ITERATIONS,
+  iterations_completed: iterationsCompleted,
+  candidates_completed: candidatesCompleted,
+  termination_requested: Boolean(terminationReason),
+  termination_reason: terminationReason || 'budget_exhausted',
+  checkpoint_path: checkpointPath,
   feature_budget: FEATURE_BUDGET,
   samples_per_feature_set: SAMPLES_PER_FEATURE_SET,
   adaptation_scope: ADAPTATION_SCOPE,

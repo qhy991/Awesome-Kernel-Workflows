@@ -25,23 +25,26 @@ test('CUDAAgent rejects an incomplete generated seed set before any evaluation',
  await assert.rejects(run(source,base,a,ev),/initial candidate.*(?:count|set|cover)|seed.*(?:count|set|cover)/i)
  assert.equal(executions,0)
 })
-for(const code of ['KERSOR_PERMISSION_DENIED','KERSOR_CONFIG_INVALID','KERSOR_AGENT_RESULT_CONTRACT_VIOLATION','KERSOR_CLAUDE_TRANSPORT_FAULT'])test('CUDAAgent preserves non-timeout implementation error '+code,async()=>{
+for(const code of ['KERSOR_PERMISSION_DENIED','KERSOR_CONFIG_INVALID','KERSOR_AGENT_RESULT_CONTRACT_VIOLATION','KERSOR_CLAUDE_TRANSPORT_FAULT','KERSOR_TURN_UNSETTLED','KERSOR_TURN_TIMEOUT'])test('CUDAAgent preserves non-timeout implementation error '+code,async()=>{
  const failure=Object.assign(new Error('retained diagnostic'),{code,retryable:false})
  const a=agents();a['task-accepted-parent']=measured('/fixture/exp/accepted_parent.task.json');a['impl-0']={then(_resolve,reject){reject(failure)}}
  await assert.rejects(run(source,{...base,kernel_path:'/fixture/parent.py'},a,null),e=>e===failure)
 })
-for(const code of ['KERSOR_CODEX_TIMEOUT','KERSOR_CLAUDE_TIMEOUT','KERSOR_TURN_TIMEOUT'])test('CUDAAgent records a typed timeout without losing its accepted parent '+code,async()=>{
+for(const code of ['KERSOR_CODEX_TIMEOUT','KERSOR_CLAUDE_TIMEOUT'])test('CUDAAgent records a typed timeout without losing its accepted parent '+code,async()=>{
  const a=agents();a['task-accepted-parent']=measured('/fixture/exp/accepted_parent.task.json');a['impl-0']={then(_resolve,reject){reject(Object.assign(new Error('bounded timeout'),{code}))}}
  const {result}=await run(source,{...base,kernel_path:'/fixture/parent.py'},a,null)
  assert.equal(result.convergence_status,'timeout');assert.equal(result.generated_kernel_path,'/fixture/exp/accepted_parent.task.json.artifact/candidate.py')
 })
-test('canonical watchdog emits a typed timeout and retains rejected errors unchanged',async()=>{
+test('canonical deadline stops before admission and retains original rejected errors',async()=>{
  const text=fs.readFileSync(path.join(root,'_meta/scaffolding/turn-timeout.js'),'utf8')
- const wrap=vm.runInNewContext(text+';withTurnTimeout',{args:{turn_timeout_min:1},setTimeout:fn=>{fn();return 1},clearTimeout:()=>{}})
- await assert.rejects(wrap(new Promise(()=>{}),'fixture'),e=>e.code==='KERSOR_TURN_TIMEOUT')
+ const retry=fs.readFileSync(path.join(root,'_meta/scaffolding/agent-retry.js'),'utf8')
+ const wrap=vm.runInNewContext(retry+'\n'+text+';withTurnTimeout',{args:{turn_timeout_min:1},setTimeout:fn=>{fn();return 1},clearTimeout:()=>{}})
+ let calls=0
+ await assert.rejects(wrap(()=>{calls++;return new Promise(()=>{})},'fixture'),e=>e.code==='KERSOR_TURN_DRAINED'&&e.invocation_settled===true&&e.resource_release_verified===false)
+ assert.equal(calls,0)
  const failure=Object.assign(new Error('permission'),{code:'KERSOR_PERMISSION_DENIED'})
- const direct=vm.runInNewContext(text+';withTurnTimeout',{args:{}})
- await assert.rejects(direct(Promise.reject(failure),'fixture'),e=>e===failure)
+ const direct=vm.runInNewContext(retry+'\n'+text+';withTurnTimeout',{args:{}})
+ await assert.rejects(direct(()=>Promise.reject(failure),'fixture'),e=>e===failure)
 })
 test('task contract distinguishes diagnostics and uses hook file references consistently',()=>{
  const text=fs.readFileSync(path.join(root,'_meta/scaffolding/typed-args.js'),'utf8')

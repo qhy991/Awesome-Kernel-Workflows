@@ -41,6 +41,23 @@ Primary arguments accepted by this workflow:
 - `samples_per_feature_set`: candidate samples per iteration, default `2`
 - `rtol` / `atol`: correctness tolerances
 - `exp_dir`: output directory
+- `termination_file`: optional non-empty cooperative-stop request file
+- `deadline_epoch`: optional positive Unix epoch deadline
+
+Native `task_result_command` runs write `exp_dir/checkpoint.json` after each
+candidate's evaluation and reinforcement, including typed failures. Legacy runs
+enable the same safe points when either stop argument is supplied. A stop returns
+the already reduced feature scores, bound best candidate, complete candidate-file
+index, `candidates_completed`, and the number of **fully** completed iterations;
+the optional final-report agent is skipped. No in-flight build or evaluation is
+cancelled, and the original FSR reward rules and declared search budget remain intact.
+
+The checkpoint stores original arguments, feature catalog/scores, test definitions,
+candidate source/result paths and source hashes. Complete source and diagnostics
+remain in those original files. It is an audit snapshot for recovery through the
+**same native Workflow activation**, with its existing replay identity and budget.
+There is no independent checkpoint loader or automatic resume into a new activation.
+Copying a checkpoint does not grant extra candidate slots or qualify a kernel.
 
 Evaluator JSON should contain:
 

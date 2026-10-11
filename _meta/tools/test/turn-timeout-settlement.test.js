@@ -37,7 +37,7 @@ for (const outcome of ['value','null','error']) {
     if (outcome==='error') child.reject(original)
     else child.resolve(outcome==='null' ? null : {ok:true})
     await assert.rejects(pending, error => outcome==='error' ? error===original
-      : error.code==='KERSOR_TURN_TIMEOUT' && error.retryable===false)
+      : error.code==='KERSOR_TURN_DRAINED' && error.invocation_settled===true && error.retryable===false)
     assert.equal(calls, 1)
     assert.equal(lateWrite, true)
     assert.equal(timer.cleared(), 1)

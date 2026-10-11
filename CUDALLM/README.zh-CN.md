@@ -41,6 +41,12 @@
 - `samples_per_feature_set`：每轮候选样本数，默认 `2`
 - `rtol` / `atol`：正确性容差
 - `exp_dir`：输出目录
+- `termination_file`：可选合作停止文件，非空时请求停止
+- `deadline_epoch`：可选 Unix 秒截止时间
+
+原生 `task_result_command` 路径在每个候选评测和 Reinforce 完成后原子写入 `exp_dir/checkpoint.json`，类型化失败也经过此边界。旧路径传入任一停止参数后启用相同检查点。停止返回已归约的 feature scores、绑定的最佳候选、完整候选文件索引、`candidates_completed` 及**完整完成**的迭代数；跳过额外 final-report agent，不中断正在进行的构建或评测，原 FSR reward 规则及声明预算保持不变。
+
+检查点保留原参数、feature catalog/scores、测试定义及候选 source/result 路径与源哈希；完整代码和诊断仍由原文件持有。它仅是同一个 native Workflow activation 的审计快照，恢复仍使用该 activation 的重放身份与预算。当前没有独立 checkpoint loader，也不支持复制检查点到新 activation 后自动恢复、增加候选槽位或认定内核合格。
 
 Evaluator JSON 建议格式：
 

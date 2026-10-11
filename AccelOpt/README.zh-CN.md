@@ -6,6 +6,12 @@
 
 ## 核心循环
 
+原生 `task_result_command` 路径维护独立的失败证据索引：候选源文件路径与哈希、完整任务结果路径及编译/正确性类型化结论。下一轮 planner 和 implementer 必须读取原文件及其关联诊断；失败候选不进入性能 Learn 样本对，也不获得虚构的 slowdown 分数。原 beam、学习阈值、seed 数量与搜索预算保持不变。最优候选改变后，初始化 profile 明确标为历史证据，不能冒充新候选的实测指标。
+
+原生路径在完整迭代结束后原子写入 `exp_dir/checkpoint.json`，保存 beam 和源绑定、初始测量、失败索引、经验、已完成轮数及原始参数。可选 `termination_file`（非空请求停止）或 `deadline_epoch`（Unix 秒）也可为旧路径启用此检查点。停止在本轮评测和学习完成后生效，返回实际 `iterations_completed`、`termination_reason`、`checkpoint_path` 并跳过额外报告 agent。这是同一个 native Workflow activation 的审计快照；恢复仍沿原 activation 的重放身份与预算，不提供独立 checkpoint loader，也不允许新 activation 通过复制检查点自动恢复或增加预算。
+
+只有全部声明的原生 seed 都获得完整、source-bound 的 `candidate_failure`，才返回有限终态 `status`/`outcome_state = no_valid_candidate`、`stop_reason`/`termination_reason = seed_exhausted`。保留每个声明槽和完整 canonical 原始结果，不生成最佳内核或性能指标，不再派发 planner、profiler 或补充 seed。证据缺失、权限失败与 unknown 仍然 HOLD；该终态不代表内核合格或资源已释放。
+
 `Plan → Execute → Profile → Summarize → Accumulate Experience → Repeat`
 
 ## 适用场景
