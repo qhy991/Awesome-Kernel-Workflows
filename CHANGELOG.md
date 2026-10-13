@@ -16,6 +16,8 @@ for the versioning policy.
 
 ### Fixed
 
+- Generate CUDAAgent task seeds in serial single-candidate activations with path-only replies, reducing per-response output pressure while preserving seed count, full serial evaluation and the frozen stage budget. Existing frozen runs are unchanged. (`CUDAAgent/cuda-agent-kernel-optimization.js`, `_meta/tools/test/initial-seed-path-ownership.test.js`).
+
 - Apply the existing settled-turn deadline to CUDAAgent initial generation, preventing late results from starting evaluation or additional attempts after expiry. Native internal cancellation and site release still require their own proof. (`CUDAAgent/cuda-agent-kernel-optimization.js`, `_meta/tools/test/cudaagent-setup-deadline.test.js`).
 
 ### Fixed
