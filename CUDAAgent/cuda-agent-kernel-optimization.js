@@ -976,7 +976,7 @@ function bestKernelPath() {
 phase('Setup')
 
 if (INPUT_MODE === 'generate_then_optimize') {
-  const generated = await agentRetry(() => agent(args.task_result_command ? `${__taskContractBlock()}Generate ${SEED_CANDIDATES} complete independent ${LANGUAGE} Python implementations from frozen specification ${PROBLEM_PATH}; no historical seed. Preserve the task run ABI and all official workloads/tolerances. Write source files only: one complete source at ${EXP_DIR}/generated/initial_<index>.py for every index 0..${SEED_CANDIDATES-1}. Return initial_candidates with each exact variant_path. Do not run the task command, create result slots, or report candidate measurements in this activation. The workflow evaluates this fixed seed set serially after generation completes. Follow all selected task skills for authorized diagnostics.` : `${__taskContractBlock()}No kernel_path was provided. Generate and verify an initial PyTorch model plus CUDA kernel scaffold before CUDAAgent optimization.
+  const generated = await withTurnTimeout(() => agent(args.task_result_command ? `${__taskContractBlock()}Generate ${SEED_CANDIDATES} complete independent ${LANGUAGE} Python implementations from frozen specification ${PROBLEM_PATH}; no historical seed. Preserve the task run ABI and all official workloads/tolerances. Write source files only: one complete source at ${EXP_DIR}/generated/initial_<index>.py for every index 0..${SEED_CANDIDATES-1}. Return initial_candidates with each exact variant_path. Do not run the task command, create result slots, or report candidate measurements in this activation. The workflow evaluates this fixed seed set serially after generation completes. Follow all selected task skills for authorized diagnostics.` : `${__taskContractBlock()}No kernel_path was provided. Generate and verify an initial PyTorch model plus CUDA kernel scaffold before CUDAAgent optimization.
 
 # Problem Input
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
@@ -1008,7 +1008,7 @@ Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run
       },
       required: ['generated_kernel_path', 'initial_candidates', 'initial_generation_result'],
     },
-  }), { retries: args.task_result_command ? 0 : 5 })
+  }), 'Setup initial generation', { retries: args.task_result_command ? 0 : 5 })
   initialCandidates = generated.initial_candidates || []
   initialGenerationResult = generated.initial_generation_result || { verified: false }
   generatedKernelPath = generated.generated_kernel_path || ''

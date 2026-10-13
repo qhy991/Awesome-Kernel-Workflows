@@ -16,6 +16,10 @@ for the versioning policy.
 
 ### Fixed
 
+- Apply the existing settled-turn deadline to CUDAAgent initial generation, preventing late results from starting evaluation or additional attempts after expiry. Native internal cancellation and site release still require their own proof. (`CUDAAgent/cuda-agent-kernel-optimization.js`, `_meta/tools/test/cudaagent-setup-deadline.test.js`).
+
+### Fixed
+
 - Reconcile with main 9d23aa9 while preserving its failure/checkpoint evidence and recovery stops. Distinguish a drained invocation (`KERSOR_TURN_DRAINED` plus its settlement flag) from legacy/unsettled watchdog errors; retain the latter as unverified. (`_meta/scaffolding/turn-timeout.js`, generated helpers, lifecycle guards).
 
 - Refresh or insert timeout helpers and migrate their call sites as one operation; reject lingering started-promise calls in CI so a helper-only update cannot silently leave an incompatible method body. (`scripts/patch-turn-timeout.js`, timeout guards).
