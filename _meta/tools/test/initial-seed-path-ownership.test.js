@@ -59,6 +59,15 @@ for (const [method,file] of Object.entries(methods)) {
           } else {
             const {calls,result}=await execute()
             assert.deepEqual(seen,[0,1,2])
+            if(method==='CUDAAgent') {
+              const generation=calls.filter(c=>/^generate-initial-kernel/.test(c.label))
+              assert.equal(generation.length,3)
+              for(let i=0;i<3;i++) {
+                assert.ok(generation[i].prompt.includes('Generate exactly ONE'))
+                assert.ok(generation[i].prompt.includes(`${exp}/generated/initial_${i}.py`))
+                assert.ok(generation[i].prompt.includes('Do not inspect other generated seeds'))
+              }
+            }
             assert.ok(result.generated_kernel_path)
             if(runtime==='native')for(const call of calls.filter(c=>/^initial-\d+$/.test(c.label))) {
               assert.ok(call.prompt.includes(`${exp}/generated/initial_${call.label.split('-')[1]}.py`))

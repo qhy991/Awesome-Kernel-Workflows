@@ -976,7 +976,10 @@ function bestKernelPath() {
 phase('Setup')
 
 if (INPUT_MODE === 'generate_then_optimize') {
-  const generated = await withTurnTimeout(() => agent(args.task_result_command ? `${__taskContractBlock()}Generate ${SEED_CANDIDATES} complete independent ${LANGUAGE} Python implementations from frozen specification ${PROBLEM_PATH}; no historical seed. Preserve the task run ABI and all official workloads/tolerances. Write source files only: one complete source at ${EXP_DIR}/generated/initial_<index>.py for every index 0..${SEED_CANDIDATES-1}. Return initial_candidates with each exact variant_path. Do not run the task command, create result slots, or report candidate measurements in this activation. The workflow evaluates this fixed seed set serially after generation completes. Follow all selected task skills for authorized diagnostics.` : `${__taskContractBlock()}No kernel_path was provided. Generate and verify an initial PyTorch model plus CUDA kernel scaffold before CUDAAgent optimization.
+  let generated = {initial_candidates: []}
+  const generationCount = args.task_result_command ? SEED_CANDIDATES : 1
+  for (let seedIndex = 0; seedIndex < generationCount; seedIndex++) {
+  const part = await withTurnTimeout(() => agent(args.task_result_command ? `${__taskContractBlock()}Generate exactly ONE complete independent ${LANGUAGE} Python implementation from frozen specification ${PROBLEM_PATH}; no historical seed. This activation owns seed ${seedIndex} of ${SEED_CANDIDATES}. Preserve the task run ABI and all official workloads/tolerances. Write the complete source directly to ${EXP_DIR}/generated/initial_${seedIndex}.py. Return initial_candidates containing only this exact variant_path. Keep code and detailed derivations in files; the final structured reply contains the path only. Do not inspect other generated seeds or author another activation's files. Do not run the task command, create result slots, or report candidate measurements in this activation. The workflow evaluates this fixed seed set serially after generation completes. Follow all selected task skills for authorized diagnostics.` : `${__taskContractBlock()}No kernel_path was provided. Generate and verify an initial PyTorch model plus CUDA kernel scaffold before CUDAAgent optimization.
 
 # Problem Input
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
@@ -993,7 +996,7 @@ if (INPUT_MODE === 'generate_then_optimize') {
 
 # Contract
 Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run available commands using {kernel_path}/{result_path}. Return the best verified generated source path.`, {
-    label: 'generate-initial-kernel',
+    label: seedIndex === 0 ? 'generate-initial-kernel' : `generate-initial-kernel-${seedIndex}`,
     phase: 'Setup',
     schema: args.task_result_command ? {
       type: 'object', properties: {initial_candidates: {type: 'array', items: {
@@ -1008,7 +1011,11 @@ Generate ${SEED_CANDIDATES} complete candidates under ${EXP_DIR}/generated/. Run
       },
       required: ['generated_kernel_path', 'initial_candidates', 'initial_generation_result'],
     },
-  }), 'Setup initial generation', { retries: args.task_result_command ? 0 : 5 })
+  }), `Setup initial generation ${seedIndex}`, { retries: args.task_result_command ? 0 : 5 })
+    generated = args.task_result_command
+      ? {...part, initial_candidates: [...generated.initial_candidates, ...(part.initial_candidates || [])]}
+      : part
+  }
   initialCandidates = generated.initial_candidates || []
   initialGenerationResult = generated.initial_generation_result || { verified: false }
   generatedKernelPath = generated.generated_kernel_path || ''
