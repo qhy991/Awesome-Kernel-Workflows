@@ -36,7 +36,10 @@ for(const workflow of ['AccelOpt/accelopt-kernel-optimization.js','CUDAAgent/cud
     assert.equal(result.generated_kernel_path,'')
     assert.equal(result.best_candidate_binding,null)
     assert.equal(Object.hasOwn(result,'resources_released'),false)
-    assert.deepEqual(calls.map(c=>c.label),['generate-initial-kernel','initial-0','initial-1','initial-2'])
+    assert.deepEqual(calls.map(c=>c.label),[
+      'generate-initial-kernel',
+      ...(workflow.startsWith('CUDAAgent/')?['generate-initial-kernel-1','generate-initial-kernel-2']:[]),
+      'initial-0','initial-1','initial-2'])
     assert.deepEqual(JSON.parse(JSON.stringify(result.seed_budget)),{declared:3,evaluated:3,remaining:0})
     assert.equal(result.declared_seed_slots.length,3)
     for(let i=0;i<3;i++) {
