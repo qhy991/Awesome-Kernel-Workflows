@@ -14,6 +14,10 @@
 
 ### Fixed
 
+- 将既有等待调用结算的逐轮截止时间应用于 CUDAAgent 初始生成，防止超时返回后继续评测或增加尝试。原生内部取消与站点释放仍需独立证明。(`CUDAAgent/cuda-agent-kernel-optimization.js`、`_meta/tools/test/cudaagent-setup-deadline.test.js`)。
+
+### Fixed
+
 - 合入 main 9d23aa9 并保留其失败/checkpoint 证据与恢复停止规则。用独立的 `KERSOR_TURN_DRAINED` 及调用终态标记区分已等待结束的调用；旧 watchdog 和未收尾错误继续保持未验证。（共享 timeout helper、生成副本及生命周期检查）。
 
 - 将 timeout helper 刷新/插入与调用点迁移合为一次操作；CI 拒绝残留的已启动 Promise 调用，防止仅更新 helper 后留下不兼容的方法主体。（`scripts/patch-turn-timeout.js`、timeout guards）。
