@@ -16,6 +16,8 @@ for the versioning policy.
 
 ### Fixed
 
+- Accept a partial task trace as a zero-scored candidate failure only when the Host proves that the source-bound candidate exhausted the fixed broker execution budget and supplies a 64-hex evidence binding. Other partial or timeout results remain HOLD. (`_meta/scaffolding/task-result.js`, generated CUDAAgent/AccelOpt/CUDALLM/KSearch/KernelFoundry copies, `_meta/tools/test/task-result-hold.test.js`).
+
 - Generate CUDAAgent task seeds in serial single-candidate activations with path-only replies, reducing per-response output pressure while preserving seed count, full serial evaluation and the frozen stage budget. Existing frozen runs are unchanged. (`CUDAAgent/cuda-agent-kernel-optimization.js`, `_meta/tools/test/initial-seed-path-ownership.test.js`).
 
 - Apply the existing settled-turn deadline to CUDAAgent initial generation, preventing late results from starting evaluation or additional attempts after expiry. Native internal cancellation and site release still require their own proof. (`CUDAAgent/cuda-agent-kernel-optimization.js`, `_meta/tools/test/cudaagent-setup-deadline.test.js`).

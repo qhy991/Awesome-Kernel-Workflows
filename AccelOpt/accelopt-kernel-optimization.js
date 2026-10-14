@@ -79,7 +79,11 @@ function __taskResult(output, expectedPath, expectedCount) {
     && result.speedup_vs_reference > 0
   const candidateFailure = result.outcome_state === 'candidate_failure' && result.failure_origin === 'candidate'
     && (result.full_workload_set === true || (result.candidate_runtime_fault_proven === true
-      && /^[0-9a-f]{64}$/i.test(result.runtime_fault_proof_sha256 || '') && result.full_workload_set === false)) && result.n_total === expectedCount
+      && /^[0-9a-f]{64}$/i.test(result.runtime_fault_proof_sha256 || '') && result.full_workload_set === false)
+      || (result.failure_kind === 'candidate_execution_budget'
+      && result.candidate_budget_exhausted_proven === true
+      && /^[0-9a-f]{64}$/i.test(result.budget_exhaustion_proof_sha256 || '')
+      && result.full_workload_set === false)) && result.n_total === expectedCount
     && Number.isInteger(result.n_pass) && result.n_pass >= 0 && result.n_pass < expectedCount
     && result.source_binding?.verified === true
     && /^[0-9a-f]{64}$/i.test(result.source_binding?.source_sha256 || '')

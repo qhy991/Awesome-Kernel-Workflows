@@ -14,6 +14,8 @@
 
 ### Fixed
 
+- 仅当 Host 证明源码绑定候选耗尽固定 broker 执行预算，并提供 64 位十六进制证据绑定时，才将部分 task trace 作为零分候选失败；其他部分结果或超时仍保持 HOLD。（`_meta/scaffolding/task-result.js`、生成的 CUDAAgent/AccelOpt/CUDALLM/KSearch/KernelFoundry 副本、`_meta/tools/test/task-result-hold.test.js`）。
+
 - CUDAAgent 任务种子按单候选激活串行生成，仅返回源码路径，降低单次响应输出压力；候选数量、完整串行评测和冻结阶段预算保持不变，旧运行不热改。(`CUDAAgent/cuda-agent-kernel-optimization.js`、`_meta/tools/test/initial-seed-path-ownership.test.js`)。
 
 - 将既有等待调用结算的逐轮截止时间应用于 CUDAAgent 初始生成，防止超时返回后继续评测或增加尝试。原生内部取消与站点释放仍需独立证明。(`CUDAAgent/cuda-agent-kernel-optimization.js`、`_meta/tools/test/cudaagent-setup-deadline.test.js`)。
