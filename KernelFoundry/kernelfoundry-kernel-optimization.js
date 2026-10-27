@@ -257,6 +257,46 @@ ${__nativeTaskDelivery(ctx.resultPath)}`, {
     || __taskHold('missing task result')
 }
 
+// Search-loop evaluation of one generated candidate. When the task evaluator
+// returns a well-formed result whose outcome_state is explicitly 'unknown' (an
+// unattributed fault or a timed-out check), only that candidate is discarded:
+// it is never scored, accepted, or reported as a candidate failure, and the
+// search may continue. Every other HOLD (malformed or missing result, contract
+// mismatch, incomplete proof, unknown model observation, transport failure)
+// still stops the workflow at once. After unknown_candidate_limit (default 3)
+// discarded candidates in a row the workflow HOLDs too, so a real
+// infrastructure fault cannot spend the whole budget. Parent and seed
+// measurement keep using __nativeTaskEvaluate, which HOLDs on any unknown.
+const __unknownCandidates = {consecutive:0, total:0}
+function __explicitUnknownOutcome(error) {
+  const result = error?.task_result
+  return error?.code === 'TASK_RESULT_HOLD' && result?.contract_version === 'kersor-task-result-v1'
+    && result.outcome_state === 'unknown' && result.model_observation !== 'unknown'
+}
+async function __nativeTaskEvaluateCandidate(ctx) {
+  const limit = Math.max(1, Number((typeof args !== 'undefined' && args.unknown_candidate_limit) || 3))
+  try {
+    const measured = await __nativeTaskEvaluate(ctx)
+    __unknownCandidates.consecutive = 0
+    return measured
+  } catch (error) {
+    if (!__explicitUnknownOutcome(error)) throw error
+    __unknownCandidates.consecutive += 1
+    __unknownCandidates.total += 1
+    if (__unknownCandidates.consecutive >= limit) {
+      error.message += `\n(${__unknownCandidates.consecutive} consecutive unknown candidate outcomes; limit ${limit})`
+      throw error
+    }
+    return {is_valid:false, measurement_valid:false, compiled:null, correct:false,
+      metric_value:0, speedup:0, latency_ms:null, n_pass:null, n_total:null, pass_rate:'unknown',
+      source_binding:null, host_candidate_path:null, test_result_path:ctx.resultPath,
+      outcome_state:'unknown', discarded_unknown:true, unknown_reason:error.task_result_reason || error.message,
+      raw_task_result:error.task_result || null, diagnostics:[], evidence:null,
+      error_log:'Discarded: this candidate\'s outcome is unknown (' + (error.task_result_reason || 'unattributed')
+        + '). It was not scored. Read ' + ctx.resultPath + ' before reusing its approach.'}
+  }
+}
+
 async function __nativeTaskAcceptedParent(ctx) {
   const measured = await __nativeTaskEvaluate(ctx)
   if (!measured?.is_valid) return __taskHold('accepted parent failed full official task measurement')
@@ -826,6 +866,14 @@ const META_PROMPT_INTERVAL = args.meta_prompt_interval || 10
 // target_speedup is the canonical KerSor/session term. speedup_target remains a
 // bounded edge adapter for historical direct Workflow() callers.
 const SPEEDUP_TARGET = Number(args.target_speedup ?? args.speedup_target ?? 2.0)
+// When optimizing an accepted parent, the target multiplies the parent's own
+// speedup ('parent', default): an inherited kernel already past 2x would
+// otherwise meet the target before any search and stop after MIN_GENERATIONS.
+// 'reference' keeps the absolute target. A clean start has no parent, so both
+// bases are the reference implementation there.
+const TARGET_BASIS = args.target_basis === 'reference' ? 'reference' : 'parent'
+let targetBase = 1
+const targetSpeedup = () => targetBase * SPEEDUP_TARGET
 const STOP_ON_TARGET = args.stop_on_target !== false
 const TARGET_PATIENCE = Math.max(1, Number(args.target_patience || 2))
 const MIN_GENERATIONS = Math.max(1, Number(args.min_generations ?? 2))
@@ -956,7 +1004,7 @@ const BEHAVIORAL_DIMS = {
 function computeFitness(compiled, correct, speedup) {
   if (!compiled) return 0.0
   if (!correct) return 0.1
-  const sNorm = Math.min(1.0, speedup / SPEEDUP_TARGET)
+  const sNorm = Math.min(1.0, speedup / targetSpeedup())
   return 0.5 + 0.5 * sNorm
 }
 
@@ -1118,6 +1166,7 @@ if (args.task_result_command && KERNEL_PATH) {
   taskParentMeasurement = await __nativeTaskAcceptedParent({candidatePath:KERNEL_PATH,
     resultPath:`${EXP_DIR}/accepted_parent.task.json`,command:args.task_result_command,
     workloadCount:args.task_workload_count,label:'accepted-parent-task'})
+  if (TARGET_BASIS === 'parent') targetBase = taskParentMeasurement.speedup
   const descriptor = await agentRetry(() => agent(`Read the complete officially measured accepted parent at ${taskParentMeasurement.host_candidate_path}. Classify this exact implementation on the existing KernelFoundry behavioral axes. d_mem: ${JSON.stringify(BEHAVIORAL_DIMS.d_mem)}; d_algo: ${JSON.stringify(BEHAVIORAL_DIMS.d_algo)}; d_sync: ${JSON.stringify(BEHAVIORAL_DIMS.d_sync)}. Return only integer coordinates 0 through 3. Do not modify the file or estimate measurements.`,
     {label:'accepted-parent-descriptor',phase:'Setup',schema:{type:'object',properties:{d_mem:{type:'integer'},d_algo:{type:'integer'},d_sync:{type:'integer'}},required:['d_mem','d_algo','d_sync']}}),{retries:0})
   if (!descriptor || !['d_mem','d_algo','d_sync'].every(k => Number.isInteger(descriptor[k]) && descriptor[k] >= 0 && descriptor[k] <= 3)) __taskHold('accepted parent behavioral descriptor unavailable')
@@ -1199,7 +1248,7 @@ ${operatorCode}
 
 # Operation: ${OP_DESC}
 # Target: ${langToken(LEGACY_LANG_TOKEN)} on ${TARGET_HW}
-# Baseline: ${baselineTime}ms | Speedup target: ${SPEEDUP_TARGET}x
+# Baseline: ${baselineTime}ms | Speedup target: ${targetSpeedup()}x vs reference${TARGET_BASIS === 'parent' && taskParentMeasurement ? ` (${SPEEDUP_TARGET}x the accepted parent)` : ''}
 
 # === EVOLVED OPTIMIZATION GUIDANCE (meta-prompt) ===
 
@@ -1428,7 +1477,7 @@ Return the parsed result.`, {
       }), { retries: 0 })
     })()
     : args.task_result_command
-    ? await __nativeTaskEvaluate({candidatePath:candidatePath, candidateSource:offspringCode, resultPath:generationResultPath, command:args.task_result_command, workloadCount:args.task_workload_count, label:`task-eval-${generation}`})
+    ? await __nativeTaskEvaluateCandidate({candidatePath:candidatePath, candidateSource:offspringCode, resultPath:generationResultPath, command:args.task_result_command, workloadCount:args.task_workload_count, label:`task-eval-${generation}`})
     : await agentRetry(() => agent(`${__taskContractBlock()}You are a kernel evaluator for KernelFoundry. Evaluate the already-materialized ${langToken(LEGACY_LANG_TOKEN)} kernel.
 
 # Candidate Path:
@@ -1803,7 +1852,7 @@ Run one small deterministic Python program; do not infer or repair anything:
     EVIDENCE_MODE === 'measured' &&
     globalBest.compiled === true &&
     globalBest.correct === true &&
-    globalBest.speedup >= SPEEDUP_TARGET
+    globalBest.speedup >= targetSpeedup()
   )
   targetStreak = targetSatisfied ? targetStreak + 1 : 0
   const shouldStopOnTarget = (
@@ -1832,7 +1881,8 @@ Run one small deterministic Python program; do not infer or repair anything:
       name: 'speedup',
       value: globalBest.speedup || 0,
     },
-    target: SPEEDUP_TARGET,
+    target: targetSpeedup(),
+    target_basis: TARGET_BASIS,
     target_met: targetSatisfied,
     target_streak: targetStreak,
     best_candidate_id: globalBest.id || null,
@@ -1896,7 +1946,7 @@ Run one small deterministic Python program; do not infer or repair anything:
   }
   if (shouldStopOnTarget) {
     terminationReason = 'speedup_target_reached'
-    log(`  Target ${SPEEDUP_TARGET}x held for ${targetStreak} safe points; stopping after ${generationsCompleted} generations`)
+    log(`  Target ${targetSpeedup()}x held for ${targetStreak} safe points; stopping after ${generationsCompleted} generations`)
     break
   }
   if (evalResult.measurement_valid === false) continue
@@ -2071,8 +2121,10 @@ return {
     EVIDENCE_MODE === 'measured' &&
     globalBest.compiled === true &&
     globalBest.correct === true &&
-    globalBest.speedup >= SPEEDUP_TARGET
+    globalBest.speedup >= targetSpeedup()
   ),
+  target_speedup: targetSpeedup(),
+  target_basis: TARGET_BASIS,
   checkpoint_path: CHECKPOINT_PATH,
   archive_coverage: Object.keys(archive).length,
   archive_summary: Object.entries(archive).sort((a, b) => b[1].fitness - a[1].fitness).slice(0, 10).map(([k, v]) => ({ cell: k, speedup: v.speedup, strategy: v.strategy })),

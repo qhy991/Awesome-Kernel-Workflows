@@ -50,6 +50,8 @@ routing:
   all_args:
   - fair_baseline_id
   - target_speedup
+  - target_basis
+  - unknown_candidate_limit
   - language
   - generations
   - min_generations
@@ -88,6 +90,12 @@ routing:
 args:
   required: []
   optional:
+  - name: unknown_candidate_limit
+    type: number
+    description: Native task mode only. A search candidate whose task result has outcome_state unknown is discarded unscored and the search continues; this many discarded candidates in a row HOLD the workflow. Parent and seed measurement still HOLD on the first unknown. Default 3.
+  - name: target_basis
+    type: string
+    description: "'parent' (default) multiplies target_speedup by the accepted parent's speedup when optimizing an existing kernel, so an inherited kernel already past the target still searches; 'reference' keeps the absolute target. Clean starts are unaffected."
   - name: native_task_result_file_handoff
     type: boolean
     description: Enable only after the native StructuredOutput canonical-file hook is installed and qualified. Return result references instead of model-transcribed measurements. Default false.

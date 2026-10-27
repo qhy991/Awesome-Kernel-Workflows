@@ -257,6 +257,46 @@ ${__nativeTaskDelivery(ctx.resultPath)}`, {
     || __taskHold('missing task result')
 }
 
+// Search-loop evaluation of one generated candidate. When the task evaluator
+// returns a well-formed result whose outcome_state is explicitly 'unknown' (an
+// unattributed fault or a timed-out check), only that candidate is discarded:
+// it is never scored, accepted, or reported as a candidate failure, and the
+// search may continue. Every other HOLD (malformed or missing result, contract
+// mismatch, incomplete proof, unknown model observation, transport failure)
+// still stops the workflow at once. After unknown_candidate_limit (default 3)
+// discarded candidates in a row the workflow HOLDs too, so a real
+// infrastructure fault cannot spend the whole budget. Parent and seed
+// measurement keep using __nativeTaskEvaluate, which HOLDs on any unknown.
+const __unknownCandidates = {consecutive:0, total:0}
+function __explicitUnknownOutcome(error) {
+  const result = error?.task_result
+  return error?.code === 'TASK_RESULT_HOLD' && result?.contract_version === 'kersor-task-result-v1'
+    && result.outcome_state === 'unknown' && result.model_observation !== 'unknown'
+}
+async function __nativeTaskEvaluateCandidate(ctx) {
+  const limit = Math.max(1, Number((typeof args !== 'undefined' && args.unknown_candidate_limit) || 3))
+  try {
+    const measured = await __nativeTaskEvaluate(ctx)
+    __unknownCandidates.consecutive = 0
+    return measured
+  } catch (error) {
+    if (!__explicitUnknownOutcome(error)) throw error
+    __unknownCandidates.consecutive += 1
+    __unknownCandidates.total += 1
+    if (__unknownCandidates.consecutive >= limit) {
+      error.message += `\n(${__unknownCandidates.consecutive} consecutive unknown candidate outcomes; limit ${limit})`
+      throw error
+    }
+    return {is_valid:false, measurement_valid:false, compiled:null, correct:false,
+      metric_value:0, speedup:0, latency_ms:null, n_pass:null, n_total:null, pass_rate:'unknown',
+      source_binding:null, host_candidate_path:null, test_result_path:ctx.resultPath,
+      outcome_state:'unknown', discarded_unknown:true, unknown_reason:error.task_result_reason || error.message,
+      raw_task_result:error.task_result || null, diagnostics:[], evidence:null,
+      error_log:'Discarded: this candidate\'s outcome is unknown (' + (error.task_result_reason || 'unattributed')
+        + '). It was not scored. Read ' + ctx.resultPath + ' before reusing its approach.'}
+  }
+}
+
 async function __nativeTaskAcceptedParent(ctx) {
   const measured = await __nativeTaskEvaluate(ctx)
   if (!measured?.is_valid) return __taskHold('accepted parent failed full official task measurement')
@@ -1554,7 +1594,7 @@ The parse step prints one line "SPEEDUP=<aggregate> REDUCTION=<contract reductio
       }
     : args.task_result_command
     ? await (async()=>{
-      const measured=await __nativeTaskEvaluate({candidatePath:`${EXP_DIR}/task_attempt_${currentAttempt}.py`,candidateSource:implResult.kernel_code,resultPath:`${EXP_DIR}/task_attempt_${currentAttempt}.json`,command:args.task_result_command,workloadCount:args.task_workload_count,label:`task-verify-${currentAttempt}`})
+      const measured=await __nativeTaskEvaluateCandidate({candidatePath:`${EXP_DIR}/task_attempt_${currentAttempt}.py`,candidateSource:implResult.kernel_code,resultPath:`${EXP_DIR}/task_attempt_${currentAttempt}.json`,command:args.task_result_command,workloadCount:args.task_workload_count,label:`task-verify-${currentAttempt}`})
       const gain=measured.is_valid ? taskInitialMeasurement.latency_ms/measured.latency_ms : 0
       return {...measured,kernel_time_ms:measured.latency_ms,speedup_vs_generated_initial:gain,speedup_vs_reference:measured.speedup,speedup_vs_compile:null,speedup_vs_eager:null,reward:!measured.is_valid ? -1 : TARGET_SPEEDUP !== null && gain>1 && gain>=TARGET_SPEEDUP ? 3 : gain>1 ? 1 : 0}
     })()
@@ -1647,7 +1687,7 @@ Then append, using the values you just measured (status="done" if correctness pa
   let outcome = ''
   let error = ''
   if (args.task_result_command && !verifyResult.is_valid) {
-    outcome = verifyResult.compiled === false ? 'compile_error' : 'candidate_failure'
+    outcome = verifyResult.discarded_unknown ? 'unknown_discarded' : verifyResult.compiled === false ? 'compile_error' : 'candidate_failure'
     error = verifyResult.error_log || JSON.stringify(verifyResult.diagnostics || [])
   } else if (!verifyResult.compiled) {
     outcome = 'compile_error'

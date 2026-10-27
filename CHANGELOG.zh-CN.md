@@ -1,3 +1,6 @@
+- 单个候选的任务检查结果为 unknown 时继续搜索。原生任务模式下，任一任务结果的 outcome_state 为 unknown（未归因的错误、检查超时）都会让 workflow 立即 HOLD，即使之前已有候选通过也会终止整个搜索；在 B300-M4 上，这导致 AccelOpt 44%、KernelFoundry 32%、CUDAAgent 26% 的最终 stage 提前结束。现在 CUDAAgent、AccelOpt、KernelFoundry 用 `__nativeTaskEvaluateCandidate` 评测搜索候选：只丢弃该候选且不计分，连续 `unknown_candidate_limit`（默认 3）个才 HOLD。格式错误、缺失或未证明的结果、未知的模型观测，以及父代和种子测量仍立即 HOLD（`_meta/scaffolding/task-result.js` 及内联副本、`AccelOpt`、`CUDAAgent`、`KernelFoundry` 的 workflow 与 manifest、`_meta/tools/test/task-result-unknown-candidate.test.js`）。
+- KernelFoundry 接手已有 kernel 时，目标改为相对被接手的父代。原目标是绝对值（参考实现的 2 倍）且适应度在此封顶，继承来的 kernel 若已超过 2 倍，搜索开始前目标就已满足，跑满 `min_generations` 即停；在 B300-M4 上这类 stage 中位只跑 1.3 小时、增益 1.11 倍。新增 `target_basis`（默认 `parent`，`reference` 恢复旧行为）；从零写不受影响（`KernelFoundry/kernelfoundry-kernel-optimization.js`、`KernelFoundry/manifest.yaml`、`KernelFoundry/README.md`、`_meta/tools/test/kernelfoundry-parent-relative-target.test.js`）。
+
 # 更新日志（中文）
 
 - AccelOpt候选身份包含iteration，确保候选、solution、benchmark及binding证据跨轮不覆盖；原生两轮回放验证较慢后轮不破坏前轮最佳源码与绑定。

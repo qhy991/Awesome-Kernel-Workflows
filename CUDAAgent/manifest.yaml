@@ -100,6 +100,9 @@ routing:
 args:
   required: []
   optional:
+  - name: unknown_candidate_limit
+    type: number
+    description: Native task mode only. A search candidate whose task result has outcome_state unknown is discarded unscored and the search continues; this many discarded candidates in a row HOLD the workflow. Parent and seed measurement still HOLD on the first unknown. Default 3.
   - name: native_task_result_file_handoff
     type: boolean
     description: Enable only after the native StructuredOutput canonical-file hook is installed and qualified. Return result references instead of model-transcribed measurements. Default false.

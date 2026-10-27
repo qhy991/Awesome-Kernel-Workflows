@@ -78,6 +78,8 @@ Workflow({name: 'kernelfoundry-kernel-optimization', args: {
 | `generations` | `30` | Number of evolutionary generations |
 | `meta_prompt_interval` | `10` | Generations between prompt evolution |
 | `target_speedup` | `2.0` | Target speedup for fitness normalization (`speedup_target` remains a legacy direct-call alias) |
+| `target_basis` | `parent` | `parent`: when optimizing an accepted parent, the target is `target_speedup` × the parent's speedup, so an inherited kernel already past the target still searches. `reference`: absolute target, the previous behaviour. Clean starts are unaffected. |
+| `unknown_candidate_limit` | `3` | Native task mode: an offspring whose task result is `unknown` is discarded unscored and the search continues; this many in a row HOLD the workflow |
 | `selection_strategy` | `'mixed'` | Parent selection: mixed/uniform/fitness/curiosity |
 
 ## Output

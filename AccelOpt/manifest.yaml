@@ -68,6 +68,9 @@ routing:
 args:
   required: []
   optional:
+  - name: unknown_candidate_limit
+    type: number
+    description: Native task mode only. A search candidate whose task result has outcome_state unknown is discarded unscored and the search continues; this many discarded candidates in a row HOLD the workflow. Parent and seed measurement still HOLD on the first unknown. Default 3.
   - name: termination_file
     type: string
     description: Optional cooperative-stop request file; checked after each complete Plan-Execute-Profile-Learn iteration. Native task runs checkpoint every iteration even without a stop request.
