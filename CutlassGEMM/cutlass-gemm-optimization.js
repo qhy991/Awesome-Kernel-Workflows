@@ -194,6 +194,23 @@ function __attemptBlock() {
   return parts.join('\n') + '\n'
 }
 
+// Channel ④: earlier stages of a composition chain. Each entry is a read-only
+// handoff directory (README.md + handoff.json) that indexes that stage's sealed
+// workspace: its task-check measurements, the kernels, profiles and search
+// state it left, and its author's unverified notes. The workspace is the state;
+// the index only says where it is.
+const PRIOR_HANDOFFS = Array.isArray(args.prior_handoffs)
+  ? args.prior_handoffs.filter(p => typeof p === 'string' && p)
+  : []
+function __priorHandoffBlock() {
+  if (!PRIOR_HANDOFFS.length) return ''
+  return '\n# Earlier stages of this chain (channel ④ — read-only sealed workspaces):\n'
+    + PRIOR_HANDOFFS.map((p, i) => `- stage ${i + 1}: ${p}/README.md (index: ${p}/handoff.json)`).join('\n') + '\n'
+    + 'Read each README.md before acting: it lists what that stage measured, the distinct failures in its raw traces, and the kernels, profiles and search state it left. '
+    + 'You may read and reuse any file it lists. Cite a number only from a task check record it names; author notes are unverified and are never a measurement. '
+    + 'Do not retry a failure it already recorded without a concrete change. The accepted incumbent, if any, is still the only inherited implementation.\n'
+}
+
 // File-backed candidate context. Pure builders; execute persistence inside the
 // existing producer/evaluator activation, not an additional model call.
 function __workspaceSource(path, fallback) {

@@ -15,6 +15,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- 让 composition 的 stage 能读到同一条 chain 里前面各 stage 留下的东西。新增可选参数 `prior_handoffs`：一组只读 handoff 目录，每个目录里的 README.md 和 handoff.json 索引了前一个 stage 的 sealed workspace，包括 task check 测量、raw trace 里去重后的失败、它写出的 kernel、profile 和 search state，以及未经验证的作者笔记。AccelOpt 的 seed 生成、规划和实现，CUDAAgent 的 seed 生成和实现，以及 KernelFoundry 的子代生成，现在都会让 agent 先读这些目录。只有 task 记录里的数字可以引用，被接受的 incumbent 仍是唯一继承的实现。不传这个参数时所有 prompt 都不变（`_meta/scaffolding/typed-args.js`、各内联副本、`AccelOpt`、`CUDAAgent`、`KernelFoundry` 的 workflow 与 manifest、`_meta/tools/test/prior-handoff-channel.test.js`、`.github/workflows/ci.yml`）。
+
 ### Fixed
 
 - 仅当 Host 证明源码绑定候选耗尽固定 broker 执行预算，并提供 64 位十六进制证据绑定时，才将部分 task trace 作为零分候选失败；其他部分结果或超时仍保持 HOLD。（`_meta/scaffolding/task-result.js`、生成的 CUDAAgent/AccelOpt/CUDALLM/KSearch/KernelFoundry 副本、`_meta/tools/test/task-result-hold.test.js`）。

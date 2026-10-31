@@ -584,6 +584,23 @@ function __attemptBlock() {
   return parts.join('\n') + '\n'
 }
 
+// Channel ④: earlier stages of a composition chain. Each entry is a read-only
+// handoff directory (README.md + handoff.json) that indexes that stage's sealed
+// workspace: its task-check measurements, the kernels, profiles and search
+// state it left, and its author's unverified notes. The workspace is the state;
+// the index only says where it is.
+const PRIOR_HANDOFFS = Array.isArray(args.prior_handoffs)
+  ? args.prior_handoffs.filter(p => typeof p === 'string' && p)
+  : []
+function __priorHandoffBlock() {
+  if (!PRIOR_HANDOFFS.length) return ''
+  return '\n# Earlier stages of this chain (channel ④ — read-only sealed workspaces):\n'
+    + PRIOR_HANDOFFS.map((p, i) => `- stage ${i + 1}: ${p}/README.md (index: ${p}/handoff.json)`).join('\n') + '\n'
+    + 'Read each README.md before acting: it lists what that stage measured, the distinct failures in its raw traces, and the kernels, profiles and search state it left. '
+    + 'You may read and reuse any file it lists. Cite a number only from a task check record it names; author notes are unverified and are never a measurement. '
+    + 'Do not retry a failure it already recorded without a concrete change. The accepted incumbent, if any, is still the only inherited implementation.\n'
+}
+
 // File-backed candidate context. Pure builders; execute persistence inside the
 // existing producer/evaluator activation, not an additional model call.
 function __workspaceSource(path, fallback) {
@@ -1023,7 +1040,7 @@ if (INPUT_MODE === 'generate_then_optimize') {
   let generated = {initial_candidates: []}
   const generationCount = args.task_result_command ? SEED_CANDIDATES : 1
   for (let seedIndex = 0; seedIndex < generationCount; seedIndex++) {
-  const part = await withTurnTimeout(() => agent(args.task_result_command ? `${__taskContractBlock()}Generate exactly ONE complete independent ${LANGUAGE} Python implementation from frozen specification ${PROBLEM_PATH}; no historical seed. This activation owns seed ${seedIndex} of ${SEED_CANDIDATES}. Preserve the task run ABI and all official workloads/tolerances. Write the complete source directly to ${EXP_DIR}/generated/initial_${seedIndex}.py. Return initial_candidates containing only this exact variant_path. Keep code and detailed derivations in files; the final structured reply contains the path only. Do not inspect other generated seeds or author another activation's files. Do not run the task command, create result slots, or report candidate measurements in this activation. The workflow evaluates this fixed seed set serially after generation completes. Follow all selected task skills for authorized diagnostics.` : `${__taskContractBlock()}No kernel_path was provided. Generate and verify an initial PyTorch model plus CUDA kernel scaffold before CUDAAgent optimization.
+  const part = await withTurnTimeout(() => agent(args.task_result_command ? `${__taskContractBlock()}${__priorHandoffBlock()}Generate exactly ONE complete independent ${LANGUAGE} Python implementation from frozen specification ${PROBLEM_PATH}; no historical seed. This activation owns seed ${seedIndex} of ${SEED_CANDIDATES}. Preserve the task run ABI and all official workloads/tolerances. Write the complete source directly to ${EXP_DIR}/generated/initial_${seedIndex}.py. Return initial_candidates containing only this exact variant_path. Keep code and detailed derivations in files; the final structured reply contains the path only. Do not inspect other generated seeds or author another activation's files. Do not run the task command, create result slots, or report candidate measurements in this activation. The workflow evaluates this fixed seed set serially after generation completes. Follow all selected task skills for authorized diagnostics.` : `${__taskContractBlock()}${__priorHandoffBlock()}No kernel_path was provided. Generate and verify an initial PyTorch model plus CUDA kernel scaffold before CUDAAgent optimization.
 
 # Problem Input
 - problem_definition: ${PROBLEM_DEFINITION || '(not provided)'}
@@ -1365,7 +1382,7 @@ for (currentAttempt = 0; currentAttempt < MAX_TURNS && !targetMet; currentAttemp
 
   let implResult
   try {
-  implResult = await withTurnTimeout(() => agent(args.task_result_command ? `${__taskContractBlock()}Implement the CUDAAgent optimization strategy ${profileResult.optimization_strategy} in complete ${LANGUAGE} Python source. Read the FULL current tested artifact ${bestBoundSourcePath}; preserve exact frozen task signature and correctness. Prior feedback: ${JSON.stringify(history.slice(-3).map(h => h.task_result_path ? {...h,error:undefined,read_complete_diagnostics:h.task_result_path} : h))}. Write the COMPLETE new source to ${EXP_DIR}/task_attempt_${currentAttempt}.py and return variant_path and implementation_notes. The source file is authoritative; do not repeat its contents in the reply. Do not modify the incumbent or benchmark; serial task verification follows. Read all selected task skills for genuine diagnostics.` : `${__taskContractBlock()}You are a CUDA kernel developer. Implement an optimized CUDA kernel for this PyTorch model.
+  implResult = await withTurnTimeout(() => agent(args.task_result_command ? `${__taskContractBlock()}${__priorHandoffBlock()}Implement the CUDAAgent optimization strategy ${profileResult.optimization_strategy} in complete ${LANGUAGE} Python source. Read the FULL current tested artifact ${bestBoundSourcePath}; preserve exact frozen task signature and correctness. Prior feedback: ${JSON.stringify(history.slice(-3).map(h => h.task_result_path ? {...h,error:undefined,read_complete_diagnostics:h.task_result_path} : h))}. Write the COMPLETE new source to ${EXP_DIR}/task_attempt_${currentAttempt}.py and return variant_path and implementation_notes. The source file is authoritative; do not repeat its contents in the reply. Do not modify the incumbent or benchmark; serial task verification follows. Read all selected task skills for genuine diagnostics.` : `${__taskContractBlock()}${__priorHandoffBlock()}You are a CUDA kernel developer. Implement an optimized CUDA kernel for this PyTorch model.
 
 # Model to Optimize:
 \`\`\`python

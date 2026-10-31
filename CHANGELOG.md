@@ -17,6 +17,10 @@ for the versioning policy.
 
 ## [Unreleased]
 
+### Added
+
+- Let a composition stage read what the earlier stages of its chain left. New optional `prior_handoffs` argument: read-only handoff directories, each with a README.md and handoff.json that index one earlier stage's sealed workspace (task-check measurements, distinct trace failures, the kernels, profiles and search state it wrote, and unverified author notes). AccelOpt seed generation, planning and implementation, CUDAAgent seed generation and implementation, and KernelFoundry offspring generation now tell agents to read them first. Measurements stay citable only from task records, and the accepted incumbent stays the only inherited implementation. Without the argument every prompt is unchanged (`_meta/scaffolding/typed-args.js`, inlined copies, `AccelOpt`, `CUDAAgent`, `KernelFoundry` workflows and manifests, `_meta/tools/test/prior-handoff-channel.test.js`, `.github/workflows/ci.yml`).
+
 ### Fixed
 
 - Accept a partial task trace as a zero-scored candidate failure only when the Host proves that the source-bound candidate exhausted the fixed broker execution budget and supplies a 64-hex evidence binding. Other partial or timeout results remain HOLD. (`_meta/scaffolding/task-result.js`, generated CUDAAgent/AccelOpt/CUDALLM/KSearch/KernelFoundry copies, `_meta/tools/test/task-result-hold.test.js`).

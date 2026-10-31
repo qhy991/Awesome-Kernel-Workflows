@@ -47,5 +47,7 @@ jobs:
             _meta/tools/test/cudallm-checkpoint.test.js \
             _meta/tools/test/cudaagent-execution-boundaries.test.js \
             _meta/tools/test/ksearch-file-handoff.test.js \
-            _meta/tools/test/ksearch-task-result.test.js
+            _meta/tools/test/ksearch-task-result.test.js \
+            _meta/tools/test/typed-args-ssot-guard.test.js \
+            _meta/tools/test/prior-handoff-channel.test.js
           node scripts/check-fidelity-contracts.js
