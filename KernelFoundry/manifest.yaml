@@ -52,6 +52,7 @@ routing:
   - target_speedup
   - target_basis
   - unknown_candidate_limit
+  - prior_handoffs
   - language
   - generations
   - min_generations
@@ -90,6 +91,9 @@ routing:
 args:
   required: []
   optional:
+  - name: prior_handoffs
+    type: array
+    description: Composition chains only. Read-only handoff directories of the earlier stages, oldest first; each holds README.md and handoff.json indexing that stage's sealed workspace (task-check measurements, distinct trace failures, kernels, profiles, search state, unverified author notes). Prompts tell agents to read them before generating or planning. The accepted incumbent stays the only inherited implementation. Default empty.
   - name: unknown_candidate_limit
     type: number
     description: Native task mode only. A search candidate whose task result has outcome_state unknown is discarded unscored and the search continues; this many discarded candidates in a row HOLD the workflow. Parent and seed measurement still HOLD on the first unknown. Default 3.

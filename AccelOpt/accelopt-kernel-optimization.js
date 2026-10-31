@@ -582,6 +582,24 @@ function __attemptBlock() {
   return parts.join('\n') + '\n'
 }
 
+// Channel ④: earlier stages of a composition chain. Each entry is a read-only
+// handoff directory (README.md + handoff.json) that indexes that stage's sealed
+// workspace: its task-check measurements, the kernels, profiles and search
+// state it left, and its author's unverified notes. The workspace is the state;
+// the index only says where it is.
+const PRIOR_HANDOFFS = Array.isArray(args.prior_handoffs)
+  ? args.prior_handoffs.filter(p => typeof p === 'string' && p)
+  : []
+function __priorHandoffBlock() {
+  if (!PRIOR_HANDOFFS.length) return ''
+  return '\n# Earlier stages of this chain (channel ④ — read-only sealed workspaces):\n'
+    + PRIOR_HANDOFFS.map((p, i) => `- stage ${i + 1}: ${p}/INDEX.md (data: ${p}/handoff.json)`).join('\n') + '\n'
+    + 'Read each INDEX.md before acting: it lists what that stage measured, the distinct failures in its raw traces, and the kernels, profiles and search state it left. '
+    + 'If it lists the author\'s README.md, read that too: it is the earlier author\'s own account of what it tried and what it would do next. '
+    + 'You may read and reuse any file it lists. Cite a number only from a task check record it names; author notes are unverified and are never a measurement. '
+    + 'Do not retry a failure it already recorded without a concrete change. The accepted incumbent, if any, is still the only inherited implementation.\n'
+}
+
 // File-backed candidate context. Pure builders; execute persistence inside the
 // existing producer/evaluator activation, not an additional model call.
 function __workspaceSource(path, fallback) {
@@ -1242,7 +1260,7 @@ function driverGenerateSeedPrompt() {
 async function resolveInitialKernelFromProblem() {
   if (INPUT_MODE !== 'generate_then_optimize') return ''
 
-  const generated = await agentRetry(() => agent(args.task_result_command ? `${__taskContractBlock()}Generate ${SEED_CANDIDATES} independent complete ${args.language} Python kernels from frozen task specification ${PROBLEM_PATH}. No historical implementation is supplied. Preserve the task run callable, exact tolerances and all workloads. Write source index 0 through ${SEED_CANDIDATES-1} to ${EXP_DIR}/generated/initial_<index>.py and return initial_candidates with each exact variant_path. You may discover and run task-permitted diagnostic tests and profiling under the frozen broker contract, retaining raw evidence. The workflow will freeze and measure the final sources serially after this call; do not create its generated/initial_<index>.json result slots. Return source paths, not copied measurements or a selected winner.` : (USE_DRIVER ? driverGenerateSeedPrompt() : legacyGenerateSeedPrompt()), {
+  const generated = await agentRetry(() => agent(args.task_result_command ? `${__taskContractBlock()}${__priorHandoffBlock()}Generate ${SEED_CANDIDATES} independent complete ${args.language} Python kernels from frozen task specification ${PROBLEM_PATH}. No historical implementation is supplied. Preserve the task run callable, exact tolerances and all workloads. Write source index 0 through ${SEED_CANDIDATES-1} to ${EXP_DIR}/generated/initial_<index>.py and return initial_candidates with each exact variant_path. You may discover and run task-permitted diagnostic tests and profiling under the frozen broker contract, retaining raw evidence. The workflow will freeze and measure the final sources serially after this call; do not create its generated/initial_<index>.json result slots. Return source paths, not copied measurements or a selected winner.` : (USE_DRIVER ? driverGenerateSeedPrompt() : legacyGenerateSeedPrompt()), {
     label: 'generate-initial-kernel',
     phase: 'Setup',
     schema: args.task_result_command ? {
@@ -1884,7 +1902,7 @@ ${IDIOMS.read_metric_guide}
   const plans = await parallel(
     Array.from({length: BREADTH}, (_, i) => () =>
       agentRetry(() => agent(`${__taskContractBlock()}${planPromptBase}\n\n# YOUR FOCUS AREA: ${planAngles[i % planAngles.length]}\nYou are planner #${i + 1}/${BREADTH}. Focus on: ${planAngles[i % planAngles.length]}.
-${__attemptBlock()}${__experienceBlock()}
+${__priorHandoffBlock()}${__attemptBlock()}${__experienceBlock()}
 # Recent genome trajectory (read BEFORE planning)
 Run \`tail -20 ${EXP_DIR}/genome.jsonl 2>/dev/null\` to see prior attempts this session (every Plan/Execute/Evaluate/Learn step has self-reported here). Use it to: (a) avoid retrying any technique already attempted with a regression or null speedup, (b) spot multi-round patterns the per-iteration experience summary may have lost. If the file is empty or missing, ignore this and proceed with the inputs above.
 
@@ -1913,7 +1931,7 @@ Then append (this is iteration ${iter}, planner ${i}):
     (plan) => parallel(
       Array.from({length: SAMPLES_PER_PLAN}, (_, sampleIdx) => () =>
         agentRetry(() => agent(args.task_result_command
-          ? `${__taskContractBlock()}Implement this AccelOpt plan in complete ${args.language} Python source: ${JSON.stringify(plan)}. Read the FULL measured incumbent file ${bestCandidateBinding.candidate_path}; preserve task callable, exact semantics and tolerances. Write the COMPLETE new candidate to ${EXP_DIR}/iter_${iter}_plan_${validPlans.indexOf(plan)}_sample_${sampleIdx}.py and return variant_path plus code (display only). Preserve the incumbent. You may discover and run task-permitted diagnostic tests and profiling under its broker contract; preserve raw evidence. Serial official task evaluation follows the final source handoff. Read all selected task skills for diagnostics when useful.${buildFailureEvidenceSection()}`
+          ? `${__taskContractBlock()}${__priorHandoffBlock()}Implement this AccelOpt plan in complete ${args.language} Python source: ${JSON.stringify(plan)}. Read the FULL measured incumbent file ${bestCandidateBinding.candidate_path}; preserve task callable, exact semantics and tolerances. Write the COMPLETE new candidate to ${EXP_DIR}/iter_${iter}_plan_${validPlans.indexOf(plan)}_sample_${sampleIdx}.py and return variant_path plus code (display only). Preserve the incumbent. You may discover and run task-permitted diagnostic tests and profiling under its broker contract; preserve raw evidence. Serial official task evaluation follows the final source handoff. Read all selected task skills for diagnostics when useful.${buildFailureEvidenceSection()}`
           : USE_DRIVER
           ? `You are an expert ${BACKEND} kernel developer. Implement this profiler-informed optimization plan as a complete, compilable kernel.
 

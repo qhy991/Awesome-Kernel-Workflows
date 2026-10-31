@@ -565,6 +565,24 @@ function __attemptBlock() {
   return parts.join('\n') + '\n'
 }
 
+// Channel ④: earlier stages of a composition chain. Each entry is a read-only
+// handoff directory (README.md + handoff.json) that indexes that stage's sealed
+// workspace: its task-check measurements, the kernels, profiles and search
+// state it left, and its author's unverified notes. The workspace is the state;
+// the index only says where it is.
+const PRIOR_HANDOFFS = Array.isArray(args.prior_handoffs)
+  ? args.prior_handoffs.filter(p => typeof p === 'string' && p)
+  : []
+function __priorHandoffBlock() {
+  if (!PRIOR_HANDOFFS.length) return ''
+  return '\n# Earlier stages of this chain (channel ④ — read-only sealed workspaces):\n'
+    + PRIOR_HANDOFFS.map((p, i) => `- stage ${i + 1}: ${p}/INDEX.md (data: ${p}/handoff.json)`).join('\n') + '\n'
+    + 'Read each INDEX.md before acting: it lists what that stage measured, the distinct failures in its raw traces, and the kernels, profiles and search state it left. '
+    + 'If it lists the author\'s README.md, read that too: it is the earlier author\'s own account of what it tried and what it would do next. '
+    + 'You may read and reuse any file it lists. Cite a number only from a task check record it names; author notes are unverified and are never a measurement. '
+    + 'Do not retry a failure it already recorded without a concrete change. The accepted incumbent, if any, is still the only inherited implementation.\n'
+}
+
 // File-backed candidate context. Pure builders; execute persistence inside the
 // existing producer/evaluator activation, not an additional model call.
 function __workspaceSource(path, fallback) {
@@ -1283,7 +1301,7 @@ ${args.task_result_command ? `7. Write the COMPLETE source to ${kernelPathForGen
 ${IS_SOL ? SOL_SOLUTION_CONTRACT : ''}
 
 Return the kernel code and its optimization strategy description.
-${__attemptBlock()}${__experienceBlock()}
+${__priorHandoffBlock()}${__attemptBlock()}${__experienceBlock()}
 # Recent genome trajectory (read BEFORE varying)
 Run \`tail -20 ${EXP_DIR}/genome.jsonl 2>/dev/null\` to see prior generations this session (every Vary/Evaluate step has self-reported). Use it to: (a) avoid producing an offspring whose strategy matches a recently-regressed sibling, (b) spot evolutionary patterns the gradientHints summary may have lost. If the file is empty or missing, ignore this and rely on the parent context above.
 
