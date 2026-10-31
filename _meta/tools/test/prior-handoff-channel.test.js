@@ -9,14 +9,16 @@ function block(args){
   const b=SSOT.indexOf('// --- BEGIN typed-args'),e=SSOT.indexOf('// --- END typed-args ---')
   return Function('args',`${SSOT.slice(b,e)}\nreturn __priorHandoffBlock()`)(args)
 }
-const names=readme=>HANDOFFS.filter(h=>readme.includes(`${h}/README.md`))
+const names=prompt=>HANDOFFS.filter(h=>prompt.includes(`${h}/INDEX.md`))
 
-test('the block names every handoff README and index in stage order',()=>{
+test('the block names every handoff index in stage order and points to the author README',()=>{
   const text=block({prior_handoffs:[...HANDOFFS,7,'',null]})
-  assert.ok(text.indexOf(`stage 1: ${HANDOFFS[0]}/README.md`)<text.indexOf(`stage 2: ${HANDOFFS[1]}/README.md`))
+  assert.ok(text.indexOf(`stage 1: ${HANDOFFS[0]}/INDEX.md`)<text.indexOf(`stage 2: ${HANDOFFS[1]}/INDEX.md`))
   assert.ok(text.includes(`${HANDOFFS[1]}/handoff.json`))
   assert.ok(!/stage 3/.test(text))
   assert.match(text,/author notes are unverified/)
+  assert.match(text,/author's README\.md/)
+  assert.ok(!text.includes(`${HANDOFFS[0]}/README.md`),'the index is INDEX.md; README.md belongs to the author')
   assert.match(text,/only inherited implementation/)
 })
 

@@ -141,8 +141,9 @@ const PRIOR_HANDOFFS = Array.isArray(args.prior_handoffs)
 function __priorHandoffBlock() {
   if (!PRIOR_HANDOFFS.length) return ''
   return '\n# Earlier stages of this chain (channel ④ — read-only sealed workspaces):\n'
-    + PRIOR_HANDOFFS.map((p, i) => `- stage ${i + 1}: ${p}/README.md (index: ${p}/handoff.json)`).join('\n') + '\n'
-    + 'Read each README.md before acting: it lists what that stage measured, the distinct failures in its raw traces, and the kernels, profiles and search state it left. '
+    + PRIOR_HANDOFFS.map((p, i) => `- stage ${i + 1}: ${p}/INDEX.md (data: ${p}/handoff.json)`).join('\n') + '\n'
+    + 'Read each INDEX.md before acting: it lists what that stage measured, the distinct failures in its raw traces, and the kernels, profiles and search state it left. '
+    + 'If it lists the author\'s README.md, read that too: it is the earlier author\'s own account of what it tried and what it would do next. '
     + 'You may read and reuse any file it lists. Cite a number only from a task check record it names; author notes are unverified and are never a measurement. '
     + 'Do not retry a failure it already recorded without a concrete change. The accepted incumbent, if any, is still the only inherited implementation.\n'
 }
